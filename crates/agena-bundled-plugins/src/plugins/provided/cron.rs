@@ -43,7 +43,7 @@ impl CronPlugin {
         *self
             .host
             .write()
-            .map_err(|_| PluginError::new("cron plugin host lock poisoned"))? = Some(host);
+            .map_err(|_| PluginError::internal("cron plugin host lock poisoned"))? = Some(host);
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
         ))
@@ -52,9 +52,9 @@ impl CronPlugin {
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
-            .map_err(|_| PluginError::new("cron plugin host lock poisoned"))?
+            .map_err(|_| PluginError::internal("cron plugin host lock poisoned"))?
             .clone()
-            .ok_or_else(|| PluginError::new("cron plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("cron plugin invoked before init"))
     }
 
     #[tool(

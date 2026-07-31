@@ -151,20 +151,20 @@ impl OpenAiToolsPlugin {
     fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
         self.host
             .get()
-            .ok_or_else(|| PluginError::new("OpenAI tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("OpenAI tools plugin invoked before init"))
     }
 
     fn workspace_root(&self) -> SdkResult<&Path> {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("OpenAI tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("OpenAI tools plugin invoked before init"))
     }
 
     fn config(&self) -> SdkResult<&OpenAiToolsConfig> {
         self.config
             .get()
-            .ok_or_else(|| PluginError::new("OpenAI tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("OpenAI tools plugin invoked before init"))
     }
 
     fn endpoint(&self, path: &str) -> SdkResult<String> {
@@ -214,7 +214,7 @@ impl OpenAiToolsPlugin {
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "OpenAI API credential is unavailable; set environment variable {env_name}"
                 ))
             })
@@ -253,14 +253,16 @@ impl OpenAiToolsPlugin {
                     .pointer("/error/message")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("OpenAI image response did not contain data[0].b64_json");
-                PluginError::new(message)
+                PluginError::internal(message)
             })?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|error| PluginError::new(format!("invalid OpenAI image data: {error}")))?;
+            .map_err(|error| {
+                PluginError::internal(format!("invalid OpenAI image data: {error}"))
+            })?;
         const MAX_IMAGE_BYTES: usize = 50 * 1024 * 1024;
         if bytes.len() > MAX_IMAGE_BYTES {
-            return Err(PluginError::new(
+            return Err(PluginError::internal(
                 "OpenAI image exceeds the 50 MiB artifact limit",
             ));
         }
@@ -275,12 +277,12 @@ impl OpenAiToolsPlugin {
             .await?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PluginError::new(format!("cannot create image directory: {error}"))
+                PluginError::internal(format!("cannot create image directory: {error}"))
             })?;
         }
         tokio::fs::write(&path, bytes.as_slice())
             .await
-            .map_err(|error| PluginError::new(format!("cannot save OpenAI image: {error}")))?;
+            .map_err(|error| PluginError::internal(format!("cannot save OpenAI image: {error}")))?;
         let sha256 = hex::encode(Sha256::digest(bytes.as_slice()));
         let revised_prompt = response
             .pointer("/data/0/revised_prompt")
@@ -345,13 +347,13 @@ impl OpenAiToolsPlugin {
             )?;
         self.workspace_root
             .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("OpenAI tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
         self.config
             .set(config)
-            .map_err(|_| PluginError::new("OpenAI tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
         self.host
             .set(host)
-            .map_err(|_| PluginError::new("OpenAI tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -384,18 +386,18 @@ impl OpenAiToolsPlugin {
             .send()
             .await
             .map_err(|error| {
-                PluginError::new(format!("OpenAI web search request failed: {error}"))
+                PluginError::internal(format!("OpenAI web search request failed: {error}"))
             })?;
         let status = response.status();
         let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::new(format!("OpenAI web search returned invalid JSON: {error}"))
+            PluginError::internal(format!("OpenAI web search returned invalid JSON: {error}"))
         })?;
         if !status.is_success() {
             let message = value
                 .pointer("/error/message")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("OpenAI web search failed");
-            return Err(PluginError::new(format!("{message} (HTTP {status})")));
+            return Err(PluginError::internal(format!("{message} (HTTP {status})")));
         }
         let output_text = openai_response_text(&value)
             .filter(|text| !text.trim().is_empty())
@@ -439,10 +441,12 @@ impl OpenAiToolsPlugin {
             .json(&body)
             .send()
             .await
-            .map_err(|error| PluginError::new(format!("OpenAI image request failed: {error}")))?;
+            .map_err(|error| {
+                PluginError::internal(format!("OpenAI image request failed: {error}"))
+            })?;
         let status = response.status();
         let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::new(format!(
+            PluginError::internal(format!(
                 "OpenAI image generation returned invalid JSON: {error}"
             ))
         })?;
@@ -483,7 +487,7 @@ impl OpenAiToolsPlugin {
                 ))
                 .await?;
             let bytes = tokio::fs::read(&path).await.map_err(|error| {
-                PluginError::new(format!("cannot read image '{}': {error}", path.display()))
+                PluginError::internal(format!("cannot read image '{}': {error}", path.display()))
             })?;
             let filename = path
                 .file_name()
@@ -494,7 +498,7 @@ impl OpenAiToolsPlugin {
             let part = reqwest::multipart::Part::bytes(bytes)
                 .file_name(filename)
                 .mime_str(mime)
-                .map_err(|error| PluginError::new(format!("invalid image MIME: {error}")))?;
+                .map_err(|error| PluginError::internal(format!("invalid image MIME: {error}")))?;
             form = form.part("image[]", part);
         }
         let response = reqwest::Client::new()
@@ -503,10 +507,10 @@ impl OpenAiToolsPlugin {
             .multipart(form)
             .send()
             .await
-            .map_err(|error| PluginError::new(format!("OpenAI image edit failed: {error}")))?;
+            .map_err(|error| PluginError::internal(format!("OpenAI image edit failed: {error}")))?;
         let status = response.status();
         let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::new(format!("OpenAI image edit returned invalid JSON: {error}"))
+            PluginError::internal(format!("OpenAI image edit returned invalid JSON: {error}"))
         })?;
         if !status.is_success() {
             return Err(openai_api_error("image edit", status, &value));
@@ -541,12 +545,11 @@ fn image_option<T: Serialize>(value: Option<T>) -> SdkResult<Option<String>> {
     value
         .map(|value| {
             serde_json::to_value(value)
-                .map_err(|error| PluginError::new(error.to_string()))
+                .map_err(|error| PluginError::internal(error.to_string()))
                 .and_then(|value| {
-                    value
-                        .as_str()
-                        .map(ToOwned::to_owned)
-                        .ok_or_else(|| PluginError::new("image option did not serialize as text"))
+                    value.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                        PluginError::internal("image option did not serialize as text")
+                    })
                 })
         })
         .transpose()
@@ -558,7 +561,7 @@ fn apply_image_options_to_json(
 ) -> SdkResult<()> {
     let object = body
         .as_object_mut()
-        .ok_or_else(|| PluginError::new("image request body is not an object"))?;
+        .ok_or_else(|| PluginError::internal("image request body is not an object"))?;
     for (key, value) in [
         ("background", image_option(options.background)?),
         ("size", image_option(options.size)?),
@@ -612,7 +615,7 @@ fn openai_api_error(
         .pointer("/error/message")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("OpenAI request failed");
-    PluginError::new(format!(
+    PluginError::internal(format!(
         "OpenAI {operation} failed: {message} (HTTP {status})"
     ))
 }

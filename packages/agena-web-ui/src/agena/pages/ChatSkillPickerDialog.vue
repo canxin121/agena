@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 
@@ -65,7 +66,7 @@ async function loadPage(nextOffset = offset.value) {
   } catch (reason) {
     if (generation !== requestGeneration) return
     items.value = []
-    error.value = reason instanceof Error ? reason.message : String(reason)
+    error.value = userErrorMessage(reason)
   } finally {
     if (generation === requestGeneration) loading.value = false
   }
@@ -83,7 +84,7 @@ async function refreshCatalog() {
     })
     await loadPage(0)
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
+    error.value = userErrorMessage(reason)
     loading.value = false
   }
 }
@@ -101,7 +102,7 @@ async function selectSkill(item: SkillCatalogItem) {
     emit('select', createComposerSkillDraft(response))
     emit('close')
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason)
+    error.value = userErrorMessage(reason)
   } finally {
     selecting.value = ''
   }

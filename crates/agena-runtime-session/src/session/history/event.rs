@@ -39,7 +39,7 @@ pub struct RunAborted {
     pub run_id: RunId,
     pub reason: RunAbortReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

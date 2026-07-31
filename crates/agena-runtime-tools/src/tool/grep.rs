@@ -25,16 +25,24 @@ pub(super) fn execute(
     executor.ensure_read_permission(&base_path)?;
 
     if !base_path.exists() {
-        return Err(ToolError::InvalidInput(format!(
-            "grep base path does not exist: {}",
-            executor.display_path(&base_path)
-        )));
+        return Err(ToolError::invalid_field(
+            "path",
+            agena_failure::FieldIssueKind::NotFound,
+            format!(
+                "grep base path does not exist: {}",
+                executor.display_path(&base_path)
+            ),
+        ));
     }
     if !base_path.is_dir() {
-        return Err(ToolError::InvalidInput(format!(
-            "grep base path is not a directory: {}",
-            executor.display_path(&base_path)
-        )));
+        return Err(ToolError::invalid_field(
+            "path",
+            agena_failure::FieldIssueKind::Invalid,
+            format!(
+                "grep base path is not a directory: {}",
+                executor.display_path(&base_path)
+            ),
+        ));
     }
 
     let pattern = Regex::new(&input.pattern)?;
@@ -57,7 +65,7 @@ pub(super) fn execute(
         }
 
         let relative = entry.path().strip_prefix(&base_path).map_err(|err| {
-            ToolError::InvalidInput(format!(
+            ToolError::invalid_input(format!(
                 "grep failed to build relative path for '{}': {err}",
                 entry.path().display()
             ))

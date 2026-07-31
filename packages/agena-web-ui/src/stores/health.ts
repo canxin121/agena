@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
@@ -14,7 +15,7 @@ export const useHealthStore = defineStore('health', () => {
     try {
       data.value = await fetchStudioHealth()
     } catch (err) {
-      error.value = err instanceof Error ? err.message : String(err)
+      error.value = userErrorMessage(err)
       data.value = null
     } finally {
       loading.value = false

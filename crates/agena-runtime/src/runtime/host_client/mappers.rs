@@ -1,11 +1,8 @@
 pub(super) fn host_unavailable(message: impl Into<String>) -> PluginError {
-    PluginError {
-        code: agena_plugin_host::sdk::PluginErrorCode::HostUnavailable,
-        message: message.into(),
-        hook: None,
-        plugin: None,
-        data: None,
-    }
+    PluginError::from_kind(
+        agena_plugin_host::sdk::PluginErrorKind::HostUnavailable,
+        message.into(),
+    )
 }
 
 pub(super) fn tool_execution_to_invoke_output(
@@ -22,22 +19,18 @@ pub(super) fn tool_execution_to_invoke_output(
 }
 
 pub(super) fn map_storage_error(err: PluginStorageError) -> PluginError {
-    use agena_plugin_host::sdk::PluginErrorCode;
+    use agena_plugin_host::sdk::PluginErrorKind;
     match err {
         PluginStorageError::MissingSessionId
         | PluginStorageError::MissingWorkspaceRoot
         | PluginStorageError::EmptyNamespace
         | PluginStorageError::EmptyKey
         | PluginStorageError::Data(_) => PluginError::invalid_params(err.to_string()),
-        PluginStorageError::SecretUnavailable(_) => PluginError {
-            code: PluginErrorCode::HostUnavailable,
-            message: err.to_string(),
-            hook: None,
-            plugin: None,
-            data: None,
-        },
+        PluginStorageError::SecretUnavailable(_) => {
+            PluginError::from_kind(PluginErrorKind::HostUnavailable, err)
+        }
         PluginStorageError::Io(_) | PluginStorageError::Secret(_) => {
-            PluginError::new(err.to_string())
+            PluginError::internal(err.to_string())
         }
     }
 }
@@ -189,7 +182,7 @@ pub(super) fn map_monitor_error(err: MonitorError) -> PluginError {
         MonitorError::NotFound(_) | MonitorError::Invalid(_) | MonitorError::InvalidPattern(_) => {
             PluginError::invalid_params(err.to_string())
         }
-        other => PluginError::new(other.to_string()),
+        other => PluginError::internal(other.to_string()),
     }
 }
 
@@ -292,7 +285,7 @@ pub(super) fn workflow_tool_output(
         session_context.map(|context| context as &dyn agena_runtime_tools::ToolSessionContext);
     executor
         .execute_tool_payload_for_host(tool_name, input, session_id, call_id, session_context)
-        .map_err(|err| PluginError::new(err.to_string()))
+        .map_err(|err| PluginError::internal(err.to_string()))
 }
 
 pub(super) fn scheduler_job_to_sdk(job: agena_scheduler::ScheduledJob) -> HostSchedulerJob {
@@ -340,7 +333,7 @@ pub(super) fn host_status_to_sdk(
         restart_count: status.restart_count,
         last_exit_code: status.last_exit_code,
         last_restart_at_ms: status.last_restart_at_ms,
-        last_error: status.last_error,
+        last_failure: status.last_failure,
     }
 }
 

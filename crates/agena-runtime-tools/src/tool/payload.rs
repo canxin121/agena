@@ -199,7 +199,7 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         final_text: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        model_feedback: Option<agena_failure::ModelFeedback>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_provider_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

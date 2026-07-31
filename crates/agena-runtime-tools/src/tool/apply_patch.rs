@@ -38,7 +38,7 @@ pub fn execute(
 ) -> Result<ApplyPatchExecution, ToolError> {
     let ops = parse_patch(&input.patch)?;
     if ops.is_empty() {
-        return Err(ToolError::InvalidPatch(
+        return Err(ToolError::invalid_patch(
             "no operations in patch".to_string(),
         ));
     }
@@ -57,7 +57,7 @@ pub fn execute(
                 executor.ensure_edit_permission(&absolute)?;
                 ensure_parent(&absolute)?;
                 if absolute.exists() {
-                    return Err(ToolError::InvalidPatch(format!(
+                    return Err(ToolError::invalid_patch(format!(
                         "add file target already exists: {path}"
                     )));
                 }
@@ -80,7 +80,7 @@ pub fn execute(
                 let absolute = executor.resolve_target_path(&path);
                 executor.ensure_edit_permission(&absolute)?;
                 if !absolute.exists() {
-                    return Err(ToolError::InvalidPatch(format!(
+                    return Err(ToolError::invalid_patch(format!(
                         "delete file target does not exist: {path}"
                     )));
                 }
@@ -108,7 +108,7 @@ pub fn execute(
                 let source = executor.resolve_target_path(&path);
                 executor.ensure_edit_permission(&source)?;
                 if !source.exists() {
-                    return Err(ToolError::InvalidPatch(format!(
+                    return Err(ToolError::invalid_patch(format!(
                         "update file target does not exist: {path}"
                     )));
                 }
@@ -121,7 +121,7 @@ pub fn execute(
                     executor.ensure_edit_permission(&target)?;
                     ensure_parent(&target)?;
                     if source != target && target.exists() {
-                        return Err(ToolError::InvalidPatch(format!(
+                        return Err(ToolError::invalid_patch(format!(
                             "move target already exists: {target_path}"
                         )));
                     }
@@ -208,16 +208,16 @@ pub(crate) fn planned_paths(text: &str) -> Result<Vec<String>, ToolError> {
 fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
     let lines = text.lines().collect::<Vec<_>>();
     if lines.is_empty() {
-        return Err(ToolError::InvalidPatch("empty patch".to_string()));
+        return Err(ToolError::invalid_patch("empty patch".to_string()));
     }
 
     if lines.first().copied() != Some("*** Begin Patch") {
-        return Err(ToolError::InvalidPatch(
+        return Err(ToolError::invalid_patch(
             "patch must start with '*** Begin Patch'".to_string(),
         ));
     }
     if lines.last().copied() != Some("*** End Patch") {
-        return Err(ToolError::InvalidPatch(
+        return Err(ToolError::invalid_patch(
             "patch must end with '*** End Patch'".to_string(),
         ));
     }
@@ -238,7 +238,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
             while idx < lines.len() - 1 && !lines[idx].starts_with("*** ") {
                 let l = lines[idx];
                 let payload = l.strip_prefix('+').ok_or_else(|| {
-                    ToolError::InvalidPatch("add file expects '+' prefixed lines".to_string())
+                    ToolError::invalid_patch("add file expects '+' prefixed lines".to_string())
                 })?;
                 content.push(payload);
                 idx += 1;
@@ -269,7 +269,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
                 let l = lines[idx];
                 if let Some(target) = l.strip_prefix("*** Move to: ") {
                     if move_to.replace(target.to_string()).is_some() {
-                        return Err(ToolError::InvalidPatch(format!(
+                        return Err(ToolError::invalid_patch(format!(
                             "duplicate move target for update file: {path}"
                         )));
                     }
@@ -309,7 +309,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
                     continue;
                 }
 
-                return Err(ToolError::InvalidPatch(format!(
+                return Err(ToolError::invalid_patch(format!(
                     "invalid update hunk line in {path}: {l}"
                 )));
             }
@@ -322,7 +322,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
             }
 
             if hunks.is_empty() && move_to.is_none() {
-                return Err(ToolError::InvalidPatch(format!(
+                return Err(ToolError::invalid_patch(format!(
                     "update file has no hunks: {path}"
                 )));
             }
@@ -335,7 +335,7 @@ fn parse_patch(text: &str) -> Result<Vec<PatchOp>, ToolError> {
             continue;
         }
 
-        return Err(ToolError::InvalidPatch(format!(
+        return Err(ToolError::invalid_patch(format!(
             "unknown patch section header: {line}"
         )));
     }
@@ -351,7 +351,7 @@ fn apply_hunks(path: &str, original: &str, hunks: &[Hunk]) -> Result<String, Too
             continue;
         }
         let pos = content.find(&hunk.old).ok_or_else(|| {
-            ToolError::InvalidPatch(format!(
+            ToolError::invalid_patch(format!(
                 "failed to locate update hunk {} in target file: {path}",
                 index + 1
             ))

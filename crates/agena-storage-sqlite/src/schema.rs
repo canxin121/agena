@@ -22,8 +22,8 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
 
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, depth INTEGER NOT NULL, root_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, title TEXT NOT NULL, version INTEGER NOT NULL, lifecycle_state TEXT NOT NULL, creation_error TEXT NULL, runtime_state_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_session_lineage (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL, source_cutoff_seq_global INTEGER NULL, source_message_id INTEGER NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_error TEXT NULL, created_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, depth INTEGER NOT NULL, root_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, title TEXT NOT NULL, version INTEGER NOT NULL, lifecycle_state TEXT NOT NULL, creation_failure_json JSON NULL, runtime_state_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_session_lineage (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL, source_cutoff_seq_global INTEGER NULL, source_message_id INTEGER NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_failure_json TEXT NULL, created_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_permission_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, action_key TEXT NOT NULL, mode TEXT NOT NULL, scope TEXT NOT NULL, session_id INTEGER NULL, workspace_id INTEGER NULL, source TEXT NOT NULL, reason TEXT NULL, operator TEXT NULL, revoked_at_ms INTEGER NULL, revoked_reason TEXT NULL, revoked_by TEXT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_events (id INTEGER PRIMARY KEY AUTOINCREMENT, event_uuid TEXT NOT NULL UNIQUE, seq_global INTEGER NOT NULL UNIQUE, seq_session INTEGER NULL, session_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, workspace_id INTEGER NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, kind_tag TEXT NOT NULL, envelope_schema INTEGER NOT NULL, payload_json JSON NOT NULL, causation_uuid TEXT NULL, correlation_uuid TEXT NULL, created_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_turns (turn_id TEXT PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, turn_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, UNIQUE(session_id, turn_seq))",
@@ -91,7 +91,7 @@ mod tests {
             &db,
             "INSERT INTO agena_sessions \
              (id, parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, \
-              creation_error, runtime_state_json, created_at_ms, updated_at_ms) \
+              creation_failure_json, runtime_state_json, created_at_ms, updated_at_ms) \
              VALUES (1, NULL, 0, 0, 1, 'session', 1, 'creating', NULL, NULL, 1, 1)",
         )
         .await

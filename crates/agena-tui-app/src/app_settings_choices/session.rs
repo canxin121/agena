@@ -7,19 +7,19 @@ impl App {
             SessionModelModeStep::ThinkingMode => inspector_rows_to_mode_choice_items(
                 self.backend
                     .runtime_thinking_mode_rows(&self.run_options.to_request())
-                    .map_err(|error| error.to_string())?,
+                    .map_err(crate::UiFailure::internal)?,
                 ui_text::thinking_mode_display_value,
             ),
             SessionModelModeStep::SpeedMode => inspector_rows_to_mode_choice_items(
                 self.backend
                     .runtime_speed_mode_rows(&self.run_options.to_request())
-                    .map_err(|error| error.to_string())?,
+                    .map_err(crate::UiFailure::internal)?,
                 ui_text::speed_mode_display_value,
             ),
             SessionModelModeStep::Verbosity => self
                 .backend
                 .runtime_verbosity_values(&self.run_options.to_request())
-                .map_err(|error| error.to_string())?
+                .map_err(crate::UiFailure::internal)?
                 .into_iter()
                 .map(|value| {
                     choice_item(

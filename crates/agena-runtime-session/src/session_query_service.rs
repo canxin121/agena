@@ -7,7 +7,6 @@
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 use agena_domain::{
     PendingInteractiveRequestContext, PermissionConfig, SessionCostSummary, SessionSummary,
@@ -222,8 +221,7 @@ pub enum SessionProjectedPartDetail {
         encrypted_content: Option<String>,
     },
     Error {
-        code: String,
-        message: String,
+        problem: agena_failure::UserProblem,
     },
     Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
     SkillReference(crate::message::SkillReferencePart),
@@ -261,22 +259,33 @@ pub struct SessionExecutionContext {
     pub subtask_status: Option<SubtaskStatus>,
     pub subtask_started_at: Option<DateTime<Utc>>,
     pub subtask_finished_at: Option<DateTime<Utc>>,
-    pub subtask_error: Option<String>,
+    pub subtask_failure: Option<agena_failure::Failure>,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("session query failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionQueryError {
-    message: String,
+    pub failure: Box<agena_failure::Failure>,
 }
 
 impl SessionQueryError {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
         Self {
-            message: message.into(),
+            failure: Box::new(crate::service_failure::unexpected_service_failure(
+                "session.query_failed",
+                "Session data could not be loaded.",
+                diagnostic,
+            )),
         }
     }
 }
+
+impl std::fmt::Display for SessionQueryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::service_failure::display_service_failure(&self.failure, formatter)
+    }
+}
+
+impl std::error::Error for SessionQueryError {}
 
 /// Read-only session capabilities with stable result types.
 #[async_trait]
@@ -519,7 +528,7 @@ mod tests {
                 subtask_status: None,
                 subtask_started_at: None,
                 subtask_finished_at: None,
-                subtask_error: None,
+                subtask_failure: None,
             })
         }
 

@@ -773,7 +773,7 @@ pub fn require_terminal_stream_event(
         Err(ProviderError::ProviderClassified {
             provider: provider_id.to_owned(),
             message: format!("{protocol} stream closed before a terminal response event"),
-            kind: ProviderErrorKind::ApiError,
+            kind: ProviderErrorKind::MalformedResponse,
             // A truncated transport is safe to retry before output. After
             // output, the registry only retries providers that explicitly
             // opt into replay-safe prefix verification.
@@ -1067,21 +1067,40 @@ fn classify_http_error(
             retryable: false,
         };
     }
-    if provider_id.trim().eq_ignore_ascii_case("openai") && status == reqwest::StatusCode::NOT_FOUND
-    {
+    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         return ProviderErrorClassification {
-            kind: ProviderErrorKind::ApiError,
+            kind: ProviderErrorKind::Authentication,
+            retryable: false,
+        };
+    }
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return ProviderErrorClassification {
+            kind: ProviderErrorKind::RateLimited,
             retryable: true,
         };
     }
-    let retryable = matches!(
-        status,
-        reqwest::StatusCode::REQUEST_TIMEOUT
-            | reqwest::StatusCode::CONFLICT
-            | reqwest::StatusCode::TOO_MANY_REQUESTS
-    ) || status.is_server_error();
+    if status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::GATEWAY_TIMEOUT
+    {
+        return ProviderErrorClassification {
+            kind: ProviderErrorKind::Timeout,
+            retryable: true,
+        };
+    }
+    if provider_id.trim().eq_ignore_ascii_case("openai") && status == reqwest::StatusCode::NOT_FOUND
+    {
+        return ProviderErrorClassification {
+            kind: ProviderErrorKind::Unavailable,
+            retryable: true,
+        };
+    }
+    let retryable = status == reqwest::StatusCode::CONFLICT || status.is_server_error();
     ProviderErrorClassification {
-        kind: ProviderErrorKind::ApiError,
+        kind: if status.is_server_error() {
+            ProviderErrorKind::Unavailable
+        } else {
+            ProviderErrorKind::InvalidRequest
+        },
         retryable,
     }
 }
@@ -1097,11 +1116,41 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
             retryable: false,
         };
     }
+    if matches!(
+        normalized_code.as_str(),
+        "rate_limit_exceeded" | "rate_limit_error" | "too_many_requests"
+    ) {
+        return ProviderError::ProviderClassified {
+            provider: provider_id.to_owned(),
+            message: if message.trim().is_empty() {
+                normalized_code.clone()
+            } else {
+                format!("{normalized_code}: {}", message.trim())
+            },
+            kind: ProviderErrorKind::RateLimited,
+            retryable: true,
+        };
+    }
+    if matches!(
+        normalized_code.as_str(),
+        "invalid_api_key" | "authentication_error" | "unauthorized"
+    ) {
+        return ProviderError::ProviderClassified {
+            provider: provider_id.to_owned(),
+            message: if message.trim().is_empty() {
+                normalized_code.clone()
+            } else {
+                format!("{normalized_code}: {}", message.trim())
+            },
+            kind: ProviderErrorKind::Authentication,
+            retryable: false,
+        };
+    }
     if normalized_code == "insufficient_quota" {
         return ProviderError::ProviderClassified {
             provider: provider_id.to_owned(),
             message: "Quota exceeded. Please check your plan and billing details.".to_owned(),
-            kind: ProviderErrorKind::ApiError,
+            kind: ProviderErrorKind::QuotaExceeded,
             retryable: false,
         };
     }
@@ -1111,7 +1160,7 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
             message:
                 "To use Codex models and OpenAI reasoning summaries, upgrade to Plus plan first."
                     .to_owned(),
-            kind: ProviderErrorKind::ApiError,
+            kind: ProviderErrorKind::QuotaExceeded,
             retryable: false,
         };
     }
@@ -1123,7 +1172,7 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
             } else {
                 message.to_owned()
             },
-            kind: ProviderErrorKind::ApiError,
+            kind: ProviderErrorKind::InvalidRequest,
             retryable: false,
         };
     }
@@ -1131,7 +1180,7 @@ fn classify_stream_error(provider_id: &str, code: Option<&str>, message: &str) -
     let kind = if is_context_overflow_message(message) {
         ProviderErrorKind::ContextOverflow
     } else {
-        ProviderErrorKind::ApiError
+        ProviderErrorKind::Unavailable
     };
     let retryable = kind != ProviderErrorKind::ContextOverflow
         && is_retryable_stream_error(normalized_code.as_str(), message);
@@ -1269,6 +1318,37 @@ mod tests {
             ProviderError::ProviderClassified { message, .. } => message,
             other => panic!("expected classified provider error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn provider_failures_have_stable_semantic_kinds() {
+        assert_eq!(
+            classify_http_error("example", reqwest::StatusCode::UNAUTHORIZED, "token=secret").kind,
+            ProviderErrorKind::Authentication
+        );
+        assert_eq!(
+            classify_http_error(
+                "example",
+                reqwest::StatusCode::TOO_MANY_REQUESTS,
+                "raw upstream body"
+            )
+            .kind,
+            ProviderErrorKind::RateLimited
+        );
+        assert_eq!(
+            classify_http_error(
+                "example",
+                reqwest::StatusCode::SERVICE_UNAVAILABLE,
+                "raw upstream body"
+            )
+            .kind,
+            ProviderErrorKind::Unavailable
+        );
+        assert_eq!(
+            classify_stream_error("example", Some("insufficient_quota"), "billing raw")
+                .provider_error_kind(),
+            Some(ProviderErrorKind::QuotaExceeded)
+        );
     }
 
     #[test]

@@ -42,7 +42,7 @@ mod protocol_contract_tests {
 
     #[test]
     fn client_uses_the_current_api_protocol_version() {
-        assert_eq!(PROTOCOL_VERSION, 1);
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
@@ -86,7 +87,7 @@ export function useRuntimeMarketplaceActions(
     try {
       await loadMarketplacePanelData(input, deps, options)
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       input.marketplaceLoading.value = false
     }
@@ -112,7 +113,7 @@ export function useRuntimeMarketplaceActions(
         : 'Marketplace registry sync is already running.'
       await deps.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       input.marketplaceLoading.value = false
     }
@@ -140,7 +141,7 @@ export function useRuntimeMarketplaceActions(
         : `${result.task.title} is already running.`
       await deps.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       input.marketplaceLoading.value = false
     }
@@ -161,7 +162,7 @@ export function useRuntimeMarketplaceActions(
         : `${result.task.title} is already running.`
       await deps.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       input.marketplaceLoading.value = false
     }
@@ -184,7 +185,7 @@ export function useRuntimeMarketplaceActions(
         : `${result.task.title} is already running.`
       await deps.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       input.marketplaceLoading.value = false
     }

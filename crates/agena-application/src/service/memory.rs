@@ -114,11 +114,12 @@ fn memory_resource(record: MemoryRecord) -> MemoryResource {
 
 fn memory_api_error(error: MemoryError) -> ApplicationError {
     match error {
-        MemoryError::NotFound(name) => {
-            ApplicationError::not_found(format!("memory not found: {name}"))
-        }
+        MemoryError::NotFound(name) => ApplicationError::not_found_with_diagnostic(
+            "The memory entry was not found.",
+            format!("memory not found: {name}"),
+        ),
         MemoryError::Malformed { .. } | MemoryError::Yaml(_) => {
-            ApplicationError::bad_request(error.to_string())
+            ApplicationError::bad_request_with_diagnostic("The memory file is invalid.", error)
         }
         MemoryError::Io(_) => ApplicationError::internal(error.to_string()),
     }

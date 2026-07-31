@@ -1,7 +1,6 @@
 //! Stable commands for application-originated event publication.
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeEventPublishRequest {
@@ -15,19 +14,30 @@ pub enum RuntimeEventPublishRequest {
     },
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("event publication failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeEventPublishError {
-    message: String,
+    pub failure: agena_failure::Failure,
 }
 
 impl RuntimeEventPublishError {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
         Self {
-            message: message.into(),
+            failure: crate::service_failure::unexpected_service_failure(
+                "event.publish_failed",
+                "The event could not be saved.",
+                diagnostic,
+            ),
         }
     }
 }
+
+impl std::fmt::Display for RuntimeEventPublishError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::service_failure::display_service_failure(&self.failure, formatter)
+    }
+}
+
+impl std::error::Error for RuntimeEventPublishError {}
 
 #[async_trait]
 pub trait RuntimeEventPublishService: Send + Sync {

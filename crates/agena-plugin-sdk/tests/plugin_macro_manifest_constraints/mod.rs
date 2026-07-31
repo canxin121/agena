@@ -18,7 +18,7 @@ fn tool_input_direct_array_choices_auto_target_items() {
     .expect_err("direct choices on array fields should target items");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#),
         "unexpected direct array choices error: {path_error}"
     );
@@ -29,7 +29,7 @@ fn tool_input_direct_array_choices_auto_target_items() {
     .expect_err("direct choices on aliased array fields should target items");
     assert!(
         renamed_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#),
         "unexpected renamed direct array choices error: {renamed_error}"
     );
@@ -103,7 +103,7 @@ fn tool_input_enum_variant_local_normalization_applies_to_parse_and_schema() {
     .expect_err("variant-level item_non_empty should validate normalized items");
     assert!(
         tags_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not be empty"#),
         "unexpected enum variant item normalization error: {tags_error}"
     );
@@ -149,7 +149,7 @@ fn tool_input_enum_variant_direct_array_constraints_auto_target_items() {
     .expect_err("variant-level distinct_trimmed should target normalized array items");
     assert!(
         distinct_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `auto_tags[]` must not contain duplicate values"#),
         "unexpected variant direct-array distinct error: {distinct_error}"
     );
@@ -173,7 +173,7 @@ fn tool_input_enum_variant_direct_array_constraints_auto_target_items() {
     .expect_err("variant-level direct array choices should target renamed array items");
     assert!(
         renamed_tools_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tools[]` must be one of ["cargo","git"]"#),
         "unexpected renamed variant direct-array choice error: {renamed_tools_error}"
     );
@@ -222,7 +222,7 @@ fn tool_input_enum_variant_renamed_fields_resolve_constraint_paths() {
     .expect_err("variant-level non_empty should use the renamed field key");
     assert!(
         query_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `filePath` must not be empty"#),
         "unexpected renamed variant non-empty error: {query_error}"
     );
@@ -234,7 +234,7 @@ fn tool_input_enum_variant_renamed_fields_resolve_constraint_paths() {
     .expect_err("variant-level requires should resolve renamed field paths");
     assert!(
         run_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `filePath` requires `mode`"#),
         "unexpected renamed variant requires error: {run_error}"
     );
@@ -246,7 +246,7 @@ fn tool_input_enum_variant_renamed_fields_resolve_constraint_paths() {
     .expect_err("variant-level direct array relation rules should resolve renamed field paths");
     assert!(
         tags_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tagValues[]` must not contain duplicate values"#),
         "unexpected renamed variant array relation error: {tags_error}"
     );
@@ -293,7 +293,7 @@ fn tool_input_enum_variant_field_args_support_name_alias_default_and_constraints
     .expect_err("variant field arg non_empty should report the schema-side key");
     assert!(
         query_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `filePath` must not be empty"#),
         "unexpected variant field arg error: {query_error}"
     );
@@ -318,7 +318,7 @@ fn tool_input_enum_variant_field_args_support_name_alias_default_and_constraints
     .expect_err("variant field arg array rules should use the renamed schema key");
     assert!(
         tags_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tagValues[]` must not contain duplicate values"#),
         "unexpected variant field arg array error: {tags_error}"
     );
@@ -458,7 +458,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("requires should reject missing peer fields");
     assert!(
         requires_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `path` requires `mode`"#),
         "unexpected requires error: {requires_error}"
     );
@@ -473,7 +473,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("conflicts_with should reject simultaneous fields");
     assert!(
         conflicts_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `slug` conflicts with `mode`"#),
         "unexpected conflicts_with error: {conflicts_error}"
     );
@@ -485,7 +485,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("required_unless_present should reject missing fallback");
     assert!(
         required_unless_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `fallback` is required unless `mode` is present"#),
         "unexpected required_unless_present error: {required_unless_error}"
     );
@@ -498,7 +498,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("forbid_substrings should reject matching substrings");
     assert!(
         forbid_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `file_path` must not contain `..`"#),
         "unexpected forbid_substrings error: {forbid_error}"
     );
@@ -511,7 +511,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("distinct_trimmed should reject duplicate trimmed values");
     assert!(
         distinct_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain duplicate values"#),
         "unexpected distinct_trimmed error: {distinct_error}"
     );
@@ -524,7 +524,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed requires should report schema-side wire names");
     assert!(
         renamed_requires_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `path` requires `mode`"#),
         "unexpected renamed requires error: {renamed_requires_error}"
     );
@@ -536,7 +536,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed forbid_substrings should use schema-side wire names");
     assert!(
         renamed_forbid_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `filePath` must not contain `..`"#),
         "unexpected renamed forbid_substrings error: {renamed_forbid_error}"
     );
@@ -548,7 +548,7 @@ fn tool_input_field_relation_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed distinct_trimmed should use schema-side wire names");
     assert!(
         renamed_distinct_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `tags[]` must not contain duplicate values"#),
         "unexpected renamed distinct_trimmed error: {renamed_distinct_error}"
     );
@@ -633,7 +633,7 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
     .expect_err("exactly_one_of should reject both fields present");
     assert!(
         exactly_one_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"exactly one of `path` or `stdin` is required"#),
         "unexpected exactly_one_of error: {exactly_one_error}"
     );
@@ -644,7 +644,7 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
     .expect_err("exactly_one_of should reject both fields missing");
     assert!(
         exactly_one_missing_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"exactly one of `path` or `stdin` is required"#),
         "unexpected exactly_one_of missing error: {exactly_one_missing_error}"
     );
@@ -655,7 +655,7 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
     .expect_err("at_least_one_of should reject missing peers");
     assert!(
         at_least_one_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"at least one of `text` or `stdin` is required"#),
         "unexpected at_least_one_of error: {at_least_one_error}"
     );
@@ -668,7 +668,7 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed exactly_one_of should use schema-side wire names");
     assert!(
         renamed_exactly_one_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"exactly one of `filePath` or `stdinPayload` is required"#),
         "unexpected renamed exactly_one_of error: {renamed_exactly_one_error}"
     );
@@ -679,7 +679,7 @@ fn tool_input_field_group_constraints_apply_to_parse_and_schema() {
     .expect_err("renamed at_least_one_of should use schema-side wire names");
     assert!(
         renamed_at_least_one_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"at least one of `text` or `stdinPayload` is required"#),
         "unexpected renamed at_least_one_of error: {renamed_at_least_one_error}"
     );

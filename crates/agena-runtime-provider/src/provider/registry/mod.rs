@@ -613,8 +613,18 @@ fn retry_reason(err: &ProviderError) -> &'static str {
 
 fn provider_error_kind_label(kind: ProviderErrorKind) -> &'static str {
     match kind {
-        ProviderErrorKind::ApiError => "provider_api_error",
+        ProviderErrorKind::Authentication => "authentication",
+        ProviderErrorKind::RateLimited => "rate_limited",
+        ProviderErrorKind::QuotaExceeded => "quota_exceeded",
         ProviderErrorKind::ContextOverflow => "context_overflow",
+        ProviderErrorKind::InvalidRequest => "invalid_request",
+        ProviderErrorKind::Unavailable => "unavailable",
+        ProviderErrorKind::Timeout => "timeout",
+        ProviderErrorKind::Connection => "connection",
+        ProviderErrorKind::MalformedResponse => "malformed_response",
+        ProviderErrorKind::ToolProtocolViolation => "tool_protocol_violation",
+        ProviderErrorKind::Misconfiguration => "misconfiguration",
+        ProviderErrorKind::Internal => "internal",
     }
 }
 

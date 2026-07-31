@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { computed, inject, ref } from 'vue'
 import { routerKey, useRoute } from 'vue-router'
@@ -79,7 +80,7 @@ const filteredPlugins = computed(() => {
   const query = pluginSearch.value.trim().toLowerCase()
   if (!query) return props.plugins
   return props.plugins.filter((plugin) =>
-    [plugin.plugin_id, plugin.kind, plugin.state, plugin.last_error || ''].join(' ').toLowerCase().includes(query),
+    [plugin.plugin_id, plugin.kind, plugin.state, plugin.last_failure?.user.fallback || ''].join(' ').toLowerCase().includes(query),
   )
 })
 const manifest = computed(() => props.selectedPlugin?.manifest ?? null)
@@ -439,7 +440,7 @@ async function runStudioUiItem(item: ManifestStudioUiItem, input?: Record<string
     const response = await runPluginUiAction({ pluginId, actionId: item.id, payload: input })
     pluginUiMessage.value = await renderPluginUiActionResult(pluginId, item, response.result)
   } catch (err) {
-    pluginUiError.value = err instanceof Error ? err.message : String(err)
+    pluginUiError.value = userErrorMessage(err)
   }
 }
 
@@ -512,7 +513,7 @@ async function renderResolvedPluginCommandEffect(
                 <strong>{{ plugin.plugin_id }}</strong>
               </div>
               <div class="muted">{{ plugin.kind }} · {{ plugin.state }}</div>
-              <div v-if="plugin.last_error" class="muted">{{ plugin.last_error }}</div>
+              <div v-if="plugin.last_failure" class="muted">{{ plugin.last_failure.user.fallback }}</div>
             </div>
             <span class="badge">restarts {{ plugin.restart_count }}</span>
           </div>

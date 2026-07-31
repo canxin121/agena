@@ -8,14 +8,32 @@ export class ApiError extends Error {
   status: number
   bodyText?: string
   bodyJson?: JsonLike
-  code?: string
-  hint?: string
+  problem?: ApiFailure
 
-  constructor(message: string, status: number, bodyText?: string) {
+  constructor(message: string, status: number, problem?: ApiFailure, bodyText?: string) {
     super(message)
     this.status = status
+    this.problem = problem
     this.bodyText = bodyText
   }
+}
+
+export interface ApiFailureUser {
+  key: string
+  fallback: string
+  args?: Record<string, JsonLike>
+  detail_key?: string | null
+}
+
+export interface ApiFailure {
+  id: string
+  code: string
+  category: string
+  responsibility: string
+  retry: string
+  recovery: string
+  impact: string
+  user: ApiFailureUser
 }
 
 export function apiUrl(path: string): string {
@@ -77,6 +95,86 @@ export function apiErrorBodyRecord(error: Error | JsonLike): Record<string, Json
   return asRecord(error.bodyJson)
 }
 
+function parseFailure(value: JsonLike): ApiFailure | undefined {
+  const envelope = asRecord(value)
+  const problem = asRecord(envelope?.problem)
+  const user = asRecord(problem?.user)
+  if (
+    !problem ||
+    !user ||
+    typeof problem.id !== 'string' ||
+    typeof problem.code !== 'string' ||
+    typeof problem.category !== 'string' ||
+    typeof problem.responsibility !== 'string' ||
+    typeof problem.retry !== 'string' ||
+    typeof problem.recovery !== 'string' ||
+    typeof problem.impact !== 'string' ||
+    typeof user.key !== 'string' ||
+    typeof user.fallback !== 'string'
+  ) {
+    return undefined
+  }
+  return problem as unknown as ApiFailure
+}
+
+function parseJsonBody(text: string, contentType: string): JsonLike {
+  const looksJson =
+    contentType.toLowerCase().includes('application/json') ||
+    text.trim().startsWith('{') ||
+    text.trim().startsWith('[')
+  if (!text || !looksJson) return undefined
+  try {
+    return JSON.parse(text) as JsonLike
+  } catch {
+    return undefined
+  }
+}
+
+function responseError(resp: Response, text: string, url: string): ApiError {
+  const bodyJson = parseJsonBody(text, resp.headers.get('content-type') || '')
+  const problem = parseFailure(bodyJson)
+  const fallback = problem?.user.fallback.trim() || `Request failed (${resp.status})`
+  const message =
+    problem && (problem.category === 'internal' || problem.category === 'data_corruption')
+      ? `${fallback} Reference: ${problem.id}`
+      : fallback
+  const error = new ApiError(message, resp.status, problem, text)
+  error.bodyJson = bodyJson
+
+  if (resp.status === 401) {
+    emitAuthRequired({ message, status: resp.status, code: problem?.code || 'auth_required', url })
+  }
+  return error
+}
+
+export async function apiResponseError(resp: Response, url: string): Promise<ApiError> {
+  return responseError(resp, await readBodyText(resp), url)
+}
+
+function transportError(url: string, diagnostic: unknown): ApiError {
+  console.error('API transport failed', { url, diagnostic })
+  return new ApiError('The service could not be reached. Check the connection and try again.', 0)
+}
+
+function invalidSuccessResponse(url: string, diagnostic: unknown): ApiError {
+  console.error('API returned an invalid success response', { url, diagnostic })
+  return new ApiError('The service returned an invalid response. Try again.', 0)
+}
+
+/**
+ * Safe display projection for catches that may also receive browser/library
+ * exceptions. Only ApiError carries server-approved prose; unknown errors use
+ * the caller's fixed fallback and remain diagnostic-only.
+ */
+export function userErrorMessage(
+  error: unknown,
+  fallback = 'The operation could not be completed. Try again.',
+): string {
+  if (error instanceof ApiError && error.message.trim()) return error.message.trim()
+  console.error('Unexpected UI operation failure', { diagnostic: error })
+  return fallback
+}
+
 export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const authHeaders = buildActiveUiAuthHeaders()
   const resp = await fetch(apiUrl(url), {
@@ -88,65 +186,20 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
       accept: 'application/json',
       ...(authHeaders.authorization && !hasHeader(init?.headers, 'authorization') ? authHeaders : {}),
     },
+  }).catch((error) => {
+    throw transportError(url, error)
   })
 
   if (!resp.ok) {
     const txt = await readBodyText(resp)
-
-    // Best-effort parse structured backend errors so the UI can show something actionable.
-    let bodyJson: JsonLike = undefined
-    const ct = (resp.headers.get('content-type') || '').toLowerCase()
-    const looksJson = ct.includes('application/json') || txt.trim().startsWith('{') || txt.trim().startsWith('[')
-    if (txt && looksJson) {
-      try {
-        bodyJson = JSON.parse(txt)
-      } catch {
-        bodyJson = undefined
-      }
-    }
-
-    let message = txt || `Request failed (${resp.status})`
-    const bodyRecord = asRecord(bodyJson)
-    if (bodyRecord) {
-      const errorValue = bodyRecord.error
-      const errorRecord = asRecord(errorValue)
-      const extracted =
-        (typeof errorValue === 'string' && errorValue) ||
-        (typeof bodyRecord.message === 'string' && bodyRecord.message) ||
-        (typeof errorRecord?.message === 'string' && errorRecord.message)
-      if (extracted && extracted.trim()) message = extracted.trim()
-
-      const hint = typeof bodyRecord.hint === 'string' ? bodyRecord.hint.trim() : ''
-      if (hint) {
-        // Keep the primary message first; hint is extra guidance.
-        message = `${message}\n${hint}`
-      }
-    }
-
-    const err = new ApiError(message, resp.status, txt)
-    if (bodyJson !== undefined) {
-      err.bodyJson = bodyJson
-      const bodyRecord = asRecord(bodyJson)
-      if (bodyRecord) {
-        if (typeof bodyRecord.code === 'string') err.code = bodyRecord.code
-        if (typeof bodyRecord.hint === 'string') err.hint = bodyRecord.hint
-      }
-    }
-
-    const code = (err.code || '').trim()
-    const isUiAuthRequired =
-      err.status === 401 &&
-      (code === 'auth_required' ||
-        String(err.message || '')
-          .trim()
-          .toLowerCase() === 'ui authentication required')
-    if (isUiAuthRequired) {
-      emitAuthRequired({ message: err.message, status: err.status, code: code || 'auth_required', url })
-    }
-    throw err
+    throw responseError(resp, txt, url)
   }
 
-  return (await resp.json()) as T
+  try {
+    return (await resp.json()) as T
+  } catch (error) {
+    throw invalidSuccessResponse(url, error)
+  }
 }
 
 export async function apiText(url: string, init?: RequestInit): Promise<string> {
@@ -158,61 +211,12 @@ export async function apiText(url: string, init?: RequestInit): Promise<string> 
       ...(init?.headers ?? {}),
       ...(authHeaders.authorization && !hasHeader(init?.headers, 'authorization') ? authHeaders : {}),
     },
+  }).catch((error) => {
+    throw transportError(url, error)
   })
   if (!resp.ok) {
     const txt = await readBodyText(resp)
-
-    // Match apiJson's error extraction so callers get actionable messages.
-    let bodyJson: JsonLike = undefined
-    const ct = (resp.headers.get('content-type') || '').toLowerCase()
-    const looksJson = ct.includes('application/json') || txt.trim().startsWith('{') || txt.trim().startsWith('[')
-    if (txt && looksJson) {
-      try {
-        bodyJson = JSON.parse(txt)
-      } catch {
-        bodyJson = undefined
-      }
-    }
-
-    let message = txt || `Request failed (${resp.status})`
-    const bodyRecord = asRecord(bodyJson)
-    if (bodyRecord) {
-      const errorValue = bodyRecord.error
-      const errorRecord = asRecord(errorValue)
-      const extracted =
-        (typeof errorValue === 'string' && errorValue) ||
-        (typeof bodyRecord.message === 'string' && bodyRecord.message) ||
-        (typeof errorRecord?.message === 'string' && errorRecord.message)
-      if (extracted && extracted.trim()) message = extracted.trim()
-
-      const hint = typeof bodyRecord.hint === 'string' ? bodyRecord.hint.trim() : ''
-      if (hint) {
-        message = `${message}\n${hint}`
-      }
-    }
-
-    const err = new ApiError(message, resp.status, txt)
-    if (bodyJson !== undefined) {
-      err.bodyJson = bodyJson
-      const bodyRecord = asRecord(bodyJson)
-      if (bodyRecord) {
-        if (typeof bodyRecord.code === 'string') err.code = bodyRecord.code
-        if (typeof bodyRecord.hint === 'string') err.hint = bodyRecord.hint
-      }
-    }
-
-    const code = (err.code || '').trim()
-    const isUiAuthRequired =
-      err.status === 401 &&
-      (code === 'auth_required' ||
-        String(err.message || '')
-          .trim()
-          .toLowerCase() === 'ui authentication required')
-    if (isUiAuthRequired) {
-      emitAuthRequired({ message: err.message, status: err.status, code: code || 'auth_required', url })
-    }
-
-    throw err
+    throw responseError(resp, txt, url)
   }
   return await resp.text()
 }
@@ -226,61 +230,12 @@ export async function apiBlob(url: string, init?: RequestInit): Promise<Blob> {
       ...(init?.headers ?? {}),
       ...(authHeaders.authorization && !hasHeader(init?.headers, 'authorization') ? authHeaders : {}),
     },
+  }).catch((error) => {
+    throw transportError(url, error)
   })
   if (!resp.ok) {
     const txt = await readBodyText(resp)
-
-    // Mirror apiText error extraction.
-    let bodyJson: JsonLike = undefined
-    const ct = (resp.headers.get('content-type') || '').toLowerCase()
-    const looksJson = ct.includes('application/json') || txt.trim().startsWith('{') || txt.trim().startsWith('[')
-    if (txt && looksJson) {
-      try {
-        bodyJson = JSON.parse(txt)
-      } catch {
-        bodyJson = undefined
-      }
-    }
-
-    let message = txt || `Request failed (${resp.status})`
-    const bodyRecord = asRecord(bodyJson)
-    if (bodyRecord) {
-      const errorValue = bodyRecord.error
-      const errorRecord = asRecord(errorValue)
-      const extracted =
-        (typeof errorValue === 'string' && errorValue) ||
-        (typeof bodyRecord.message === 'string' && bodyRecord.message) ||
-        (typeof errorRecord?.message === 'string' && errorRecord.message)
-      if (extracted && extracted.trim()) message = extracted.trim()
-
-      const hint = typeof bodyRecord.hint === 'string' ? bodyRecord.hint.trim() : ''
-      if (hint) {
-        message = `${message}\n${hint}`
-      }
-    }
-
-    const err = new ApiError(message, resp.status, txt)
-    if (bodyJson !== undefined) {
-      err.bodyJson = bodyJson
-      const bodyRecord = asRecord(bodyJson)
-      if (bodyRecord) {
-        if (typeof bodyRecord.code === 'string') err.code = bodyRecord.code
-        if (typeof bodyRecord.hint === 'string') err.hint = bodyRecord.hint
-      }
-    }
-
-    const code = (err.code || '').trim()
-    const isUiAuthRequired =
-      err.status === 401 &&
-      (code === 'auth_required' ||
-        String(err.message || '')
-          .trim()
-          .toLowerCase() === 'ui authentication required')
-    if (isUiAuthRequired) {
-      emitAuthRequired({ message: err.message, status: err.status, code: code || 'auth_required', url })
-    }
-
-    throw err
+    throw responseError(resp, txt, url)
   }
 
   return await resp.blob()

@@ -570,8 +570,15 @@ pub(crate) fn render_part_node(
                     width,
                 );
             }
+            let problem_text = activity.problem.as_ref().map(|problem| {
+                if problem.is_unexpected() {
+                    format!("{} Reference: {}", problem.user.fallback, problem.id)
+                } else {
+                    problem.user.fallback.clone()
+                }
+            });
             if expanded
-                && let Some(error) = activity.error.as_ref()
+                && let Some(error) = problem_text.as_ref()
                 && error.trim() != activity.summary.trim()
             {
                 push_multiline(
@@ -591,18 +598,19 @@ pub(crate) fn render_part_node(
                 key,
                 kind: TranscriptNodeKind::Activity,
                 copy_text,
-                toggleable: !activity.summary.is_empty() || activity.error.is_some(),
+                toggleable: !activity.summary.is_empty() || activity.problem.is_some(),
                 expanded,
             }
         }
         TranscriptPartContent::Error(error) => {
-            let text = i18n.text_args(
-                "message-error",
-                &agena_tui::fl_args!(
-                    "code" => error.code.as_str(),
-                    "message" => error.message.as_str(),
-                ),
-            );
+            let text = if error.problem.is_unexpected() {
+                format!(
+                    "{} Reference: {}",
+                    error.problem.user.fallback, error.problem.id
+                )
+            } else {
+                error.problem.user.fallback.clone()
+            };
             push_multiline(
                 out,
                 "  ",

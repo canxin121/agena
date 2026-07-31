@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Vendor-specific Agena runtime provider adapters"
 
 [dependencies]
+agena-failure = { workspace = true }
 agena-domain = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime-provider = { workspace = true }

@@ -148,8 +148,18 @@ pub enum ProviderCatalogError {
 /// Classifies provider failures that affect retry and recovery policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderErrorKind {
-    ApiError,
+    Authentication,
+    RateLimited,
+    QuotaExceeded,
     ContextOverflow,
+    InvalidRequest,
+    Unavailable,
+    Timeout,
+    Connection,
+    MalformedResponse,
+    ToolProtocolViolation,
+    Misconfiguration,
+    Internal,
 }
 
 /// Persistence provenance for a provider model-catalog snapshot.

@@ -102,7 +102,7 @@ fn current_executor(
                 .cloned()
                 .or_else(|| tool_key.as_ref().and_then(|key| contexts.get(key).cloned()))
         })
-        .ok_or_else(|| PluginError::new("static plugin invoked without executor context"))
+        .ok_or_else(|| PluginError::internal("static plugin invoked without executor context"))
 }
 
 fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
@@ -165,7 +165,7 @@ pub fn invoke_tool(
         prepared_shell_command: None,
     };
     let execution = orchestrator::execute_tool(&executor, tool_name, input, context)
-        .map_err(|err| PluginError::new(format!("{tool_name}: {err}")))?;
+        .map_err(|err| PluginError::internal(format!("{tool_name}: {err}")))?;
     Ok(tool_execution_to_invoke_output(execution))
 }
 
@@ -177,7 +177,7 @@ pub fn permission_paths_for(
         "apply_patch" => {
             let payload = ApplyPatchToolInput::parse_input(input.clone())?;
             let paths = crate::tool::apply_patch::planned_paths(&payload.patch)
-                .map_err(|err| PluginError::new(err.to_string()))?;
+                .map_err(|err| PluginError::internal(err.to_string()))?;
             Ok(paths
                 .into_iter()
                 .map(agena_plugin_host::sdk::PathRequest::write)

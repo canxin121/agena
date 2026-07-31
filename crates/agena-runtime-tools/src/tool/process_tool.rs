@@ -95,7 +95,7 @@ fn execute_foreground_run(
             output.unwrap_or_else(|| view.output_text.clone()),
         ),
         other => {
-            return Err(ToolError::InvalidInput(format!(
+            return Err(ToolError::invalid_input(format!(
                 "shell.run expected process output, got {other:?}"
             )));
         }
@@ -205,7 +205,7 @@ fn finalize_background_command(
             .unwrap_or_else(|| (command.command.clone(), cwd))),
         ProcessShell::Powershell => {
             if !cfg!(windows) {
-                return Err(ToolError::InvalidInput(
+                return Err(ToolError::invalid_input(
                     "powershell tool is only available on Windows".to_string(),
                 ));
             }
@@ -222,7 +222,7 @@ fn process_registry(executor: &ToolExecutor) -> Result<&dyn MonitorService, Tool
         .monitor_registry()
         .map(|registry| registry.as_ref())
         .ok_or_else(|| {
-            ToolError::InvalidInput(
+            ToolError::invalid_input(
                 "background process registry is not enabled in this runtime".to_string(),
             )
         })
@@ -231,10 +231,10 @@ fn process_registry(executor: &ToolExecutor) -> Result<&dyn MonitorService, Tool
 fn into_tool_error(err: MonitorError) -> ToolError {
     match err {
         MonitorError::NotFound(_) | MonitorError::Invalid(_) => {
-            ToolError::InvalidInput(err.to_string())
+            ToolError::invalid_input(err.to_string())
         }
         MonitorError::InvalidPattern(e) => ToolError::InvalidRegexPattern(e),
-        MonitorError::RuntimeMissing => ToolError::InvalidInput(err.to_string()),
+        MonitorError::RuntimeMissing => ToolError::invalid_input(err.to_string()),
     }
 }
 

@@ -493,7 +493,7 @@ impl HostPermissionCheckResponse {
             .filter(|reason| !reason.trim().is_empty())
             .or_else(|| (!self.explanation.trim().is_empty()).then_some(self.explanation.as_str()))
             .unwrap_or("permission check did not allow the requested access");
-        Err(PluginError::new(reason.to_string()))
+        Err(PluginError::internal(reason.to_string()))
     }
 }
 
@@ -643,7 +643,9 @@ pub struct RunSubtaskResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub problem: Option<agena_failure::UserProblem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_feedback: Option<agena_failure::ModelFeedback>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1181,7 +1183,7 @@ pub struct HostPluginStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_restart_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1527,11 +1529,8 @@ impl HostClient for NoopHostClient {
 }
 
 fn unavailable() -> PluginError {
-    PluginError {
-        code: crate::error::PluginErrorCode::HostUnavailable,
-        message: "host is unavailable for this plugin".into(),
-        hook: None,
-        plugin: None,
-        data: None,
-    }
+    PluginError::from_kind(
+        crate::error::PluginErrorKind::HostUnavailable,
+        "host is unavailable for this plugin",
+    )
 }

@@ -16,8 +16,8 @@ use crate::message::{
 use crate::provider::ProviderRegistry;
 use agena_domain::ModelRef;
 use agena_domain::{
-    AssistantReasoningField, ErrorInfo, ExecutionStatus, FinishReason, MessageSource, Role,
-    StreamErrorEvent, StructuredObject, TimeRange, ToolInvocation,
+    AssistantReasoningField, ExecutionStatus, FinishReason, MessageSource, Role, StreamErrorEvent,
+    StructuredObject, TimeRange, ToolInvocation,
 };
 use agena_provider::CompletionFinishReason;
 use agena_provider::CompletionRequest;

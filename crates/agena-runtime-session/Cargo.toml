@@ -9,6 +9,7 @@ description = "Agena session model, history and execution"
 [dependencies]
 arc-swap = { workspace = true }
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-keyring-store = { workspace = true }
 agena-lsp = { workspace = true }
 agena-plugin-host = { workspace = true }

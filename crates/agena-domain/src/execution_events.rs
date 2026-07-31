@@ -43,7 +43,7 @@ pub struct SubtaskStatusChangedEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
     pub ts_ms: i64,
 }
 
@@ -63,11 +63,11 @@ mod tests {
             resumed: false,
             started_at_ms: None,
             finished_at_ms: None,
-            error: None,
+            failure: None,
             ts_ms: 3,
         };
         let json = serde_json::to_value(value).unwrap();
         assert!(json.get("resumed").is_none());
-        assert!(json.get("error").is_none());
+        assert!(json.get("failure").is_none());
     }
 }

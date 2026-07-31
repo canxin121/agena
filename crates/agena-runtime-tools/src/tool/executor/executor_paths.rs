@@ -109,7 +109,7 @@ impl ToolExecutor {
     ) -> Result<(), ToolError> {
         for effect in effects {
             let target: NetworkTarget = effect.target.parse().map_err(|err| {
-                ToolError::InvalidInput(format!(
+                ToolError::invalid_input(format!(
                     "invalid network effect target `{}`: {err}",
                     effect.target
                 ))
@@ -186,7 +186,7 @@ impl ToolExecutor {
         target: &str,
     ) -> Result<(), ToolError> {
         let target: NetworkTarget = target.parse().map_err(|err| {
-            ToolError::InvalidInput(format!(
+            ToolError::invalid_input(format!(
                 "invalid network permission target `{target}`: {err}"
             ))
         })?;

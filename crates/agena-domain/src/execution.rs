@@ -38,15 +38,12 @@ pub enum ExecutionFailureKind {
 pub enum ExecutionOutcome {
     Completed,
     Cancelled,
-    Failed {
-        failure_kind: ExecutionFailureKind,
-        message: String,
-    },
+    Failed { failure: agena_failure::UserProblem },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};
+    use super::{ExecutionOutcome, ExecutionPhase, ExecutionSource};
 
     #[test]
     fn execution_values_have_stable_wire_shapes() {
@@ -55,17 +52,31 @@ mod tests {
             serde_json::to_string(&ExecutionPhase::PreparingModel).unwrap(),
             "\"preparing_model\""
         );
-        assert_eq!(
-            serde_json::to_value(ExecutionOutcome::Failed {
-                failure_kind: ExecutionFailureKind::ProcessRestart,
-                message: "interrupted".to_owned(),
-            })
-            .unwrap(),
-            serde_json::json!({
-                "kind": "failed",
-                "failure_kind": "process_restart",
-                "message": "interrupted",
-            })
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("execution.interrupted"),
+            agena_failure::FailureCategory::DependencyUnavailable,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::AfterUserAction,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new(
+                "execution-interrupted",
+                "The response was interrupted.",
+            ),
         );
+        let id = failure.id.to_string();
+        let value = serde_json::to_value(ExecutionOutcome::Failed {
+            failure: failure.into(),
+        })
+        .unwrap();
+        assert_eq!(value["kind"], "failed");
+        assert_eq!(value["failure"]["id"], id);
+        assert_eq!(value["failure"]["code"], "execution.interrupted");
+        assert_eq!(
+            value["failure"]["user"]["fallback"],
+            "The response was interrupted."
+        );
+        assert!(value.get("message").is_none());
+        assert!(value["failure"].get("model").is_none());
     }
 }

@@ -27,13 +27,62 @@ use agena_storage_sqlite::{StoredExecutionStatus, StoredPartKind};
 
 use super::{RunAborted, RunId, RunStarted};
 use agena_domain::{
-    EventFilter, EventScope, ExecutionFailureKind, ExecutionFinishedEvent, ExecutionOutcome,
-    ExecutionStartedEvent, ExecutionStatus, MessageSource, PromptCompactionCompletedEvent, Role,
-    RunAbortReason,
+    EventFilter, EventScope, ExecutionFinishedEvent, ExecutionOutcome, ExecutionStartedEvent,
+    ExecutionStatus, MessageSource, PromptCompactionCompletedEvent, Role, RunAbortReason,
 };
 
 #[cfg(test)]
 mod tests;
+
+fn run_abort_problem(reason: RunAbortReason) -> Option<agena_failure::UserProblem> {
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+        RecoveryDirective, RetryDirective, UserPresentation,
+    };
+
+    let (code, category, responsibility, retry, recovery, fallback) = match reason {
+        RunAbortReason::UserCancelled => return None,
+        RunAbortReason::ProviderError => (
+            "provider.response_failed",
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::Dependency,
+            RetryDirective::Backoff,
+            RecoveryDirective::Retry,
+            "The provider could not complete the response. Try again or choose another model.",
+        ),
+        RunAbortReason::ProcessRestart => (
+            "execution.process_restarted",
+            FailureCategory::Internal,
+            FailureResponsibility::System,
+            RetryDirective::ImmediateOnce,
+            RecoveryDirective::Retry,
+            "The response was interrupted because the runtime restarted. Try again.",
+        ),
+        RunAbortReason::Internal => (
+            "execution.internal",
+            FailureCategory::Internal,
+            FailureResponsibility::System,
+            RetryDirective::Unknown,
+            RecoveryDirective::Retry,
+            "The response stopped unexpectedly. Try again.",
+        ),
+    };
+    let failure = Failure::new(
+        FailureCode::new(code),
+        category,
+        responsibility,
+        retry,
+        recovery,
+        FailureImpact::OperationFailed,
+        UserPresentation::new(code, fallback),
+    );
+    tracing::warn!(
+        failure_id = %failure.id,
+        abort_reason = ?reason,
+        "reconciled a run without its authoritative terminal event"
+    );
+    Some(failure.into())
+}
 
 #[derive(Debug, Clone)]
 pub struct ProjectedMessageHeader {
@@ -50,6 +99,11 @@ pub struct ProjectedMessageHeader {
 pub(crate) struct SessionHistoryStore {
     publisher: Arc<EventPublisher>,
     db: DatabaseConnection,
+    /// Projection catch-up is a per-session single-writer operation. Without
+    /// this fence, a read-side catch-up can race an append-side barrier: both
+    /// observe the same watermark and apply the same terminal event.
+    projection_locks:
+        Arc<std::sync::Mutex<std::collections::HashMap<i64, Arc<tokio::sync::Mutex<()>>>>>,
     message_projection_repository: Arc<dyn MessageProjectionRepository>,
     message_projection_transaction_writer:
         Arc<dyn MessageProjectionTransactionWriter<DatabaseTransaction>>,
@@ -67,6 +121,7 @@ impl SessionHistoryStore {
         Self {
             publisher,
             db,
+            projection_locks: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             message_projection_repository,
             message_projection_transaction_writer,
         }
@@ -101,7 +156,6 @@ impl SessionHistoryStore {
         &self,
         session_id: i64,
         reason: RunAbortReason,
-        message: String,
     ) -> Result<(), DbErr> {
         let events = self.list_session_events(session_id).await?;
         let (started_runs, _) = unmatched_lifecycles(events.as_slice());
@@ -118,7 +172,7 @@ impl SessionHistoryStore {
                         EventKind::RunAborted(RunAborted {
                             run_id,
                             reason,
-                            message: Some(message.clone()),
+                            failure: run_abort_problem(reason),
                         }),
                     )
                     .await
@@ -245,7 +299,7 @@ impl SessionHistoryStore {
             let kind = EventKind::RunAborted(RunAborted {
                 run_id,
                 reason: RunAbortReason::ProcessRestart,
-                message: Some("process restart detected on session load".to_string()),
+                failure: run_abort_problem(RunAbortReason::ProcessRestart),
             });
             pending.push(
                 self.publisher
@@ -260,8 +314,7 @@ impl SessionHistoryStore {
                 execution_id,
                 response_id,
                 outcome: ExecutionOutcome::Failed {
-                    failure_kind: ExecutionFailureKind::ProcessRestart,
-                    message: "process restart interrupted execution".to_string(),
+                    failure: interrupted_execution_problem(),
                 },
                 ts_ms: Utc::now().timestamp_millis(),
             });
@@ -351,6 +404,17 @@ impl SessionHistoryStore {
     }
 
     async fn ensure_projection_current(&self, session_id: i64) -> Result<i64, DbErr> {
+        let session_lock = {
+            let mut locks = self.projection_locks.lock().map_err(|_| {
+                DbErr::Custom("projection coordinator lock was poisoned".to_owned())
+            })?;
+            Arc::clone(
+                locks
+                    .entry(session_id)
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+            )
+        };
+        let _projection_guard = session_lock.lock().await;
         let projected_seq = self
             .load_projection_state(session_id)
             .await?
@@ -361,16 +425,29 @@ impl SessionHistoryStore {
             .await?;
         if !pending.is_empty() {
             let txn = self.db.begin().await?;
+            acquire_projection_fence(&txn, session_id).await?;
+            let transactional_watermark =
+                transcript_projection_state::Entity::find_by_id(session_id)
+                    .one(&txn)
+                    .await?
+                    .map(|row| row.last_seq_global)
+                    .unwrap_or(0);
+            let pending = pending
+                .into_iter()
+                .filter(|event| event.meta.seq_global > transactional_watermark)
+                .collect::<Vec<_>>();
             let part_writer = TransactionProjectionPartWriter::new(Arc::clone(
                 &self.message_projection_transaction_writer,
             ));
-            apply_projection_events_on_connection(
-                &txn,
-                &part_writer,
-                session_id,
-                pending.as_slice(),
-            )
-            .await?;
+            if !pending.is_empty() {
+                apply_projection_events_on_connection(
+                    &txn,
+                    &part_writer,
+                    session_id,
+                    pending.as_slice(),
+                )
+                .await?;
+            }
             txn.commit().await?;
         }
         Ok(self
@@ -384,6 +461,7 @@ impl SessionHistoryStore {
         let events = self.list_session_events(session_id).await?;
 
         let txn = self.db.begin().await?;
+        acquire_projection_fence(&txn, session_id).await?;
         let part_writer = TransactionProjectionPartWriter::new(Arc::clone(
             &self.message_projection_transaction_writer,
         ));
@@ -395,6 +473,46 @@ impl SessionHistoryStore {
         txn.commit().await?;
         Ok(())
     }
+}
+
+fn interrupted_execution_problem() -> agena_failure::UserProblem {
+    agena_failure::Failure::new(
+        agena_failure::FailureCode::new("execution.process_restart"),
+        agena_failure::FailureCategory::DependencyUnavailable,
+        agena_failure::FailureResponsibility::System,
+        agena_failure::RetryDirective::AfterUserAction,
+        agena_failure::RecoveryDirective::Retry,
+        agena_failure::FailureImpact::OperationFailed,
+        agena_failure::UserPresentation::new(
+            "execution-process-restart",
+            "The response was interrupted because the runtime restarted.",
+        ),
+    )
+    .into()
+}
+
+/// Acquire a database-level per-session projection fence before reading the
+/// transactional watermark. The no-op upsert is deliberately the first write
+/// in the transaction: SQLite serializes concurrent writers here, including
+/// independent `SessionHistoryStore` instances whose process-local locks are
+/// not shared. After the fence is held, a stale caller re-reads the committed
+/// watermark and skips events already applied by the winner.
+async fn acquire_projection_fence(
+    transaction: &DatabaseTransaction,
+    session_id: i64,
+) -> Result<(), DbErr> {
+    transaction
+        .execute(Statement::from_sql_and_values(
+            transaction.get_database_backend(),
+            "INSERT INTO agena_transcript_projection_states \
+             (session_id, last_seq_global, updated_at_ms) VALUES (?, 0, ?) \
+             ON CONFLICT(session_id) DO UPDATE SET \
+             updated_at_ms = agena_transcript_projection_states.updated_at_ms"
+                .to_owned(),
+            [session_id.into(), Utc::now().timestamp_millis().into()],
+        ))
+        .await?;
+    Ok(())
 }
 
 fn unmatched_lifecycles(
@@ -634,13 +752,45 @@ where
             ],
         ))
         .await?;
-    if result.rows_affected() != 1 {
+    if result.rows_affected() == 1 {
+        return Ok(());
+    }
+
+    // Applying the same event again is harmless. This can happen after an
+    // ambiguous transaction outcome or while recovering a projection cursor.
+    // A different terminal event is not harmless and remains an invariant
+    // violation with a precise diagnostic.
+    let existing = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT execution_id, status, revision_seq, finished_at_ms \
+             FROM agena_responses WHERE response_id = ? LIMIT 1",
+            [payload.response_id.to_string().into()],
+        ))
+        .await?;
+    let Some(existing) = existing else {
         return Err(DbErr::Custom(format!(
-            "response {} for execution {} is missing or already terminal",
-            payload.response_id, payload.execution_id
+            "execution-finished projection references missing response {}",
+            payload.response_id
+        )));
+    };
+    let existing_execution = existing.try_get::<String>("", "execution_id")?;
+    if existing_execution != payload.execution_id.to_string() {
+        return Err(DbErr::Custom(format!(
+            "execution-finished projection identity mismatch for response {}",
+            payload.response_id
         )));
     }
-    Ok(())
+    let existing_status = existing.try_get::<String>("", "status")?;
+    let existing_revision = existing.try_get::<i64>("", "revision_seq")?;
+    let finished_at = existing.try_get::<Option<i64>>("", "finished_at_ms")?;
+    if finished_at.is_some() && existing_status == status && existing_revision == revision_seq {
+        return Ok(());
+    }
+    Err(DbErr::Custom(format!(
+        "conflicting terminal projection for response {}: existing status {} at revision {}, incoming status {} at revision {}",
+        payload.response_id, existing_status, existing_revision, status, revision_seq
+    )))
 }
 
 pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::ActivityPayload> {
@@ -677,8 +827,7 @@ pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::Activ
                     .error
                     .as_ref()
                     .map(|error| OperationActivityError {
-                        message: error.message.clone(),
-                        code: error.code.clone(),
+                        problem: (&error.failure).into(),
                     }),
             }))
         }
@@ -747,9 +896,7 @@ pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::Activ
         }
         PartContent::Activity(crate::message::RuntimeActivity::Error(error)) => {
             Some(ActivityPayload::Error(ErrorActivity {
-                code: error.code.clone(),
-                message: error.message.clone(),
-                failure_kind: None,
+                problem: error.problem.clone(),
             }))
         }
     }
@@ -2133,7 +2280,7 @@ where
          (session_id, last_seq_global, updated_at_ms) \
          VALUES (?, ?, ?) \
          ON CONFLICT(session_id) DO UPDATE SET \
-         last_seq_global = excluded.last_seq_global, \
+         last_seq_global = MAX(agena_transcript_projection_states.last_seq_global, excluded.last_seq_global), \
          updated_at_ms = excluded.updated_at_ms",
         [
             session_id.into(),

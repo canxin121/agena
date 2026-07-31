@@ -55,36 +55,60 @@ impl SessionManager {
             ExecutionSource::Compaction,
             "compaction execution",
             move |manager, control, _steer_rx| async move {
-                let state = manager.execution_state();
-                let mut session = manager
-                    .store
-                    .load_session(session_id, state.cache_policy())
-                    .await?;
-                manager.refresh_execution_policy(&mut session, &state);
-                let options =
-                    manager.apply_execution_context_to_run_options(&session, request.options)?;
-                match manager
-                    .compact_candidate(
-                        session,
-                        &options,
-                        PromptCompactionTrigger::Manual,
-                        state.clone(),
-                        control,
-                    )
-                    .await
-                {
-                    Ok(session) => Ok(session),
-                    Err((mut session, error)) => {
-                        session.runtime.prompt_window.record_compaction_failure();
-                        let _ = manager
-                            .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
-                            .await?;
-                        Err(error)
-                    }
-                }
+                manager.compact_session_inner(request, control).await
             },
         )
         .await
+    }
+
+    pub async fn start_compact_session(
+        &self,
+        request: SessionExecutionRequest,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        let session_id = request.session_id;
+        self.start_registered(
+            session_id,
+            ExecutionSource::Compaction,
+            "compaction execution",
+            move |manager, control, _steer_rx| async move {
+                manager.compact_session_inner(request, control).await
+            },
+        )
+        .await
+    }
+
+    async fn compact_session_inner(
+        &self,
+        request: SessionExecutionRequest,
+        control: Arc<ExecutionControl>,
+    ) -> Result<Session, AppError> {
+        let session_id = request.session_id;
+        let state = self.execution_state();
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        self.refresh_execution_policy(&mut session, &state);
+        let options = self.apply_execution_context_to_run_options(&session, request.options)?;
+        match self
+            .compact_candidate(
+                session,
+                &options,
+                PromptCompactionTrigger::Manual,
+                state.clone(),
+                control,
+            )
+            .await
+        {
+            Ok(session) => Ok(session),
+            Err((mut session, error)) => {
+                session.runtime.prompt_window.record_compaction_failure();
+                let _ = self
+                    .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+                    .await?;
+                Err(error)
+            }
+        }
     }
 
     pub(super) async fn auto_compact_session(
@@ -856,7 +880,15 @@ fn compaction_model_key(options: &SessionRunOptions) -> String {
 
 fn remote_compaction_is_permanently_unavailable(error: &AppError) -> bool {
     matches!(error, AppError::Config(_))
-        || (!error.retryable() && error.provider_error_kind() == Some(ProviderErrorKind::ApiError))
+        || matches!(
+            error.provider_error_kind(),
+            Some(
+                ProviderErrorKind::Authentication
+                    | ProviderErrorKind::QuotaExceeded
+                    | ProviderErrorKind::InvalidRequest
+                    | ProviderErrorKind::Misconfiguration
+            )
+        )
 }
 
 #[cfg(test)]

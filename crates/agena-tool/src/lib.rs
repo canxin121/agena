@@ -208,7 +208,7 @@ pub struct CronJobSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_run_error: Option<String>,
+    pub last_run_failure: Option<agena_failure::UserProblem>,
 }
 
 /// Stable history entry emitted by `cron.history`.
@@ -227,7 +227,7 @@ pub struct CronRunSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 /// A permission decision attached to one tool access action.

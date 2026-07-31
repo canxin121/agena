@@ -50,7 +50,7 @@ impl SuiteOperation {
         self.value
             .error
             .as_ref()
-            .map(|error| error.message.as_str())
+            .map(|error| error.failure.user.fallback.as_str())
     }
     pub(super) fn output_text(&self) -> Option<&str> {
         (!self.value.model_output.text.is_empty()).then_some(self.value.model_output.text.as_str())

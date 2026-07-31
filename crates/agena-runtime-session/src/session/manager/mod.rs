@@ -25,10 +25,10 @@ use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::UserInputReply;
 use agena_domain::{
-    DecisionTraceStep, ExecutionFailureKind, ExecutionFinishedEvent, ExecutionOutcome,
-    ExecutionSource, ExecutionStartedEvent, FinishReason, PermissionAction, PermissionDecision,
-    PermissionMode, PermissionRepliedEvent, PermissionReply, PermissionReplyKind,
-    PermissionRiskLevel, PermissionScope, Role, RunAbortReason, TimeRange, UserInputReplyKind,
+    DecisionTraceStep, ExecutionFinishedEvent, ExecutionOutcome, ExecutionSource,
+    ExecutionStartedEvent, FinishReason, PermissionAction, PermissionDecision, PermissionMode,
+    PermissionRepliedEvent, PermissionReply, PermissionReplyKind, PermissionRiskLevel,
+    PermissionScope, Role, RunAbortReason, TimeRange, UserInputReplyKind,
 };
 use agena_domain::{ExecutionStatus, MessageSource};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
@@ -154,7 +154,7 @@ pub struct SessionSubtaskResponse {
     pub status: agena_domain::SubtaskStatus,
     pub resumed: bool,
     pub final_text: Option<String>,
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
     pub usage: agena_provider::CompletionUsage,
     pub model_provider_id: Option<String>,
     pub model_adapter_id: Option<String>,
@@ -578,6 +578,16 @@ impl agena_runtime::SessionPluginCommandService for SessionManager {
     }
 }
 
+fn session_execution_command_error(error: AppError) -> agena_runtime::SessionExecutionCommandError {
+    let failure = error.failure();
+    tracing::error!(
+        failure_id = %failure.id,
+        diagnostic = %error,
+        "session execution command rejected"
+    );
+    agena_runtime::SessionExecutionCommandError::from_failure(failure)
+}
+
 #[async_trait::async_trait]
 impl agena_runtime::SessionExecutionCommandService for SessionManager {
     async fn create_session(
@@ -589,10 +599,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     > {
         let session = SessionManager::create_session(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
+            session.id,
+        ))
     }
 
     async fn submit_user_message(
@@ -608,7 +618,7 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
             idempotency_key,
         } = request;
         let parts = part_contents_from_composer_document(document)
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
+            .map_err(session_execution_command_error)?;
         let mut request = SessionUserMessageRequest {
             run,
             parts,
@@ -617,12 +627,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         if let Some(key) = idempotency_key {
             request = request.with_idempotency_key(key);
         }
-        let session = SessionManager::submit_user_message_parts(self, request)
+        let outcome = SessionManager::start_user_message_parts(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(outcome)
     }
 
     async fn steer_input(
@@ -631,14 +639,14 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         document: agena_domain::ComposerDocument,
     ) -> Result<(), agena_runtime::SessionExecutionCommandError> {
         let parts = part_contents_from_composer_document(document)
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
+            .map_err(session_execution_command_error)?;
         SessionManager::steer_input(
             self,
             session_id,
             parts.into_iter().map(|part| part.content).collect(),
         )
         .await
-        .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))
+        .map_err(session_execution_command_error)
     }
 
     async fn continue_session(
@@ -648,12 +656,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let session = SessionManager::continue_session(self, request)
+        let outcome = SessionManager::start_continue_session(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(outcome)
     }
 
     async fn compact_session(
@@ -663,12 +669,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let session = SessionManager::compact_session(self, request)
+        let outcome = SessionManager::start_compact_session(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(outcome)
     }
 
     async fn rewind_session(
@@ -680,10 +684,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     > {
         let session = SessionManager::rewind_session(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
+            session.id,
+        ))
     }
 
     async fn fork_session(
@@ -695,10 +699,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     > {
         let session = SessionManager::fork_session(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
+            session.id,
+        ))
     }
 
     async fn import_session_jsonl(
@@ -710,10 +714,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     > {
         let session = SessionManager::import_session_jsonl(self, jsonl)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
+            session.id,
+        ))
     }
 
     async fn reply_permission(
@@ -723,12 +727,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let session = SessionManager::reply_permission(self, request)
+        let outcome = SessionManager::start_reply_permission(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(outcome)
     }
 
     async fn reply_user_input(
@@ -738,12 +740,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let session = SessionManager::reply_user_input(self, request)
+        let outcome = SessionManager::start_reply_user_input(self, request)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(outcome)
     }
 
     async fn update_session_selection(
@@ -756,10 +756,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     > {
         let session = SessionManager::update_session_selection(self, session_id, options)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
+            session.id,
+        ))
     }
 
     async fn set_session_permission(
@@ -772,10 +772,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
     > {
         let session = SessionManager::set_session_permission(self, session_id, permission)
             .await
-            .map_err(|error| agena_runtime::SessionExecutionCommandError::new(error.to_string()))?;
-        Ok(agena_runtime::SessionExecutionCommandOutcome {
-            session_id: session.id,
-        })
+            .map_err(session_execution_command_error)?;
+        Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
+            session.id,
+        ))
     }
 }
 
@@ -924,10 +924,17 @@ impl SessionManager {
         } else {
             match result {
                 Ok(_) => ExecutionOutcome::Completed,
-                Err(error) => ExecutionOutcome::Failed {
-                    failure_kind: execution_failure_kind(error),
-                    message: error.to_string(),
-                },
+                Err(error) => {
+                    let failure = error.failure();
+                    tracing::error!(
+                        failure_id = %failure.id,
+                        diagnostic = %error,
+                        "session execution failed"
+                    );
+                    ExecutionOutcome::Failed {
+                        failure: failure.into(),
+                    }
+                }
             }
         }
     }
@@ -972,6 +979,89 @@ impl SessionManager {
             return Err(error);
         }
 
+        self.drive_registered(session_id, task_name, control, steer_rx, operation)
+            .await
+    }
+
+    /// Accept an execution and return its stable identity after
+    /// `ExecutionStarted` is durable. The lifecycle owner continues in the
+    /// background; provider/tool/cancellation outcomes are reported by
+    /// terminal events and never retroactively fail the accepted command.
+    async fn start_registered<T, F, Fut>(
+        &self,
+        session_id: i64,
+        source: ExecutionSource,
+        task_name: &'static str,
+        operation: F,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(
+                SessionManager,
+                Arc<ExecutionControl>,
+                mpsc::UnboundedReceiver<Vec<PartContent>>,
+            ) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<T, AppError>> + Send + 'static,
+    {
+        let (control, steer_rx) = self
+            .execution_registry
+            .register(session_id)
+            .await
+            .map_err(execution_control_to_app_error)?;
+        if let Err(error) = self
+            .begin_execution(session_id, control.as_ref(), source)
+            .await
+        {
+            self.execution_registry
+                .unregister_if_matches(session_id, &control)
+                .await;
+            return Err(error);
+        }
+        let outcome = crate::SessionExecutionCommandOutcome::accepted(
+            session_id,
+            control.execution_id(),
+            control.turn_id(),
+            control.response_id(),
+        );
+        let manager = self.background_handle();
+        tokio::spawn(async move {
+            if let Err(error) = manager
+                .drive_registered(session_id, task_name, control, steer_rx, operation)
+                .await
+            {
+                tracing::error!(
+                    session_id,
+                    task_name,
+                    diagnostic = %error,
+                    public_message = %error.public_message(),
+                    "accepted execution finished with a failure"
+                );
+            }
+        });
+        Ok(outcome)
+    }
+
+    async fn drive_registered<T, F, Fut>(
+        &self,
+        session_id: i64,
+        task_name: &'static str,
+        control: Arc<ExecutionControl>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        operation: F,
+    ) -> Result<T, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(
+                SessionManager,
+                Arc<ExecutionControl>,
+                mpsc::UnboundedReceiver<Vec<PartContent>>,
+            ) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<T, AppError>> + Send + 'static,
+    {
         agena_runtime::session_started();
         let manager = self.background_handle();
         let task_control = Arc::clone(&control);
@@ -996,11 +1086,7 @@ impl SessionManager {
             .unwrap_or(RunAbortReason::Internal);
         let reconciliation_result = self
             .store
-            .reconcile_unmatched_runs(
-                session_id,
-                unmatched_run_reason,
-                "execution ended without a terminal run event".to_string(),
-            )
+            .reconcile_unmatched_runs(session_id, unmatched_run_reason)
             .await;
         let outcome = Self::execution_outcome(control.as_ref(), &result);
         let terminal_result = self

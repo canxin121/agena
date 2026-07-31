@@ -57,7 +57,7 @@ pub struct CrawlRunReport {
     pub total_documents: usize,
     pub documents: Vec<CrawlDocumentSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failures: Vec<String>,
+    pub failures: Vec<agena_failure::UserProblem>,
 }
 
 pub trait CrawlPageFetcher {
@@ -122,7 +122,14 @@ pub async fn crawl_site(
         {
             Ok(page) => {
                 if page.status >= 400 {
-                    failures.push(format!("{url}: http {}", page.status));
+                    let failure = crawl_page_failure();
+                    tracing::warn!(
+                        failure_id = %failure.id,
+                        url = %url,
+                        http_status = page.status,
+                        "crawl page returned an unsuccessful HTTP status"
+                    );
+                    failures.push(failure.into());
                     continue;
                 }
                 let document =
@@ -165,7 +172,16 @@ pub async fn crawl_site(
                 stored_count += 1;
                 documents.push(document.summary());
             }
-            Err(err) => failures.push(format!("{url}: {err}")),
+            Err(err) => {
+                let failure = crawl_page_failure();
+                tracing::warn!(
+                    failure_id = %failure.id,
+                    url = %url,
+                    diagnostic = %err,
+                    "crawl page fetch failed"
+                );
+                failures.push(failure.into());
+            }
         }
     }
 
@@ -190,6 +206,26 @@ pub async fn crawl_site(
         documents,
         failures,
     })
+}
+
+fn crawl_page_failure() -> agena_failure::Failure {
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+        RecoveryDirective, RetryDirective, UserPresentation,
+    };
+
+    Failure::new(
+        FailureCode::new("web.crawl_page_failed"),
+        FailureCategory::DependencyUnavailable,
+        FailureResponsibility::Dependency,
+        RetryDirective::Backoff,
+        RecoveryDirective::Retry,
+        FailureImpact::PartialSuccess,
+        UserPresentation::new(
+            "web-crawl-page-failed",
+            "A page could not be retrieved during the crawl.",
+        ),
+    )
 }
 
 pub fn ensure_index_exists(store: &CrawlStore) -> Result<(), CrawlError> {

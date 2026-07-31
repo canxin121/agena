@@ -653,7 +653,7 @@ impl Application {
         &self,
     ) -> Result<Arc<dyn agena_runtime::SessionQueryService>, ApplicationError> {
         self.session_queries.clone().ok_or_else(|| {
-            ApplicationError::ServiceUnavailable("session query service not initialised".into())
+            ApplicationError::service_unavailable("session query service not initialised")
         })
     }
 
@@ -662,17 +662,17 @@ impl Application {
     ) -> Result<ApplicationSessionServices, ApplicationError> {
         Ok(ApplicationSessionServices {
             execution_control: self.execution_control.clone().ok_or_else(|| {
-                ApplicationError::ServiceUnavailable("session runtime not initialised".into())
+                ApplicationError::service_unavailable("session runtime not initialised")
             })?,
             queries: self.session_query_service()?,
             commands: self.execution_commands.clone().ok_or_else(|| {
-                ApplicationError::ServiceUnavailable("session runtime not initialised".into())
+                ApplicationError::service_unavailable("session runtime not initialised")
             })?,
             tool_execution: self.tool_execution.clone().ok_or_else(|| {
-                ApplicationError::ServiceUnavailable("session runtime not initialised".into())
+                ApplicationError::service_unavailable("session runtime not initialised")
             })?,
             plugin_commands: self.plugin_commands.clone().ok_or_else(|| {
-                ApplicationError::ServiceUnavailable("session runtime not initialised".into())
+                ApplicationError::service_unavailable("session runtime not initialised")
             })?,
         })
     }
@@ -681,7 +681,7 @@ impl Application {
         &self,
     ) -> Result<Arc<dyn agena_runtime::RuntimeEventStreamService>, ApplicationError> {
         self.event_stream.clone().ok_or_else(|| {
-            ApplicationError::ServiceUnavailable("event stream service not initialised".into())
+            ApplicationError::service_unavailable("event stream service not initialised")
         })
     }
 
@@ -689,7 +689,7 @@ impl Application {
         &self,
     ) -> Result<Arc<dyn agena_runtime::RuntimeEventQueryService>, ApplicationError> {
         self.event_queries.clone().ok_or_else(|| {
-            ApplicationError::ServiceUnavailable("event query service not initialised".into())
+            ApplicationError::service_unavailable("event query service not initialised")
         })
     }
 }
@@ -712,7 +712,7 @@ fn model_catalog_summary(
         refreshing: runtime.model_catalog_refresh_active(),
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
-        last_error: catalog.last_error.clone(),
+        last_failure: catalog.last_failure.as_ref().map(Into::into),
         model_count: catalog.models.len(),
     }
 }
@@ -722,10 +722,16 @@ fn application_error_from_runtime_authentication(
 ) -> ApplicationError {
     match error.kind {
         agena_runtime::RuntimeAuthenticationErrorKind::BadRequest => {
-            ApplicationError::bad_request(error.message)
+            ApplicationError::bad_request_with_diagnostic(
+                "The authentication request is invalid.",
+                error.message,
+            )
         }
         agena_runtime::RuntimeAuthenticationErrorKind::NotFound => {
-            ApplicationError::not_found(error.message)
+            ApplicationError::not_found_with_diagnostic(
+                "The authentication method was not found.",
+                error.message,
+            )
         }
         agena_runtime::RuntimeAuthenticationErrorKind::Internal => {
             ApplicationError::internal(error.message)

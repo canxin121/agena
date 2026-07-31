@@ -286,7 +286,7 @@ pub(crate) fn permission_config_from_json_value(value: &JsonValue) -> UiResult<P
     if value.is_null() {
         Ok(PermissionConfig::default())
     } else {
-        serde_json::from_value(value.clone()).map_err(|error| error.to_string())
+        serde_json::from_value(value.clone()).map_err(crate::UiFailure::internal)
     }
 }
 use crate::{

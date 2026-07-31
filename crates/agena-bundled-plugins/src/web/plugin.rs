@@ -711,12 +711,12 @@ impl WebPlugin {
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.state
             .set(WebPluginState::new(parse_web_config(ctx.config)?))
-            .map_err(|_| PluginError::new("web plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("web plugin initialized more than once"))?;
         self.host
             .set(host)
-            .map_err(|_| PluginError::new("web plugin host initialized more than once"))?;
+            .map_err(|_| PluginError::internal("web plugin host initialized more than once"))?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
-            PluginError::new("web plugin workspace root initialized more than once")
+            PluginError::internal("web plugin workspace root initialized more than once")
         })?;
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
@@ -726,7 +726,7 @@ impl WebPlugin {
     fn state(&self) -> SdkResult<&WebPluginState> {
         self.state
             .get()
-            .ok_or_else(|| PluginError::new("web plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("web plugin invoked before init"))
     }
 
     fn config(&self) -> SdkResult<&WebConfig> {
@@ -737,13 +737,13 @@ impl WebPlugin {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("web plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("web plugin invoked before init"))
     }
 
     fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
         self.host
             .get()
-            .ok_or_else(|| PluginError::new("web plugin host not initialized"))
+            .ok_or_else(|| PluginError::internal("web plugin host not initialized"))
     }
 
     fn store(&self) -> SdkResult<CrawlStore> {
@@ -802,7 +802,7 @@ impl WebPlugin {
             .timeout(timeout)
             .build()
             .map_err(|error| {
-                PluginError::new(format!("browser redirect preflight setup failed: {error}"))
+                PluginError::internal(format!("browser redirect preflight setup failed: {error}"))
             })?;
         let mut current = initial.clone();
         let mut checked = Vec::new();
@@ -810,7 +810,7 @@ impl WebPlugin {
             self.ensure_network_permission(&current).await?;
             checked.push(current.to_string());
             let response = client.head(current.clone()).send().await.map_err(|error| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "browser redirect preflight failed for {current}: {error}"
                 ))
             })?;
@@ -822,13 +822,13 @@ impl WebPlugin {
                 .get(reqwest::header::LOCATION)
                 .and_then(|value| value.to_str().ok())
                 .ok_or_else(|| {
-                    PluginError::new(format!(
+                    PluginError::internal(format!(
                         "browser redirect from {current} had no valid Location header"
                     ))
                 })?;
             current = resolve_browser_redirect(&current, location)?;
         }
-        Err(PluginError::new(format!(
+        Err(PluginError::internal(format!(
             "browser redirect preflight exceeded {MAX_REDIRECTS} hops"
         )))
     }
@@ -851,7 +851,7 @@ impl WebPlugin {
         let options = self.local_browser_options()?;
         tokio::task::spawn_blocking(move || local_browser_endpoint(&options))
             .await
-            .map_err(|error| PluginError::new(format!("browser launcher failed: {error}")))?
+            .map_err(|error| PluginError::internal(format!("browser launcher failed: {error}")))?
             .map_err(crawl_error_to_plugin)
     }
 
@@ -935,7 +935,7 @@ impl WebPlugin {
     ) -> SdkResult<FetchedPage> {
         let state = self.state()?;
         if !state.config.fetch.enabled {
-            return Err(PluginError::new(
+            return Err(PluginError::internal(
                 "web fetching is disabled by plugin config `fetch.enabled`",
             ));
         }
@@ -948,7 +948,7 @@ impl WebPlugin {
                     .await
                     .map_err(crawl_error_to_plugin)?;
                 let final_url = url::Url::parse(page.canonical_url.as_str()).map_err(|error| {
-                    PluginError::new(format!("invalid final fetch URL: {error}"))
+                    PluginError::internal(format!("invalid final fetch URL: {error}"))
                 })?;
                 // Spider follows HTTP redirects internally. Do not return a response
                 // whose final destination would fail the same network policy.
@@ -979,7 +979,7 @@ impl WebPlugin {
         let render_js = input.render_js.unwrap_or(config.browser.enabled);
         let page = self.fetch_page(&url, input.use_cache, render_js).await?;
         let payload =
-            serde_json::to_value(&page).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_value(&page).map_err(|err| PluginError::internal(err.to_string()))?;
         let text = format_fetched_page(&page, input.prompt.as_deref());
         Ok(ToolInvokeOutput::from_parts(
             format!("web fetch {}", url),
@@ -1036,7 +1036,7 @@ impl WebPlugin {
             .map_err(crawl_error_to_plugin)?;
         let text = format_crawl_run(&report);
         let payload =
-            serde_json::to_value(report).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_value(report).map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             format!("web crawl {}", start_url),
             text,
@@ -1110,7 +1110,7 @@ impl WebPlugin {
         };
         let text = format_web_search(&output);
         let payload =
-            serde_json::to_value(output).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_value(output).map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             format!("web search {query}"),
             text,
@@ -1143,7 +1143,7 @@ impl WebPlugin {
         let target_id = created
             .get("targetId")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| PluginError::new("browser did not return a target id"))?
+            .ok_or_else(|| PluginError::internal("browser did not return a target id"))?
             .to_string();
         let page = match self.browser_client(Some(target_id.as_str())).await {
             Ok(page) => page,
@@ -1401,10 +1401,10 @@ impl WebPlugin {
         let encoded = result
             .get("data")
             .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| PluginError::new("browser screenshot returned no image data"))?;
+            .ok_or_else(|| PluginError::internal("browser screenshot returned no image data"))?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|error| PluginError::new(format!("invalid screenshot data: {error}")))?;
+            .map_err(|error| PluginError::internal(format!("invalid screenshot data: {error}")))?;
         let relative = input
             .path
             .clone()
@@ -1421,12 +1421,12 @@ impl WebPlugin {
             .await?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
-                PluginError::new(format!("cannot create screenshot directory: {error}"))
+                PluginError::internal(format!("cannot create screenshot directory: {error}"))
             })?;
         }
         tokio::fs::write(&path, bytes.as_slice())
             .await
-            .map_err(|error| PluginError::new(format!("cannot write screenshot: {error}")))?;
+            .map_err(|error| PluginError::internal(format!("cannot write screenshot: {error}")))?;
         let attachment = AttachmentItem {
             kind: AttachmentKind::Image,
             mime: "image/png".to_string(),
@@ -1487,7 +1487,7 @@ impl WebPlugin {
         tokio::fs::create_dir_all(&download_dir)
             .await
             .map_err(|error| {
-                PluginError::new(format!("cannot create browser download directory: {error}"))
+                PluginError::internal(format!("cannot create browser download directory: {error}"))
             })?;
 
         // Chromium's download behavior is browser-global. Serialize this
@@ -1515,12 +1515,12 @@ impl WebPlugin {
         let mut last_candidate: Option<(PathBuf, u64)> = None;
         loop {
             let mut entries = tokio::fs::read_dir(&download_dir).await.map_err(|error| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "cannot inspect browser download directory: {error}"
                 ))
             })?;
             while let Some(entry) = entries.next_entry().await.map_err(|error| {
-                PluginError::new(format!("cannot inspect browser download artifact: {error}"))
+                PluginError::internal(format!("cannot inspect browser download artifact: {error}"))
             })? {
                 let path = entry.path();
                 let partial = path
@@ -1531,7 +1531,7 @@ impl WebPlugin {
                     || !entry
                         .file_type()
                         .await
-                        .map_err(|error| PluginError::new(error.to_string()))?
+                        .map_err(|error| PluginError::internal(error.to_string()))?
                         .is_file()
                 {
                     continue;
@@ -1539,10 +1539,10 @@ impl WebPlugin {
                 let size = entry
                     .metadata()
                     .await
-                    .map_err(|error| PluginError::new(error.to_string()))?
+                    .map_err(|error| PluginError::internal(error.to_string()))?
                     .len();
                 if size > MAX_DOWNLOAD_BYTES {
-                    return Err(PluginError::new(format!(
+                    return Err(PluginError::internal(format!(
                         "browser download exceeds the {} MiB artifact limit",
                         MAX_DOWNLOAD_BYTES / (1024 * 1024)
                     )));
@@ -1593,7 +1593,7 @@ impl WebPlugin {
                 last_candidate = Some((path, size));
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(PluginError::new(format!(
+                return Err(PluginError::internal(format!(
                     "browser download timed out after {} ms",
                     input.timeout_ms
                 )));
@@ -1633,7 +1633,7 @@ impl WebPlugin {
                 return Ok(());
             }
             if tokio::time::Instant::now() >= deadline {
-                return Err(PluginError::new(format!(
+                return Err(PluginError::internal(format!(
                     "browser wait timed out after {timeout_ms} ms"
                 )));
             }
@@ -1649,7 +1649,7 @@ impl WebPlugin {
         input: &CrawlWebSearchInput,
     ) -> SdkResult<Vec<WebSearchResult>> {
         let engine_url = url::Url::parse(engine.permission_url())
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         let state = self.state()?;
         state.fetch_coordinator.wait_for_url_host(&engine_url).await;
         self.ensure_network_permission(&engine_url).await?;
@@ -1698,11 +1698,11 @@ async fn ensure_network_permission_with_host(
 
     let addresses = tokio::net::lookup_host((host, port))
         .await
-        .map_err(|error| PluginError::new(format!("failed to resolve {host}: {error}")))?
+        .map_err(|error| PluginError::internal(format!("failed to resolve {host}: {error}")))?
         .map(|address| address.ip())
         .collect::<BTreeSet<_>>();
     if addresses.is_empty() {
-        return Err(PluginError::new(format!(
+        return Err(PluginError::internal(format!(
             "DNS resolution returned no addresses for {host}"
         )));
     }
@@ -1756,16 +1756,21 @@ struct CdpClient {
 
 impl CdpClient {
     async fn connect(endpoint: &str, target_id: Option<&str>) -> SdkResult<Self> {
-        let (mut socket, _) = tokio_tungstenite::connect_async(endpoint)
-            .await
-            .map_err(|error| PluginError::new(format!("cannot connect to browser CDP: {error}")))?;
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(endpoint)
+                .await
+                .map_err(|error| {
+                    PluginError::internal(format!("cannot connect to browser CDP: {error}"))
+                })?;
 
         let (session_id, next_id) = if let Some(target_id) = target_id {
             let result = cdp_attach_target(&mut socket, target_id).await?;
             let session_id = result
                 .get("sessionId")
                 .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| PluginError::new("browser target attach returned no session id"))?
+                .ok_or_else(|| {
+                    PluginError::internal("browser target attach returned no session id")
+                })?
                 .to_string();
             (Some(session_id), 2)
         } else {
@@ -1815,7 +1820,7 @@ impl CdpClient {
         params: serde_json::Value,
     ) -> SdkResult<serde_json::Value> {
         if let Some(error) = self.take_navigation_error() {
-            return Err(PluginError::new(error));
+            return Err(PluginError::internal(error));
         }
 
         let (response, receiver) = oneshot::channel();
@@ -1826,15 +1831,15 @@ impl CdpClient {
                 response,
             })
             .await
-            .map_err(|_| PluginError::new("browser CDP connection ended"))?;
+            .map_err(|_| PluginError::internal("browser CDP connection ended"))?;
         let result = receiver
             .await
-            .map_err(|_| PluginError::new("browser CDP connection ended"))?;
+            .map_err(|_| PluginError::internal("browser CDP connection ended"))?;
 
         if let Some(error) = self.take_navigation_error() {
-            return Err(PluginError::new(error));
+            return Err(PluginError::internal(error));
         }
-        result.map_err(PluginError::new)
+        result.map_err(PluginError::internal)
     }
 
     async fn evaluate(&self, expression: &str) -> SdkResult<serde_json::Value> {
@@ -1849,7 +1854,7 @@ impl CdpClient {
             )
             .await?;
         if let Some(exception) = result.get("exceptionDetails") {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "browser JavaScript evaluation failed: {exception}"
             )));
         }
@@ -1888,11 +1893,11 @@ async fn cdp_attach_target(
             request.to_string().into(),
         ))
         .await
-        .map_err(|error| PluginError::new(format!("browser CDP send failed: {error}")))?;
+        .map_err(|error| PluginError::internal(format!("browser CDP send failed: {error}")))?;
 
     while let Some(message) = socket.next().await {
         let message = message
-            .map_err(|error| PluginError::new(format!("browser CDP read failed: {error}")))?;
+            .map_err(|error| PluginError::internal(format!("browser CDP read failed: {error}")))?;
         let Some(value) = cdp_message_value(socket, message).await? else {
             continue;
         };
@@ -1900,7 +1905,7 @@ async fn cdp_attach_target(
             continue;
         }
         if let Some(error) = value.get("error") {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "browser CDP Target.attachToTarget failed: {error}"
             )));
         }
@@ -1909,7 +1914,7 @@ async fn cdp_attach_target(
             .cloned()
             .unwrap_or(serde_json::Value::Null));
     }
-    Err(PluginError::new("browser CDP connection ended"))
+    Err(PluginError::internal("browser CDP connection ended"))
 }
 
 async fn cdp_message_value(
@@ -1920,24 +1925,26 @@ async fn cdp_message_value(
         tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
         tokio_tungstenite::tungstenite::Message::Binary(bytes) => String::from_utf8(bytes.to_vec())
             .map_err(|error| {
-                PluginError::new(format!("browser CDP returned non-UTF-8 data: {error}"))
+                PluginError::internal(format!("browser CDP returned non-UTF-8 data: {error}"))
             })?,
         tokio_tungstenite::tungstenite::Message::Ping(payload) => {
             socket
                 .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
                 .await
-                .map_err(|error| PluginError::new(format!("browser CDP pong failed: {error}")))?;
+                .map_err(|error| {
+                    PluginError::internal(format!("browser CDP pong failed: {error}"))
+                })?;
             return Ok(None);
         }
         tokio_tungstenite::tungstenite::Message::Pong(_)
         | tokio_tungstenite::tungstenite::Message::Frame(_) => return Ok(None),
         tokio_tungstenite::tungstenite::Message::Close(_) => {
-            return Err(PluginError::new("browser CDP connection closed"));
+            return Err(PluginError::internal("browser CDP connection closed"));
         }
     };
     serde_json::from_str(text.as_str())
         .map(Some)
-        .map_err(|error| PluginError::new(format!("invalid browser CDP response: {error}")))
+        .map_err(|error| PluginError::internal(format!("invalid browser CDP response: {error}")))
 }
 
 async fn run_cdp_connection(
@@ -2409,7 +2416,7 @@ fn resolve_browser_redirect(base: &url::Url, location: &str) -> SdkResult<url::U
 }
 
 fn crawl_error_to_plugin(err: agena_web::CrawlError) -> PluginError {
-    PluginError::new(err.to_string())
+    PluginError::internal(err.to_string())
 }
 
 fn search_network_targets(engine: Option<WebSearchEngineSelection>) -> Vec<String> {
@@ -2450,7 +2457,7 @@ fn parse_web_config(value: serde_json::Value) -> SdkResult<WebConfig> {
         WebConfig::default()
     } else {
         serde_json::from_value(value)
-            .map_err(|err| PluginError::new(format!("invalid web plugin config: {err}")))?
+            .map_err(|err| PluginError::internal(format!("invalid web plugin config: {err}")))?
     };
     validate_web_config(&config)?;
     Ok(config)
@@ -2470,7 +2477,7 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
         ("search.max_limit", web.search.max_limit),
     ] {
         if value == 0 {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "web plugin config `{label}` must be greater than 0"
             )));
         }
@@ -2492,28 +2499,28 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
         ("store.retention.max_bytes", web.store.retention.max_bytes),
     ] {
         if value == 0 {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "web plugin config `{label}` must be greater than 0"
             )));
         }
     }
     if web.store.retention.max_documents == 0 {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "web plugin config `store.retention.max_documents` must be greater than 0",
         ));
     }
     if web.crawl.defaults.max_pages > web.crawl.limits.max_pages {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "web plugin config `crawl.defaults.max_pages` must be less than or equal to `crawl.limits.max_pages`",
         ));
     }
     if web.crawl.defaults.max_depth > web.crawl.limits.max_depth {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "web plugin config `crawl.defaults.max_depth` must be less than or equal to `crawl.limits.max_depth`",
         ));
     }
     if web.search.default_limit > web.search.max_limit {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "web plugin config `search.default_limit` must be less than or equal to `search.max_limit`",
         ));
     }
@@ -2523,7 +2530,7 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
         .as_deref()
         .is_some_and(|value| value.trim().is_empty())
     {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "web plugin config `browser.executable_path` must not be empty when set",
         ));
     }
@@ -2534,7 +2541,7 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
         .as_deref()
         .is_some_and(|value| value.trim().is_empty())
     {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "web plugin config `browser.wait.for_selector` must not be empty when set",
         ));
     }
@@ -2730,13 +2737,13 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
     }
     if !output.failures.is_empty() {
         lines.push("Failures:".to_string());
-        lines.extend(
-            output
-                .failures
-                .iter()
-                .take(5)
-                .map(|failure| format!("- {failure}")),
-        );
+        lines.extend(output.failures.iter().take(5).map(|failure| {
+            if failure.is_unexpected() {
+                format!("- {} Reference: {}", failure.user.fallback, failure.id)
+            } else {
+                format!("- {}", failure.user.fallback)
+            }
+        }));
     }
     lines.join("\n")
 }
@@ -2808,7 +2815,9 @@ mod tests {
             &self,
             _event: agena_plugin_host::sdk::EventEnvelope,
         ) -> agena_plugin_host::sdk::Result<()> {
-            Err(agena_plugin_host::PluginError::new("unused test host API"))
+            Err(agena_plugin_host::PluginError::internal(
+                "unused test host API",
+            ))
         }
 
         async fn subscribe_events(
@@ -2816,7 +2825,9 @@ mod tests {
             _filter: agena_plugin_host::sdk::EventFilter,
         ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::host_api::EventSubscription>
         {
-            Err(agena_plugin_host::PluginError::new("unused test host API"))
+            Err(agena_plugin_host::PluginError::internal(
+                "unused test host API",
+            ))
         }
 
         async fn ask_permission(
@@ -2861,7 +2872,9 @@ mod tests {
             _tool: String,
             _input: serde_json::Value,
         ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
-            Err(agena_plugin_host::PluginError::new("unused test host API"))
+            Err(agena_plugin_host::PluginError::internal(
+                "unused test host API",
+            ))
         }
     }
 
@@ -3135,7 +3148,12 @@ mod tests {
         .await
         .expect("denied navigation must resolve")
         .expect_err("denied document request must fail");
-        assert!(error.to_string().contains("blocked before dispatch"));
+        assert!(
+            error
+                .diagnostic_message()
+                .contains("blocked before dispatch")
+        );
+        assert!(!error.to_string().contains("blocked before dispatch"));
         assert!(
             tokio::time::timeout(Duration::from_millis(500), denied_observed)
                 .await
@@ -3164,6 +3182,7 @@ mod tests {
         );
         let error = resolve_browser_redirect(&base, "file:///private/data")
             .expect_err("file redirect must be rejected");
-        assert!(error.to_string().contains("unsupported scheme"));
+        assert!(error.diagnostic_message().contains("unsupported scheme"));
+        assert!(!error.to_string().contains("unsupported scheme"));
     }
 }

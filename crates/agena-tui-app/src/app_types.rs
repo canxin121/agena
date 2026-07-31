@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -307,7 +307,8 @@ pub struct App {
     pub(super) seen_permission_request_ids: BTreeSet<String>,
     pub(super) seen_user_input_request_ids: BTreeSet<String>,
     pub(super) pending_permission_replay: Option<PermissionReplayState>,
-    pub(super) flash: Option<FlashMessage>,
+    pub(super) notice: Option<UiNotice>,
+    pub(super) seen_failure_ids: HashSet<agena_failure::FailureId>,
     pub(super) sessions: SessionListPresentation,
     pub(super) session_load: SessionListLoadState,
     pub(super) session_composer: SessionComposerState,
@@ -329,11 +330,11 @@ pub struct App {
     pub(super) draft_store_dirty: bool,
     pub(super) draft_store_last_persist_at: Instant,
     pub(super) draft_store_reported_error: Option<String>,
-    pub(super) pending_draft_store_error: Option<String>,
+    pub(super) pending_draft_store_error: Option<UiFailure>,
     pub(super) prompt_history: PromptHistory,
     pub(super) prompt_history_path: PathBuf,
     pub(super) prompt_history_reported_error: Option<String>,
-    pub(super) pending_prompt_history_error: Option<String>,
+    pub(super) pending_prompt_history_error: Option<UiFailure>,
     pub(super) run_activity: RunActivityTracker,
     pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
@@ -544,7 +545,109 @@ pub(super) enum UiAction {
     PageTranscript,
 }
 
-pub(super) type UiResult<T> = std::result::Result<T, String>;
+#[derive(Debug, Clone)]
+pub(super) struct UiFailure {
+    pub(super) failure: Box<agena_failure::Failure>,
+}
+
+impl UiFailure {
+    pub(super) fn internal(diagnostic: impl std::fmt::Display) -> Self {
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("ui.operation_failed"),
+            agena_failure::FailureCategory::Internal,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::Unknown,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::RequestRejected,
+            agena_failure::UserPresentation::new(
+                "ui-operation-failed",
+                "The operation could not be completed.",
+            ),
+        );
+        tracing::error!(
+            failure_id = %failure.id,
+            diagnostic = %diagnostic,
+            "terminal UI operation failed"
+        );
+        Self {
+            failure: Box::new(failure),
+        }
+    }
+
+    pub(super) fn message(message: impl Into<String>) -> Self {
+        Self {
+            failure: Box::new(agena_failure::Failure::new(
+                agena_failure::FailureCode::new("ui.invalid_action"),
+                agena_failure::FailureCategory::InvalidInput,
+                agena_failure::FailureResponsibility::Caller,
+                agena_failure::RetryDirective::CorrectInput,
+                agena_failure::RecoveryDirective::None,
+                agena_failure::FailureImpact::RequestRejected,
+                agena_failure::UserPresentation::validated("ui-invalid-action", message.into()),
+            )),
+        }
+    }
+
+    pub(super) fn invalid_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self {
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("ui.invalid_action"),
+            agena_failure::FailureCategory::InvalidInput,
+            agena_failure::FailureResponsibility::Caller,
+            agena_failure::RetryDirective::CorrectInput,
+            agena_failure::RecoveryDirective::None,
+            agena_failure::FailureImpact::RequestRejected,
+            agena_failure::UserPresentation::new("ui-invalid-action", message),
+        );
+        tracing::warn!(
+            failure_id = %failure.id,
+            diagnostic = %diagnostic,
+            "terminal UI input was invalid"
+        );
+        Self {
+            failure: Box::new(failure),
+        }
+    }
+}
+
+impl std::fmt::Display for UiFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.failure.user.fallback.as_str())?;
+        if self.failure.is_unexpected() {
+            write!(formatter, " Reference: {}", self.failure.id)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for UiFailure {}
+
+pub(crate) enum UiErrorNotice {
+    Message(String),
+    Failure(UiFailure),
+}
+
+impl From<String> for UiErrorNotice {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<&str> for UiErrorNotice {
+    fn from(message: &str) -> Self {
+        Self::Message(message.to_owned())
+    }
+}
+
+impl From<UiFailure> for UiErrorNotice {
+    fn from(failure: UiFailure) -> Self {
+        Self::Failure(failure)
+    }
+}
+
+pub(super) type UiResult<T> = std::result::Result<T, UiFailure>;
 
 #[derive(Debug, Clone)]
 pub(super) enum Overlay {

@@ -9,6 +9,86 @@ mod tests {
     use agena_storage::WorkspaceRepository;
     use sea_orm::{ActiveModelTrait, Database, EntityTrait, PaginatorTrait, Set};
 
+    fn provider_execution_problem() -> agena_failure::UserProblem {
+        agena_failure::Failure::new(
+            agena_failure::FailureCode::new("provider.unavailable"),
+            agena_failure::FailureCategory::DependencyUnavailable,
+            agena_failure::FailureResponsibility::Dependency,
+            agena_failure::RetryDirective::Backoff,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new(
+                "provider-unavailable",
+                "The provider is temporarily unavailable.",
+            ),
+        )
+        .into()
+    }
+
+    #[tokio::test]
+    async fn database_projection_fence_serializes_independent_callers() {
+        let directory = tempfile::tempdir().expect("temporary database directory");
+        let path = directory.path().join("projection-fence.sqlite");
+        let db = Database::connect(format!("sqlite://{}?mode=rwc", path.display()))
+            .await
+            .expect("file database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/projection-fence")
+            .await
+            .expect("workspace");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "projection fence")
+                .await
+                .expect("session");
+
+        let first = db.begin().await.expect("first transaction");
+        acquire_projection_fence(&first, session.id)
+            .await
+            .expect("first fence");
+
+        let second_db = db.clone();
+        let session_id = session.id;
+        let second = tokio::spawn(async move {
+            let transaction = second_db.begin().await.expect("second transaction");
+            acquire_projection_fence(&transaction, session_id)
+                .await
+                .expect("second fence");
+            let watermark = transcript_projection_state::Entity::find_by_id(session_id)
+                .one(&transaction)
+                .await
+                .expect("read fenced watermark")
+                .expect("projection state")
+                .last_seq_global;
+            transaction.commit().await.expect("commit second");
+            watermark
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !second.is_finished(),
+            "the second independent caller must wait for the database fence"
+        );
+
+        first
+            .execute(Statement::from_sql_and_values(
+                first.get_database_backend(),
+                "UPDATE agena_transcript_projection_states SET last_seq_global = 10 WHERE session_id = ?"
+                    .to_owned(),
+                [session.id.into()],
+            ))
+            .await
+            .expect("advance watermark");
+        first.commit().await.expect("commit first");
+
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(5), second)
+            .await
+            .expect("second caller released")
+            .expect("second task");
+        assert_eq!(observed, 10, "stale caller must re-read winner's watermark");
+    }
+
     #[test]
     fn projected_header_decodes_storage_record_and_rejects_inconsistent_turn() {
         let record = MessageProjectionHeaderRecord {
@@ -128,8 +208,7 @@ mod tests {
                 execution_id,
                 response_id,
                 outcome: ExecutionOutcome::Failed {
-                    failure_kind: ExecutionFailureKind::Provider,
-                    message: "provider unavailable".to_owned(),
+                    failure: provider_execution_problem(),
                 },
                 ts_ms: 20,
             },
@@ -137,6 +216,23 @@ mod tests {
         )
         .await
         .expect("failed response");
+
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                response_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: provider_execution_problem(),
+                },
+                ts_ms: 20,
+            },
+            2,
+        )
+        .await
+        .expect("replaying the same terminal event is idempotent");
 
         let failed = db
             .query_one(Statement::from_sql_and_values(

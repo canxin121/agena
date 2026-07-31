@@ -110,18 +110,18 @@ impl ClaudeToolsPlugin {
     fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
         self.host
             .get()
-            .ok_or_else(|| PluginError::new("Claude tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("Claude tools plugin invoked before init"))
     }
     fn workspace_root(&self) -> SdkResult<&Path> {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("Claude tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("Claude tools plugin invoked before init"))
     }
     fn config(&self) -> SdkResult<&ClaudeToolsConfig> {
         self.config
             .get()
-            .ok_or_else(|| PluginError::new("Claude tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("Claude tools plugin invoked before init"))
     }
     fn model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
         configured_model(
@@ -262,13 +262,13 @@ impl ClaudeToolsPlugin {
             )?;
         self.workspace_root
             .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("Claude tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("Claude tools plugin initialized more than once"))?;
         self.config
             .set(config)
-            .map_err(|_| PluginError::new("Claude tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("Claude tools plugin initialized more than once"))?;
         self.host
             .set(host)
-            .map_err(|_| PluginError::new("Claude tools plugin initialized more than once"))?;
+            .map_err(|_| PluginError::internal("Claude tools plugin initialized more than once"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))

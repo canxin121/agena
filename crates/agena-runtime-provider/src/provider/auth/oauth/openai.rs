@@ -309,7 +309,17 @@ async fn openai_oauth_token_error(
         provider: "openai".to_owned(),
         status,
         body: format!("{error_context}: {detail}"),
-        kind: ProviderErrorKind::ApiError,
+        kind: if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+        {
+            ProviderErrorKind::Authentication
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            ProviderErrorKind::RateLimited
+        } else if status.is_server_error() {
+            ProviderErrorKind::Unavailable
+        } else {
+            ProviderErrorKind::InvalidRequest
+        },
         retryable: status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error(),
     }
 }

@@ -286,7 +286,17 @@ pub(super) async fn ensure_http_success(
         provider: provider.to_owned(),
         status,
         body,
-        kind: ProviderErrorKind::ApiError,
+        kind: if status == reqwest::StatusCode::UNAUTHORIZED
+            || status == reqwest::StatusCode::FORBIDDEN
+        {
+            ProviderErrorKind::Authentication
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            ProviderErrorKind::RateLimited
+        } else if status.is_server_error() {
+            ProviderErrorKind::Unavailable
+        } else {
+            ProviderErrorKind::InvalidRequest
+        },
         retryable: status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error(),
     })
 }

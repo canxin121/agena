@@ -171,8 +171,9 @@ impl NotebookPlugin {
         }
 
         let cell_count = cells.len();
-        let updated = serde_json::to_vec_pretty(&notebook)
-            .map_err(|error| PluginError::new(format!("cannot serialize notebook: {error}")))?;
+        let updated = serde_json::to_vec_pretty(&notebook).map_err(|error| {
+            PluginError::internal(format!("cannot serialize notebook: {error}"))
+        })?;
         atomic_write(&path, updated.as_slice())?;
         let after_sha256 = sha256(updated.as_slice());
         Ok(ToolInvokeOutput::from_parts(
@@ -267,7 +268,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> SdkResult<()> {
 }
 
 fn io_error(error: std::io::Error) -> PluginError {
-    PluginError::new(format!("notebook filesystem operation failed: {error}"))
+    PluginError::internal(format!("notebook filesystem operation failed: {error}"))
 }
 
 #[cfg(test)]

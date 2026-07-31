@@ -207,10 +207,10 @@ impl MemoryPlugin {
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.config
             .set(parse_memory_config(ctx.config)?)
-            .map_err(|_| PluginError::new("memory plugin initialized more than once"))?;
-        self.workspace_root
-            .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("memory plugin workspace root already initialized"))?;
+            .map_err(|_| PluginError::internal("memory plugin initialized more than once"))?;
+        self.workspace_root.set(ctx.workspace_root).map_err(|_| {
+            PluginError::internal("memory plugin workspace root already initialized")
+        })?;
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
         ))
@@ -219,14 +219,14 @@ impl MemoryPlugin {
     fn config(&self) -> SdkResult<&MemoryConfig> {
         self.config
             .get()
-            .ok_or_else(|| PluginError::new("memory plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("memory plugin invoked before init"))
     }
 
     fn workspace_root(&self) -> SdkResult<&Path> {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("memory plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("memory plugin invoked before init"))
     }
 
     fn store(&self) -> SdkResult<MemoryStore> {
@@ -249,7 +249,7 @@ impl MemoryPlugin {
     fn sync_index(&self, documents: &[MemorySearchDocument]) -> SdkResult<()> {
         self.search_index()?
             .replace_documents(documents)
-            .map_err(|err| PluginError::new(format!("failed to rebuild memory index: {err}")))
+            .map_err(|err| PluginError::internal(format!("failed to rebuild memory index: {err}")))
     }
 
     fn run_search(
@@ -263,7 +263,7 @@ impl MemoryPlugin {
         }
         self.search_index()?
             .search(query, limit)
-            .map_err(|err| PluginError::new(format!("memory search failed: {err}")))
+            .map_err(|err| PluginError::internal(format!("memory search failed: {err}")))
     }
 
     async fn sync_and_search_documents(
@@ -339,7 +339,7 @@ impl MemoryPlugin {
             .get(input.name.as_str())
             .map_err(memory_error_to_plugin)?;
         let payload = serde_json::to_value(memory_record_output(&entry))
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             "memory get",
             format_memory_entry(&entry),
@@ -425,7 +425,7 @@ impl MemoryPlugin {
             })
             .map_err(memory_error_to_plugin)?;
         let payload = serde_json::to_value(memory_record_output(&entry))
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             "memory write",
             format!("Saved memory '{}'.", memory_name(&entry)),
@@ -530,14 +530,14 @@ fn parse_memory_config(value: serde_json::Value) -> SdkResult<MemoryConfig> {
         return Ok(MemoryConfig::default());
     }
     let config = serde_json::from_value::<MemoryConfig>(value)
-        .map_err(|err| PluginError::new(format!("invalid memory plugin config: {err}")))?;
+        .map_err(|err| PluginError::internal(format!("invalid memory plugin config: {err}")))?;
     if config.retrieval.limit == 0 {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "memory plugin config `retrieval.limit` must be greater than 0",
         ));
     }
     if config.retrieval.min_query_chars == 0 {
-        return Err(PluginError::new(
+        return Err(PluginError::internal(
             "memory plugin config `retrieval.min_query_chars` must be greater than 0",
         ));
     }
@@ -545,7 +545,7 @@ fn parse_memory_config(value: serde_json::Value) -> SdkResult<MemoryConfig> {
 }
 
 fn memory_error_to_plugin(err: MemoryError) -> PluginError {
-    PluginError::new(err.to_string())
+    PluginError::internal(err.to_string())
 }
 
 fn memory_document_from_entry(entry: MemoryRecord) -> MemorySearchDocument {

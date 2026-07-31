@@ -140,7 +140,7 @@ pub async fn dispatch_query(
             let events = events
                 .list_events(&filter, range)
                 .await
-                .map_err(|e| ApplicationError::Internal(e.to_string()))?;
+                .map_err(|e| ApplicationError::internal(e.to_string()))?;
             let returned = events.len() as u64;
             let next_cursor = events.last().map(|e| e.meta.seq_global.to_string());
             let items = events

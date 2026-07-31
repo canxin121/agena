@@ -15,9 +15,9 @@ pub fn validate(input: &AskUserToolInput) -> Result<(), ToolError> {
 
 fn normalize(input: &AskUserToolInput) -> Result<AskUserToolInput, ToolError> {
     AskUserToolInput::parse_input(
-        serde_json::to_value(input).map_err(|err| ToolError::InvalidInput(err.to_string()))?,
+        serde_json::to_value(input).map_err(|err| ToolError::invalid_input(err.to_string()))?,
     )
-    .map_err(|err| ToolError::InvalidInput(err.to_string()))
+    .map_err(|err| ToolError::invalid_input(err.to_string()))
 }
 
 pub fn execution_from_answers(

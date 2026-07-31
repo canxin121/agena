@@ -10,7 +10,7 @@ pub use serde::{Deserialize, Serialize};
 pub use serde_json::{Value, json};
 pub use std::sync::Arc;
 
-pub use crate::error::{PluginError, PluginErrorCode, Result};
+pub use crate::error::{PluginError, PluginErrorKind, Result};
 pub use crate::hooks::*;
 pub use crate::host_api::{
     EventSubscription, HostClient, HostGetSessionRequest, HostGetSessionResponse,

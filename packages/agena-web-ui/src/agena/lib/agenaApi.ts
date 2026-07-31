@@ -1,5 +1,12 @@
-import { emitAuthRequired, extractAuthRequiredMessageFromBodyText } from '../../lib/authEvents'
-import { apiBlob, apiJson, apiText, apiUrl } from '../../lib/api'
+import {
+  apiBlob,
+  apiJson,
+  apiResponseError,
+  apiText,
+  apiUrl,
+  userErrorMessage,
+} from '../../lib/api'
+import type { ApiFailure } from '../../lib/api'
 import { buildActiveUiAuthHeaders } from '../../lib/uiAuthToken'
 import { normalizeSseBuffer, parseSseEventBlock } from './sse'
 import type { ProviderModelPricing, ProviderModelThinkingMode, ProviderModelSpeedMode } from './providerApi'
@@ -30,7 +37,7 @@ export type ScheduledJobRunResource = {
   finished_at: string
   status: 'submitted' | 'skipped' | 'failed' | string
   session_id?: number | null
-  error_message?: string | null
+  failure?: ApiFailure | null
 }
 
 export type ScheduledJobResource = {
@@ -139,7 +146,7 @@ export type RuntimeBackgroundTask = {
   title: string
   status: RuntimeBackgroundTaskStatus
   message?: string | null
-  error_message?: string | null
+  failure?: ApiFailure | null
   created_at: string
   started_at: string
   finished_at?: string | null
@@ -167,7 +174,7 @@ export type PluginStatus = {
   restart_count: number
   last_exit_code?: number | null
   last_restart_at_ms?: number | null
-  last_error?: string | null
+  last_failure?: ApiFailure | null
 }
 
 export type PluginAuthoritySummary = {
@@ -530,7 +537,7 @@ export type ModelCatalogResponse = {
   refreshing: boolean
   last_refresh_at?: string | null
   last_successful_source?: ModelCatalogSourceKind | null
-  last_error?: string | null
+  last_failure?: ApiFailure | null
   entry_count: number
 }
 
@@ -993,7 +1000,7 @@ export type SessionExecutionContextResource = {
   subtask_status?: SubtaskStatus | null
   subtask_started_at?: string | null
   subtask_finished_at?: string | null
-  subtask_error?: string | null
+  subtask_failure?: ApiFailure | null
 }
 
 export type SessionUsageLimitBasis = 'context_window' | 'prompt_threshold'
@@ -1154,28 +1161,6 @@ async function collectPagedItems<T>(
   }
 
   throw new Error(`Pagination exceeded ${maxPages} pages while loading ${resourceName}`)
-}
-
-function extractErrorCode(bodyText: string): string {
-  const txt = String(bodyText || '').trim()
-  if (!txt) return ''
-
-  try {
-    const parsed = JSON.parse(txt) as unknown
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return ''
-    const record = parsed as Record<string, unknown>
-    if (typeof record.code === 'string') return record.code.trim()
-
-    const nested = record.error
-    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
-      const nestedCode = (nested as Record<string, unknown>).code
-      if (typeof nestedCode === 'string') return nestedCode.trim()
-    }
-  } catch {
-    // ignore non-json payloads
-  }
-
-  return ''
 }
 
 export async function fetchStudioHealth(): Promise<StudioHealth> {
@@ -2211,22 +2196,7 @@ export function streamSessionEvents(
       })
 
       if (!response.ok) {
-        const bodyText = await response.text().catch(() => '')
-        const extractedMessage = extractAuthRequiredMessageFromBodyText(bodyText)
-        const message = extractedMessage || bodyText.trim() || `Request failed (${response.status})`
-        const code = extractErrorCode(bodyText)
-        const isUiAuthRequired =
-          response.status === 401 &&
-          (code === 'auth_required' || message.trim().toLowerCase() === 'ui authentication required')
-        if (isUiAuthRequired) {
-          emitAuthRequired({
-            message,
-            status: response.status,
-            code: code || 'auth_required',
-            url: url.toString(),
-          })
-        }
-        throw new Error(message)
+        throw await apiResponseError(response, url.toString())
       }
 
       options.onOpen?.()
@@ -2237,7 +2207,9 @@ export function streamSessionEvents(
       }
     } catch (error) {
       if (closed || controller.signal.aborted) return
-      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+      options.onError?.(
+        new Error(userErrorMessage(error, 'Live session updates were interrupted. Reconnecting…')),
+      )
       scheduleReconnect(1_000)
     }
   }
@@ -2371,22 +2343,7 @@ export function streamNotifications(options: {
       })
 
       if (!response.ok) {
-        const bodyText = await response.text().catch(() => '')
-        const extractedMessage = extractAuthRequiredMessageFromBodyText(bodyText)
-        const message = extractedMessage || bodyText.trim() || `Request failed (${response.status})`
-        const code = extractErrorCode(bodyText)
-        const isUiAuthRequired =
-          response.status === 401 &&
-          (code === 'auth_required' || message.trim().toLowerCase() === 'ui authentication required')
-        if (isUiAuthRequired) {
-          emitAuthRequired({
-            message,
-            status: response.status,
-            code: code || 'auth_required',
-            url: url.toString(),
-          })
-        }
-        throw new Error(message)
+        throw await apiResponseError(response, url.toString())
       }
 
       options.onOpen?.()
@@ -2397,7 +2354,9 @@ export function streamNotifications(options: {
       }
     } catch (error) {
       if (closed || controller.signal.aborted) return
-      options.onError?.(error instanceof Error ? error : new Error(String(error)))
+      options.onError?.(
+        new Error(userErrorMessage(error, 'Live runtime updates were interrupted. Reconnecting…')),
+      )
       scheduleReconnect(reconnectDelayMs)
     }
   }

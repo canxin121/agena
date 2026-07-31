@@ -109,10 +109,10 @@ impl App {
             PermissionRuleStudioEditField::SessionId => {
                 let trimmed = input.trim();
                 if !trimmed.is_empty() && trimmed.parse::<i64>().is_err() {
-                    return Err(ui_text::t(
+                    return Err(crate::UiFailure::message(ui_text::t(
                         &self.i18n,
                         "permission-rule-error-session-id-integer",
-                    ));
+                    )));
                 }
                 dialog.draft.session_id = trimmed.to_string();
             }
@@ -128,53 +128,56 @@ impl App {
         let draft = dialog.draft.clone();
         match draft.subject_kind {
             PermissionRuleSubjectKind::Tool if draft.tool_name.trim().is_empty() => {
-                return Err(ui_text::t(
+                return Err(crate::UiFailure::message(ui_text::t(
                     &self.i18n,
                     "permission-rule-error-tool-name-required",
-                ));
+                )));
             }
             PermissionRuleSubjectKind::PathAccess => {
                 if draft.path_access_kind.trim().is_empty() {
-                    return Err(ui_text::t(
+                    return Err(crate::UiFailure::message(ui_text::t(
                         &self.i18n,
                         "permission-rule-error-path-access-kind-required",
-                    ));
+                    )));
                 }
                 if draft.target_path.trim().is_empty() {
-                    return Err(ui_text::t(
+                    return Err(crate::UiFailure::message(ui_text::t(
                         &self.i18n,
                         "permission-rule-error-target-path-required",
-                    ));
+                    )));
                 }
             }
             PermissionRuleSubjectKind::NetworkAccess if draft.network_target.trim().is_empty() => {
-                return Err(ui_text::t(
+                return Err(crate::UiFailure::message(ui_text::t(
                     &self.i18n,
                     "permission-rule-error-network-target-required",
-                ));
+                )));
             }
             _ => {}
         }
         if draft.scope == "session" {
             let trimmed = draft.session_id.trim();
             if trimmed.is_empty() {
-                return Err(ui_text::t(
+                return Err(crate::UiFailure::message(ui_text::t(
                     &self.i18n,
                     "permission-rule-error-session-id-required",
-                ));
+                )));
             }
-            trimmed
-                .parse::<i64>()
-                .map_err(|_| ui_text::t(&self.i18n, "permission-rule-error-session-id-integer"))?;
+            trimmed.parse::<i64>().map_err(|_| {
+                crate::UiFailure::message(ui_text::t(
+                    &self.i18n,
+                    "permission-rule-error-session-id-integer",
+                ))
+            })?;
         }
         let params = permission_rule_params_from_draft(&draft);
         let saved = match dialog.rule_id {
             Some(rule_id) => self
                 .block_on_async(self.backend.replace_permission_rule(rule_id, params))
-                .map_err(|error| error.to_string())?,
+                .map_err(crate::UiFailure::internal)?,
             None => self
                 .block_on_async(self.backend.create_permission_rule(params))
-                .map_err(|error| error.to_string())?,
+                .map_err(crate::UiFailure::internal)?,
         };
         dialog.rule_id = Some(saved.id);
         dialog.presentation.title = format!(

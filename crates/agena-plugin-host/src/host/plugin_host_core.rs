@@ -269,7 +269,7 @@ impl PluginHost {
                     continue;
                 };
                 if let Some(reason) = patch.abort_reason {
-                    return Err(PluginError::new(reason));
+                    return Err(PluginError::internal(reason));
                 }
                 if let Some(v) = patch.input {
                     current.input = v;
@@ -360,7 +360,7 @@ impl PluginHost {
             .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "plugin `{}` not loaded",
                     registered_tool.plugin_full_name()
                 ))
@@ -476,7 +476,7 @@ impl PluginHost {
             .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "plugin `{}` not loaded",
                     registered_tool.plugin_full_name()
                 ))
@@ -527,7 +527,7 @@ impl PluginHost {
             .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "plugin `{}` not loaded",
                     registered_tool.plugin_full_name()
                 ))
@@ -579,7 +579,7 @@ impl PluginHost {
             .get(registered_tool.plugin_key())
             .cloned()
             .ok_or_else(|| {
-                PluginError::new(format!(
+                PluginError::internal(format!(
                     "plugin `{}` not loaded",
                     registered_tool.plugin_full_name()
                 ))
@@ -1219,7 +1219,7 @@ impl PluginHost {
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
                 if let Some(r) = p.block_reason {
-                    return Err(PluginError::new(format!("prompt blocked: {r}")));
+                    return Err(PluginError::internal(format!("prompt blocked: {r}")));
                 }
                 if let Some(text) = p.prompt {
                     current.prompt = text;

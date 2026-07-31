@@ -1595,7 +1595,7 @@ mod tests {
                 .iter()
                 .position(|line| line.contains(expected.as_str()))
                 .unwrap_or_else(|| panic!("missing wrapped path row {expected:?} in:\n{rendered}"));
-            assert!(last_row.map_or(true, |previous| row > previous));
+            assert!(last_row.is_none_or(|previous| row > previous));
             last_row = Some(row);
         }
     }

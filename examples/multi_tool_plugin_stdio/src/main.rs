@@ -122,7 +122,7 @@ impl NotesPlugin {
             && !parent.as_os_str().is_empty()
         {
             fs::create_dir_all(parent).map_err(|err| {
-                PluginError::new(format!("failed to create parent directory: {err}"))
+                PluginError::internal(format!("failed to create parent directory: {err}"))
             })?;
         }
 
@@ -132,9 +132,9 @@ impl NotesPlugin {
             .append(input.append)
             .truncate(!input.append)
             .open(&path)
-            .map_err(|err| PluginError::new(format!("failed to open note file: {err}")))?;
+            .map_err(|err| PluginError::internal(format!("failed to open note file: {err}")))?;
         file.write_all(rendered.as_bytes())
-            .map_err(|err| PluginError::new(format!("failed to write note file: {err}")))?;
+            .map_err(|err| PluginError::internal(format!("failed to write note file: {err}")))?;
 
         Ok(WriteNoteOutput {
             message: format!("wrote {}", path.display()),

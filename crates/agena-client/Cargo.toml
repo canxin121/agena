@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 agena-domain = { workspace = true }
 agena-api = { workspace = true }
+agena-failure = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 serde = { workspace = true }

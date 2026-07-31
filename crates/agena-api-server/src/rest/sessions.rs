@@ -135,7 +135,7 @@ pub async fn list_session_events(
         page: page.page,
     };
     Ok(Json(serde_json::to_value(page).map_err(|error| {
-        ServerError::Internal(error.to_string())
+        ServerError::internal(error.to_string())
     })?))
 }
 
@@ -177,7 +177,7 @@ pub async fn stream_session_events(
             {
                 Ok(ev) => yield Ok::<Event, Infallible>(ev),
                 Err(error) => {
-                    yield Ok::<Event, Infallible>(sse_error_event(format!("failed to encode session event: {error}")));
+                    yield Ok::<Event, Infallible>(sse_error_event(error));
                     return;
                 }
             }
@@ -220,7 +220,7 @@ pub async fn stream_session_events(
                     {
                         Ok(ev) => yield Ok::<Event, Infallible>(ev),
                         Err(error) => {
-                            yield Ok::<Event, Infallible>(sse_error_event(format!("failed to encode session event: {error}")));
+                            yield Ok::<Event, Infallible>(sse_error_event(error));
                             return;
                         }
                     }
@@ -252,7 +252,7 @@ pub async fn submit_message(
         .commands
         .submit_user_message(request)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
@@ -270,7 +270,7 @@ pub async fn continue_run(
         .commands
         .continue_session(request)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
@@ -288,7 +288,7 @@ pub async fn compact_session(
         .commands
         .compact_session(request)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
@@ -299,8 +299,8 @@ pub async fn fork_session(
     Json(request): Json<SessionForkRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
     if request.at_event_seq.is_some() && request.at_message_id.is_none() {
-        return Err(ServerError::BadRequest(
-            "fork expects at_message_id; at_event_seq is no longer supported".into(),
+        return Err(ServerError::bad_request(
+            "fork expects at_message_id; at_event_seq is no longer supported",
         ));
     }
     let services = state.application().session_execution_services()?;
@@ -313,7 +313,7 @@ pub async fn fork_session(
             expected_version: if_match_version(&headers)?,
         })
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
@@ -362,7 +362,7 @@ pub async fn reply_permission(
         .commands
         .reply_permission(request)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
@@ -382,7 +382,7 @@ pub async fn reply_user_input(
         .commands
         .reply_user_input(request)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
@@ -402,7 +402,7 @@ pub async fn rewind_session(
             expected_version,
         })
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
@@ -415,7 +415,7 @@ pub async fn list_session_tree(
         .queries
         .list_session_tree(root_id)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(*error.failure))?;
     let resources: Vec<agena_application::dto::SessionResource> = summaries
         .into_iter()
         .map(session_resource_from_summary)
@@ -432,7 +432,7 @@ pub async fn export_session(
         .queries
         .export_session_jsonl(session_id)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(*error.failure))?;
     Ok((
         [(axum::http::header::CONTENT_TYPE, "application/x-ndjson")],
         jsonl,
@@ -453,7 +453,7 @@ pub async fn import_session(
         .commands
         .import_session_jsonl(&request.jsonl)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(error.failure))?;
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 

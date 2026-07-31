@@ -302,9 +302,9 @@ pub(crate) fn provider_model_config_fields() -> &'static [ProviderModelConfigFie
 pub(crate) fn provider_model_config_draft_from_value(
     model_id: &str,
     value: JsonValue,
-) -> std::result::Result<ProviderModelConfigDraft, String> {
+) -> crate::UiResult<ProviderModelConfigDraft> {
     let overlay = serde_json::from_value::<ResolvedProviderModelConfig>(value)
-        .map_err(|error| error.to_string())?;
+        .map_err(crate::UiFailure::internal)?;
     Ok(provider_model_config_draft_from_overlay(model_id, overlay))
 }
 

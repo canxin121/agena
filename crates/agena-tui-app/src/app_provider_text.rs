@@ -105,7 +105,13 @@ pub(crate) fn provider_draft_auth_error_message(
             "flash-provider-auth-error-required-field",
             &agena_tui::fl_args!("field" => provider_draft_auth_field_label(i18n, field)),
         ),
-        agena_tui_backend::ProviderDraftAuthError::Other(error) => error.clone(),
+        agena_tui_backend::ProviderDraftAuthError::Other(problem) => {
+            if problem.is_unexpected() {
+                format!("{} Reference: {}", problem.user.fallback, problem.id)
+            } else {
+                problem.user.fallback.clone()
+            }
+        }
     }
 }
 
@@ -232,7 +238,13 @@ pub(crate) fn provider_studio_save_error_message(
         agena_tui_backend::ProviderStudioSaveError::ConfiguredProviderAdapterModelsMustBeObject => {
             ui_text::t(i18n, "flash-provider-save-error-configured-models-object")
         }
-        agena_tui_backend::ProviderStudioSaveError::Other(error) => error.clone(),
+        agena_tui_backend::ProviderStudioSaveError::Other(problem) => {
+            if problem.is_unexpected() {
+                format!("{} Reference: {}", problem.user.fallback, problem.id)
+            } else {
+                problem.user.fallback.clone()
+            }
+        }
     }
 }
 
@@ -452,7 +464,7 @@ pub(crate) fn provider_studio_adapter_list_detail(
         .iter()
         .find(|adapter_models| adapter_models.adapter_id == adapter_id)
     {
-        if adapter.error.is_none() {
+        if adapter.failure.is_none() {
             return join_inline_segments(vec![
                 provider_studio_model_count_label(i18n, adapter.models.len()),
                 adapter
@@ -461,12 +473,16 @@ pub(crate) fn provider_studio_adapter_list_detail(
                     .unwrap_or_else(|| ui_text::t(i18n, "overlay-provider-studio-loaded")),
             ]);
         }
-        return adapter
-            .error
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| ui_text::t(i18n, "overlay-provider-studio-error"));
+        return adapter.failure.as_ref().map_or_else(
+            || ui_text::t(i18n, "overlay-provider-studio-error"),
+            |problem| {
+                if problem.is_unexpected() {
+                    format!("{} Reference: {}", problem.user.fallback, problem.id)
+                } else {
+                    problem.user.fallback.clone()
+                }
+            },
+        );
     }
     if let Some(rule) = provider_studio_adapter_rule(dialog, adapter_id) {
         let mut parts = vec![provider_studio_adapter_rule_detail(i18n, rule)];

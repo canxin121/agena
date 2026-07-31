@@ -1,12 +1,11 @@
 use super::{
-    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor, ErrorInfo,
-    EventKind, ExecutionStatus, FinishReason, FixedAssistantId, Message, MessageMetadata,
-    MessageSource, ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall,
-    ProviderRegistry, REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest,
-    SessionRunResult, SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts,
-    complete_part_status, fail_nonterminal_parts, map_finish_reason,
-    message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
-    sync_assistant_completion_event,
+    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor, EventKind,
+    ExecutionStatus, FinishReason, FixedAssistantId, Message, MessageMetadata, MessageSource,
+    ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall, ProviderRegistry,
+    REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest, SessionRunResult,
+    SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts, complete_part_status,
+    fail_nonterminal_parts, map_finish_reason, message_provider_state_from_provider_metadata,
+    pending_tool_call_stream_key, sync_assistant_completion_event,
 };
 use agena_provider::{
     ProviderNativeToolArtifact, ProviderNativeToolOutputBlock, ProviderNativeToolSearchResult,
@@ -477,12 +476,16 @@ impl SessionProcessor {
                 .map_err(|err| AppError::Internal(err.to_string()))?;
 
             if !cancelled {
+                let failure = err.failure();
+                tracing::warn!(
+                    failure_id = %failure.id,
+                    session_id = run.session_id,
+                    diagnostic = %err,
+                    "provider stream failed"
+                );
                 client_events.push(EventKind::StreamError(StreamErrorEvent {
                     session_id: run.session_id,
-                    error: ErrorInfo {
-                        code: "provider_stream_error".to_string(),
-                        message: err.to_string(),
-                    },
+                    problem: failure.into(),
                     ts_ms: Utc::now().timestamp_millis(),
                 }));
             }

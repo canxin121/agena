@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
@@ -165,8 +166,17 @@ function taskOriginLabel(origin: RuntimeBackgroundTask['origin']) {
   return origin === 'user' ? 'User' : 'System'
 }
 
+function taskFailureMessage(task: RuntimeBackgroundTask) {
+  const failure = task.failure
+  if (!failure) return ''
+  const summary = failure.user?.fallback?.trim() || `${task.title} failed.`
+  return failure.category === 'internal' || failure.category === 'data_corruption'
+    ? `${summary} Reference: ${failure.id}`
+    : summary
+}
+
 function taskMessage(task: RuntimeBackgroundTask) {
-  return task.error_message || task.message || ''
+  return taskFailureMessage(task) || task.message || ''
 }
 
 function taskCanCancel(task: RuntimeBackgroundTask) {
@@ -213,7 +223,7 @@ async function refreshCatalog() {
     actionMessage.value = message
     pushToast('info', message)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = userErrorMessage(err)
     pushToast('error', message, 7000)
   } finally {
     submitting.value = false
@@ -231,7 +241,7 @@ async function cancelTask(task: RuntimeBackgroundTask) {
     pushToast('info', message)
     await props.load()
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
+    const message = userErrorMessage(err)
     actionMessage.value = ''
     actionError.value = message
     pushToast('error', message, 7000)
@@ -258,7 +268,7 @@ function handleTaskCompletion(task: RuntimeBackgroundTask) {
   }
 
   if (task.status === 'failed') {
-    const message = task.error_message || `${task.title} failed.`
+    const message = taskFailureMessage(task) || `${task.title} failed.`
     actionMessage.value = ''
     actionError.value = message
     pushToast('error', message, 7000)
@@ -376,7 +386,7 @@ onBeforeUnmount(() => {
                   {{ job.last_run.status }} · triggered {{ job.last_run.triggered_at }}
                 </div>
                 <div v-else-if="job.next_fire_at" class="muted">next {{ job.next_fire_at }}</div>
-                <div v-if="job.last_run?.error_message" class="muted">{{ job.last_run.error_message }}</div>
+                <div v-if="job.last_run?.failure" class="muted">{{ job.last_run.failure.user.fallback }}</div>
               </div>
               <span class="badge">{{ job.expression || job.at || 'scheduled' }}</span>
             </div>
@@ -473,8 +483,8 @@ onBeforeUnmount(() => {
         <div v-if="props.runtime?.model_catalog" class="stack" style="margin-top: 12px">
           <div><strong>Last Source:</strong> {{ props.runtime.model_catalog.last_successful_source || 'none' }}</div>
           <div><strong>Last Refresh:</strong> {{ props.runtime.model_catalog.last_refresh_at || 'never' }}</div>
-          <div v-if="props.runtime.model_catalog.last_error" class="muted">
-            {{ props.runtime.model_catalog.last_error }}
+          <div v-if="props.runtime.model_catalog.last_failure" class="muted">
+            {{ props.runtime.model_catalog.last_failure.user.fallback }}
           </div>
         </div>
         <p v-else class="muted" style="margin-top: 12px">Model catalog is not available in the runtime snapshot yet.</p>

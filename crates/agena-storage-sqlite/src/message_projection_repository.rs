@@ -171,7 +171,7 @@ impl SeaMessageProjectionTransactionWriter {
                 format!(
                     "INSERT INTO {PROJECTION_STATE_TABLE} (session_id, last_seq_global, updated_at_ms) \
                      VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET \
-                     last_seq_global = excluded.last_seq_global, updated_at_ms = excluded.updated_at_ms"
+                     last_seq_global = MAX({PROJECTION_STATE_TABLE}.last_seq_global, excluded.last_seq_global), updated_at_ms = excluded.updated_at_ms"
                 ),
                 [session_id.into(), last_seq_global.into(), updated_at_ms.into()],
             ))

@@ -43,10 +43,9 @@ impl SessionStore {
         &self,
         session_id: i64,
         reason: agena_domain::RunAbortReason,
-        message: String,
     ) -> Result<(), AppError> {
         self.history
-            .reconcile_unmatched_runs(session_id, reason, message)
+            .reconcile_unmatched_runs(session_id, reason)
             .await
             .map_err(AppError::from)
     }
@@ -772,7 +771,13 @@ impl SessionStore {
                 Ok(child)
             }
             Err(error) => {
-                let failure = error.to_string();
+                let failure = error.failure();
+                tracing::error!(
+                    failure_id = %failure.id,
+                    session_id = child_id,
+                    diagnostic = %error,
+                    "failed to build session branch"
+                );
                 if let Err(mark_error) = session::set_session_lifecycle(
                     &self.db,
                     child_id,

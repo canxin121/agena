@@ -118,9 +118,9 @@ impl LspPlugin {
     fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
-            .map_err(|_| PluginError::new("lsp plugin host lock poisoned"))?
+            .map_err(|_| PluginError::internal("lsp plugin host lock poisoned"))?
             .clone()
-            .ok_or_else(|| PluginError::new("lsp plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("lsp plugin invoked before init"))
     }
 
     fn invoke_routed_tool<T: serde::Serialize>(
@@ -172,7 +172,7 @@ impl LspPlugin {
         *self
             .host
             .write()
-            .map_err(|_| PluginError::new("lsp plugin host lock poisoned"))? = Some(host);
+            .map_err(|_| PluginError::internal("lsp plugin host lock poisoned"))? = Some(host);
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
         ))
@@ -200,7 +200,7 @@ impl LspPlugin {
                 .collect(),
         };
         let body = serde_json::to_string_pretty(&summary)
-            .map_err(|err| PluginError::new(err.to_string()))?;
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         let title = format!("lsp_servers: {} configured", summary.servers.len());
         Ok(ToolInvokeOutput {
             title,

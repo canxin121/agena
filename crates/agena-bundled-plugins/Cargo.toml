@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Agena's bundled plugin implementations and factory registrations"
 
 [dependencies]
+agena-failure = { workspace = true }
 agena-domain = { workspace = true }
 agena-macros = { workspace = true }
 agena-mcp-client = { workspace = true }

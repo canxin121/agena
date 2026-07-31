@@ -28,7 +28,7 @@ impl App {
         let sources = self
             .backend
             .config_json_sources()
-            .map_err(|error| error.to_string())?;
+            .map_err(crate::UiFailure::internal)?;
         let locale = self.i18n.locale_tag();
         let statuses = self.backend.plugin_statuses();
         let mut plugins = statuses
@@ -376,10 +376,16 @@ impl App {
         action: PluginToolInvocationAction,
         input: &str,
     ) -> UiResult<()> {
-        let value = serde_json::from_str::<JsonValue>(input)
-            .map_err(|error| format!("invalid JSON tool arguments: {error}"))?;
+        let value = serde_json::from_str::<JsonValue>(input).map_err(|error| {
+            crate::UiFailure::invalid_with_diagnostic(
+                "The tool arguments are not valid JSON.",
+                error,
+            )
+        })?;
         if !value.is_object() {
-            return Err("plugin tool arguments must be a JSON object".to_owned());
+            return Err(crate::UiFailure::message(
+                "plugin tool arguments must be a JSON object",
+            ));
         }
         let schema = dialog
             .plugins
@@ -392,19 +398,22 @@ impl App {
                     .find(|tool| tool.name == action.tool_name)
             })
             .map(|tool| tool.contract.input_schema.clone())
-            .ok_or_else(|| {
-                format!(
-                    "plugin tool is no longer available: {}/{}",
-                    action.plugin_id, action.tool_name
+            .ok_or_else(|| crate::UiFailure::message("The plugin tool is no longer available."))?;
+        agena_plugin_host::loader::validate_json_schema_value(&schema, &value).map_err(
+            |error| {
+                crate::UiFailure::invalid_with_diagnostic(
+                    "The tool arguments do not match the plugin schema.",
+                    error,
                 )
-            })?;
-        agena_plugin_host::loader::validate_json_schema_value(&schema, &value)
-            .map_err(|error| format!("tool arguments do not match the schema: {error}"))?;
+            },
+        )?;
         let session_id = self
             .transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id())
-            .ok_or_else(|| "plugin tool invocation requires an active session".to_owned())?;
+            .ok_or_else(|| {
+                crate::UiFailure::message("The plugin tool requires an active session.")
+            })?;
         let result = self.block_on_async(self.backend.invoke_plugin_workbench_tool(
             action.plugin_id.as_str(),
             action.tool_name.as_str(),

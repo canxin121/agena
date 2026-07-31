@@ -434,7 +434,21 @@ mod tests {
         let activity = crate::TranscriptActivityPresentation {
             title: "Response failed".to_owned(),
             summary: "provider unavailable".to_owned(),
-            error: Some("provider unavailable".to_owned()),
+            problem: Some(
+                agena_failure::Failure::new(
+                    agena_failure::FailureCode::new("provider.unavailable"),
+                    agena_failure::FailureCategory::DependencyUnavailable,
+                    agena_failure::FailureResponsibility::Dependency,
+                    agena_failure::RetryDirective::Backoff,
+                    agena_failure::RecoveryDirective::Retry,
+                    agena_failure::FailureImpact::OperationFailed,
+                    agena_failure::UserPresentation::new(
+                        "provider-unavailable",
+                        "The provider is temporarily unavailable.",
+                    ),
+                )
+                .into(),
+            ),
         };
         let parts = vec![TranscriptFixture::activity(
             21,
@@ -1061,8 +1075,19 @@ mod tests {
             },
             title: "Read file".to_owned(),
             error: Some(agena_api::message_part::OperationErrorResource {
-                message: "permission denied by workspace policy".to_owned(),
-                code: None,
+                failure: agena_failure::Failure::new(
+                    agena_failure::FailureCode::new("tool.permission_denied"),
+                    agena_failure::FailureCategory::PermissionDenied,
+                    agena_failure::FailureResponsibility::Policy,
+                    agena_failure::RetryDirective::AfterUserAction,
+                    agena_failure::RecoveryDirective::RequestPermission,
+                    agena_failure::FailureImpact::OperationFailed,
+                    agena_failure::UserPresentation::new(
+                        "tool-permission-denied",
+                        "permission denied by workspace policy",
+                    ),
+                )
+                .into(),
             }),
             ..Default::default()
         };

@@ -1,11 +1,24 @@
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
+    RecoveryDirective, RetryDirective, UserPresentation,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Top-level plugin error. Carried over JSON-RPC as the `error.data` field of
-/// the response, with a stable `code` from [`PluginErrorCode`].
+/// A plugin failure with explicit public and diagnostic channels.
+///
+/// `failure` is safe to project to users or models. `diagnostic` exists only
+/// for plugin transports and host logs and must never be copied into UI,
+/// transcript, or model feedback fields.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginError {
-    pub code: PluginErrorCode,
+    pub kind: PluginErrorKind,
+    pub failure: Box<Failure>,
+    pub diagnostic: Box<PluginDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginDiagnostic {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook: Option<String>,
@@ -17,8 +30,8 @@ pub struct PluginError {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PluginErrorCode {
-    Generic,
+pub enum PluginErrorKind {
+    Internal,
     NotImplemented,
     InvalidParams,
     Timeout,
@@ -28,70 +41,149 @@ pub enum PluginErrorCode {
 }
 
 impl PluginError {
-    pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            code: PluginErrorCode::Generic,
-            message: message.into(),
-            hook: None,
-            plugin: None,
-            data: None,
-        }
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
+        Self::from_kind(PluginErrorKind::Internal, diagnostic)
     }
 
     pub fn not_implemented(hook: impl Into<String>) -> Self {
+        let hook = hook.into();
+        Self::from_kind(
+            PluginErrorKind::NotImplemented,
+            format_args!("hook not implemented: {hook}"),
+        )
+        .with_hook(hook)
+    }
+
+    pub fn invalid_params(diagnostic: impl std::fmt::Display) -> Self {
+        Self::from_kind(PluginErrorKind::InvalidParams, diagnostic)
+    }
+
+    pub fn invalid_params_with_data(
+        diagnostic: impl std::fmt::Display,
+        data: serde_json::Value,
+    ) -> Self {
+        let mut error = Self::invalid_params(diagnostic);
+        error.diagnostic.data = Some(data);
+        error
+    }
+
+    pub fn from_kind(kind: PluginErrorKind, diagnostic: impl std::fmt::Display) -> Self {
         Self {
-            code: PluginErrorCode::NotImplemented,
-            message: format!("hook not implemented: {}", hook.into()),
-            hook: None,
-            plugin: None,
-            data: None,
+            kind,
+            failure: Box::new(failure_for_kind(kind)),
+            diagnostic: Box::new(PluginDiagnostic {
+                message: diagnostic.to_string(),
+                hook: None,
+                plugin: None,
+                data: None,
+            }),
         }
     }
 
-    pub fn invalid_params(message: impl Into<String>) -> Self {
-        Self {
-            code: PluginErrorCode::InvalidParams,
-            message: message.into(),
-            hook: None,
-            plugin: None,
-            data: None,
-        }
+    pub fn with_hook(mut self, hook: impl Into<String>) -> Self {
+        self.diagnostic.hook = Some(hook.into());
+        self
     }
 
-    pub fn invalid_params_with_data(message: impl Into<String>, data: serde_json::Value) -> Self {
-        Self {
-            code: PluginErrorCode::InvalidParams,
-            message: message.into(),
-            hook: None,
-            plugin: None,
-            data: Some(data),
-        }
+    pub fn with_plugin(mut self, plugin: impl Into<String>) -> Self {
+        self.diagnostic.plugin = Some(plugin.into());
+        self
+    }
+
+    pub fn diagnostic_message(&self) -> &str {
+        self.diagnostic.message.as_str()
     }
 }
 
+fn failure_for_kind(kind: PluginErrorKind) -> Failure {
+    let (code, category, responsibility, retry, recovery, fallback, model) = match kind {
+        PluginErrorKind::InvalidParams => (
+            "plugin.invalid_input",
+            FailureCategory::InvalidInput,
+            FailureResponsibility::Caller,
+            RetryDirective::CorrectInput,
+            RecoveryDirective::None,
+            "The plugin input is invalid.",
+            Some(ModelFeedback::invalid_input()),
+        ),
+        PluginErrorKind::NotImplemented => (
+            "plugin.not_implemented",
+            FailureCategory::NotFound,
+            FailureResponsibility::Dependency,
+            RetryDirective::UseAlternative,
+            RecoveryDirective::ChooseAlternative,
+            "The plugin does not support this operation.",
+            None,
+        ),
+        PluginErrorKind::Timeout => (
+            "plugin.timeout",
+            FailureCategory::Timeout,
+            FailureResponsibility::Dependency,
+            RetryDirective::Backoff,
+            RecoveryDirective::Retry,
+            "The plugin did not respond in time.",
+            None,
+        ),
+        PluginErrorKind::Disconnected => (
+            "plugin.disconnected",
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::Dependency,
+            RetryDirective::Backoff,
+            RecoveryDirective::RestartPlugin,
+            "The plugin is disconnected. Restart it and try again.",
+            None,
+        ),
+        PluginErrorKind::HostUnavailable => (
+            "plugin.host_unavailable",
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::System,
+            RetryDirective::Backoff,
+            RecoveryDirective::RestartRuntime,
+            "The plugin host is unavailable. Restart the runtime and try again.",
+            None,
+        ),
+        PluginErrorKind::Panicked | PluginErrorKind::Internal => (
+            "plugin.internal",
+            FailureCategory::Internal,
+            FailureResponsibility::Dependency,
+            RetryDirective::UseAlternative,
+            RecoveryDirective::RestartPlugin,
+            "The plugin failed unexpectedly.",
+            None,
+        ),
+    };
+    let failure = Failure::new(
+        FailureCode::new(code),
+        category,
+        responsibility,
+        retry,
+        recovery,
+        FailureImpact::OperationFailed,
+        UserPresentation::new(code, fallback),
+    );
+    match model {
+        Some(model) => failure.with_model_feedback(model),
+        None => failure,
+    }
+}
+
+/// Display is deliberately safe-by-default. Use `diagnostic_message()` only
+/// in a correlated host log.
 impl std::fmt::Display for PluginError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.failure.user.fallback.as_str())?;
+        if self.failure.is_unexpected() {
+            write!(formatter, " Reference: {}", self.failure.id)?;
+        }
+        Ok(())
     }
 }
 
 impl std::error::Error for PluginError {}
 
-impl From<&str> for PluginError {
-    fn from(value: &str) -> Self {
-        PluginError::new(value)
-    }
-}
-
-impl From<String> for PluginError {
-    fn from(value: String) -> Self {
-        PluginError::new(value)
-    }
-}
-
 impl From<serde_json::Error> for PluginError {
     fn from(value: serde_json::Error) -> Self {
-        PluginError::invalid_params(value.to_string())
+        PluginError::invalid_params(value)
     }
 }
 
@@ -102,3 +194,17 @@ pub struct TransportErrorRepr {
 }
 
 pub type Result<T> = std::result::Result<T, PluginError>;
+
+#[cfg(test)]
+mod tests {
+    use super::PluginError;
+
+    #[test]
+    fn display_and_failure_exclude_plugin_diagnostics() {
+        let error = PluginError::internal("token=secret /private/plugin.sock panic backtrace");
+        let public = serde_json::to_string(&error.failure).expect("serialize public failure");
+        assert!(!error.to_string().contains("token=secret"));
+        assert!(!public.contains("/private/plugin.sock"));
+        assert!(error.diagnostic_message().contains("panic backtrace"));
+    }
+}

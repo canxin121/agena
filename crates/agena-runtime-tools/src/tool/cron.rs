@@ -25,7 +25,7 @@ pub(super) fn execute_create(
         input.prompt.trim(),
         input.max_age_days,
     )
-    .map_err(|e| ToolError::Plugin(format!("cron_create: {e}")))?;
+    .map_err(|e| ToolError::plugin(format!("cron_create: {e}")))?;
     job.set_recovery_policy(
         scheduler_misfire_policy(input.misfire_policy),
         scheduler_retry_policy(&input.retry_policy),
@@ -89,7 +89,7 @@ pub(super) fn execute_delete(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let scheduler = require_scheduler(executor)?;
     let id = uuid::Uuid::parse_str(input.id.trim())
-        .map_err(|e| ToolError::Plugin(format!("cron_delete: invalid id: {e}")))?;
+        .map_err(|e| ToolError::plugin(format!("cron_delete: invalid id: {e}")))?;
     let scheduler_for_remove = scheduler.clone();
     let removed = super::mcp::block_on(async move { scheduler_for_remove.remove(id).await });
     let view =
@@ -113,7 +113,7 @@ pub(super) fn execute_update(
         && input.misfire_policy.is_none()
         && input.retry_policy.is_none()
     {
-        return Err(ToolError::Plugin(
+        return Err(ToolError::plugin(
             "cron_update: provide prompt, expression, max_age_days, misfire_policy, or retry_policy"
                 .to_string(),
         ));
@@ -137,8 +137,8 @@ pub(super) fn execute_update(
             )
             .await
     })
-    .map_err(|error| ToolError::Plugin(format!("cron_update: {error}")))?
-    .ok_or_else(|| ToolError::Plugin(format!("cron_update: job {id} was not found")))?;
+    .map_err(|error| ToolError::plugin(format!("cron_update: {error}")))?
+    .ok_or_else(|| ToolError::plugin(format!("cron_update: job {id} was not found")))?;
     let summary = summarize(updated);
     let view = ToolExecutionView::simple(
         format!("cron_update {id}"),
@@ -157,8 +157,8 @@ pub(super) fn execute_pause(
     let scheduler = require_scheduler(executor)?;
     let id = parse_job_id("cron_pause", input.id.as_str())?;
     let job = super::mcp::block_on(async move { scheduler.pause(id).await })
-        .map_err(|error| ToolError::Plugin(format!("cron_pause: {error}")))?
-        .ok_or_else(|| ToolError::Plugin(format!("cron_pause: job {id} was not found")))?;
+        .map_err(|error| ToolError::plugin(format!("cron_pause: {error}")))?
+        .ok_or_else(|| ToolError::plugin(format!("cron_pause: job {id} was not found")))?;
     let summary = summarize(job);
     let view = ToolExecutionView::simple(
         format!("cron_pause {id}"),
@@ -177,8 +177,8 @@ pub(super) fn execute_resume(
     let scheduler = require_scheduler(executor)?;
     let id = parse_job_id("cron_resume", input.id.as_str())?;
     let job = super::mcp::block_on(async move { scheduler.resume(id).await })
-        .map_err(|error| ToolError::Plugin(format!("cron_resume: {error}")))?
-        .ok_or_else(|| ToolError::Plugin(format!("cron_resume: job {id} was not found")))?;
+        .map_err(|error| ToolError::plugin(format!("cron_resume: {error}")))?
+        .ok_or_else(|| ToolError::plugin(format!("cron_resume: job {id} was not found")))?;
     let summary = summarize(job);
     let view = ToolExecutionView::simple(
         format!("cron_resume {id}"),
@@ -220,7 +220,7 @@ pub(super) fn execute_history(
         delivery_key: entry.record.delivery_key,
         attempt: entry.record.attempt,
         session_id: entry.record.session_id,
-        error_message: entry.record.error_message,
+        failure: entry.record.failure.map(Into::into),
     })
     .collect::<Vec<_>>();
     // A database-backed ledger has a stable newest-first order.  Keep this
@@ -280,12 +280,12 @@ fn require_scheduler(executor: &ToolExecutor) -> Result<Arc<Scheduler>, ToolErro
     executor
         .scheduler()
         .cloned()
-        .ok_or_else(|| ToolError::Plugin("scheduler not configured".to_string()))
+        .ok_or_else(|| ToolError::plugin("scheduler not configured".to_string()))
 }
 
 fn parse_job_id(operation: &str, id: &str) -> Result<uuid::Uuid, ToolError> {
     uuid::Uuid::parse_str(id.trim())
-        .map_err(|error| ToolError::Plugin(format!("{operation}: invalid id: {error}")))
+        .map_err(|error| ToolError::plugin(format!("{operation}: invalid id: {error}")))
 }
 
 fn normalized_optional(value: Option<String>) -> Option<String> {
@@ -315,7 +315,7 @@ fn summarize(j: ScheduledJob) -> CronJobSummary {
             .last_run
             .as_ref()
             .map(|run| format!("{:?}", run.status).to_ascii_lowercase()),
-        last_run_error: j.last_run.and_then(|run| run.error_message),
+        last_run_failure: j.last_run.and_then(|run| run.failure).map(Into::into),
     }
 }
 

@@ -38,7 +38,7 @@ impl Backend {
             Ok(QueryResult::Session(session)) => Ok(Some(session)),
             Ok(other) => Err(anyhow!("unexpected query result: {:?}", other))
                 .context("failed to fetch session"),
-            Err(agena_application::ApplicationError::NotFound(_)) => Ok(None),
+            Err(error) if error.is_not_found() => Ok(None),
             Err(error) => Err(api_error(error).context("failed to fetch session")),
         }
     }

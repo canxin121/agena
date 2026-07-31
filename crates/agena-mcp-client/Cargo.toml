@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 [dependencies]
+agena-failure = { workspace = true }
 agena-keyring-store = { workspace = true }
 async-trait.workspace = true
 http = { workspace = true }

@@ -76,7 +76,7 @@ pub(super) fn execute(
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     if input.command.trim().is_empty() {
-        return Err(ToolError::InvalidInput(
+        return Err(ToolError::invalid_input(
             "bash command must not be empty".to_string(),
         ));
     }

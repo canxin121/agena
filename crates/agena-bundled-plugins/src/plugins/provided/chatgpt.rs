@@ -129,20 +129,20 @@ impl ChatGptToolsPlugin {
     fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
         self.host
             .get()
-            .ok_or_else(|| PluginError::new("ChatGPT tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("ChatGPT tools plugin invoked before init"))
     }
 
     fn workspace_root(&self) -> SdkResult<&Path> {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("ChatGPT tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("ChatGPT tools plugin invoked before init"))
     }
 
     fn config(&self) -> SdkResult<&ChatGptToolsConfig> {
         self.config
             .get()
-            .ok_or_else(|| PluginError::new("ChatGPT tools plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("ChatGPT tools plugin invoked before init"))
     }
 
     fn model(&self, requested: Option<String>, tool: &str) -> SdkResult<String> {
@@ -322,15 +322,15 @@ impl ChatGptToolsPlugin {
                 ctx.config,
                 "invalid ChatGPT tools plugin config",
             )?;
-        self.workspace_root
-            .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("ChatGPT tools plugin initialized more than once"))?;
-        self.config
-            .set(config)
-            .map_err(|_| PluginError::new("ChatGPT tools plugin initialized more than once"))?;
-        self.host
-            .set(host)
-            .map_err(|_| PluginError::new("ChatGPT tools plugin initialized more than once"))?;
+        self.workspace_root.set(ctx.workspace_root).map_err(|_| {
+            PluginError::internal("ChatGPT tools plugin initialized more than once")
+        })?;
+        self.config.set(config).map_err(|_| {
+            PluginError::internal("ChatGPT tools plugin initialized more than once")
+        })?;
+        self.host.set(host).map_err(|_| {
+            PluginError::internal("ChatGPT tools plugin initialized more than once")
+        })?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
         )))
@@ -546,7 +546,7 @@ impl ChatGptToolsPlugin {
                 ))
                 .await?;
             let bytes = tokio::fs::read(&path).await.map_err(|error| {
-                PluginError::new(format!("cannot read image '{}': {error}", path.display()))
+                PluginError::internal(format!("cannot read image '{}': {error}", path.display()))
             })?;
             let filename = path
                 .file_name()
@@ -567,7 +567,7 @@ impl ChatGptToolsPlugin {
             let part = reqwest::multipart::Part::bytes(bytes)
                 .file_name(filename)
                 .mime_str(mime)
-                .map_err(|error| PluginError::new(format!("invalid image MIME: {error}")))?;
+                .map_err(|error| PluginError::internal(format!("invalid image MIME: {error}")))?;
             form = form.part("image[]", part);
         }
         let response = reqwest::Client::builder()
@@ -575,7 +575,9 @@ impl ChatGptToolsPlugin {
                 self.config()?.timeout_secs.max(1),
             ))
             .build()
-            .map_err(|error| PluginError::new(format!("cannot create OpenAI client: {error}")))?
+            .map_err(|error| {
+                PluginError::internal(format!("cannot create OpenAI client: {error}"))
+            })?
             .post(url)
             .bearer_auth(env_secret(
                 self.config()?.api_key_env.as_str(),
@@ -584,7 +586,7 @@ impl ChatGptToolsPlugin {
             .multipart(form)
             .send()
             .await
-            .map_err(|error| PluginError::new(format!("OpenAI image edit failed: {error}")))?;
+            .map_err(|error| PluginError::internal(format!("OpenAI image edit failed: {error}")))?;
         let status = response.status();
         let request_id = response
             .headers()
@@ -592,10 +594,10 @@ impl ChatGptToolsPlugin {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let value: serde_json::Value = response.json().await.map_err(|error| {
-            PluginError::new(format!("OpenAI image edit returned invalid JSON: {error}"))
+            PluginError::internal(format!("OpenAI image edit returned invalid JSON: {error}"))
         })?;
         if !status.is_success() {
-            return Err(PluginError::new(format!(
+            return Err(PluginError::internal(format!(
                 "OpenAI image edit failed (HTTP {status}): {value}"
             )));
         }

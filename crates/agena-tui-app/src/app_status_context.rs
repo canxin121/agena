@@ -18,25 +18,24 @@ impl App {
     pub(crate) fn block_on_async<F, T, E>(&self, fut: F) -> UiResult<T>
     where
         F: std::future::Future<Output = std::result::Result<T, E>>,
-        E: ToString,
+        E: std::fmt::Display,
     {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => match handle.runtime_flavor() {
                 tokio::runtime::RuntimeFlavor::MultiThread => {
                     tokio::task::block_in_place(|| handle.block_on(fut))
-                        .map_err(|error| error.to_string())
+                        .map_err(crate::UiFailure::internal)
                 }
-                _ => Err(
-                    "cannot synchronously wait for async work inside the current-thread runtime"
-                        .to_string(),
-                ),
+                _ => Err(crate::UiFailure::internal(
+                    "cannot synchronously wait for async work inside the current-thread runtime",
+                )),
             },
             Err(_) => {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .map_err(|error| error.to_string())?;
-                runtime.block_on(fut).map_err(|error| error.to_string())
+                    .map_err(crate::UiFailure::internal)?;
+                runtime.block_on(fut).map_err(crate::UiFailure::internal)
             }
         }
     }

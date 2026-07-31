@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { nextTick, onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
@@ -301,7 +302,7 @@ export function useChatSessionLifecycle(
     try {
       input.timelineEvents.value = await deps.listSessionTimeline(sessionId, { limit })
     } catch (error) {
-      input.errorMessage.value = error instanceof Error ? error.message : String(error)
+      input.errorMessage.value = userErrorMessage(error)
     } finally {
       input.loading.value = false
     }
@@ -355,7 +356,7 @@ export function useChatSessionLifecycle(
       if (routeSessionId === input.selectedSessionId.value) return
       input.selectedSessionId.value = routeSessionId
       void loadSidebar().catch((err) => {
-        input.errorMessage.value = err instanceof Error ? err.message : String(err)
+        input.errorMessage.value = userErrorMessage(err)
       })
     },
   )
@@ -367,7 +368,7 @@ export function useChatSessionLifecycle(
       if (routeWorkspaceId === null || routeWorkspaceId === input.selectedWorkspaceId.value) return
       input.selectedWorkspaceId.value = routeWorkspaceId
       void loadSidebar().catch((err) => {
-        input.errorMessage.value = err instanceof Error ? err.message : String(err)
+        input.errorMessage.value = userErrorMessage(err)
       })
     },
   )
@@ -385,7 +386,7 @@ export function useChatSessionLifecycle(
   if (registerComponentLifecycle) {
     onMounted(() => {
       void loadSidebar().catch((err) => {
-        input.errorMessage.value = err instanceof Error ? err.message : String(err)
+        input.errorMessage.value = userErrorMessage(err)
       })
     })
 

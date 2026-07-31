@@ -16,6 +16,7 @@ agena-provider-bedrock-streaming = { workspace = true }
 agena-provider-google-auth = { workspace = true }
 agena-web = { workspace = true }
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-runtime-provider = { workspace = true }

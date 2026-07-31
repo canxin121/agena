@@ -15,6 +15,7 @@ jsonrpc = []
 [dependencies]
 agena-application = { workspace = true }
 agena-api = { workspace = true }
+agena-failure = { workspace = true }
 agena-domain = { workspace = true }
 agena-runtime = { workspace = true }
 agena-plugin-host = { workspace = true }

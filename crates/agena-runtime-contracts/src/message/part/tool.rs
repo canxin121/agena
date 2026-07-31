@@ -909,36 +909,37 @@ impl ToolResultEnvelope {
     }
 
     pub fn failed(
-        error_message: String,
-        output_text: String,
+        failure: agena_failure::Failure,
         blocks: Vec<OperationBlock>,
         attachments: Vec<AttachmentItem>,
         details: &ToolOutput,
     ) -> Self {
         let truncated = details.is_model_truncated();
+        let user_summary = failure.user.fallback.clone();
+        let model_output = failure
+            .model
+            .as_ref()
+            .map(|feedback| feedback.message())
+            .unwrap_or_else(|| {
+                "The tool failed because of an internal system error. Try an alternative approach."
+                    .to_owned()
+            });
         Self {
             state: ToolResultState::Failed,
             structured: details.to_json_payload(),
             content: blocks,
             model_preview: ModelVisibleOutput {
-                text: output_text.clone(),
+                text: model_output,
                 attachments: attachments.clone(),
                 truncated,
             },
             managed_outputs: details.managed_outputs.clone(),
             display: ToolResultDisplay {
                 title: String::new(),
-                summary: if error_message.trim().is_empty() {
-                    output_text
-                } else {
-                    error_message.clone()
-                },
+                summary: user_summary,
             },
             attachments,
-            error: Some(OperationError {
-                message: error_message,
-                code: None,
-            }),
+            error: Some(OperationError { failure }),
             metadata: BTreeMap::new(),
             raw: None,
         }
@@ -1051,35 +1052,36 @@ impl OperationPart {
     pub fn failed(
         call_id: i64,
         invocation: ToolInvocation,
-        error_message: impl Into<String>,
-        output_text: impl Into<String>,
+        failure: agena_failure::Failure,
         blocks: Vec<OperationBlock>,
         attachments: Vec<AttachmentItem>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
-        let error_message = error_message.into();
-        let output_text = output_text.into();
         let structured = details.to_json_payload();
         let truncated = details.is_model_truncated();
         let result = ToolResultEnvelope::failed(
-            error_message.clone(),
-            output_text.clone(),
+            failure.clone(),
             blocks.clone(),
             attachments.clone(),
             &details,
         );
+        let user_summary = failure.user.fallback.clone();
+        let model_output = failure
+            .model
+            .as_ref()
+            .map(|feedback| feedback.message())
+            .unwrap_or_else(|| {
+                "The tool failed because of an internal system error. Try an alternative approach."
+                    .to_owned()
+            });
         Self {
             call_id,
             invocation,
             title: String::new(),
-            summary: if error_message.trim().is_empty() {
-                output_text.clone()
-            } else {
-                error_message.clone()
-            },
+            summary: user_summary,
             model_output: ModelVisibleOutput {
-                text: output_text,
+                text: model_output,
                 attachments: attachments.clone(),
                 truncated,
             },
@@ -1090,10 +1092,7 @@ impl OperationPart {
             result,
             structured,
             metadata: BTreeMap::new(),
-            error: Some(OperationError {
-                message: error_message,
-                code: None,
-            }),
+            error: Some(OperationError { failure }),
             raw: None,
             lifecycle,
         }
@@ -1173,7 +1172,7 @@ impl OperationPart {
             .error
             .as_ref()
             .or(self.error.as_ref())
-            .map(|error| error.message.as_str())
+            .map(OperationError::user_message)
     }
 
     pub fn status(&self) -> ExecutionStatus {

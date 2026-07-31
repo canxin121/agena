@@ -40,9 +40,8 @@ pub fn encode_cursor<T>(value: &T) -> Result<String, ApplicationError>
 where
     T: Serialize,
 {
-    let json = serde_json::to_vec(value).map_err(|error| {
-        ApplicationError::bad_request(format!("failed to encode cursor: {error}"))
-    })?;
+    let json = serde_json::to_vec(value)
+        .map_err(|error| ApplicationError::internal(format!("failed to encode cursor: {error}")))?;
     Ok(URL_SAFE_NO_PAD.encode(json))
 }
 
@@ -51,10 +50,11 @@ where
     T: DeserializeOwned,
 {
     let bytes = URL_SAFE_NO_PAD.decode(value).map_err(|error| {
-        ApplicationError::bad_request(format!("invalid cursor encoding: {error}"))
+        ApplicationError::bad_request_with_diagnostic("The page cursor is invalid.", error)
     })?;
-    serde_json::from_slice(&bytes)
-        .map_err(|error| ApplicationError::bad_request(format!("invalid cursor payload: {error}")))
+    serde_json::from_slice(&bytes).map_err(|error| {
+        ApplicationError::bad_request_with_diagnostic("The page cursor is invalid.", error)
+    })
 }
 
 #[cfg(test)]

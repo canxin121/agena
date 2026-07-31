@@ -105,12 +105,12 @@ impl SessionManager {
     }
 
     #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
-    pub(in crate::session::manager) async fn submit_user_message_parts(
+    pub(in crate::session::manager) async fn start_user_message_parts(
         &self,
         request: SessionUserMessageRequest,
-    ) -> Result<Session, AppError> {
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
         let session_id = request.run.session_id;
-        self.execute_registered(
+        self.start_registered(
             session_id,
             ExecutionSource::User,
             "user execution",
@@ -174,7 +174,7 @@ impl SessionManager {
                     }
                     return Err(AppError::Internal(format!(
                         "prompt blocked by plugin: {}",
-                        err.message
+                        err.diagnostic_message()
                     )));
                 }
             }
@@ -307,6 +307,24 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         self.execute_registered(
+            session_id,
+            ExecutionSource::Continue,
+            "continuation execution",
+            move |manager, control, steer_rx| async move {
+                manager
+                    .continue_session_inner(request, control, steer_rx)
+                    .await
+            },
+        )
+        .await
+    }
+
+    pub async fn start_continue_session(
+        &self,
+        request: SessionExecutionRequest,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        let session_id = request.session_id;
+        self.start_registered(
             session_id,
             ExecutionSource::Continue,
             "continuation execution",
@@ -476,7 +494,7 @@ impl SessionManager {
         child.runtime.subtask.status = agena_domain::SubtaskStatus::Running;
         child.runtime.subtask.started_at_ms = Some(started_at_ms);
         child.runtime.subtask.finished_at_ms = None;
-        child.runtime.subtask.error = None;
+        child.runtime.subtask.failure = None;
         self.apply_run_selection_to_session(&mut child, &options);
         child = self
             .store
@@ -486,7 +504,7 @@ impl SessionManager {
                     status: agena_domain::SubtaskStatus::Running,
                     started_at_ms: Some(started_at_ms),
                     finished_at_ms: None,
-                    error: None,
+                    failure: None,
                 },
                 state.cache_policy(),
             )
@@ -505,7 +523,7 @@ impl SessionManager {
                 resumed,
                 started_at_ms: Some(started_at_ms),
                 finished_at_ms: None,
-                error: None,
+                failure: None,
                 ts_ms: started_at_ms,
             })],
             None,
@@ -572,10 +590,10 @@ impl SessionManager {
                 .and_then(std::convert::identity)
         };
 
-        let (status, error, budget_exceeded, mut session) = match run_result {
+        let (status, failure, budget_exceeded, mut session) = match run_result {
             Ok(session) if timed_out => (
                 agena_domain::SubtaskStatus::TimedOut,
-                Some("subtask exceeded its configured timeout".to_string()),
+                Some(subtask_timeout_failure()),
                 false,
                 session,
             ),
@@ -589,18 +607,18 @@ impl SessionManager {
                     agena_domain::SubtaskStatus::Failed
                 };
                 let budget_exceeded = matches!(&error, AppError::SubtaskBudgetExceeded(_));
-                let message = error.to_string();
+                let failure = (!matches!(&error, AppError::Cancelled)).then(|| error.failure());
                 let session = self
                     .store
                     .load_session(child_id, state.cache_policy())
                     .await?;
-                (status, Some(message), budget_exceeded, session)
+                (status, failure, budget_exceeded, session)
             }
         };
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         session.runtime.subtask.status = status;
         session.runtime.subtask.finished_at_ms = Some(finished_at_ms);
-        session.runtime.subtask.error = error.clone();
+        session.runtime.subtask.failure = failure.clone();
         let subtask_started_at_ms = session.runtime.subtask.started_at_ms;
         let subtask_access = session.runtime.execution.access;
         session = self
@@ -611,7 +629,7 @@ impl SessionManager {
                     status,
                     started_at_ms: subtask_started_at_ms,
                     finished_at_ms: Some(finished_at_ms),
-                    error: error.clone(),
+                    failure: failure.clone(),
                 },
                 state.cache_policy(),
             )
@@ -629,7 +647,7 @@ impl SessionManager {
                     resumed,
                     started_at_ms: subtask_started_at_ms,
                     finished_at_ms: Some(finished_at_ms),
-                    error: error.clone(),
+                    failure: failure.as_ref().map(Into::into),
                     ts_ms: finished_at_ms,
                 })],
                 None,
@@ -644,7 +662,7 @@ impl SessionManager {
             status,
             resumed,
             final_text: session.last_assistant_text_after(baseline_message_id),
-            error,
+            failure,
             usage,
             model_provider_id: Some(options.model.provider_id.to_string()),
             model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
@@ -653,6 +671,21 @@ impl SessionManager {
             session,
         })
     }
+}
+
+fn subtask_timeout_failure() -> agena_failure::Failure {
+    agena_failure::Failure::new(
+        agena_failure::FailureCode::new("subtask.timeout"),
+        agena_failure::FailureCategory::Timeout,
+        agena_failure::FailureResponsibility::System,
+        agena_failure::RetryDirective::AfterUserAction,
+        agena_failure::RecoveryDirective::Retry,
+        agena_failure::FailureImpact::OperationFailed,
+        agena_failure::UserPresentation::new(
+            "subtask-timeout",
+            "The subtask exceeded its configured time limit.",
+        ),
+    )
 }
 
 pub(in crate::session::manager) fn non_recursive_subtask_permission_ceiling()

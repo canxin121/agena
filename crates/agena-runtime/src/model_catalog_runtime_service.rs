@@ -53,7 +53,7 @@ mod tests {
             agena_provider::ModelCatalogResponse {
                 last_refresh_at: None,
                 last_successful_source: None,
-                last_error: None,
+                last_failure: None,
                 models: Vec::new(),
             }
         }

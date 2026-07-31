@@ -356,7 +356,8 @@ mod tests {
             })
             .await
             .expect_err("bundled Skill must remain read-only");
-        assert!(error.to_string().contains("does not exist"));
+        assert!(error.diagnostic_message().contains("does not exist"));
+        assert!(!error.to_string().contains("does not exist"));
     }
 
     #[tokio::test]
@@ -685,7 +686,7 @@ fn parse_managed_skill_document(document: &str) -> SdkResult<Skill> {
 fn write_skill_document(path: &Path, document: &str) -> SdkResult<()> {
     enforce_skill_document_size(document)?;
     let parent = path.parent().ok_or_else(|| {
-        PluginError::new("managed Skill path unexpectedly has no parent directory")
+        PluginError::internal("managed Skill path unexpectedly has no parent directory")
     })?;
     let temporary = parent.join(".SKILL.md.agena-tmp");
     if temporary.exists() {
@@ -699,7 +700,7 @@ fn write_skill_document(path: &Path, document: &str) -> SdkResult<()> {
 }
 
 fn skill_write_error(error: std::io::Error) -> PluginError {
-    PluginError::new(format!(
+    PluginError::internal(format!(
         "workspace Skill filesystem operation failed: {error}"
     ))
 }
@@ -928,10 +929,10 @@ impl SkillsPlugin {
         config.validate_for_workspace(ctx.workspace_root.as_path())?;
         self.workspace_root
             .set(ctx.workspace_root)
-            .map_err(|_| PluginError::new("skills plugin initialized more than once"))?;
-        self.config
-            .set(config)
-            .map_err(|_| PluginError::new("skills plugin config initialized more than once"))?;
+            .map_err(|_| PluginError::internal("skills plugin initialized more than once"))?;
+        self.config.set(config).map_err(|_| {
+            PluginError::internal("skills plugin config initialized more than once")
+        })?;
         self.start_filesystem_watcher()?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
@@ -942,7 +943,7 @@ impl SkillsPlugin {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("skills invoked before init"))
+            .ok_or_else(|| PluginError::internal("skills invoked before init"))
     }
 
     fn config(&self) -> SkillsPluginConfig {
@@ -956,7 +957,7 @@ impl SkillsPlugin {
     fn managed_root(&self) -> SdkResult<PathBuf> {
         let workspace_root = self.workspace_root()?;
         let canonical_workspace = workspace_root.canonicalize().map_err(|error| {
-            PluginError::new(format!(
+            PluginError::internal(format!(
                 "cannot canonicalize Skill workspace '{}': {error}",
                 workspace_root.display()
             ))
@@ -981,7 +982,7 @@ impl SkillsPlugin {
     fn managed_skill_document(&self, name: &str) -> SdkResult<(String, PathBuf)> {
         let path = self.managed_skill_path(name)?;
         let parent = path.parent().ok_or_else(|| {
-            PluginError::new("managed Skill path unexpectedly has no parent directory")
+            PluginError::internal("managed Skill path unexpectedly has no parent directory")
         })?;
         if !parent.is_dir() || parent.is_symlink() {
             return Err(PluginError::invalid_params(format!(
@@ -1016,7 +1017,7 @@ impl SkillsPlugin {
             )));
         }
         let parent = path.parent().ok_or_else(|| {
-            PluginError::new("managed Skill path unexpectedly has no parent directory")
+            PluginError::internal("managed Skill path unexpectedly has no parent directory")
         })?;
         std::fs::create_dir_all(parent).map_err(skill_write_error)?;
         let canonical_root = self.managed_root()?;
@@ -1215,7 +1216,7 @@ impl SkillsPlugin {
                 }
             })
             .map_err(|error| {
-                PluginError::new(format!("cannot start Skill filesystem watcher: {error}"))
+                PluginError::internal(format!("cannot start Skill filesystem watcher: {error}"))
             })?;
         let mut watched_paths = Vec::new();
         for (path, mode) in desired {
@@ -1231,7 +1232,7 @@ impl SkillsPlugin {
         *self
             .watcher
             .lock()
-            .map_err(|_| PluginError::new("skills watcher lock poisoned"))? =
+            .map_err(|_| PluginError::internal("skills watcher lock poisoned"))? =
             Some(SkillCatalogWatcher {
                 _watcher: watcher,
                 watched_paths,
@@ -1243,7 +1244,7 @@ impl SkillsPlugin {
         let watcher = self
             .watcher
             .lock()
-            .map_err(|_| PluginError::new("skills watcher lock poisoned"))?;
+            .map_err(|_| PluginError::internal("skills watcher lock poisoned"))?;
         Ok((
             self.config().watcher.enabled,
             watcher
@@ -1332,7 +1333,7 @@ impl SkillsPlugin {
         for diagnostic in &catalog.diagnostics {
             digest.update(diagnostic.path.to_string_lossy().as_bytes());
             digest.update([0]);
-            digest.update(diagnostic.error.as_bytes());
+            digest.update(diagnostic.diagnostic.as_bytes());
             digest.update([0xfe]);
         }
         hex::encode(digest.finalize())
@@ -1351,7 +1352,7 @@ impl SkillsPlugin {
         let mut state = self
             .catalog_state
             .lock()
-            .map_err(|_| PluginError::new("skills catalog-state lock poisoned"))?;
+            .map_err(|_| PluginError::internal("skills catalog-state lock poisoned"))?;
         let changed = state.fingerprint.as_deref() != Some(fingerprint.as_str());
         if changed {
             state.generation = state.generation.saturating_add(1);
@@ -1553,7 +1554,10 @@ impl SkillsPlugin {
         if input.verbose && !catalog.diagnostics.is_empty() {
             lines.push("Discovery diagnostics:".to_string());
             lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
-                format!("- {}: {}", diagnostic.path.display(), diagnostic.error)
+                format!(
+                    "- {} Reference: {}",
+                    diagnostic.failure.user.fallback, diagnostic.failure.id
+                )
             }));
         }
         let payload = serde_json::json!({
@@ -1568,8 +1572,7 @@ impl SkillsPlugin {
                 "editable": is_workspace_managed_skill(workspace_root, name, tool),
             })).collect::<Vec<_>>(),
             "diagnostics": catalog.diagnostics.iter().map(|diagnostic| serde_json::json!({
-                "path": diagnostic.path,
-                "error": diagnostic.error,
+                "problem": diagnostic.failure,
             })).collect::<Vec<_>>(),
             "total": total,
             "offset": offset,
@@ -1766,7 +1769,10 @@ impl SkillsPlugin {
         if input.verbose && !refresh.catalog.diagnostics.is_empty() {
             lines.push("Discovery diagnostics:".to_string());
             lines.extend(refresh.catalog.diagnostics.iter().map(|diagnostic| {
-                format!("- {}: {}", diagnostic.path.display(), diagnostic.error)
+                format!(
+                    "- {} Reference: {}",
+                    diagnostic.failure.user.fallback, diagnostic.failure.id
+                )
             }));
         }
         Ok(ToolInvokeOutput::from_parts(
@@ -1784,8 +1790,7 @@ impl SkillsPlugin {
                     "generation": watcher_generation,
                 },
                 "diagnostics": refresh.catalog.diagnostics.iter().map(|diagnostic| serde_json::json!({
-                    "path": diagnostic.path,
-                    "error": diagnostic.error,
+                    "problem": diagnostic.failure,
                 })).collect::<Vec<_>>(),
             })),
             BTreeMap::from([

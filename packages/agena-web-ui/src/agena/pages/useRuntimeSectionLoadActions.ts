@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
 
 import type {
@@ -162,7 +163,7 @@ export function useRuntimeSectionLoadActions(
         await loadPluginsSection()
       }
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       if (!background) {
         input.loading.value = false

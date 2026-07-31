@@ -73,9 +73,10 @@ pub async fn list_provider_models_response(
         .provider_catalog()
         .contains_provider(&provider_id_value)
     {
-        return Err(ApplicationError::NotFound(format!(
-            "provider {provider_id} not found"
-        )));
+        return Err(ApplicationError::not_found_with_diagnostic(
+            "The provider was not found.",
+            format!("provider {provider_id} not found"),
+        ));
     }
 
     let models = state
@@ -373,14 +374,21 @@ fn provider_adapter_models_resource(
             .into_iter()
             .map(provider_model_resource_from_domain)
             .collect(),
-        error: value.error,
+        failure: value.failure.map(Into::into),
     }
 }
 
 fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError {
     match error {
-        ProviderCatalogError::InvalidRequest(message) => ApplicationError::BadRequest(message),
-        ProviderCatalogError::NotFound(message) => ApplicationError::NotFound(message),
-        ProviderCatalogError::Operation(message) => ApplicationError::Internal(message),
+        ProviderCatalogError::InvalidRequest(message) => {
+            ApplicationError::bad_request_with_diagnostic(
+                "The provider request is invalid.",
+                message,
+            )
+        }
+        ProviderCatalogError::NotFound(message) => {
+            ApplicationError::not_found_with_diagnostic("The provider was not found.", message)
+        }
+        ProviderCatalogError::Operation(message) => ApplicationError::internal(message),
     }
 }

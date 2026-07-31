@@ -68,7 +68,7 @@ impl ToolExecutor {
         .into_invocation();
         let input_value = serde_json::Value::from(rewritten_invocation.input);
         let input = StructuredObject::try_from(input_value)
-            .map_err(|err| ToolError::InvalidInput(err.to_string()))?;
+            .map_err(|err| ToolError::invalid_input(err.to_string()))?;
         Ok((
             ToolInvocation {
                 tool_api_function: invocation.tool_api_function,
@@ -113,7 +113,7 @@ impl ToolExecutor {
             })?;
         let input_json = invocation_input_json(invocation)?;
         let parsed_input_value: serde_json::Value = serde_json::from_str(&input_json)
-            .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+            .map_err(|e| ToolError::invalid_input(e.to_string()))?;
         let input_value = parsed_input_value;
 
         let effective_tags = definition
@@ -139,7 +139,7 @@ impl ToolExecutor {
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
         let input_json = serde_json::to_string(&hooked.input)
-            .map_err(|e| ToolError::InvalidInput(e.to_string()))?;
+            .map_err(|e| ToolError::invalid_input(e.to_string()))?;
 
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
@@ -308,7 +308,7 @@ impl ToolExecutor {
             {
                 ToolError::Cancelled
             } else {
-                ToolError::Plugin(err.message)
+                ToolError::from_plugin_error(err)
             }
         })?;
         let stream_id = stream.stream_id;
@@ -341,7 +341,7 @@ impl ToolExecutor {
                         attachments: end.attachments,
                     };
                     let output = ToolOutput::from_json_payload(end.payload.as_ref())
-                        .map_err(ToolError::InvalidInput)?;
+                        .map_err(ToolError::invalid_input)?;
                     let execution = ToolInvocationExecution {
                         output: output.clone(),
                         view,
@@ -356,8 +356,8 @@ impl ToolExecutor {
                         execution,
                     )
                 })(),
-                Ok(Err(err)) => Err(ToolError::Plugin(err.message)),
-                Err(_) => Err(ToolError::Plugin(
+                Ok(Err(err)) => Err(ToolError::from_plugin_error(err)),
+                Err(_) => Err(ToolError::plugin(
                     "stream ended without a terminal frame".to_string(),
                 )),
             };
@@ -452,7 +452,7 @@ impl ToolExecutor {
                 {
                     ToolError::Cancelled
                 } else {
-                    ToolError::Plugin(err.message)
+                    ToolError::from_plugin_error(err)
                 }
             })?;
         self.ensure_not_cancelled()?;
@@ -464,7 +464,7 @@ impl ToolExecutor {
             attachments: response.attachments,
         };
         let output = ToolOutput::from_json_payload(response.payload.as_ref())
-            .map_err(ToolError::InvalidInput)?;
+            .map_err(ToolError::invalid_input)?;
         let execution = ToolInvocationExecution {
             output: output.clone(),
             view,

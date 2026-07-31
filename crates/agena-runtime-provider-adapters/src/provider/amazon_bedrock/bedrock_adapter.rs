@@ -995,7 +995,7 @@ impl AmazonBedrockAdapter {
                         Err(ProviderError::ProviderClassified {
                             provider: PROVIDER_ID.to_owned(),
                             message: service.to_string(),
-                            kind: agena_provider::ProviderErrorKind::ApiError,
+                            kind: agena_provider::ProviderErrorKind::Unavailable,
                             retryable: service.retryable,
                         })?;
                         unreachable!("stream error branch always returns via `?`");

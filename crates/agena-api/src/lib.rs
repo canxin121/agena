@@ -26,7 +26,7 @@
 //!
 //! ## Development contract
 //!
-//! - `pub const PROTOCOL_VERSION: u32 = 1;` is fixed throughout development.
+//! - `pub const PROTOCOL_VERSION: u32 = 2;` is the failure-semantics contract.
 //! - Server and clients are built against the same current contract.
 //! - Breaking changes replace the current contract directly; no older
 //!   protocol generations or downgrade behavior are retained.
@@ -47,7 +47,7 @@ pub use scope::Scope;
 
 /// Fixed development wire contract. Do not increment this during development;
 /// change server and clients together against the one current format.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Stable, open-ended event-kind identifier used in wire filters.
 pub type EventKindTag = smol_str::SmolStr;

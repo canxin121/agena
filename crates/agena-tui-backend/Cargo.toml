@@ -10,6 +10,7 @@ description = "Application and runtime adapter used by Agena's TUI"
 agena-api = { workspace = true }
 agena-application = { workspace = true }
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
 agena-provider = { workspace = true }
@@ -23,6 +24,7 @@ mime_guess = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync"] }
+tracing = { workspace = true }
 
 [lints]
 workspace = true

@@ -677,14 +677,21 @@ impl SessionManager {
                             run_events.push(EventKind::RunAborted(RunAborted {
                                 run_id,
                                 reason: RunAbortReason::UserCancelled,
-                                message: Some("execution cancelled".to_string()),
+                                failure: None,
                             }));
                         }
                         SessionRunTermination::Failed(error) => {
+                            let failure = error.failure();
+                            tracing::warn!(
+                                failure_id = %failure.id,
+                                session_id = persisted_session.id,
+                                diagnostic = %error,
+                                "session run failed"
+                            );
                             run_events.push(EventKind::RunAborted(RunAborted {
                                 run_id,
                                 reason: RunAbortReason::ProviderError,
-                                message: Some(error.to_string()),
+                                failure: Some((&failure).into()),
                             }));
                         }
                     }
@@ -708,13 +715,20 @@ impl SessionManager {
                 }
                 Err(err) => {
                     let reason = run_abort_reason(&err);
+                    let failure = err.failure();
+                    tracing::warn!(
+                        failure_id = %failure.id,
+                        session_id = session.id,
+                        diagnostic = %err,
+                        "session run aborted by an execution failure"
+                    );
                     self.store
                         .append_history_items(
                             session,
                             vec![EventKind::RunAborted(RunAborted {
                                 run_id,
                                 reason,
-                                message: Some(err.to_string()),
+                                failure: Some((&failure).into()),
                             })],
                             state.cache_policy(),
                         )
@@ -832,13 +846,7 @@ impl SessionManager {
                 }
                 Err(err) => {
                     session = self
-                        .apply_tool_failure(
-                            session,
-                            &resolved.pending,
-                            err.to_string(),
-                            None,
-                            state.clone(),
-                        )
+                        .apply_tool_error(session, &resolved.pending, err, None, state.clone())
                         .await?;
                 }
             }
@@ -1052,14 +1060,8 @@ impl SessionManager {
             &resolved.invocation,
             resolved.advertised_tool_identity.as_deref(),
         ) {
-            return Box::pin(self.apply_tool_failure(
-                session,
-                &resolved.pending,
-                err.to_string(),
-                None,
-                state,
-            ))
-            .await;
+            return Box::pin(self.apply_tool_error(session, &resolved.pending, err, None, state))
+                .await;
         }
         let prepared = match scoped_executor.prepare_invocation(
             &resolved.invocation,
@@ -1073,10 +1075,10 @@ impl SessionManager {
                     .await;
             }
             Err(err) => {
-                return Box::pin(self.apply_tool_failure(
+                return Box::pin(self.apply_tool_error(
                     session,
                     &resolved.pending,
-                    err.to_string(),
+                    err,
                     None,
                     state,
                 ))
@@ -1093,10 +1095,10 @@ impl SessionManager {
                     .await;
             }
             Err(err) => {
-                return Box::pin(self.apply_tool_failure(
+                return Box::pin(self.apply_tool_error(
                     session,
                     &resolved.pending,
-                    err.to_string(),
+                    err,
                     None,
                     state,
                 ))
@@ -1145,10 +1147,10 @@ impl SessionManager {
                     .await;
             }
             Err(err) => {
-                return Box::pin(self.apply_tool_failure(
+                return Box::pin(self.apply_tool_error(
                     session,
                     &resolved.pending,
-                    err.to_string(),
+                    err,
                     None,
                     state,
                 ))
@@ -1182,11 +1184,10 @@ impl SessionManager {
                     .await;
             }
             AggregatedPermissionOutcome::Deny { reason } => {
-                return Box::pin(self.apply_tool_failure(
+                return Box::pin(self.apply_permission_denied(
                     session,
                     &resolved.pending,
                     reason,
-                    None,
                     state,
                 ))
                 .await;
@@ -1224,10 +1225,10 @@ impl SessionManager {
                     .await;
             }
             Err(err) => {
-                return Box::pin(self.apply_tool_failure(
+                return Box::pin(self.apply_tool_error(
                     session,
                     &resolved.pending,
-                    err.to_string(),
+                    err,
                     None,
                     state,
                 ))
@@ -1292,14 +1293,7 @@ impl SessionManager {
                     .store
                     .load_session(session.id, state.cache_policy())
                     .await?;
-                Box::pin(self.apply_tool_failure(
-                    session,
-                    &resolved.pending,
-                    err.to_string(),
-                    None,
-                    state,
-                ))
-                .await
+                Box::pin(self.apply_tool_error(session, &resolved.pending, err, None, state)).await
             }
         }
     }
@@ -1816,7 +1810,7 @@ impl SessionManager {
                     .load_session(session.id, state.cache_policy())
                     .await?;
                 return self
-                    .apply_tool_failure(session, pending_tool, err.to_string(), None, state)
+                    .apply_tool_error(session, pending_tool, err, None, state)
                     .await;
             }
             Err(_) => {
@@ -1825,10 +1819,12 @@ impl SessionManager {
                     .load_session(session.id, state.cache_policy())
                     .await?;
                 return self
-                    .apply_tool_failure(
+                    .apply_tool_error(
                         session,
                         pending_tool,
-                        format!("tool stream ended without terminal result: {stream_id}"),
+                        ToolError::plugin(format!(
+                            "tool stream ended without terminal result: {stream_id}"
+                        )),
                         None,
                         state,
                     )

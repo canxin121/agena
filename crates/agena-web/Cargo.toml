@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+agena-failure = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }

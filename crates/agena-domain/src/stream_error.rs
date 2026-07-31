@@ -1,30 +1,30 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ErrorInfo {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamErrorEvent {
     pub session_id: i64,
-    pub error: ErrorInfo,
+    pub problem: agena_failure::UserProblem,
     pub ts_ms: i64,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ErrorInfo, StreamErrorEvent};
+    use super::StreamErrorEvent;
 
     #[test]
     fn stream_error_payload_round_trips() {
         let event = StreamErrorEvent {
             session_id: 7,
-            error: ErrorInfo {
-                code: "overloaded".into(),
-                message: "try again".into(),
-            },
+            problem: agena_failure::Failure::new(
+                agena_failure::FailureCode::new("stream.test"),
+                agena_failure::FailureCategory::Internal,
+                agena_failure::FailureResponsibility::System,
+                agena_failure::RetryDirective::Unknown,
+                agena_failure::RecoveryDirective::None,
+                agena_failure::FailureImpact::OperationFailed,
+                agena_failure::UserPresentation::new("stream-test", "Something went wrong."),
+            )
+            .into(),
             ts_ms: 42,
         };
         assert_eq!(

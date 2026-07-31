@@ -135,7 +135,8 @@ mod tests {
             }]
         }))
         .expect_err("sub-minute auto resolution must be rejected");
-        assert!(err.to_string().contains("auto_resolution_ms"));
+        assert!(err.diagnostic_message().contains("auto_resolution_ms"));
+        assert!(!err.to_string().contains("auto_resolution_ms"));
     }
 
     #[test]

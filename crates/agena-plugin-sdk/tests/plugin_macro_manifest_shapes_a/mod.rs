@@ -376,7 +376,7 @@ fn tool_input_nested_shape_outer_constraints_resolve_schema_side_paths() {
     }))
     .expect_err("nested_shape outer non_empty should validate the resolved inner path");
     assert!(
-        error.to_string().contains("must not be empty"),
+        error.diagnostic_message().contains("must not be empty"),
         "unexpected nested_shape outer constraint error: {error}"
     );
 }
@@ -401,7 +401,7 @@ fn tool_input_nested_shape_array_outer_constraints_resolve_item_schema_side_path
     }))
     .expect_err("nested_shape array outer non_empty should validate the resolved inner item path");
     assert!(
-        error.to_string().contains("must not be empty"),
+        error.diagnostic_message().contains("must not be empty"),
         "unexpected nested_shape array outer constraint error: {error}"
     );
 }
@@ -448,7 +448,7 @@ fn tool_input_nested_shape_inner_validation_errors_are_prefixed() {
     .expect_err("nested_shape inner validation should surface under the outer field path");
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `payload.filePath` must not be empty"#),
         "unexpected nested_shape validation error: {error}"
     );
@@ -463,7 +463,7 @@ fn tool_input_enum_nested_shape_inner_validation_errors_are_prefixed() {
     .expect_err("enum nested_shape inner validation should surface under the outer field path");
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `payload.filePath` must not be empty"#),
         "unexpected enum nested_shape validation error: {error}"
     );
@@ -480,7 +480,7 @@ fn tool_input_nested_shape_array_inner_validation_errors_include_item_index() {
     .expect_err("nested_shape array item validation should keep the failing item index");
     assert!(
         error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `payload[1].filePath` must not be empty"#),
         "unexpected nested_shape array validation error: {error}"
     );
@@ -766,7 +766,7 @@ fn tool_input_choice_constraints_apply_to_parse_schema_and_usage() {
         PathChoiceInput::parse_input(json!({ "mode": "turbo" })).expect_err("invalid enum value");
     assert!(
         path_error
-            .to_string()
+            .diagnostic_message()
             .contains(r#"field `mode` must be one of ["fast","slow"]"#),
         "unexpected path choice error: {path_error}"
     );

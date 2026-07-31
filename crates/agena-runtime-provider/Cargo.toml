@@ -8,6 +8,7 @@ description = "Concrete Agena provider adapters and registry"
 
 [dependencies]
 agena-domain = { workspace = true }
+agena-failure = { workspace = true }
 agena-provider = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-provider-google-auth = { workspace = true }

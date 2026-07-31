@@ -147,9 +147,10 @@ impl ApplicationService {
         if exists {
             Ok(())
         } else {
-            Err(ApplicationError::not_found(format!(
-                "workspace not found: {workspace_id}"
-            )))
+            Err(ApplicationError::not_found_with_diagnostic(
+                "The workspace was not found.",
+                format!("workspace not found: {workspace_id}"),
+            ))
         }
     }
 
@@ -167,12 +168,16 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
             .ok_or_else(|| {
-                ApplicationError::not_found(format!("session not found: {session_id}"))
+                ApplicationError::not_found_with_diagnostic(
+                    "The session was not found.",
+                    format!("session not found: {session_id}"),
+                )
             })?;
         if record.lifecycle_state != agena_domain::SessionLifecycleState::Ready {
-            return Err(ApplicationError::not_found(format!(
-                "session not found: {session_id}"
-            )));
+            return Err(ApplicationError::not_found_with_diagnostic(
+                "The session was not found.",
+                format!("session not found: {session_id}"),
+            ));
         }
         Ok(record)
     }
@@ -236,8 +241,12 @@ where
 }
 
 fn trim_page<T>(mut rows: Vec<T>, limit: u64) -> ApplicationResult<(Vec<T>, bool)> {
-    let limit = usize::try_from(limit)
-        .map_err(|_| ApplicationError::bad_request(format!("page limit too large: {limit}")))?;
+    let limit = usize::try_from(limit).map_err(|error| {
+        ApplicationError::bad_request_with_diagnostic(
+            "The requested page size is too large.",
+            format!("page limit {limit} cannot be represented: {error}"),
+        )
+    })?;
     let has_more = rows.len() > limit;
     if has_more {
         rows.truncate(limit);

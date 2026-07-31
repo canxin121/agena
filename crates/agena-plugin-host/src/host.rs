@@ -54,7 +54,7 @@ use crate::sdk::{
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
     PermissionDecision, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
-    PluginError, PluginErrorCode, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
+    PluginError, PluginErrorKind, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
     PluginTuiContentBlock, PluginUiAction, PostRunInput, PreRunInput, ProviderListInput,
     ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
     ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
@@ -504,7 +504,7 @@ fn unix_timestamp_ms() -> i64 {
 fn transport_to_plugin_error(e: TransportError) -> PluginError {
     match e {
         TransportError::Plugin(pe) => pe,
-        other => PluginError::new(other.to_string()),
+        other => PluginError::internal(other.to_string()),
     }
 }
 
@@ -640,7 +640,7 @@ fn host_status_from(status: crate::status::PluginStatus) -> HostPluginStatus {
         restart_count: status.restart_count,
         last_exit_code: status.last_exit_code,
         last_restart_at_ms: status.last_restart_at_ms,
-        last_error: status.last_error,
+        last_failure: status.last_failure,
     }
 }
 
@@ -976,13 +976,7 @@ struct HostThemeRemoveParams {
 }
 
 fn host_unavailable(message: impl Into<String>) -> PluginError {
-    PluginError {
-        code: PluginErrorCode::HostUnavailable,
-        message: message.into(),
-        hook: None,
-        plugin: None,
-        data: None,
-    }
+    PluginError::from_kind(PluginErrorKind::HostUnavailable, message.into())
 }
 
 fn scoped_context(

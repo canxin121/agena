@@ -125,7 +125,7 @@ impl ToolExecutor {
         {
             ToolError::Cancelled
         } else {
-            ToolError::Plugin(error.message)
+            ToolError::from_plugin_error(error)
         }
     }
 

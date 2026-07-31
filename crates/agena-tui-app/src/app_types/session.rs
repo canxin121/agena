@@ -147,7 +147,7 @@ pub(crate) struct CurrentLineageState {
     pub(crate) summary: agena_tui_session::session_navigation::SessionLineageSummary,
 }
 
-pub(crate) use agena_tui::flash::{FlashLevel, FlashMessage};
+pub(crate) use agena_tui::notice::{NoticeScope, NoticeSeverity, UiNotice};
 
 /// Runtime query lifecycle for the TUI-owned session-list presentation.
 ///

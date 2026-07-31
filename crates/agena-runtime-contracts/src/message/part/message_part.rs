@@ -198,12 +198,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
             Some("skill_reference".to_string())
         }
         PartContent::Activity(RuntimeActivity::Error(error)) => {
-            let code = error.code.trim();
-            if code.is_empty() {
-                Some("error".to_string())
-            } else {
-                Some(code.to_string())
-            }
+            Some(error.problem.code.to_string())
         }
         PartContent::Activity(RuntimeActivity::Resource(_)) => Some("resource".to_string()),
         PartContent::Activity(RuntimeActivity::Interaction(RequestPart::Permission(_))) => {
@@ -233,7 +228,7 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
                 .or_else(|| truncate_summary(&tool_name(invocation)))
         }
         PartContent::Activity(RuntimeActivity::Error(error)) => {
-            truncate_summary(&format!("{}: {}", error.code.trim(), error.message.trim()))
+            truncate_summary(error.problem.user.fallback.as_str())
         }
         PartContent::Activity(RuntimeActivity::Resource(attachment)) => {
             attachment_part_summary(attachment)

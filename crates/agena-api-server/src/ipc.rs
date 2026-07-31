@@ -94,12 +94,9 @@ mod unix {
                         .await;
                 }
                 Err(err) => {
-                    let _ = tx
-                        .send(ServerMessage::Error {
-                            id: None,
-                            error: ApiError::protocol(format!("invalid frame: {err}")),
-                        })
-                        .await;
+                    let error = ApiError::protocol(format!("invalid frame: {err}"));
+                    tracing::warn!(failure_id = %error.problem.id, diagnostic = %err, "invalid IPC protocol frame");
+                    let _ = tx.send(ServerMessage::Error { id: None, error }).await;
                 }
             }
         }

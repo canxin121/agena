@@ -24,7 +24,7 @@ pub async fn list_events(
     let events = events
         .list_events(&filter, range)
         .await
-        .map_err(|error| ServerError::Internal(error.to_string()))?;
+        .map_err(|error| ServerError::from_failure(*error.failure))?;
     let returned = events.len() as u64;
     let next_cursor = events.last().map(|event| event.meta.seq_global.to_string());
     Ok(Json(serde_json::json!({

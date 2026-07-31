@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
@@ -297,7 +298,7 @@ export function useRuntimePermissionActions(
       resetPermissionDraft()
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -310,7 +311,7 @@ export function useRuntimePermissionActions(
       if (input.editingPermissionRuleId.value === rule.id) resetPermissionDraft()
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -323,7 +324,7 @@ export function useRuntimePermissionActions(
       if (input.editingPermissionRuleId.value === rule.id) resetPermissionDraft()
       await input.load()
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     }
   }
 
@@ -347,7 +348,7 @@ export function useRuntimePermissionActions(
       input.actionMessage.value = `Sent permission reply: ${kind.replaceAll('_', ' ')}.`
       await input.loadSessionExecution(sessionId)
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
     } finally {
       finishInteractiveRequest(sessionId, requestId)
     }

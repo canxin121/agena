@@ -1,5 +1,5 @@
 use super::{
-    AppError, AttachmentItem, ExecutionControlError, ExecutionFailureKind, ExecutionStatus,
+    AppError, AttachmentItem, ExecutionControlError, ExecutionStatus,
     HOST_PERMISSION_REQUEST_SEQUENCE, HashSet, HistoryToolCallId, IpAddr, Message, MessageMetadata,
     MessagePart, OperationBlock, Ordering, PartContent, PermissionAction, PermissionDecision,
     PermissionMode, PermissionReplyKind, PermissionRiskLevel, PermissionScope,
@@ -90,16 +90,6 @@ pub(super) fn execution_control_to_app_error(err: ExecutionControlError) -> AppE
             AppError::Internal("steer channel closed for session".to_string())
         }
         ExecutionControlError::InvalidTransition(message) => AppError::Internal(message),
-    }
-}
-
-pub(super) fn execution_failure_kind(error: &AppError) -> ExecutionFailureKind {
-    match error {
-        AppError::Provider(_)
-        | AppError::ProviderClassified { .. }
-        | AppError::HttpStatus { .. }
-        | AppError::Http(_) => ExecutionFailureKind::Provider,
-        _ => ExecutionFailureKind::Internal,
     }
 }
 

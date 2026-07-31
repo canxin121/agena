@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import { computed, ref, watch } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
@@ -195,7 +196,7 @@ export function useWorkspacePageState(
       gitStatus.value = await deps.initGitProject()
       actionMessage.value = `Initialized git repository at ${gitStatus.value.workspace_root}.`
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       loading.value = false
     }
@@ -212,7 +213,7 @@ export function useWorkspacePageState(
         ? 'Loaded raw git diff.'
         : 'No raw git diff is available for the current workspace.'
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       rawDiffLoading.value = false
     }
@@ -226,7 +227,7 @@ export function useWorkspacePageState(
       gitStatus.value = await deps.stageGitChanges()
       actionMessage.value = `Staged ${gitStatus.value.staged_files} changed file(s).`
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       gitActionLoading.value = false
     }
@@ -246,7 +247,7 @@ export function useWorkspacePageState(
       rawDiffLoaded.value = false
       rawDiff.value = ''
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       gitActionLoading.value = false
     }
@@ -268,7 +269,7 @@ export function useWorkspacePageState(
       pullRequestUrl.value = result.url
       actionMessage.value = `Created pull request: ${result.url}`
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       gitActionLoading.value = false
     }
@@ -288,7 +289,7 @@ export function useWorkspacePageState(
       })
       await updateRouteQuery()
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       loading.value = false
     }
@@ -323,7 +324,7 @@ export function useWorkspacePageState(
         await loadTree()
       }
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       loading.value = false
     }
@@ -348,7 +349,7 @@ export function useWorkspacePageState(
       await deps.downloadWorkspaceFile({ workspaceId: selectedWorkspaceId.value, path: node.path })
       actionMessage.value = `Downloaded ${node.path}.`
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       downloadingFilePath.value = ''
     }
@@ -397,7 +398,7 @@ export function useWorkspacePageState(
       await loadTree()
       actionMessage.value = `Opened workspace ${workspace.path}.`
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       loading.value = false
     }
@@ -420,7 +421,7 @@ export function useWorkspacePageState(
       selectedWorkspacePathDraft.value = updated.path
       actionMessage.value = `Renamed workspace to ${updated.path}.`
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       loading.value = false
     }
@@ -465,7 +466,7 @@ export function useWorkspacePageState(
       }
       actionMessage.value = `Deleted workspace ${removed.path}.`
     } catch (err) {
-      actionError.value = err instanceof Error ? err.message : String(err)
+      actionError.value = userErrorMessage(err)
     } finally {
       loading.value = false
     }

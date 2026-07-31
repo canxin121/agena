@@ -178,11 +178,11 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
 }
 
 fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart {
-    let (schema, title, summary, error) = activity_presentation(&activity.payload);
+    let (schema, title, summary, problem) = activity_presentation(&activity.payload);
     let generic = TranscriptActivityPresentation {
         title,
         summary,
-        error,
+        problem,
     };
     TranscriptEntryPart {
         id: TranscriptContentId::Activity(activity.id),
@@ -275,14 +275,15 @@ fn activity_detail(
             })
         }
         ActivityPayload::Error(error) => TranscriptPartContent::Error(MessageErrorPartResource {
-            code: error.code.clone(),
-            message: error.message.clone(),
+            problem: error.problem.clone(),
         }),
         _ => TranscriptPartContent::Activity(generic),
     }
 }
 
-fn activity_presentation(payload: &ActivityPayload) -> (String, String, String, Option<String>) {
+fn activity_presentation(
+    payload: &ActivityPayload,
+) -> (String, String, String, Option<agena_failure::UserProblem>) {
     match payload {
         ActivityPayload::Resource(resource) => (
             "resource".to_owned(),
@@ -334,7 +335,7 @@ fn activity_presentation(payload: &ActivityPayload) -> (String, String, String, 
             } else {
                 operation.summary.clone()
             },
-            operation.error.as_ref().map(|error| error.message.clone()),
+            operation.error.as_ref().map(|error| error.problem.clone()),
         ),
         ActivityPayload::Interaction(interaction) => match interaction {
             agena_domain::InteractionActivity::Permission { request, .. } => (
@@ -404,13 +405,9 @@ fn activity_presentation(payload: &ActivityPayload) -> (String, String, String, 
         },
         ActivityPayload::Error(error) => (
             "error".to_owned(),
-            if error.code.trim().is_empty() {
-                "Error".to_owned()
-            } else {
-                error.code.clone()
-            },
-            error.message.clone(),
-            Some(error.message.clone()),
+            "Error".to_owned(),
+            error.problem.user.fallback.clone(),
+            Some(error.problem.clone()),
         ),
         ActivityPayload::Custom(custom) => (
             custom.schema.clone(),

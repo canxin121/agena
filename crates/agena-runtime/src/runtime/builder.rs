@@ -951,12 +951,12 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
                         connected: status.connected,
                         tool_count: status.tool_count,
                         network_target: status.network_target,
-                        last_error: status.last_error,
+                        last_failure: status.last_failure.map(Into::into),
                         instructions_present: status.instructions.is_some(),
                         tool_generation: status.tool_generation,
                         resource_generation: status.resource_generation,
                         prompt_generation: status.prompt_generation,
-                        last_refresh_error: status.last_refresh_error,
+                        last_refresh_failure: status.last_refresh_failure.map(Into::into),
                         reconnect_supervisor_running: status.reconnect_supervisor_running,
                         auth_mode: status.auth_mode.as_str().to_owned(),
                         oauth_health: status.oauth_health.map(|health| {
@@ -1179,7 +1179,7 @@ impl AgenaRuntime {
                     enabled: adapter.enabled,
                     resolved_base_url: adapter.resolved_base_url,
                     models: adapter.models,
-                    error: adapter.error,
+                    failure: adapter.failure,
                 })
                 .collect(),
         })
@@ -1564,13 +1564,11 @@ impl AgenaRuntime {
                         ));
                     };
 
-                    let message = refreshed
-                        .last_error
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(|warning| format!("Refreshed model catalog with warnings: {warning}"))
-                        .unwrap_or_else(|| "Refreshed model catalog.".to_owned());
+                    let message = if refreshed.last_failure.is_some() {
+                        "Refreshed the model catalog, but some sources were unavailable.".to_owned()
+                    } else {
+                        "Refreshed model catalog.".to_owned()
+                    };
 
                     Ok(RuntimeBackgroundTaskOutcome::succeeded(message))
                 }

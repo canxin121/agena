@@ -12,7 +12,7 @@ impl WorkflowPlugin {
     ) -> SdkResult<&WorkflowPluginConfig> {
         self.config
             .get()
-            .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("workflow plugin invoked before init"))
     }
 
     pub(in crate::plugins::provided::workflow) fn resolve_tool_descriptor<'a>(
@@ -94,16 +94,16 @@ impl WorkflowPlugin {
     pub(crate) fn host(&self) -> SdkResult<Arc<dyn HostClient>> {
         self.host
             .read()
-            .map_err(|_| PluginError::new("workflow plugin host lock poisoned"))?
+            .map_err(|_| PluginError::internal("workflow plugin host lock poisoned"))?
             .clone()
-            .ok_or_else(|| PluginError::new("workflow plugin invoked before init"))
+            .ok_or_else(|| PluginError::internal("workflow plugin invoked before init"))
     }
 
     pub(in crate::plugins::provided::workflow) fn workspace_root(&self) -> SdkResult<&Path> {
         self.workspace_root
             .get()
             .map(PathBuf::as_path)
-            .ok_or_else(|| PluginError::new("workflow plugin workspace root not initialized"))
+            .ok_or_else(|| PluginError::internal("workflow plugin workspace root not initialized"))
     }
 
     pub(in crate::plugins::provided::workflow) fn host_ask_user_questions(
@@ -282,7 +282,7 @@ impl WorkflowPlugin {
         session: HostSession,
     ) -> SdkResult<serde_json::Value> {
         serde_json::to_value(SessionToolResponse { session })
-            .map_err(|err| PluginError::new(err.to_string()))
+            .map_err(|err| PluginError::internal(err.to_string()))
     }
 
     pub(in crate::plugins::provided::workflow) fn session_summary(session: &HostSession) -> String {
@@ -361,15 +361,15 @@ impl WorkflowPlugin {
         };
         serde_json::from_str::<WorkflowPlan>(&value)
             .map(Some)
-            .map_err(|err| PluginError::new(format!("invalid stored plan payload: {err}")))
+            .map_err(|err| PluginError::internal(format!("invalid stored plan payload: {err}")))
     }
 
     pub(in crate::plugins::provided::workflow) async fn save_active_plan(
         &self,
         plan: &WorkflowPlan,
     ) -> SdkResult<()> {
-        let value =
-            serde_json::to_string_pretty(plan).map_err(|err| PluginError::new(err.to_string()))?;
+        let value = serde_json::to_string_pretty(plan)
+            .map_err(|err| PluginError::internal(err.to_string()))?;
         let host = self.host()?;
         host.storage_set(HostStorageSetRequest {
             scope: HostStorageScope::Session,
@@ -471,7 +471,7 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
     ) -> SdkResult<serde_json::Value> {
         serde_json::to_value(serde_json::json!({ "plan": plan }))
-            .map_err(|err| PluginError::new(err.to_string()))
+            .map_err(|err| PluginError::internal(err.to_string()))
     }
 
     pub(in crate::plugins::provided::workflow) fn validate_plan_objective(
@@ -1201,7 +1201,7 @@ impl WorkflowPlugin {
         step: &WorkflowPlanStep,
     ) -> SdkResult<String> {
         let serialized =
-            serde_json::to_string(plan).map_err(|err| PluginError::new(err.to_string()))?;
+            serde_json::to_string(plan).map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(format!("{serialized}:{step_index}:{}", step.id))
     }
 

@@ -321,7 +321,7 @@ struct ServerEventState {
     tool_generation: AtomicU64,
     resource_generation: AtomicU64,
     prompt_generation: AtomicU64,
-    last_refresh_error: RwLock<Option<String>>,
+    last_refresh_failure: RwLock<Option<agena_failure::Failure>>,
 }
 
 #[derive(Clone)]
@@ -356,17 +356,19 @@ impl ClientHandler for AgenaMcpClientHandler {
                 Ok(Ok(tools)) => {
                     *events.tools.write().await = filter_tools(tools, &tool_policy);
                     events.tool_generation.fetch_add(1, Ordering::Relaxed);
-                    *events.last_refresh_error.write().await = None;
+                    *events.last_refresh_failure.write().await = None;
                 }
                 Ok(Err(error)) => {
-                    let message = format!("tools/list refresh failed: {error}");
-                    warn!(target: "agena_mcp_client::manager", server = %server_name, "{message}");
-                    *events.last_refresh_error.write().await = Some(message);
+                    let error = McpError::from(error);
+                    let failure = mcp_failure(&error);
+                    warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh failed");
+                    *events.last_refresh_failure.write().await = Some(failure);
                 }
                 Err(_) => {
-                    let message = "tools/list refresh timed out".to_string();
-                    warn!(target: "agena_mcp_client::manager", server = %server_name, "{message}");
-                    *events.last_refresh_error.write().await = Some(message);
+                    let error = McpError::Timeout;
+                    let failure = mcp_failure(&error);
+                    warn!(target: "agena_mcp_client::manager", failure_id = %failure.id, server = %server_name, diagnostic = %error, "MCP tool list refresh timed out");
+                    *events.last_refresh_failure.write().await = Some(failure);
                 }
             }
         });
@@ -442,7 +444,7 @@ pub struct McpConnectionManager {
 struct Inner {
     servers: BTreeMap<String, Arc<ConnectedServer>>,
     specs: BTreeMap<String, ServerSpec>,
-    last_errors: BTreeMap<String, String>,
+    last_failures: BTreeMap<String, agena_failure::Failure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -451,12 +453,12 @@ pub struct McpServerStatus {
     pub connected: bool,
     pub tool_count: usize,
     pub network_target: Option<String>,
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::Failure>,
     pub instructions: Option<String>,
     pub tool_generation: u64,
     pub resource_generation: u64,
     pub prompt_generation: u64,
-    pub last_refresh_error: Option<String>,
+    pub last_refresh_failure: Option<agena_failure::Failure>,
     pub reconnect_supervisor_running: bool,
     pub auth_mode: McpServerAuthMode,
     /// Present only for servers configured with standard MCP OAuth. It is a
@@ -576,7 +578,7 @@ impl McpConnectionManager {
         if let Some(existing) = {
             let mut inner = self.inner.write().await;
             inner.specs.insert(name.to_string(), spec.clone());
-            inner.last_errors.remove(name);
+            inner.last_failures.remove(name);
             inner.servers.remove(name)
         } {
             shutdown_server(existing).await;
@@ -618,12 +620,11 @@ impl McpConnectionManager {
             match tokio::time::timeout(self.connect_timeout, connection).await {
                 Ok(Ok(connected)) => connected,
                 Ok(Err(error)) => {
-                    self.record_error(name, error.to_string()).await;
+                    self.record_error(name, &error).await;
                     return Err(error);
                 }
                 Err(_) => {
-                    self.record_error(name, "connection timed out".to_string())
-                        .await;
+                    self.record_error(name, &McpError::Timeout).await;
                     return Err(McpError::Timeout);
                 }
             };
@@ -636,13 +637,13 @@ impl McpConnectionManager {
         let tools = match tokio::time::timeout(self.request_timeout, peer.list_all_tools()).await {
             Ok(Ok(tools)) => filter_tools(tools, &tool_policy),
             Ok(Err(error)) => {
-                self.record_error(name, error.to_string()).await;
+                let error = McpError::from(error);
+                self.record_error(name, &error).await;
                 let _ = running.cancel().await;
-                return Err(error.into());
+                return Err(error);
             }
             Err(_) => {
-                self.record_error(name, "initial tools/list timed out".to_string())
-                    .await;
+                self.record_error(name, &McpError::Timeout).await;
                 let _ = running.cancel().await;
                 return Err(McpError::Timeout);
             }
@@ -660,7 +661,7 @@ impl McpConnectionManager {
 
         let mut inner = self.inner.write().await;
         inner.servers.insert(name.to_string(), connected);
-        inner.last_errors.remove(name);
+        inner.last_failures.remove(name);
         Ok(())
     }
 
@@ -680,7 +681,7 @@ impl McpConnectionManager {
         let removed = {
             let mut inner = self.inner.write().await;
             inner.specs.remove(name);
-            inner.last_errors.remove(name);
+            inner.last_failures.remove(name);
             inner.servers.remove(name)
         };
         if let Some(server) = removed {
@@ -698,7 +699,7 @@ impl McpConnectionManager {
         let inner = self.inner.read().await;
         let specs = inner.specs.clone();
         let servers = inner.servers.clone();
-        let errors = inner.last_errors.clone();
+        let failures = inner.last_failures.clone();
         drop(inner);
         let mut statuses = Vec::with_capacity(specs.len());
         let reconnect_supervisor_running = self.reconnect_supervisor_running();
@@ -708,8 +709,8 @@ impl McpConnectionManager {
                 Some(server) => server.events.tools.read().await.len(),
                 None => 0,
             };
-            let last_refresh_error = match server.as_ref() {
-                Some(server) => server.events.last_refresh_error.read().await.clone(),
+            let last_refresh_failure = match server.as_ref() {
+                Some(server) => server.events.last_refresh_failure.read().await.clone(),
                 None => None,
             };
             statuses.push(McpServerStatus {
@@ -719,7 +720,7 @@ impl McpConnectionManager {
                 network_target: server
                     .as_ref()
                     .and_then(|server| server.network_target.clone()),
-                last_error: errors.get(name.as_str()).cloned(),
+                last_failure: failures.get(name.as_str()).cloned(),
                 instructions: server
                     .as_ref()
                     .and_then(|server| server.instructions.clone()),
@@ -732,7 +733,7 @@ impl McpConnectionManager {
                 prompt_generation: server.as_ref().map_or(0, |server| {
                     server.events.prompt_generation.load(Ordering::Relaxed)
                 }),
-                last_refresh_error,
+                last_refresh_failure,
                 reconnect_supervisor_running,
                 auth_mode: spec.auth_mode(),
                 oauth_health: spec.oauth_health(name.as_str()),
@@ -802,7 +803,7 @@ impl McpConnectionManager {
             .events
             .tool_generation
             .fetch_add(1, Ordering::Relaxed);
-        *server.events.last_refresh_error.write().await = None;
+        *server.events.last_refresh_failure.write().await = None;
         Ok(tools)
     }
 
@@ -949,7 +950,7 @@ impl McpConnectionManager {
         let servers = {
             let mut inner = self.inner.write().await;
             inner.specs.clear();
-            inner.last_errors.clear();
+            inner.last_failures.clear();
             std::mem::take(&mut inner.servers)
                 .into_values()
                 .collect::<Vec<_>>()
@@ -1001,13 +1002,93 @@ impl McpConnectionManager {
         }
     }
 
-    async fn record_error(&self, name: &str, error: String) {
+    async fn record_error(&self, name: &str, error: &McpError) {
+        let failure = mcp_failure(error);
+        warn!(
+            target: "agena_mcp_client::manager",
+            failure_id = %failure.id,
+            server = %name,
+            diagnostic = %error,
+            "MCP connection failed"
+        );
         self.inner
             .write()
             .await
-            .last_errors
-            .insert(name.to_string(), error);
+            .last_failures
+            .insert(name.to_string(), failure);
     }
+}
+
+fn mcp_failure(error: &McpError) -> agena_failure::Failure {
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+        RecoveryDirective, RetryDirective, UserPresentation,
+    };
+
+    let (code, category, responsibility, retry, recovery, fallback) = match error {
+        McpError::Auth(_) => (
+            "mcp.authentication_required",
+            FailureCategory::AuthenticationRequired,
+            FailureResponsibility::Caller,
+            RetryDirective::AfterUserAction,
+            RecoveryDirective::Reauthenticate,
+            "The MCP server requires authentication. Sign in and try again.",
+        ),
+        McpError::Timeout => (
+            "mcp.timeout",
+            FailureCategory::Timeout,
+            FailureResponsibility::Dependency,
+            RetryDirective::Backoff,
+            RecoveryDirective::Retry,
+            "The MCP server did not respond in time. Try again shortly.",
+        ),
+        McpError::Malformed(_) | McpError::Serde(_) | McpError::Rpc { .. } => (
+            "mcp.protocol_failure",
+            FailureCategory::ProtocolFailure,
+            FailureResponsibility::Dependency,
+            RetryDirective::UseAlternative,
+            RecoveryDirective::RestartPlugin,
+            "The MCP server returned an invalid response.",
+        ),
+        McpError::ToolDisallowed { .. } => (
+            "mcp.permission_denied",
+            FailureCategory::PermissionDenied,
+            FailureResponsibility::Policy,
+            RetryDirective::AfterUserAction,
+            RecoveryDirective::RequestPermission,
+            "The MCP tool is disabled by the current permission policy.",
+        ),
+        McpError::ServerNotConnected(_)
+        | McpError::TransportClosed
+        | McpError::Transport(_)
+        | McpError::Io(_)
+        | McpError::Http(_)
+        | McpError::Shutdown => (
+            "mcp.unavailable",
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::Dependency,
+            RetryDirective::Backoff,
+            RecoveryDirective::RestartPlugin,
+            "The MCP server is unavailable. Reconnect it and try again.",
+        ),
+        McpError::SamplingUnsupported => (
+            "mcp.unsupported",
+            FailureCategory::NotFound,
+            FailureResponsibility::Dependency,
+            RetryDirective::UseAlternative,
+            RecoveryDirective::ChooseAlternative,
+            "The MCP server does not support this operation.",
+        ),
+    };
+    Failure::new(
+        FailureCode::new(code),
+        category,
+        responsibility,
+        retry,
+        recovery,
+        FailureImpact::RuntimeDegraded,
+        UserPresentation::new(code, fallback),
+    )
 }
 
 async fn run_reconnect_supervisor(
@@ -1686,7 +1767,16 @@ mod tests {
         let statuses = manager.statuses().await;
         assert_eq!(statuses.len(), 1);
         assert!(!statuses[0].connected);
-        assert!(statuses[0].last_error.is_some());
+        let failure = statuses[0]
+            .last_failure
+            .as_ref()
+            .expect("structured MCP failure");
+        assert!(
+            !failure
+                .user
+                .fallback
+                .contains("/definitely/not/an/agena-mcp-server")
+        );
         assert_eq!(statuses[0].tool_generation, 0);
         assert_eq!(statuses[0].resource_generation, 0);
         assert_eq!(statuses[0].prompt_generation, 0);

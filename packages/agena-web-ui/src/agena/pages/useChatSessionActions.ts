@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
@@ -276,7 +277,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.inspectedPart.value = partId == null ? null : await deps.getMessagePart(partId)
       input.localCommandNotice.value = `Loaded message #${messageId} inspector.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -294,7 +295,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.loadSidebar()
       await input.selectWorkspace(workspace.id)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -319,7 +320,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.selectSession(session.id)
       input.localCommandNotice.value = `Created session #${session.id}.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -339,7 +340,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       patchCurrentGoal(goal ?? null)
       input.localCommandNotice.value = goal ? formatGoalNotice(goal) : `Session #${sessionId} has no active goal.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -359,7 +360,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -378,7 +379,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -397,7 +398,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -431,7 +432,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.selectSession(updated.id)
       input.localCommandNotice.value = `Renamed session #${updated.id}.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -456,7 +457,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.loadSessionsForWorkspace(workspaceId, false)
       await input.selectSession(execution.session.id)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -485,7 +486,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.loadSessionsForWorkspace(workspaceId, true)
       input.localCommandNotice.value = `Started aside session #${child.id}; the current session remains selected.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -509,7 +510,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.localCommandNotice.value = `Deleted session #${session.id}.`
       await input.loadSessionsForWorkspace(workspaceId, false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -544,7 +545,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.refreshConversation(false)
       return true
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
       return false
     } finally {
       input.sending.value = false
@@ -651,7 +652,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.continuing.value = false
     }
@@ -673,7 +674,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.continuing.value = false
     }
@@ -690,7 +691,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.localCommandNotice.value = `Cancellation requested for session #${sessionId}.`
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.continuing.value = false
     }
@@ -716,7 +717,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       finishInteractiveRequest(sessionId, requestId)
     }
@@ -750,7 +751,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       finishInteractiveRequest(sessionId, requestId)
     }
@@ -771,7 +772,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       finishInteractiveRequest(sessionId, requestId)
     }
@@ -803,7 +804,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.skillReferences.value = []
       input.localCommandNotice.value = `Restored message #${messageId} to the composer.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }
@@ -834,7 +835,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         ? `Exported session #${sessionId} as ${requestedFilename}.`
         : `Exported session #${sessionId} into the Session Transfer panel.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     }
   }
 
@@ -852,7 +853,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.selectSession(execution.session.id)
       input.localCommandNotice.value = `Imported session #${execution.session.id}.`
     } catch (err) {
-      input.errorMessage.value = err instanceof Error ? err.message : String(err)
+      input.errorMessage.value = userErrorMessage(err)
     } finally {
       input.loading.value = false
     }

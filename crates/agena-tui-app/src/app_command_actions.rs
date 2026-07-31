@@ -153,7 +153,7 @@ impl App {
                     let result = backend
                         .submit_document_with_options(session_id, document, options)
                         .await
-                        .map_err(|error| error.to_string());
+                        .map_err(crate::UiFailure::internal);
                     // Reuse the existing run-submitted message — the
                     // handler will route the new session into the UI if
                     // appropriate, otherwise just refresh the list.
@@ -168,7 +168,7 @@ impl App {
                     let _ = tx.send(AppMessage::SessionCreated {
                         submit_draft: None,
                         pending_message_id: None,
-                        result: Err(err.to_string()),
+                        result: Err(crate::UiFailure::internal(err)),
                     });
                 }
             }
@@ -250,7 +250,7 @@ impl App {
                 .map(ToOwned::to_owned)
                 .ok_or_else(|| "review Skill did not return instructions".to_owned()),
             Err(error) => {
-                self.flash_error(error.to_string());
+                self.notify_ui_failure(error, NoticeScope::Session);
                 return;
             }
         };
@@ -387,7 +387,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
     )
 }
 use crate::{
-    App, AppMessage, CommandId, CommandSpec, ComposerDraft, Path, PermissionReplyKind,
+    App, AppMessage, CommandId, CommandSpec, ComposerDraft, NoticeScope, Path, PermissionReplyKind,
     TIMELINE_EVENT_LIMIT, UiAction, derive_session_title, non_empty_owned, parse_pr_command_args,
     ui_text,
 };

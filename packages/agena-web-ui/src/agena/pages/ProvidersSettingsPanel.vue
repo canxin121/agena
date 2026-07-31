@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watchEffect, type Ref } from 'vue'
 
@@ -323,7 +324,7 @@ async function copyText(value: string, label: string) {
     await navigator.clipboard.writeText(text)
     setConfigMessage(`Copied ${label}.`)
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : `Failed to copy ${label}.`)
+    setConfigError(userErrorMessage(err, `Failed to copy ${label}.`))
   }
 }
 
@@ -611,7 +612,7 @@ async function listCreateProviderAdapterModels() {
     setConfigMessage(`Listed adapter models for ${draftAdapterModelLists.value.length} draft adapters.`)
   } catch (err) {
     draftAdapterModelLists.value = []
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
   } finally {
     listingDraftAdapters.value = false
   }
@@ -647,7 +648,7 @@ async function listExistingProviderAdapterModels(providerId: string) {
     setConfigMessage(`Listed adapter models for ${providerId}.`)
   } catch (err) {
     providerAdapterModelLists[providerId] = []
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
   } finally {
     listingSavedProviderIds[providerId] = false
   }
@@ -691,7 +692,7 @@ async function loadListedProviderModel(providerId: string, adapterId: string, mo
     const providerNative = recordValue(agenaTools?.provider_native)
     providerModelDraft.value.provider_native_json = providerNative ? JSON.stringify(providerNative, null, 2) : ''
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
     return
   }
   providerModelSetDefault.value = false
@@ -706,7 +707,7 @@ async function saveListedAdapterModels(providerId: string, adapterModels: Provid
   try {
     existingModels = await configuredProviderAdapterModels(providerId, adapterModels.adapter_id)
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
     return
   }
   const configuredModels = configuredProviderModelDefinitions(
@@ -746,7 +747,7 @@ async function saveListedAdapterModels(providerId: string, adapterModels: Provid
       ? await listSavedProviderAdapterModels(providerId, { adapterIds: refreshAdapterIds })
       : []
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
   } finally {
     submittingConfig.value = false
   }
@@ -797,7 +798,7 @@ async function patchProviderAdapterModel(input: {
     setConfigMessage(`Saved ${providerId}/${adapterId}/${modelId}.`)
     await props.load()
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
   } finally {
     submittingConfig.value = false
   }
@@ -875,7 +876,7 @@ async function createProvider() {
     )
     await props.load()
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
   } finally {
     submittingConfig.value = false
   }
@@ -924,7 +925,7 @@ async function installClinePassPreset() {
     )
     await props.load()
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
   } finally {
     submittingConfig.value = false
   }
@@ -981,7 +982,7 @@ async function bootstrapClinePassCredential() {
     )
     await props.load()
   } catch (err) {
-    setConfigError(err instanceof Error ? err.message : String(err))
+    setConfigError(userErrorMessage(err))
   } finally {
     submittingConfig.value = false
   }
@@ -1194,17 +1195,17 @@ onMounted(() => {
               </div>
             </div>
             <div class="record-meta">
-              <span class="badge" :class="adapterModels.error ? 'danger' : 'success'">
-                {{ adapterModels.error ? 'error' : 'loaded' }}
+              <span class="badge" :class="adapterModels.failure ? 'danger' : 'success'">
+                {{ adapterModels.failure ? 'error' : 'loaded' }}
               </span>
             </div>
           </div>
-          <label v-if="!adapterModels.error" class="muted" style="display: flex; gap: 8px; align-items: center">
+          <label v-if="!adapterModels.failure" class="muted" style="display: flex; gap: 8px; align-items: center">
             <input v-model="draftSelectedAdapterIds" type="checkbox" :value="adapterModels.adapter_id" />
             Add this adapter when creating the provider
           </label>
-          <p v-if="adapterModels.error" class="muted">{{ adapterModels.error }}</p>
-          <p v-if="!adapterModels.error" class="muted">
+          <p v-if="adapterModels.failure" class="muted">{{ adapterModels.failure.user.fallback }}</p>
+          <p v-if="!adapterModels.failure" class="muted">
             Catalog matched: {{ adapterModelsMatchedModels(cachedCatalogEntries, adapterModels).length }} · unmatched:
             {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length }}
           </p>
@@ -1242,7 +1243,7 @@ onMounted(() => {
                 .join(', ')
             }}
           </p>
-          <p v-else-if="!adapterModels.error" class="muted" style="margin-top: 10px">No models returned.</p>
+          <p v-else-if="!adapterModels.failure" class="muted" style="margin-top: 10px">No models returned.</p>
         </article>
       </div>
     </section>
@@ -1338,13 +1339,13 @@ onMounted(() => {
                 </div>
               </div>
               <div class="record-meta">
-                <span class="badge" :class="adapterModels.error ? 'danger' : 'success'">
-                  {{ adapterModels.error ? 'error' : 'loaded' }}
+                <span class="badge" :class="adapterModels.failure ? 'danger' : 'success'">
+                  {{ adapterModels.failure ? 'error' : 'loaded' }}
                 </span>
               </div>
             </div>
-            <p v-if="adapterModels.error" class="muted">{{ adapterModels.error }}</p>
-            <p v-if="!adapterModels.error" class="muted">
+            <p v-if="adapterModels.failure" class="muted">{{ adapterModels.failure.user.fallback }}</p>
+            <p v-if="!adapterModels.failure" class="muted">
               Catalog matched: {{ adapterModelsMatchedModels(cachedCatalogEntries, adapterModels).length }} · unmatched:
               {{ adapterModelsUnmatchedModels(cachedCatalogEntries, adapterModels).length }}
             </p>
@@ -1391,7 +1392,7 @@ onMounted(() => {
                   .join(', ')
               }}
             </p>
-            <p v-else-if="!adapterModels.error" class="muted" style="margin-top: 10px">No models returned.</p>
+            <p v-else-if="!adapterModels.failure" class="muted" style="margin-top: 10px">No models returned.</p>
           </article>
         </div>
       </article>

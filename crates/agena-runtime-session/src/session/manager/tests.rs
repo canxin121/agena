@@ -4,7 +4,7 @@ use super::*;
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::RuntimeSessionManagerConfig;
+    use crate::{AppError, RuntimeSessionManagerConfig};
     use std::{
         collections::{HashMap, HashSet},
         sync::Arc,
@@ -258,6 +258,70 @@ mod tests {
             executor,
             RuntimeSessionManagerConfig::default(),
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn accepted_execution_returns_before_terminal_outcome_and_cancels_cleanly() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "accepted execution".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let never_finishes = Arc::new(Notify::new());
+        let wait = Arc::clone(&never_finishes);
+        let outcome = manager
+            .start_registered(
+                session.id,
+                ExecutionSource::User,
+                "acceptance regression",
+                move |_manager, _control, _steer_rx| async move {
+                    wait.notified().await;
+                    Ok::<_, AppError>(())
+                },
+            )
+            .await
+            .expect("execution accepted");
+        let receipt = outcome.receipt.expect("accepted receipt");
+
+        assert!(manager.active_execution(session.id).await.is_some());
+        assert_eq!(
+            manager
+                .cancel_execution(session.id, receipt.execution_id)
+                .await
+                .expect("request cancellation"),
+            agena_domain::CancellationResult::CancellationRequested
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while manager.active_execution(session.id).await.is_some() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("execution terminalized after cancellation");
+
+        let events = manager
+            .list_session_events(session.id)
+            .await
+            .expect("load lifecycle events");
+        let starts = events
+            .iter()
+            .filter(|event| matches!(event.kind, EventKind::ExecutionStarted(_)))
+            .count();
+        let finishes = events
+            .iter()
+            .filter(|event| matches!(event.kind, EventKind::ExecutionFinished(_)))
+            .count();
+        assert_eq!(starts, 1);
+        assert_eq!(finishes, 1);
+        assert!(events.iter().any(|event| matches!(
+            &event.kind,
+            EventKind::ExecutionFinished(finished)
+                if finished.outcome == agena_domain::ExecutionOutcome::Cancelled
+        )));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -829,27 +893,31 @@ mod tests {
             .await
             .expect("persist reply probe permission request");
 
-        let reply_manager = Arc::clone(&manager);
         let session_id = session.id;
-        let mut reply_task = tokio::spawn(async move {
-            reply_manager
-                .reply_permission(SessionPermissionReplyRequest::new(
-                    session_id,
-                    options,
-                    PermissionReply {
-                        request_id,
-                        kind: PermissionReplyKind::AllowOnce,
-                        reason: None,
-                        scope: None,
-                    },
-                    None,
-                ))
-                .await
-        });
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(5),
+            manager.start_reply_permission(SessionPermissionReplyRequest::new(
+                session_id,
+                options,
+                PermissionReply {
+                    request_id,
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                None,
+            )),
+        )
+        .await
+        .expect("permission reply was not accepted")
+        .expect("start permission reply");
+        assert!(
+            outcome.receipt.is_some(),
+            "permission continuation must return an execution receipt"
+        );
 
         tokio::select! {
             _ = REPLY_PROBE_STARTED.notified() => {}
-            result = &mut reply_task => panic!("permission reply terminated before tool continuation: {result:?}"),
             _ = tokio::time::sleep(Duration::from_secs(5)) => {
                 panic!("approved tool continuation did not start")
             }
@@ -861,10 +929,13 @@ mod tests {
         .await
         .is_ok();
         REPLY_PROBE_CONTINUE.notify_one();
-        let _ = tokio::time::timeout(Duration::from_secs(5), reply_task)
-            .await
-            .expect("permission reply continuation did not terminate")
-            .expect("permission reply task panicked");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while manager.is_run_active(session_id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("permission reply continuation did not terminate");
 
         assert!(
             lock_is_available,

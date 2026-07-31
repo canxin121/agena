@@ -32,7 +32,7 @@ where
         "CREATE TRIGGER IF NOT EXISTS agena_sessions_lifecycle_insert_valid \
          BEFORE INSERT ON agena_sessions \
          WHEN NEW.lifecycle_state NOT IN ('creating', 'ready') \
-           OR NEW.creation_error IS NOT NULL \
+           OR NEW.creation_failure_json IS NOT NULL \
          BEGIN SELECT RAISE(ABORT, 'invalid session lifecycle state'); END",
         "CREATE TRIGGER IF NOT EXISTS agena_sessions_lifecycle_update_valid \
          BEFORE UPDATE OF lifecycle_state ON agena_sessions \
@@ -43,11 +43,11 @@ where
          WHEN OLD.lifecycle_state != NEW.lifecycle_state \
            AND NOT (OLD.lifecycle_state = 'creating' AND NEW.lifecycle_state IN ('ready', 'failed')) \
          BEGIN SELECT RAISE(ABORT, 'invalid session lifecycle transition'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_sessions_creation_error_shape \
-         BEFORE UPDATE OF lifecycle_state, creation_error ON agena_sessions \
-         WHEN (NEW.lifecycle_state = 'failed' AND (NEW.creation_error IS NULL OR length(trim(NEW.creation_error)) = 0)) \
-           OR (NEW.lifecycle_state != 'failed' AND NEW.creation_error IS NOT NULL) \
-         BEGIN SELECT RAISE(ABORT, 'creation error must describe only failed sessions'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_sessions_creation_failure_shape \
+         BEFORE UPDATE OF lifecycle_state, creation_failure_json ON agena_sessions \
+         WHEN (NEW.lifecycle_state = 'failed' AND (NEW.creation_failure_json IS NULL OR length(trim(NEW.creation_failure_json)) = 0 OR CASE WHEN json_valid(NEW.creation_failure_json) = 1 THEN (json_type(NEW.creation_failure_json, '$.id') != 'text' OR json_type(NEW.creation_failure_json, '$.code') != 'text' OR json_type(NEW.creation_failure_json, '$.user.fallback') != 'text') ELSE 1 END)) \
+           OR (NEW.lifecycle_state != 'failed' AND NEW.creation_failure_json IS NOT NULL) \
+         BEGIN SELECT RAISE(ABORT, 'creation failure must describe only failed sessions'); END",
         "CREATE TRIGGER IF NOT EXISTS agena_session_lineage_shape_insert_valid \
          BEFORE INSERT ON agena_session_lineage \
          WHEN NEW.relation_kind NOT IN ('child', 'fork', 'rewind', 'subagent') \
@@ -55,14 +55,15 @@ where
            OR (NEW.relation_kind = 'subagent' AND (NEW.task_id IS NULL OR NEW.subtask_status IS NULL)) \
            OR (NEW.relation_kind = 'subagent' AND (length(trim(NEW.task_id)) = 0 OR NEW.subtask_status NOT IN ('created', 'running', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted'))) \
            OR (NEW.relation_kind = 'subagent' AND ( \
-             (NEW.subtask_status = 'created' AND (NEW.subtask_started_at_ms IS NOT NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_error IS NOT NULL)) \
-             OR (NEW.subtask_status = 'running' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_error IS NOT NULL)) \
-             OR (NEW.subtask_status = 'completed' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_error IS NOT NULL)) \
-             OR (NEW.subtask_status IN ('failed', 'cancelled', 'timed_out', 'interrupted') AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_error IS NULL OR length(trim(NEW.subtask_error)) = 0)) \
+             (NEW.subtask_status = 'created' AND (NEW.subtask_started_at_ms IS NOT NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+             OR (NEW.subtask_status = 'running' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+             OR (NEW.subtask_status = 'completed' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+             OR (NEW.subtask_status = 'cancelled' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+             OR (NEW.subtask_status IN ('failed', 'timed_out', 'interrupted') AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_failure_json IS NULL OR length(trim(NEW.subtask_failure_json)) = 0 OR CASE WHEN json_valid(NEW.subtask_failure_json) = 1 THEN (json_type(NEW.subtask_failure_json, '$.id') != 'text' OR json_type(NEW.subtask_failure_json, '$.code') != 'text' OR json_type(NEW.subtask_failure_json, '$.user.fallback') != 'text') ELSE 1 END)) \
              OR (NEW.subtask_started_at_ms IS NOT NULL AND NEW.subtask_started_at_ms < 0) \
              OR (NEW.subtask_finished_at_ms IS NOT NULL AND NEW.subtask_finished_at_ms < NEW.subtask_started_at_ms) \
            )) \
-           OR (NEW.relation_kind != 'subagent' AND (NEW.task_id IS NOT NULL OR NEW.subtask_status IS NOT NULL OR NEW.subtask_started_at_ms IS NOT NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_error IS NOT NULL)) \
+           OR (NEW.relation_kind != 'subagent' AND (NEW.task_id IS NOT NULL OR NEW.subtask_status IS NOT NULL OR NEW.subtask_started_at_ms IS NOT NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_failure_json IS NOT NULL)) \
            OR (NEW.relation_kind IN ('fork', 'rewind') AND NEW.source_cutoff_seq_global IS NULL) \
            OR NEW.source_cutoff_seq_global < 0 \
            OR NEW.source_message_id <= 0 \
@@ -77,13 +78,14 @@ where
            OR OLD.task_id IS NOT NEW.task_id \
          BEGIN SELECT RAISE(ABORT, 'session lineage provenance is immutable'); END",
         "CREATE TRIGGER IF NOT EXISTS agena_session_lineage_subtask_status_valid \
-         BEFORE UPDATE OF subtask_status, subtask_started_at_ms, subtask_finished_at_ms, subtask_error ON agena_session_lineage \
+         BEFORE UPDATE OF subtask_status, subtask_started_at_ms, subtask_finished_at_ms, subtask_failure_json ON agena_session_lineage \
          WHEN NEW.relation_kind != 'subagent' \
            OR NEW.subtask_status NOT IN ('created', 'running', 'completed', 'failed', 'cancelled', 'timed_out', 'interrupted') \
-           OR (NEW.subtask_status = 'created' AND (NEW.subtask_started_at_ms IS NOT NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_error IS NOT NULL)) \
-           OR (NEW.subtask_status = 'running' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_error IS NOT NULL)) \
-           OR (NEW.subtask_status = 'completed' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_error IS NOT NULL)) \
-           OR (NEW.subtask_status IN ('failed', 'cancelled', 'timed_out', 'interrupted') AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_error IS NULL OR length(trim(NEW.subtask_error)) = 0)) \
+           OR (NEW.subtask_status = 'created' AND (NEW.subtask_started_at_ms IS NOT NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+           OR (NEW.subtask_status = 'running' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NOT NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+           OR (NEW.subtask_status = 'completed' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+           OR (NEW.subtask_status = 'cancelled' AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_failure_json IS NOT NULL)) \
+           OR (NEW.subtask_status IN ('failed', 'timed_out', 'interrupted') AND (NEW.subtask_started_at_ms IS NULL OR NEW.subtask_finished_at_ms IS NULL OR NEW.subtask_failure_json IS NULL OR length(trim(NEW.subtask_failure_json)) = 0 OR CASE WHEN json_valid(NEW.subtask_failure_json) = 1 THEN (json_type(NEW.subtask_failure_json, '$.id') != 'text' OR json_type(NEW.subtask_failure_json, '$.code') != 'text' OR json_type(NEW.subtask_failure_json, '$.user.fallback') != 'text') ELSE 1 END)) \
            OR (NEW.subtask_started_at_ms IS NOT NULL AND NEW.subtask_started_at_ms < 0) \
            OR (NEW.subtask_finished_at_ms IS NOT NULL AND NEW.subtask_finished_at_ms < NEW.subtask_started_at_ms) \
          BEGIN SELECT RAISE(ABORT, 'invalid delegated-task lifecycle'); END",

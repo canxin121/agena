@@ -129,7 +129,7 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                 title: spec.title().to_owned(),
                 status: RuntimeBackgroundTaskStatus::Running,
                 message: None,
-                error_message: None,
+                failure: None,
                 created_at: now,
                 started_at: now,
                 finished_at: None,
@@ -164,9 +164,28 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                         Ok(RuntimeBackgroundTaskOutcome::Cancelled { message }) => {
                             RuntimeBackgroundTaskCompletion::Cancelled { message }
                         }
-                        Err(error) => RuntimeBackgroundTaskCompletion::Failed {
-                            error_message: error.to_string(),
-                        },
+                        Err(error) => {
+                            let diagnostic = error.to_string();
+                            let failure = agena_failure::Failure::new(
+                                agena_failure::FailureCode::new("background_task.internal"),
+                                agena_failure::FailureCategory::Internal,
+                                agena_failure::FailureResponsibility::System,
+                                agena_failure::RetryDirective::Unknown,
+                                agena_failure::RecoveryDirective::Retry,
+                                agena_failure::FailureImpact::BackgroundTaskFailed,
+                                agena_failure::UserPresentation::new(
+                                    "background-task-failed",
+                                    "The background task failed.",
+                                ),
+                            );
+                            tracing::error!(
+                                task_id = %task_id,
+                                failure_id = %failure.id,
+                                diagnostic = %diagnostic,
+                                "background task failed"
+                            );
+                            RuntimeBackgroundTaskCompletion::Failed { failure }
+                        }
                     },
                 };
                 registry.finish(task_id.as_str(), completion);
@@ -184,17 +203,17 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                 RuntimeBackgroundTaskCompletion::Succeeded { message } => {
                     task.status = RuntimeBackgroundTaskStatus::Succeeded;
                     task.message = message;
-                    task.error_message = None;
+                    task.failure = None;
                 }
-                RuntimeBackgroundTaskCompletion::Failed { error_message } => {
+                RuntimeBackgroundTaskCompletion::Failed { failure } => {
                     task.status = RuntimeBackgroundTaskStatus::Failed;
                     task.message = None;
-                    task.error_message = Some(error_message);
+                    task.failure = Some(failure);
                 }
                 RuntimeBackgroundTaskCompletion::Cancelled { message } => {
                     task.status = RuntimeBackgroundTaskStatus::Cancelled;
                     task.message = message;
-                    task.error_message = None;
+                    task.failure = None;
                 }
             }
         }

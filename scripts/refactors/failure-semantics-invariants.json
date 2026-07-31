@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "must_exist": [
+    "crates/agena-failure/src/lib.rs",
+    "docs/failure-semantics.md"
+  ],
+  "text_rules": [
+    {
+      "name": "cancel-is-not-a-failure-category",
+      "roots": ["crates"],
+      "include": ["**/*.rs"],
+      "pattern": "FailureCategory::Cancelled",
+      "expected": 0
+    },
+    {
+      "name": "api-never-serializes-internal-failure",
+      "roots": ["crates/agena-api"],
+      "include": ["**/*.rs"],
+      "pattern": "pub failure: agena_failure::Failure",
+      "expected": 0
+    },
+    {
+      "name": "api-problem-is-user-projection",
+      "roots": ["crates/agena-api"],
+      "include": ["**/*.rs"],
+      "pattern": "pub problem: Failure",
+      "expected": 0
+    },
+    {
+      "name": "model-feedback-has-no-free-form-construction",
+      "roots": ["crates"],
+      "include": ["**/*.rs"],
+      "exclude": ["crates/agena-failure/**"],
+      "pattern": "ModelFeedback {",
+      "expected": 0
+    },
+    {
+      "name": "removed-safe-context-bag-stays-removed",
+      "roots": ["crates", "packages/agena-web-ui/src", "packages/agena-vscode/src"],
+      "include": ["**/*.rs", "**/*.ts", "**/*.vue"],
+      "pattern": "safe_context:",
+      "expected": 0
+    },
+    {
+      "name": "legacy-plugin-error-constructor-stays-removed",
+      "roots": ["crates", "examples"],
+      "include": ["**/*.rs"],
+      "pattern": "PluginError::new",
+      "expected": 0
+    },
+    {
+      "name": "public-status-string-last-error-stays-removed",
+      "roots": ["crates"],
+      "include": ["**/*.rs"],
+      "pattern": "pub last_error: Option<String>",
+      "expected": 0
+    },
+    {
+      "name": "public-status-string-refresh-error-stays-removed",
+      "roots": ["crates"],
+      "include": ["**/*.rs"],
+      "pattern": "pub last_refresh_error: Option<String>",
+      "expected": 0
+    },
+    {
+      "name": "tui-application-has-structured-result",
+      "roots": ["crates/agena-tui-app"],
+      "include": ["**/*.rs"],
+      "pattern": "UiResult<T> = std::result::Result<T, String>",
+      "expected": 0
+    },
+    {
+      "name": "plugin-tool-failure-never-carries-free-form-error",
+      "roots": ["crates/agena-plugin-sdk"],
+      "include": ["**/*.rs"],
+      "pattern": "pub error: String",
+      "expected": 0
+    },
+    {
+      "name": "plugin-host-api-never-exposes-internal-failure",
+      "roots": ["crates/agena-plugin-sdk/src/host_api.rs"],
+      "include": ["**/*.rs"],
+      "pattern": "pub failure: Option<agena_failure::Failure>",
+      "expected": 0
+    },
+    {
+      "name": "model-tool-payload-never-serializes-internal-failure",
+      "roots": ["crates/agena-runtime-tools/src/tool/payload.rs"],
+      "include": ["**/*.rs"],
+      "pattern": "failure: Option<agena_failure::Failure>",
+      "expected": 0
+    },
+    {
+      "name": "session-creation-error-column-stays-removed",
+      "roots": ["crates"],
+      "include": ["**/*.rs"],
+      "pattern": "creation_error",
+      "expected": 0
+    },
+    {
+      "name": "legacy-stream-error-info-stays-removed",
+      "roots": ["crates"],
+      "include": ["**/*.rs"],
+      "pattern": "ErrorInfo",
+      "expected": 0
+    },
+    {
+      "name": "run-abort-never-persists-a-message-string",
+      "roots": ["crates/agena-runtime-session/src/session/history"],
+      "include": ["**/*.rs"],
+      "pattern": "pub message: Option<String>",
+      "expected": 0
+    },
+    {
+      "name": "tui-failure-never-demotes-to-string",
+      "roots": ["crates/agena-tui-app"],
+      "include": ["**/*.rs"],
+      "pattern": "From<UiFailure> for String",
+      "expected": 0
+    },
+    {
+      "name": "tui-string-never-promotes-to-structured-failure-implicitly",
+      "roots": ["crates/agena-tui-app"],
+      "include": ["**/*.rs"],
+      "pattern": "From<String> for UiFailure",
+      "expected": 0
+    },
+    {
+      "name": "web-catches-never-render-arbitrary-error-message",
+      "roots": ["packages/agena-web-ui/src"],
+      "include": ["**/*.ts", "**/*.vue"],
+      "exclude": ["**/*.test.ts"],
+      "pattern": "instanceof Error ?",
+      "expected": 0
+    },
+    {
+      "name": "web-catches-never-stringify-unknown-errors",
+      "roots": ["packages/agena-web-ui/src"],
+      "include": ["**/*.ts", "**/*.vue"],
+      "exclude": ["**/*.test.ts"],
+      "pattern": "String(error)",
+      "expected": 0
+    },
+    {
+      "name": "public-expected-failure-constructors-require-static-presentation",
+      "roots": ["crates/agena-application/src/error.rs", "crates/agena-api/src/error.rs", "crates/agena-api-server/src/error.rs"],
+      "include": ["**/*.rs"],
+      "pattern": "pub fn (bad_request|not_found|conflict)\\(message: (impl Into<String>|String)",
+      "regex": true,
+      "expected": 0
+    },
+    {
+      "name": "transcript-activity-never-carries-free-form-error-text",
+      "roots": ["crates/agena-tui-transcript"],
+      "include": ["**/*.rs"],
+      "pattern": "pub error: Option<String>",
+      "expected": 0
+    }
+  ]
+}

@@ -116,11 +116,8 @@ mod transcript_character_cursor_tests {
             .lines
             .iter()
             .enumerate()
-            .filter_map(|(index, line)| {
-                line.text
-                    .contains("a界🙂z")
-                    .then(|| (index, display_column_before(line.text.as_str(), "a界🙂z")))
-            })
+            .filter(|(_, line)| line.text.contains("a界🙂z"))
+            .map(|(index, line)| (index, display_column_before(line.text.as_str(), "a界🙂z")))
             .collect::<Vec<_>>();
         let (first_line, first_column) = *rows.first().expect("first source row");
         let short_line = transcript

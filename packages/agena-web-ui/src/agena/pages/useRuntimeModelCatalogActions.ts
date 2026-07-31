@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import type {
@@ -594,7 +595,7 @@ export function useRuntimeModelCatalogActions(
       await input.load()
       return result
     } catch (err) {
-      input.actionError.value = err instanceof Error ? err.message : String(err)
+      input.actionError.value = userErrorMessage(err)
       throw err
     }
   }

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 
 import { usePluginToolRegistryRuntimeSync } from '../lib/usePluginToolRegistryRuntimeSync'
+import { userErrorMessage } from '@/lib/api'
 import { runtimeTabs, type RuntimeRouteSection } from './runtimePageStateModel'
 import { useRuntimeDerivedState } from './useRuntimeDerivedState'
 import { useRuntimePageAssembly } from './useRuntimePageAssembly'
@@ -81,7 +82,7 @@ export function useRuntimePageState(input: {
     undefined,
     {
       onError: (error) => {
-        actionError.value = error.message
+        actionError.value = userErrorMessage(error, 'Runtime updates were interrupted. Reconnecting…')
       },
     },
   )

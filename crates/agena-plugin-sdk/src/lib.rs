@@ -30,7 +30,7 @@ pub mod drivers;
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
-pub use error::{PluginError, PluginErrorCode, Result};
+pub use error::{PluginError, PluginErrorKind, Result};
 pub use hooks::*;
 pub use host_api::{
     HostClient, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,

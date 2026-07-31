@@ -431,16 +431,14 @@ mod tests {
 
     #[test]
     fn registered_default_catalogs_do_not_offer_arbitrary_typed_values() {
-        for path in ["providers.default"] {
-            let field = SETTINGS_FIELDS
-                .iter()
-                .copied()
-                .find(|field| field.path == path)
-                .expect("settings field");
-            assert_eq!(
-                App::settings_field_choice_overlay_style(field),
-                agena_tui::choice::ChoicePresentationStyle::SearchableSelect
-            );
-        }
+        let field = SETTINGS_FIELDS
+            .iter()
+            .copied()
+            .find(|field| field.path == "providers.default")
+            .expect("settings field");
+        assert_eq!(
+            App::settings_field_choice_overlay_style(field),
+            agena_tui::choice::ChoicePresentationStyle::SearchableSelect
+        );
     }
 }

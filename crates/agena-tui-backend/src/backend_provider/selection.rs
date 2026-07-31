@@ -121,7 +121,7 @@ impl Backend {
                         ProviderModelResource::configured(adapter.adapter_id.as_str(), model_id)
                     })
                     .collect(),
-                error: None,
+                failure: None,
             })
             .collect()
     }
@@ -366,7 +366,7 @@ impl Backend {
 
         for adapter_models in adapter_model_lists {
             let adapter_id = adapter_models.adapter_id.as_str();
-            if adapter_models.error.is_some() || !selected.contains(adapter_id) {
+            if adapter_models.failure.is_some() || !selected.contains(adapter_id) {
                 continue;
             }
 

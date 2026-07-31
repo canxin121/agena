@@ -22,7 +22,7 @@ pub fn model_catalog_snapshot_from_cache_record(
     Ok(ModelCatalogSnapshot {
         last_refresh_at: DateTime::<Utc>::from_timestamp_millis(record.fetched_at_unix_ms),
         last_successful_source: Some(source),
-        last_error: None,
+        last_failure: None,
         official,
     })
 }

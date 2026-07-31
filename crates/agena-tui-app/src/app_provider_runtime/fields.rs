@@ -60,7 +60,12 @@ impl App {
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
-                    Err(error) => return Err(error.to_string()),
+                    Err(error) => {
+                        return Err(crate::UiFailure::invalid_with_diagnostic(
+                            "The provider authentication mode is invalid.",
+                            error,
+                        ));
+                    }
                 }
             }
             ProviderStudioField::AuthSubtype => {
@@ -73,15 +78,20 @@ impl App {
                         dialog.draft.normalize_shape();
                         self.refresh_provider_studio_adapter_state(dialog);
                     }
-                    Err(error) => return Err(error.to_string()),
+                    Err(error) => {
+                        return Err(crate::UiFailure::invalid_with_diagnostic(
+                            "The provider authentication subtype is invalid.",
+                            error,
+                        ));
+                    }
                 }
             }
             ProviderStudioField::AuthLoginMethod => {
                 let Some(kind) = ProviderDraftInteractiveLoginKind::parse(value.as_str()) else {
-                    return Err(ui_text::t(
+                    return Err(crate::UiFailure::message(ui_text::t(
                         &self.i18n,
                         "flash-provider-studio-invalid-auth-login-method",
-                    ));
+                    )));
                 };
                 dialog.draft.set_interactive_login_kind(kind);
             }
@@ -94,7 +104,7 @@ impl App {
             ProviderStudioField::ApiKeySource => {
                 dialog.draft.auth.secret_source_kind =
                     ProviderDraftSecretSourceKind::parse(value.as_str())
-                        .map_err(|error| error.to_string())?;
+                        .map_err(crate::UiFailure::internal)?;
             }
             ProviderStudioField::ApiKeyValue => {
                 dialog.draft.auth.secret_source_value = value;
@@ -150,7 +160,8 @@ impl App {
                     .filter(|value| *value > 0)
                     .ok_or_else(|| {
                         "request timeout must be a positive number of seconds".to_owned()
-                    })?;
+                    })
+                    .map_err(crate::UiFailure::message)?;
             }
             ProviderStudioField::ConnectTimeoutSecs => {
                 dialog.draft.connect_timeout_secs = value
@@ -160,7 +171,8 @@ impl App {
                     .filter(|value| *value > 0)
                     .ok_or_else(|| {
                         "connect timeout must be a positive number of seconds".to_owned()
-                    })?;
+                    })
+                    .map_err(crate::UiFailure::message)?;
             }
         }
         Ok(())

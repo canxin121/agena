@@ -52,6 +52,8 @@ pub enum ConfigError {
     Validation(String),
     #[error("failed to encode config as json: {0}")]
     SerializeJson(#[from] serde_json::Error),
+    #[error(transparent)]
+    Settings(#[from] crate::RuntimeConfigSettingsError),
 }
 
 pub fn parse_numeric<T>(value: &str, key: &str) -> Result<T, ConfigError>
@@ -144,24 +146,36 @@ pub fn reject_unsupported_mode_environment(
 /// Convert schema-level configuration failures into the stable settings-service
 /// error contract used by transport and presentation adapters.
 pub fn config_error_to_settings_error(error: ConfigError) -> crate::RuntimeConfigSettingsError {
-    let message = error.to_string();
     match error {
+        ConfigError::Settings(error) => error,
         ConfigError::ReadFile { .. }
         | ConfigError::WriteFile { .. }
-        | ConfigError::SerializeJson(_) => crate::RuntimeConfigSettingsError::internal(message),
-        _ => crate::RuntimeConfigSettingsError::invalid_input(message),
+        | ConfigError::SerializeJson(_) => {
+            crate::RuntimeConfigSettingsError::internal(error.to_string())
+        }
+        ConfigError::ParseFile { source, .. } => {
+            crate::RuntimeConfigSettingsError::invalid_input(format!(
+                "Configuration JSON is invalid at line {}, column {}.",
+                source.line(),
+                source.column()
+            ))
+        }
+        other => crate::RuntimeConfigSettingsError::invalid_input(other.to_string()),
     }
 }
 
 /// Adapt the transport-facing settings error back into the shared
 /// schema-neutral configuration error used by file adapters.
 pub fn settings_error_to_config_error(error: crate::RuntimeConfigSettingsError) -> ConfigError {
-    ConfigError::Validation(error.message().to_owned())
+    ConfigError::Settings(error)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigError, parse_config_bool, parse_numeric};
+    use super::{
+        ConfigError, config_error_to_settings_error, parse_config_bool, parse_numeric,
+        settings_error_to_config_error,
+    };
 
     #[test]
     fn parses_permissive_environment_booleans() {
@@ -190,5 +204,37 @@ mod tests {
             error,
             ConfigError::ParseFile { path, .. } if path == std::path::Path::new("settings.json")
         ));
+    }
+
+    #[test]
+    fn internal_file_diagnostic_is_not_user_visible_or_serialized() {
+        let path = std::path::PathBuf::from("/private/tmp/token-secret/settings.json");
+        let error = ConfigError::WriteFile {
+            path,
+            source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "token=secret"),
+        };
+        let settings = config_error_to_settings_error(error);
+        let public = serde_json::to_string(settings.failure()).expect("serialize public failure");
+
+        assert!(settings.diagnostic().contains("token=secret"));
+        assert_eq!(
+            settings.failure().user.fallback,
+            "Couldn’t update the settings."
+        );
+        assert!(!settings.to_string().contains("token=secret"));
+        assert!(!public.contains("token=secret"));
+        assert!(!public.contains("/private/tmp"));
+    }
+
+    #[test]
+    fn settings_adapter_round_trip_preserves_structured_failure() {
+        let settings = crate::RuntimeConfigSettingsError::internal("write failed: disk full");
+        let failure_id = settings.failure().id;
+        let restored = match settings_error_to_config_error(settings) {
+            ConfigError::Settings(error) => error,
+            other => panic!("unexpected converted config error: {other}"),
+        };
+        assert_eq!(restored.failure().id, failure_id);
+        assert_eq!(restored.diagnostic(), "write failed: disk full");
     }
 }

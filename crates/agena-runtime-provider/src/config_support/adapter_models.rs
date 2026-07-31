@@ -15,7 +15,7 @@ pub struct ProviderAdapterModelsResult {
     pub enabled: bool,
     pub resolved_base_url: Option<String>,
     pub models: Vec<agena_domain::Model>,
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 use super::{

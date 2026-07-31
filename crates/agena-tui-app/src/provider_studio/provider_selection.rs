@@ -166,7 +166,7 @@ pub(crate) fn provider_studio_selected_adapter_models_for_save(
         enabled,
         resolved_base_url,
         models,
-        error,
+        failure,
     } = adapter_models;
     let selected_models = models
         .into_iter()
@@ -179,7 +179,7 @@ pub(crate) fn provider_studio_selected_adapter_models_for_save(
         enabled,
         resolved_base_url,
         models: selected_models,
-        error,
+        failure,
     })
 }
 
@@ -214,7 +214,7 @@ pub(crate) fn provider_studio_new_default_selected_model_keys(
     adapter_models
         .iter()
         .filter(|adapter_models| {
-            adapter_models.error.is_none()
+            adapter_models.failure.is_none()
                 && selected_adapter_ids.contains(adapter_models.adapter_id.as_str())
         })
         .flat_map(|adapter_models| {
@@ -255,7 +255,7 @@ pub(crate) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudi
         let adapter_selected = dialog
             .selected_adapter_ids
             .contains(adapter_models.adapter_id.as_str());
-        if !adapter_selected || adapter_models.error.is_some() {
+        if !adapter_selected || adapter_models.failure.is_some() {
             continue;
         }
         let has_any = adapter_models.models.iter().any(|model| {
@@ -380,7 +380,7 @@ mod tests {
                 .iter()
                 .map(|model_id| ProviderModelResource::configured(adapter_id, *model_id))
                 .collect(),
-            error: None,
+            failure: None,
         }
     }
 

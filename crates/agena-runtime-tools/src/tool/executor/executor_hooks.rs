@@ -104,7 +104,7 @@ impl ToolExecutor {
 
         if let Some(payload_value) = hooked.payload {
             execution.output = ToolOutput::from_json_payload(Some(&payload_value))
-                .map_err(ToolError::InvalidInput)?;
+                .map_err(ToolError::invalid_input)?;
         }
 
         Ok(())
@@ -278,7 +278,7 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
-        error: &str,
+        failure: &agena_failure::Failure,
     ) {
         if self.plugins.is_empty() {
             return;
@@ -305,8 +305,7 @@ impl ToolExecutor {
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
             input: input_value,
-            error: error.to_owned(),
-            is_interrupt: false,
+            failure: failure.into(),
         };
         let plugins = Arc::clone(&self.plugins);
         tokio::spawn(async move {

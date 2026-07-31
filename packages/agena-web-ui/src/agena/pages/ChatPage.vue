@@ -1,3 +1,4 @@
+import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -106,7 +107,7 @@ async function addComposerFiles(files: File[], imageOnly = false) {
       errorMessage.value = `Only the first ${available} attachment(s) were added; the limit is ${MAX_COMPOSER_ATTACHMENTS}.`
     }
   } catch (error) {
-    errorMessage.value = error instanceof Error ? error.message : String(error)
+    errorMessage.value = userErrorMessage(error)
   } finally {
     attachmentLoading.value = false
   }

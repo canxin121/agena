@@ -7,16 +7,16 @@ impl App {
     ) -> UiResult<()> {
         let model_id = model_id.trim();
         if model_id.is_empty() {
-            return Err(ui_text::t(
+            return Err(crate::UiFailure::message(ui_text::t(
                 &self.i18n,
                 "flash-provider-studio-model-id-required",
-            ));
+            )));
         }
         if !dialog.selected_adapter_ids.contains(adapter_id.as_str()) {
-            return Err(ui_text::t(
+            return Err(crate::UiFailure::message(ui_text::t(
                 &self.i18n,
                 "flash-provider-studio-adapter-not-enabled",
-            ));
+            )));
         }
         if !dialog
             .adapter_models
@@ -28,7 +28,7 @@ impl App {
                 enabled: true,
                 resolved_base_url: None,
                 models: Vec::new(),
-                error: None,
+                failure: None,
             });
         }
         let adapter_index = dialog
@@ -148,9 +148,13 @@ impl App {
         value: String,
     ) -> UiResult<()> {
         let Some(page) = dialog.model_page.as_mut() else {
-            return Err(ui_text::t(&self.i18n, "flash-provider-studio-context-lost"));
+            return Err(crate::UiFailure::message(ui_text::t(
+                &self.i18n,
+                "flash-provider-studio-context-lost",
+            )));
         };
         commit_provider_model_config_field(&mut page.draft, field, value)
+            .map_err(crate::UiFailure::message)
     }
 
     pub(crate) fn save_provider_studio_model_page(&mut self, dialog: &mut ProviderStudioOverlay) {

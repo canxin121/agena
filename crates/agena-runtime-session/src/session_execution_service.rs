@@ -3,7 +3,6 @@
 //! it carries core-owned content values.
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 use crate::{
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
@@ -14,21 +13,63 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionExecutionCommandOutcome {
     pub session_id: i64,
+    pub receipt: Option<SessionExecutionReceipt>,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("session execution command failed: {message}")]
-pub struct SessionExecutionCommandError {
-    message: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionExecutionReceipt {
+    pub execution_id: agena_domain::ExecutionId,
+    pub turn_id: agena_domain::TurnId,
+    pub response_id: agena_domain::ResponseId,
 }
 
-impl SessionExecutionCommandError {
-    pub fn new(message: impl Into<String>) -> Self {
+impl SessionExecutionCommandOutcome {
+    pub fn completed(session_id: i64) -> Self {
         Self {
-            message: message.into(),
+            session_id,
+            receipt: None,
+        }
+    }
+
+    pub fn accepted(
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+        turn_id: agena_domain::TurnId,
+        response_id: agena_domain::ResponseId,
+    ) -> Self {
+        Self {
+            session_id,
+            receipt: Some(SessionExecutionReceipt {
+                execution_id,
+                turn_id,
+                response_id,
+            }),
         }
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionExecutionCommandError {
+    pub failure: agena_failure::Failure,
+}
+
+impl SessionExecutionCommandError {
+    pub fn from_failure(failure: agena_failure::Failure) -> Self {
+        Self { failure }
+    }
+}
+
+impl std::fmt::Display for SessionExecutionCommandError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.failure.user.fallback.as_str())?;
+        if self.failure.is_unexpected() {
+            write!(formatter, " Reference: {}", self.failure.id)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for SessionExecutionCommandError {}
 
 #[async_trait]
 pub trait SessionExecutionCommandService: Send + Sync {
@@ -113,59 +154,59 @@ mod tests {
             &self,
             _request: crate::SessionCreateRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome { session_id: 1 })
+            Ok(SessionExecutionCommandOutcome::completed(1))
         }
 
         async fn submit_user_message(
             &self,
             request: crate::SessionUserMessageRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome {
-                session_id: request.run.session_id,
-            })
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.run.session_id,
+            ))
         }
 
         async fn continue_session(
             &self,
             request: crate::SessionExecutionRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome {
-                session_id: request.session_id,
-            })
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.session_id,
+            ))
         }
 
         async fn compact_session(
             &self,
             request: crate::SessionExecutionRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome {
-                session_id: request.session_id,
-            })
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.session_id,
+            ))
         }
 
         async fn rewind_session(
             &self,
             request: crate::SessionRewindRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome {
-                session_id: request.session_id,
-            })
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.session_id,
+            ))
         }
 
         async fn fork_session(
             &self,
             request: crate::SessionForkRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome {
-                session_id: request.session_id,
-            })
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.session_id,
+            ))
         }
 
         async fn import_session_jsonl(
             &self,
             _jsonl: &str,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome { session_id: 1 })
+            Ok(SessionExecutionCommandOutcome::completed(1))
         }
 
         async fn steer_input(
@@ -180,18 +221,18 @@ mod tests {
             &self,
             request: crate::SessionPermissionReplyRequest,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome {
-                session_id: request.request.session_id,
-            })
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.request.session_id,
+            ))
         }
 
         async fn reply_user_input(
             &self,
             request: crate::SessionExecutionReplyRequest<agena_domain::UserInputReply>,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome {
-                session_id: request.session_id,
-            })
+            Ok(SessionExecutionCommandOutcome::completed(
+                request.session_id,
+            ))
         }
 
         async fn update_session_selection(
@@ -199,7 +240,7 @@ mod tests {
             session_id: i64,
             _options: crate::SessionRunOptions,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome { session_id })
+            Ok(SessionExecutionCommandOutcome::completed(session_id))
         }
 
         async fn set_session_permission(
@@ -207,7 +248,7 @@ mod tests {
             session_id: i64,
             _permission: agena_domain::PermissionConfig,
         ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
-            Ok(SessionExecutionCommandOutcome { session_id })
+            Ok(SessionExecutionCommandOutcome::completed(session_id))
         }
     }
 

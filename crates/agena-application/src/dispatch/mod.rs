@@ -97,7 +97,7 @@ impl IntoWire<ModelCatalogResponse> for ApplicationModelCatalogResponse {
             last_successful_source: value
                 .last_successful_source
                 .map(model_catalog_source_kind_from_domain),
-            last_error: value.last_error,
+            last_failure: value.last_failure,
             model_count: value.model_count,
         }
     }
@@ -113,7 +113,7 @@ impl IntoWire<RuntimeBackgroundTaskResource> for ApplicationRuntimeBackgroundTas
             title: value.title,
             status: runtime_background_task_status_from_domain(value.status),
             message: value.message,
-            error_message: value.error_message,
+            failure: value.failure,
             created_at: value.created_at,
             started_at: value.started_at,
             finished_at: value.finished_at,
@@ -197,7 +197,9 @@ where
         .await
         .application()?
         .map(IntoWire::into_wire)
-        .ok_or_else(|| ApplicationError::NotFound(not_found()))
+        .ok_or_else(|| {
+            ApplicationError::not_found_with_diagnostic("The resource was not found.", not_found())
+        })
 }
 
 async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
@@ -207,7 +209,7 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
         refreshing: status.model_catalog_refreshing,
         last_refresh_at: catalog.last_refresh_at,
         last_successful_source: catalog.last_successful_source,
-        last_error: catalog.last_error,
+        last_failure: catalog.last_failure.map(Into::into),
         model_count: catalog.models.len(),
     }
     .into_wire();

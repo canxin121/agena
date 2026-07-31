@@ -176,25 +176,66 @@ pub enum RuntimeConfigSettingsErrorKind {
     Internal,
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("runtime configuration settings operation failed: {message}")]
+#[derive(Debug, Clone)]
 pub struct RuntimeConfigSettingsError {
     kind: RuntimeConfigSettingsErrorKind,
-    message: String,
+    failure: Box<agena_failure::Failure>,
+    diagnostic: String,
 }
 
 impl RuntimeConfigSettingsError {
     pub fn invalid_input(message: impl Into<String>) -> Self {
+        let message = message.into();
         Self {
             kind: RuntimeConfigSettingsErrorKind::InvalidInput,
-            message: message.into(),
+            diagnostic: message.clone(),
+            failure: Box::new(agena_failure::Failure::new(
+                agena_failure::FailureCode::new("settings.invalid_input"),
+                agena_failure::FailureCategory::InvalidInput,
+                agena_failure::FailureResponsibility::Caller,
+                agena_failure::RetryDirective::CorrectInput,
+                agena_failure::RecoveryDirective::None,
+                agena_failure::FailureImpact::RequestRejected,
+                agena_failure::UserPresentation::validated("settings-invalid-input", &message),
+            )),
         }
     }
 
-    pub fn internal(message: impl Into<String>) -> Self {
+    pub fn invalid_input_with_diagnostic(
+        message: impl AsRef<str>,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self {
+        Self {
+            kind: RuntimeConfigSettingsErrorKind::InvalidInput,
+            diagnostic: diagnostic.to_string(),
+            failure: Box::new(agena_failure::Failure::new(
+                agena_failure::FailureCode::new("settings.invalid_input"),
+                agena_failure::FailureCategory::InvalidInput,
+                agena_failure::FailureResponsibility::Caller,
+                agena_failure::RetryDirective::CorrectInput,
+                agena_failure::RecoveryDirective::None,
+                agena_failure::FailureImpact::RequestRejected,
+                agena_failure::UserPresentation::validated("settings-invalid-input", message),
+            )),
+        }
+    }
+
+    pub fn internal(diagnostic: impl Into<String>) -> Self {
         Self {
             kind: RuntimeConfigSettingsErrorKind::Internal,
-            message: message.into(),
+            failure: Box::new(agena_failure::Failure::new(
+                agena_failure::FailureCode::new("settings.internal"),
+                agena_failure::FailureCategory::Internal,
+                agena_failure::FailureResponsibility::System,
+                agena_failure::RetryDirective::Unknown,
+                agena_failure::RecoveryDirective::Retry,
+                agena_failure::FailureImpact::OperationFailed,
+                agena_failure::UserPresentation::new(
+                    "settings-internal",
+                    "Couldn’t update the settings.",
+                ),
+            )),
+            diagnostic: diagnostic.into(),
         }
     }
 
@@ -202,10 +243,26 @@ impl RuntimeConfigSettingsError {
         self.kind
     }
 
-    pub fn message(&self) -> &str {
-        self.message.as_str()
+    pub fn failure(&self) -> &agena_failure::Failure {
+        &self.failure
+    }
+
+    pub fn diagnostic(&self) -> &str {
+        self.diagnostic.as_str()
     }
 }
+
+impl std::fmt::Display for RuntimeConfigSettingsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.failure.user.fallback.as_str())?;
+        if self.failure.is_unexpected() {
+            write!(f, " Reference: {}", self.failure.id)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RuntimeConfigSettingsError {}
 
 pub trait RuntimeConfigSettingsService: Send + Sync {
     fn read_file_settings(
@@ -591,10 +648,17 @@ fn read_runtime_settings_document(
     match fs::read_to_string(config_path) {
         Ok(text) => {
             let value = serde_json::from_str::<JsonValue>(&text).map_err(|error| {
-                RuntimeConfigSettingsError::invalid_input(format!(
-                    "failed to parse configuration file {}: {error}",
-                    config_path.display()
-                ))
+                RuntimeConfigSettingsError::invalid_input_with_diagnostic(
+                    format!(
+                        "The configuration JSON is invalid at line {}, column {}.",
+                        error.line(),
+                        error.column()
+                    ),
+                    format_args!(
+                        "failed to parse configuration file {}: {error}",
+                        config_path.display()
+                    ),
+                )
             })?;
             let value = match value {
                 JsonValue::Null => JsonValue::Object(Default::default()),

@@ -47,6 +47,8 @@ jobs:
         with:
           toolchain: 1.97.0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: failure semantics architecture gate
+        run: python3 scripts/refactors/check-refactor-invariants.py --manifest scripts/refactors/failure-semantics-invariants.json --root .
       - run: cargo check --workspace --locked
       - name: capability identity snapshot drift
         run: cargo test -p agena-bundled-plugins capability_identity_snapshot_matches_committed_json --locked

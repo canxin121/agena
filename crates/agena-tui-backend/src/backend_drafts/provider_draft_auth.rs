@@ -562,12 +562,16 @@ pub enum ProviderDraftAuthError {
     StartBrowserAuthFirst,
     StartDeviceAuthFirst,
     RequiredField(ProviderDraftAuthField),
-    Other(String),
+    Other(agena_failure::UserProblem),
 }
 
 impl ProviderDraftAuthError {
-    pub(crate) fn other(error: impl ToString) -> Self {
-        Self::Other(error.to_string())
+    pub(crate) fn other(error: impl std::fmt::Display) -> Self {
+        Self::Other(provider_backend_problem(
+            "provider.authentication_failed",
+            "Provider authentication could not be completed.",
+            error,
+        ))
     }
 }
 
@@ -654,12 +658,70 @@ pub enum ProviderStudioSaveError {
     ProviderModelConfigMustBeObject,
     ConfiguredProviderAdapterSettingsMustBeObject,
     ConfiguredProviderAdapterModelsMustBeObject,
-    Other(String),
+    Other(agena_failure::UserProblem),
 }
 
 impl ProviderStudioSaveError {
-    pub(crate) fn other(error: impl ToString) -> Self {
-        Self::Other(error.to_string())
+    pub(crate) fn other(error: impl std::fmt::Display) -> Self {
+        Self::Other(provider_backend_problem(
+            "provider.settings_save_failed",
+            "The provider settings could not be saved.",
+            error,
+        ))
+    }
+}
+
+fn provider_backend_problem(
+    code: &'static str,
+    fallback: &'static str,
+    diagnostic: impl std::fmt::Display,
+) -> agena_failure::UserProblem {
+    let failure = agena_failure::Failure::new(
+        agena_failure::FailureCode::new(code),
+        agena_failure::FailureCategory::Internal,
+        agena_failure::FailureResponsibility::System,
+        agena_failure::RetryDirective::Unknown,
+        agena_failure::RecoveryDirective::Retry,
+        agena_failure::FailureImpact::RequestRejected,
+        agena_failure::UserPresentation::new(code, fallback),
+    );
+    tracing::error!(
+        failure_id = %failure.id,
+        failure_code = %failure.code,
+        diagnostic = %diagnostic,
+        "provider TUI backend operation failed"
+    );
+    failure.into()
+}
+
+#[cfg(test)]
+mod failure_projection_tests {
+    use super::{ProviderDraftAuthError, ProviderStudioSaveError};
+
+    #[test]
+    fn provider_backend_diagnostics_never_enter_tui_problem_projection() {
+        let diagnostic =
+            "Authorization: Bearer secret token=secret /private/provider.sock raw response body";
+        let auth = ProviderDraftAuthError::other(diagnostic);
+        let save = ProviderStudioSaveError::other(diagnostic);
+
+        for problem in [
+            match auth {
+                ProviderDraftAuthError::Other(problem) => problem,
+                _ => unreachable!(),
+            },
+            match save {
+                ProviderStudioSaveError::Other(problem) => problem,
+                _ => unreachable!(),
+            },
+        ] {
+            let json = serde_json::to_string(&problem).expect("serialize user problem");
+            assert!(!json.contains("Bearer"));
+            assert!(!json.contains("token=secret"));
+            assert!(!json.contains("/private"));
+            assert!(!json.contains("raw response body"));
+            assert!(problem.is_unexpected());
+        }
     }
 }
 

@@ -181,28 +181,28 @@ pub(super) fn execute_diagnostics(
 fn registry(executor: &ToolExecutor) -> Result<&std::sync::Arc<agena_lsp::LspRegistry>, ToolError> {
     executor
         .lsp_registry()
-        .ok_or_else(|| ToolError::Plugin("no LSP servers configured".to_string()))
+        .ok_or_else(|| ToolError::plugin("no LSP servers configured".to_string()))
 }
 
 fn path_to_uri(path: &Path) -> Result<Uri, ToolError> {
     let url = url::Url::from_file_path(path).map_err(|_| {
-        ToolError::InvalidInput(format!("file path not absolute: {}", path.display()))
+        ToolError::invalid_input(format!("file path not absolute: {}", path.display()))
     })?;
     url.as_str()
         .parse::<Uri>()
-        .map_err(|err| ToolError::InvalidInput(format!("invalid uri: {err}")))
+        .map_err(|err| ToolError::invalid_input(format!("invalid uri: {err}")))
 }
 
 fn map_lsp_err(err: agena_lsp::LspError) -> ToolError {
     use agena_lsp::LspError;
     match err {
         LspError::UnknownServer(name) => {
-            ToolError::Plugin(format!("no LSP server matches `{name}`"))
+            ToolError::plugin(format!("no LSP server matches `{name}`"))
         }
         LspError::Server { code, message } => {
-            ToolError::Plugin(format!("lsp server error {code}: {message}"))
+            ToolError::plugin(format!("lsp server error {code}: {message}"))
         }
-        other => ToolError::Plugin(other.to_string()),
+        other => ToolError::plugin(other.to_string()),
     }
 }
 

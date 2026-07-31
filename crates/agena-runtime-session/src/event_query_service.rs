@@ -5,7 +5,6 @@
 //! protocol without naming that enum as a generic parameter.
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeEvent {
@@ -48,19 +47,30 @@ pub struct RuntimeReverseEventRange {
     pub limit: usize,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("event query failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeEventQueryError {
-    message: String,
+    pub failure: Box<agena_failure::Failure>,
 }
 
 impl RuntimeEventQueryError {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
         Self {
-            message: message.into(),
+            failure: Box::new(crate::service_failure::unexpected_service_failure(
+                "event.query_failed",
+                "Event history could not be loaded.",
+                diagnostic,
+            )),
         }
     }
 }
+
+impl std::fmt::Display for RuntimeEventQueryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        crate::service_failure::display_service_failure(&self.failure, formatter)
+    }
+}
+
+impl std::error::Error for RuntimeEventQueryError {}
 
 #[async_trait]
 pub trait RuntimeEventQueryService: Send + Sync {

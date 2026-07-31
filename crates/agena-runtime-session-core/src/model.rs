@@ -23,7 +23,7 @@ pub struct SubtaskRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 impl SubtaskRuntimeState {
@@ -31,7 +31,7 @@ impl SubtaskRuntimeState {
         self.status == SubtaskStatus::Created
             && self.started_at_ms.is_none()
             && self.finished_at_ms.is_none()
-            && self.error.is_none()
+            && self.failure.is_none()
     }
 }
 

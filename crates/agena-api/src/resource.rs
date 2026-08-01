@@ -1030,6 +1030,8 @@ pub struct SessionExecutionContextResource {
     pub agent_id: String,
     pub execution_access: ExecutionAccess,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
+    pub selected_permission: PermissionConfigResource,
+    #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub effective_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub permission_ceiling: PermissionConfigResource,
@@ -1441,6 +1443,7 @@ pub struct PermissionRuleResource {
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
     Allow,
+    Auto,
     Ask,
     Deny,
 }
@@ -1459,6 +1462,8 @@ pub struct PermissionConfigResource {
     pub network: Option<NetworkPermissionConfigResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolPermissionConfigResource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_model: Option<ModelRef>,
 }
 
 impl PermissionConfigResource {
@@ -1474,6 +1479,7 @@ impl PermissionConfigResource {
                 .tools
                 .as_ref()
                 .is_none_or(ToolPermissionConfigResource::is_empty)
+            && self.approval_model.is_none()
     }
 }
 
@@ -1588,6 +1594,7 @@ mod permission_config_resource_contract_tests {
             }),
             network: None,
             tools: None,
+            approval_model: None,
         };
 
         assert_eq!(

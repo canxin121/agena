@@ -7,6 +7,7 @@ use super::{
 pub(crate) fn permission_mode_choice_items(i18n: &I18n) -> Vec<ChoiceItem> {
     [
         PermissionMode::Allow,
+        PermissionMode::Auto,
         PermissionMode::Ask,
         PermissionMode::Deny,
     ]
@@ -308,12 +309,6 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
             &agena_tui::fl_args!("field" => field.path),
         ),
         ChoiceOverlayAction::SessionModelMode(step) => i18n.text_args(
-            "overlay-choice-clear-runtime-detail",
-            &agena_tui::fl_args!(
-                "field" => model_mode_display_label(i18n, *step)
-            ),
-        ),
-        ChoiceOverlayAction::ProviderDefaultModelMode { step, .. } => i18n.text_args(
             "overlay-choice-clear-runtime-detail",
             &agena_tui::fl_args!(
                 "field" => model_mode_display_label(i18n, *step)

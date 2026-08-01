@@ -68,19 +68,6 @@ impl App {
                 self.advance_session_model_mode_step(step);
                 true
             }
-            ChoiceOverlayAction::ProviderDefaultModelMode { model, step } => {
-                let input = choice_selection_value(&selection);
-                match self.persist_provider_default_model_mode(&model, step, input.as_str()) {
-                    Ok(()) => {
-                        self.advance_provider_default_model_mode_step(model, step);
-                        true
-                    }
-                    Err(error) => {
-                        self.flash_error(error);
-                        false
-                    }
-                }
-            }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = choice_selection_value(&selection);
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
@@ -152,8 +139,9 @@ impl App {
                             PermissionRuleStudioChoiceField::Mode => {
                                 parent.draft.mode = match value.as_str() {
                                     "allow" => PermissionMode::Allow,
+                                    "auto" => PermissionMode::Auto,
                                     "deny" => PermissionMode::Deny,
-                                    _ => PermissionMode::Ask,
+                                    _ => PermissionMode::Auto,
                                 };
                             }
                         }
@@ -255,8 +243,9 @@ impl App {
                 let value = choice_selection_value(&selection);
                 let mode = match value.as_str() {
                     "allow" => PermissionMode::Allow,
+                    "auto" => PermissionMode::Auto,
                     "deny" => PermissionMode::Deny,
-                    _ => PermissionMode::Ask,
+                    _ => PermissionMode::Auto,
                 };
                 let Some((host, mut parent)) = self.take_permission_studio_dialog() else {
                     self.flash_error(ui_text::t(

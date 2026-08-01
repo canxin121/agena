@@ -4,10 +4,14 @@
 //! implementations belong in adapter/runtime crates rather than this crate.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub use agena_domain::ToolPresentationSection;
-use agena_domain::{PermissionAction, PermissionDecision, ToolInvocation};
+use agena_domain::{
+    CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, PermissionAction,
+    PermissionDecision, ToolInvocation,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use unicode_segmentation::UnicodeSegmentation;
@@ -379,6 +383,20 @@ pub struct ShellOutput {
     pub duration: Duration,
     pub timed_out: bool,
 }
+
+/// Runtime-side presentation signals emitted while a process-backed tool is
+/// running. The session runtime owns delivery (and decides whether the
+/// signals are ephemeral or durable); this crate only exposes a small callback
+/// contract so stdout/stderr can be observed without waiting for the child
+/// process to exit.
+#[derive(Debug, Clone)]
+pub enum ToolRuntimeEvent {
+    CommandBegin(CommandBeginEvent),
+    CommandOutputDelta(CommandOutputDeltaEvent),
+    CommandEnd(CommandEndEvent),
+}
+
+pub type ToolRuntimeEventSink = Arc<dyn Fn(ToolRuntimeEvent) + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ShellError {

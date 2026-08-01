@@ -65,6 +65,7 @@ pub(crate) fn permission_rule_params_from_draft(
 const fn permission_mode_to_wire(mode: PermissionMode) -> agena_api::resource::PermissionMode {
     match mode {
         PermissionMode::Allow => agena_api::resource::PermissionMode::Allow,
+        PermissionMode::Auto => agena_api::resource::PermissionMode::Auto,
         PermissionMode::Ask => agena_api::resource::PermissionMode::Ask,
         PermissionMode::Deny => agena_api::resource::PermissionMode::Deny,
     }

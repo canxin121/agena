@@ -211,8 +211,8 @@ impl App {
                 .map_err(crate::UiFailure::message)?;
                 let mut permission = dialog.permission.clone();
                 let rule = PathAccessRuleConfig::Modes(PathAccessModes {
-                    read: Some(PermissionMode::Ask),
-                    write: Some(PermissionMode::Ask),
+                    read: Some(PermissionMode::Auto),
+                    write: Some(PermissionMode::Auto),
                 });
                 permission
                     .path
@@ -239,7 +239,7 @@ impl App {
                     .network
                     .get_or_insert_with(Default::default)
                     .rules
-                    .insert(target.clone(), PermissionMode::Ask);
+                    .insert(target.clone(), PermissionMode::Auto);
                 self.persist_permission_studio(dialog, permission)?;
                 self.set_permission_studio_page_with_section(
                     dialog,
@@ -294,7 +294,7 @@ impl App {
                 )
                 .map_err(crate::UiFailure::message)?;
                 let mut permission = dialog.permission.clone();
-                let rule = ToolPermissionRules::Mode(PermissionMode::Ask);
+                let rule = ToolPermissionRules::Mode(PermissionMode::Auto);
                 permission
                     .tools
                     .get_or_insert_with(Default::default)
@@ -327,7 +327,7 @@ impl App {
                     }
                     None => indexmap::IndexMap::new(),
                 };
-                entries.insert(pattern, PermissionMode::Ask);
+                entries.insert(pattern, PermissionMode::Auto);
                 tools
                     .rules
                     .insert(tool_name, ToolPermissionRules::Ordered(entries));

@@ -9,8 +9,20 @@ import { useSettingsPageState } from './useSettingsPageState'
 const route = useRoute()
 const router = useRouter()
 
-const { activeSettingsTab, actionError, actionMessage, load, loading, pageDescription, pageTitle, panels, tabs } =
-  useSettingsPageState({ route, router })
+const {
+  activeSettingsTab,
+  actionError,
+  actionMessage,
+  load,
+  loading,
+  pageDescription,
+  pageTitle,
+  panels,
+  permissionScope,
+  selectedSessionId,
+  sessionExecution,
+  tabs,
+} = useSettingsPageState({ route, router })
 </script>
 
 <template>
@@ -25,6 +37,14 @@ const { activeSettingsTab, actionError, actionMessage, load, loading, pageDescri
     @refresh="load"
     @update:active-tab="activeSettingsTab = $event as SettingsTab"
   >
-    <SettingsSectionPanelRenderer :active-tab="activeSettingsTab" :loading="loading" :load="load" :panels="panels" />
+    <SettingsSectionPanelRenderer
+      :active-tab="activeSettingsTab"
+      :loading="loading"
+      :load="load"
+      :panels="panels"
+      :permission-scope="permissionScope"
+      :selected-session-id="selectedSessionId"
+      :session-execution="sessionExecution"
+    />
   </SectionTabbedPageLayout>
 </template>

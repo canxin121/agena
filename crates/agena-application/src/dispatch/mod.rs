@@ -156,6 +156,7 @@ const fn permission_mode_to_wire(
 ) -> agena_api::resource::PermissionMode {
     match value {
         agena_domain::PermissionMode::Allow => agena_api::resource::PermissionMode::Allow,
+        agena_domain::PermissionMode::Auto => agena_api::resource::PermissionMode::Auto,
         agena_domain::PermissionMode::Ask => agena_api::resource::PermissionMode::Ask,
         agena_domain::PermissionMode::Deny => agena_api::resource::PermissionMode::Deny,
     }

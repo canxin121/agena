@@ -19,7 +19,7 @@ export type RuntimeRouteStateInput = {
   activeSettingsTab: Ref<SettingsTab>
   activeTab: Ref<RuntimeTab>
   routePath: Ref<string>
-  routeQuery: RouteLocationNormalizedLoaded['query']
+  routeQuery: Ref<RouteLocationNormalizedLoaded['query']>
   routeSection: Ref<RuntimeRouteSection>
 }
 
@@ -29,7 +29,11 @@ export type RuntimeRouteStateDeps = {
 
 export function useRuntimeRouteState(input: RuntimeRouteStateInput, deps: RuntimeRouteStateDeps) {
   function syncTabsFromRoute() {
-    const normalized = resolveRuntimeTabFromRoute(input.routePath.value, input.routeQuery, input.routeSection.value)
+    const normalized = resolveRuntimeTabFromRoute(
+      input.routePath.value,
+      input.routeQuery.value,
+      input.routeSection.value,
+    )
     if (input.routeSection.value === 'runtime' && isRuntimeTab(normalized)) {
       input.activeTab.value = normalized
     }
@@ -43,7 +47,7 @@ export function useRuntimeRouteState(input: RuntimeRouteStateInput, deps: Runtim
 
   async function updateRoutePath(tab: string) {
     const nextPath = buildRuntimeSectionPath(input.routeSection.value, tab)
-    await deps.router.replace({ path: nextPath, query: sanitizeRuntimeSectionQuery(input.routeQuery) })
+    await deps.router.replace({ path: nextPath, query: sanitizeRuntimeSectionQuery(input.routeQuery.value) })
   }
 
   return {

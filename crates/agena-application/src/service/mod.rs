@@ -52,7 +52,10 @@ pub(crate) mod sessions;
 mod workspaces;
 
 pub(crate) use execution::execution_access_from_domain;
-pub use execution::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
+pub use execution::{
+    list_scheduled_jobs, permission_config_domain_from_resource,
+    permission_config_resource_from_domain, scheduled_job_resource, sort_jobs_for_display,
+};
 
 /// Transport-neutral permission-rule mutation request.
 ///

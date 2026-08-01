@@ -1,15 +1,21 @@
-import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 
-import type { ConfigSettingsReadResponse, PermissionMode } from '../lib/agenaApi'
-import { setSettings } from '../lib/agenaApi'
+import { userErrorMessage } from '@/lib/api'
+import type {
+  ConfigSettingsReadResponse,
+  PermissionConfig,
+  PermissionMode,
+  SessionExecutionResource,
+} from '../lib/agenaApi'
+import { setSessionPermission, setSettings } from '../lib/agenaApi'
 import {
   clonePermissionEditorModel,
   commandRuleRows,
   countPermissionDraftChanges,
   createPermissionEditorModel,
   normalizePermissionEditorModel,
+  permissionConfigFromEditorModel,
   permissionModeLabel,
   replacePermissionEditorModel,
   suggestDuplicateKey,
@@ -64,6 +70,9 @@ const props = defineProps<{
   clearActionStatus: () => void
   setActionError: (message: string) => void
   setActionMessage: (message: string) => void
+  permissionScope?: 'global' | 'session'
+  selectedSessionId?: number | null
+  sessionExecution?: SessionExecutionResource | null
 }>()
 
 const activeSection = ref<SectionId>('overview')
@@ -89,18 +98,35 @@ function createDialogState(): DialogState {
     key: '',
     entry: '',
     pattern: '',
-    read: 'allow',
-    write: 'deny',
-    access: 'ask',
+    read: 'auto',
+    write: 'auto',
+    access: 'auto',
   }
 }
 
 const dialog = reactive<DialogState>(createDialogState())
 
-const isBusy = computed(() => props.loading || saving.value)
+function hasPermissionConfigValue(value: unknown): boolean {
+  return Boolean(value && typeof value === 'object' && Object.keys(value as Record<string, unknown>).length)
+}
+
 const dirtyCount = computed(() => countPermissionDraftChanges(draft, baseline.value))
 const overviewCounts = computed(() => summarizePermissionEditorModel(draft))
 const configSourceLabel = computed(() => props.permissionConfig?.source ?? 'effective')
+const permissionScope = computed(() => props.permissionScope ?? 'global')
+const sessionPermissionReady = computed(
+  () =>
+    permissionScope.value !== 'session' ||
+    (props.selectedSessionId != null && props.sessionExecution?.session.id === props.selectedSessionId),
+)
+const isBusy = computed(() => props.loading || saving.value || !sessionPermissionReady.value)
+const sourcePermissionValue = computed<unknown>(() =>
+  permissionScope.value === 'session'
+    ? hasPermissionConfigValue(props.sessionExecution?.execution.selected_permission)
+      ? props.sessionExecution?.execution.selected_permission
+      : props.sessionExecution?.execution.effective_permission || null
+    : props.permissionConfig?.value,
+)
 
 const pathRuleRows = computed<SimpleRuleRow[]>(() =>
   Object.entries(draft.path.rules).map(([key, rule]) => ({
@@ -205,7 +231,7 @@ const overviewSections = computed(() => [
 ])
 
 watch(
-  () => props.permissionConfig?.value,
+  sourcePermissionValue,
   (value) => {
     const next = normalizePermissionEditorModel(value)
     baseline.value = clonePermissionEditorModel(next)
@@ -337,14 +363,8 @@ function simpleRulePlaceholder(kind: SimpleRuleKind) {
 }
 
 function simpleRuleDefaultAccess(kind: SimpleRuleKind): PermissionMode {
-  switch (kind) {
-    case 'path':
-      return 'deny'
-    case 'domain':
-    case 'tag':
-    case 'name':
-      return 'allow'
-  }
+  void kind
+  return 'auto'
 }
 
 function simpleRuleMap(model: PermissionEditorModel, kind: SimpleRuleKind) {
@@ -432,8 +452,8 @@ function openSimpleRuleDialog(kind: SimpleRuleKind, mode: Exclude<DialogMode, 'd
 
   if (mode === 'add') {
     dialog.key = ''
-    dialog.read = kind === 'path' ? 'allow' : 'allow'
-    dialog.write = kind === 'path' ? 'deny' : 'deny'
+    dialog.read = 'auto'
+    dialog.write = 'auto'
     dialog.access = simpleRuleDefaultAccess(kind)
     return
   }
@@ -448,8 +468,8 @@ function openSimpleRuleDialog(kind: SimpleRuleKind, mode: Exclude<DialogMode, 'd
           simpleRuleRows(kind).map((entry) => entry.key),
         )
       : row.key
-  dialog.read = row.read ?? 'ask'
-  dialog.write = row.write ?? 'ask'
+  dialog.read = row.read ?? 'auto'
+  dialog.write = row.write ?? 'auto'
   dialog.access = row.access ?? simpleRuleDefaultAccess(kind)
 }
 
@@ -463,8 +483,8 @@ function openSimpleDeleteDialog(kind: SimpleRuleKind) {
   dialog.mode = 'delete'
   dialog.originalKey = row.key
   dialog.key = row.key
-  dialog.read = row.read ?? 'ask'
-  dialog.write = row.write ?? 'ask'
+  dialog.read = row.read ?? 'auto'
+  dialog.write = row.write ?? 'auto'
   dialog.access = row.access ?? simpleRuleDefaultAccess(kind)
 }
 
@@ -480,7 +500,7 @@ function openCommandDialog(mode: Exclude<DialogMode, 'delete'>) {
   if (mode === 'add') {
     dialog.entry = selectedCommandEntry.value || 'bash'
     dialog.pattern = ''
-    dialog.access = 'deny'
+    dialog.access = 'auto'
     return
   }
 
@@ -526,17 +546,27 @@ async function persistSnapshot(
 
   props.clearActionStatus()
   saving.value = true
-  const payload = clonePermissionEditorModel(snapshot)
+  const editorSnapshot = clonePermissionEditorModel(snapshot)
+  const payload = permissionConfigFromEditorModel(editorSnapshot)
 
   try {
-    await setSettings({
-      path: 'permission',
-      value: payload,
-      validate: true,
-      reload: true,
-    })
-    baseline.value = clonePermissionEditorModel(payload)
-    replacePermissionEditorModel(draft, payload)
+    if (permissionScope.value === 'session') {
+      const sessionId = props.selectedSessionId
+      if (sessionId == null || !sessionPermissionReady.value || !props.sessionExecution) {
+        props.setActionError('Select and load a session before editing session permissions.')
+        return false
+      }
+      await setSessionPermission(sessionId, payload as PermissionConfig, props.sessionExecution?.session.version)
+    } else {
+      await setSettings({
+        path: 'permission',
+        value: payload,
+        validate: true,
+        reload: true,
+      })
+    }
+    baseline.value = editorSnapshot
+    replacePermissionEditorModel(draft, editorSnapshot)
     await props.load()
     props.setActionMessage(successMessage)
     return true
@@ -692,7 +722,13 @@ function changeSection(section: SectionId) {
       <div class="permission-editor-header">
         <div>
           <p class="permission-editor-kicker">Permissions</p>
-          <h2 class="permission-editor-title">Policy Editor</h2>
+          <h2 class="permission-editor-title">
+            {{
+              permissionScope === 'session'
+                ? `Session #${props.selectedSessionId ?? '—'} Policy Editor`
+                : 'Policy Editor'
+            }}
+          </h2>
         </div>
 
         <div class="permission-editor-meta">
@@ -701,6 +737,11 @@ function changeSection(section: SectionId) {
           <span class="badge" :class="dirtyCount ? 'warn' : 'success'">Unsaved changes: {{ dirtyCount }}</span>
           <span v-if="saving" class="badge warn">Saving…</span>
         </div>
+      </div>
+
+      <div v-if="permissionScope === 'session' && !sessionPermissionReady" class="permission-scope-warning">
+        Select and load a session before editing session permissions. Open this page from an active chat session or
+        include a session id in the settings URL.
       </div>
 
       <div class="permission-editor-body">
@@ -806,6 +847,48 @@ function changeSection(section: SectionId) {
                 </div>
               </article>
             </div>
+
+            <div class="permission-approval-editor">
+              <div class="permission-section-title-row">
+                <h4 class="permission-section-title">Automatic approval model</h4>
+                <span class="muted">Missing or unavailable models safely fall back to Ask.</span>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <label class="label" for="permission-approval-provider">Provider</label>
+                  <input
+                    id="permission-approval-provider"
+                    v-model="draft.approvalModel.providerId"
+                    class="input mono"
+                    placeholder="openai"
+                    :disabled="isBusy"
+                    @change="saveCurrentDraft"
+                  />
+                </div>
+                <div class="field">
+                  <label class="label" for="permission-approval-adapter">Adapter (optional)</label>
+                  <input
+                    id="permission-approval-adapter"
+                    v-model="draft.approvalModel.adapterId"
+                    class="input mono"
+                    placeholder="responses"
+                    :disabled="isBusy"
+                    @change="saveCurrentDraft"
+                  />
+                </div>
+                <div class="field full">
+                  <label class="label" for="permission-approval-model">Model</label>
+                  <input
+                    id="permission-approval-model"
+                    v-model="draft.approvalModel.modelId"
+                    class="input mono"
+                    placeholder="gpt-5"
+                    :disabled="isBusy"
+                    @change="saveCurrentDraft"
+                  />
+                </div>
+              </div>
+            </div>
           </section>
 
           <section v-else-if="activeSection === 'filesystem-default-zones'" class="permission-section-card">
@@ -833,6 +916,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -845,6 +929,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -860,6 +945,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -872,6 +958,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -915,6 +1002,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -928,6 +1016,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -992,6 +1081,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -1007,6 +1097,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -1022,6 +1113,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -1064,6 +1156,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -1136,6 +1229,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -1208,6 +1302,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -1297,6 +1392,7 @@ function changeSection(section: SectionId) {
                         @change="saveCurrentDraft"
                       >
                         <option value="allow">Allow</option>
+                        <option value="auto">Auto</option>
                         <option value="ask">Ask</option>
                         <option value="deny">Deny</option>
                       </select>
@@ -1378,6 +1474,7 @@ function changeSection(section: SectionId) {
                 <label class="label" for="permission-command-access">Access</label>
                 <select id="permission-command-access" v-model="dialog.access" :disabled="isBusy" class="select">
                   <option value="allow">Allow</option>
+                  <option value="auto">Auto</option>
                   <option value="ask">Ask</option>
                   <option value="deny">Deny</option>
                 </select>
@@ -1403,6 +1500,7 @@ function changeSection(section: SectionId) {
                   <label class="label" for="permission-path-read">Read</label>
                   <select id="permission-path-read" v-model="dialog.read" :disabled="isBusy" class="select">
                     <option value="allow">Allow</option>
+                    <option value="auto">Auto</option>
                     <option value="ask">Ask</option>
                     <option value="deny">Deny</option>
                   </select>
@@ -1411,6 +1509,7 @@ function changeSection(section: SectionId) {
                   <label class="label" for="permission-path-write">Write</label>
                   <select id="permission-path-write" v-model="dialog.write" :disabled="isBusy" class="select">
                     <option value="allow">Allow</option>
+                    <option value="auto">Auto</option>
                     <option value="ask">Ask</option>
                     <option value="deny">Deny</option>
                   </select>
@@ -1421,6 +1520,7 @@ function changeSection(section: SectionId) {
                 <label class="label" for="permission-rule-access">Access</label>
                 <select id="permission-rule-access" v-model="dialog.access" :disabled="isBusy" class="select">
                   <option value="allow">Allow</option>
+                  <option value="auto">Auto</option>
                   <option value="ask">Ask</option>
                   <option value="deny">Deny</option>
                 </select>
@@ -1503,6 +1603,15 @@ function changeSection(section: SectionId) {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.permission-scope-warning {
+  padding: 12px 14px;
+  border: 1px solid rgba(180, 83, 9, 0.22);
+  border-radius: 12px;
+  background: rgba(255, 247, 237, 0.9);
+  color: #9a3412;
+  line-height: 1.5;
 }
 
 .permission-editor-body {

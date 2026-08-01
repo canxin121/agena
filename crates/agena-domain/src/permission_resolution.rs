@@ -4,6 +4,7 @@ use crate::{DecisionTraceStep, PermissionMode, PermissionRiskLevel, PermissionSc
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
     Allow,
+    Auto { reason: String },
     Ask { reason: String },
     Deny { reason: String },
 }
@@ -13,6 +14,9 @@ pub enum PermissionDecision {
 pub fn decide_from_mode(mode: PermissionMode, reason: impl Into<String>) -> PermissionDecision {
     match mode {
         PermissionMode::Allow => PermissionDecision::Allow,
+        PermissionMode::Auto => PermissionDecision::Auto {
+            reason: reason.into(),
+        },
         PermissionMode::Ask => PermissionDecision::Ask {
             reason: reason.into(),
         },
@@ -77,6 +81,12 @@ mod tests {
             decide_from_mode(PermissionMode::Ask, "confirm"),
             PermissionDecision::Ask {
                 reason: "confirm".to_owned()
+            }
+        );
+        assert_eq!(
+            decide_from_mode(PermissionMode::Auto, "automatic"),
+            PermissionDecision::Auto {
+                reason: "automatic".to_owned()
             }
         );
         assert_eq!(

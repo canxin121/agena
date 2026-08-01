@@ -24,6 +24,7 @@ export function useChatPageState() {
   const workspaces = ref<WorkspaceResource[]>([])
   const sessions = ref<SessionResource[]>([])
   const messages = ref<MessageResource[]>([])
+  const liveCommandEvents = ref<DomainEventRecord[]>([])
   const timelineEvents = ref<DomainEventRecord[]>([])
   const inspectedMessage = ref<MessageResource | null>(null)
   const inspectedMessageParts = ref<MessagePart[]>([])
@@ -74,6 +75,7 @@ export function useChatPageState() {
     errorMessage,
     interactiveRequestInFlight,
     loading,
+    liveCommandEvents,
     localCommandNotice,
     messages,
     newSessionTitle,

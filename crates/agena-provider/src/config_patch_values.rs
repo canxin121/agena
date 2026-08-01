@@ -157,14 +157,6 @@ pub struct ProviderDefaultsOverlay {
     pub adapter: Option<String>,
     #[merge(strategy = option_override)]
     pub model: Option<String>,
-    #[merge(strategy = option_override)]
-    pub thinking_mode: Option<String>,
-    #[merge(strategy = option_override)]
-    pub speed_mode: Option<String>,
-    #[merge(strategy = option_override)]
-    pub verbosity: Option<String>,
-    #[merge(strategy = option_override)]
-    pub parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]

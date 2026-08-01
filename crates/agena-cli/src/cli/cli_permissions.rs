@@ -32,6 +32,7 @@ pub(super) fn memory_type_label(memory_type: Option<MemoryType>) -> Option<Strin
 pub(super) fn permission_mode_from_arg(mode: PermissionModeArg) -> PermissionMode {
     match mode {
         PermissionModeArg::Allow => PermissionMode::Allow,
+        PermissionModeArg::Auto => PermissionMode::Auto,
         PermissionModeArg::Ask => PermissionMode::Ask,
         PermissionModeArg::Deny => PermissionMode::Deny,
     }
@@ -62,6 +63,7 @@ pub(super) fn permission_rule_output(
         action_key: rule.action_key,
         mode: match rule.mode {
             PermissionMode::Allow => "allow",
+            PermissionMode::Auto => "auto",
             PermissionMode::Ask => "ask",
             PermissionMode::Deny => "deny",
         }

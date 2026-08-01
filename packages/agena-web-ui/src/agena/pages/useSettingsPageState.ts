@@ -9,6 +9,7 @@ import { createSettingsProvidersPanelState } from './useSettingsProvidersPageSta
 import { createSettingsSectionShellState } from './useSettingsSectionShellState'
 import { useSettingsConfigurationState } from './useSettingsConfigurationState'
 import { useSettingsMemoryState } from './useSettingsMemoryState'
+import { ref, watch } from 'vue'
 
 export function useSettingsPageState(input: { route: RouteLocationNormalizedLoaded; router: Router }) {
   const { shared, state } = useRuntimeSectionState<ReturnType<typeof useRuntimePageState>>({
@@ -61,32 +62,57 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     },
     shared,
   )
-  const permissionMode = typeof input.route.query.mode === 'string' ? input.route.query.mode.toLowerCase() : ''
-  const normalizedPermissionScope =
-    permissionMode === 'session' || permissionMode === 'current'
-      ? 'session'
-      : permissionMode === 'workspace' || permissionMode === 'project'
-        ? 'workspace'
-        : permissionMode === 'global' || permissionMode === 'config'
-          ? 'global'
-          : null
-  if (normalizedPermissionScope) {
-    permissions.permissionScopeFilter.value = normalizedPermissionScope
-    permissions.permissionDraft.scope = normalizedPermissionScope
-  } else if (permissionMode === 'effective') {
-    permissions.permissionScopeFilter.value = 'all'
-    permissions.permissionStatusFilter.value = 'active'
-  } else if (['list', 'rules', 'manage'].includes(permissionMode)) {
-    permissions.permissionStatusFilter.value = 'active'
-  } else if (permissionMode === 'new') {
-    permissions.resetPermissionDraft()
+  const permissionScope = ref<'global' | 'session'>('global')
+
+  function queryValue(value: unknown): string {
+    if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : ''
+    return typeof value === 'string' ? value : ''
   }
+
+  function syncPermissionRoute() {
+    const permissionMode = queryValue(input.route.query.mode).toLowerCase()
+    const hasSessionQuery = Boolean(queryValue(input.route.query.session) || queryValue(input.route.query.session_id))
+    const normalizedPermissionScope =
+      permissionMode === 'session' || permissionMode === 'current' || (!permissionMode && hasSessionQuery)
+        ? 'session'
+        : permissionMode === 'workspace' || permissionMode === 'project'
+          ? 'workspace'
+          : permissionMode === 'global' || permissionMode === 'config' || !permissionMode
+            ? 'global'
+            : null
+
+    if (normalizedPermissionScope) {
+      permissionScope.value = normalizedPermissionScope === 'session' ? 'session' : 'global'
+      permissions.permissionScopeFilter.value = normalizedPermissionScope
+      permissions.permissionDraft.scope = normalizedPermissionScope
+    } else if (permissionMode === 'effective') {
+      permissionScope.value = 'global'
+      permissions.permissionScopeFilter.value = 'all'
+      permissions.permissionStatusFilter.value = 'active'
+    } else if (['list', 'rules', 'manage'].includes(permissionMode)) {
+      permissionScope.value = 'global'
+      permissions.permissionStatusFilter.value = 'active'
+    } else if (permissionMode === 'new') {
+      permissionScope.value = 'global'
+      permissions.resetPermissionDraft()
+    }
+  }
+
+  watch(() => [input.route.query.mode, input.route.query.session, input.route.query.session_id], syncPermissionRoute, {
+    immediate: true,
+  })
 
   const configuration = useSettingsConfigurationState({
     actionError: shared.actionError,
     actionMessage: shared.actionMessage,
   })
-  configuration.search.value = typeof input.route.query.search === 'string' ? input.route.query.search.trim() : ''
+  watch(
+    () => input.route.query.search,
+    (value) => {
+      configuration.search.value = queryValue(value).trim()
+    },
+    { immediate: true },
+  )
   const memory = useSettingsMemoryState({
     actionError: shared.actionError,
     actionMessage: shared.actionMessage,
@@ -129,6 +155,9 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     memory,
     plugins,
     permissions,
+    permissionScope,
+    selectedSessionId: state.selectedSessionId,
+    sessionExecution: state.sessionExecution,
     providers,
     tabs: shell.tabs,
   }

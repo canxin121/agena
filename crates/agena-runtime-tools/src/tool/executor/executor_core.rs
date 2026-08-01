@@ -21,6 +21,7 @@ impl ToolExecutor {
             tool_presentation,
             cancellation_token: None,
             permission_inspector: None,
+            command_event_sink: None,
         }
     }
 
@@ -111,6 +112,17 @@ impl ToolExecutor {
         inspector: Option<Arc<dyn crate::tool::ExecutionPermissionInspector>>,
     ) -> Self {
         self.permission_inspector = inspector;
+        self
+    }
+
+    /// Attach a runtime-owned sink for process command lifecycle/output
+    /// events. The sink is intentionally optional and is preserved when the
+    /// executor is scoped or cloned for a concurrent tool task.
+    pub fn with_command_event_sink(
+        mut self,
+        sink: Option<agena_tool::ToolRuntimeEventSink>,
+    ) -> Self {
+        self.command_event_sink = sink;
         self
     }
 

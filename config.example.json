@@ -62,17 +62,17 @@
     "path": {
       "workspace": {
         "read": "allow",
-        "write": "ask"
+        "write": "auto"
       },
       "external": {
-        "read": "ask",
-        "write": "ask"
+        "read": "auto",
+        "write": "auto"
       }
     },
     "network": {
-      "internet": "ask",
-      "private": "deny",
-      "loopback": "deny",
+      "internet": "auto",
+      "private": "auto",
+      "loopback": "auto",
       "rules": {
         "github.com": "allow"
       }
@@ -80,13 +80,13 @@
     "tools": {
       "tags": {
         "filesystem_read": "allow",
-        "filesystem_write": "ask",
+        "filesystem_write": "auto",
         "settings_read": "allow",
-        "settings_write": "ask",
-        "network": "ask",
-        "internet": "ask",
-        "task": "ask",
-        "shell": "ask"
+        "settings_write": "auto",
+        "network": "auto",
+        "internet": "auto",
+        "task": "auto",
+        "shell": "auto"
       }
     }
   }

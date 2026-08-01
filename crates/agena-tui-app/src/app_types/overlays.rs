@@ -5,7 +5,7 @@ use std::{
 };
 
 use agena_api::resource::ProviderAdapterModelsResource;
-use agena_domain::{ModelRef, PermissionConfig, UserInputRequest};
+use agena_domain::{PermissionConfig, UserInputRequest};
 use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope};
 
 use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
@@ -122,10 +122,6 @@ pub(crate) enum ChoiceOverlayAction {
     InsertContent,
     SettingsField(SettingsFieldSpec),
     SessionModelMode(SessionModelModeStep),
-    ProviderDefaultModelMode {
-        model: ModelRef,
-        step: SessionModelModeStep,
-    },
     ProviderStudioField(ProviderStudioField),
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),

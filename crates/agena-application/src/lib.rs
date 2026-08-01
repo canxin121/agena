@@ -17,3 +17,4 @@ pub mod session;
 pub use application::{Application, AuthLoginKind};
 pub use error::ApplicationError;
 pub use provider_queries::provider_model_resource_from_domain;
+pub use service::{permission_config_domain_from_resource, permission_config_resource_from_domain};

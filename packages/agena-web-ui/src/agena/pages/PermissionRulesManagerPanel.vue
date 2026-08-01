@@ -59,6 +59,7 @@ async function deleteRule(rule: Parameters<typeof props.permissions.deletePermis
         <select id="permission-mode-filter" v-model="props.permissions.permissionModeFilter.value" class="select">
           <option value="all">All modes</option>
           <option value="allow">Allow</option>
+          <option value="auto">Auto</option>
           <option value="ask">Ask</option>
           <option value="deny">Deny</option>
         </select>
@@ -122,6 +123,7 @@ async function deleteRule(rule: Parameters<typeof props.permissions.deletePermis
         <label class="label" for="permission-rule-mode">Decision</label>
         <select id="permission-rule-mode" v-model="props.permissions.permissionDraft.mode" class="select">
           <option value="allow">Allow</option>
+          <option value="auto">Auto</option>
           <option value="ask">Ask</option>
           <option value="deny">Deny</option>
         </select>

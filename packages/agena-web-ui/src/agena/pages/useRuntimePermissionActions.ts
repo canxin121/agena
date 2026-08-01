@@ -116,7 +116,7 @@ export function useRuntimePermissionActions(
     input.permissionDraft.networkPort = ''
     input.permissionDraft.scope = 'workspace'
     input.permissionDraft.sessionId = ''
-    input.permissionDraft.mode = 'ask'
+    input.permissionDraft.mode = 'auto'
     input.editingPermissionRuleId.value = null
   }
 

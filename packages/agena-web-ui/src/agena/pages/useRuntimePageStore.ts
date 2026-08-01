@@ -106,7 +106,7 @@ export function useRuntimePageStore() {
     networkPort: '',
     scope: 'workspace',
     sessionId: '',
-    mode: 'ask',
+    mode: 'auto',
   })
   const editingPermissionRuleId = ref<number | null>(null)
   return {

@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    sync::{Arc, Mutex as StdMutex},
+    sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock},
     time::Duration,
 };
 
@@ -251,6 +251,9 @@ struct SessionManagerState {
     tool_executor: ToolExecutor,
     config: RuntimeSessionManagerConfig,
     tool_execution_semaphore: Arc<Semaphore>,
+    shared_permission: Arc<StdRwLock<crate::authorization::PermissionConfig>>,
+    shared_session_permissions:
+        Arc<StdRwLock<HashMap<i64, crate::authorization::PermissionConfig>>>,
 }
 
 /// Per-run collaborators that belong to one execution lifecycle.
@@ -385,12 +388,33 @@ impl SessionManagerState {
         tool_executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
     ) -> Self {
+        let shared_permission = Arc::new(StdRwLock::new(config.permission.clone()));
+        Self::new_with_permission_stores(
+            processor,
+            tool_executor,
+            config,
+            shared_permission,
+            Arc::new(StdRwLock::new(HashMap::new())),
+        )
+    }
+
+    fn new_with_permission_stores(
+        processor: SessionProcessor,
+        tool_executor: ToolExecutor,
+        config: RuntimeSessionManagerConfig,
+        shared_permission: Arc<StdRwLock<crate::authorization::PermissionConfig>>,
+        shared_session_permissions: Arc<
+            StdRwLock<HashMap<i64, crate::authorization::PermissionConfig>>,
+        >,
+    ) -> Self {
         let tool_execution_semaphore = Arc::new(Semaphore::new(config.max_concurrent_tools));
         Self {
             processor,
             tool_executor,
             config,
             tool_execution_semaphore,
+            shared_permission,
+            shared_session_permissions,
         }
     }
 
@@ -424,10 +448,11 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
         let session = self.get_session(session_id).await.map_err(|error| {
             agena_runtime::SessionToolExecutionError::Execution(error.to_string())
         })?;
-        let executor = self
-            .execution_state()
+        let state = self.execution_state();
+        let executor = state
             .tool_executor
-            .for_session_context(&session.runtime.execution);
+            .for_session_context(&session.runtime.execution)
+            .with_cancellation_token(self.execution_registry.cancellation_token(session_id).await);
         let prepared = (|| {
             let prepared = executor.prepare_invocation(&invocation, session_id, -1)?;
             let (invocation, prepared_shell_command) =
@@ -1344,10 +1369,23 @@ impl SessionManager {
         let session = self.get_session(session_id).await?;
         let state = self.execution_state();
         let cancellation = self.execution_registry.cancellation_token(session_id).await;
+        // A host callback may execute the same pending operation that was
+        // originally created by the model. Reuse that operation's correlation
+        // ids so shell output remains attached to the visible Activity.
+        let outer_pending_tool = session.pending_tools().into_iter().find(|tool| {
+            session
+                .pending_tool_execution(tool)
+                .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
+        });
+        let command_event_sink = outer_pending_tool
+            .as_ref()
+            .and_then(|pending| resolve_pending_tool(&session, pending).ok())
+            .map(|pending| self.command_event_sink_for_pending(session_id, &pending));
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution)
-            .with_cancellation_token(cancellation.clone());
+            .with_cancellation_token(cancellation.clone())
+            .with_command_event_sink(command_event_sink);
         let prepared = scoped_executor
             .prepare_invocation(&invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
@@ -1356,11 +1394,6 @@ impl SessionManager {
             .map_err(tool_error_to_app_error)?;
         // Host/application callbacks are not model tool invocations and do
         // not participate in the model permission state machine.
-        let outer_pending_tool = session.pending_tools().into_iter().find(|tool| {
-            session
-                .pending_tool_execution(tool)
-                .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
-        });
         if let Some(mut stream) = scoped_executor
             .execute_invocation_streaming(&invocation, session_id, call_id)
             .await
@@ -1540,11 +1573,18 @@ impl SessionManager {
         tool_executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
     ) {
-        self.execution.store(Arc::new(SessionManagerState::new(
-            processor,
-            tool_executor,
-            config,
-        )));
+        let previous = self.execution.load_full();
+        if let Ok(mut permission) = previous.shared_permission.write() {
+            *permission = config.permission.clone();
+        }
+        self.execution
+            .store(Arc::new(SessionManagerState::new_with_permission_stores(
+                processor,
+                tool_executor,
+                config,
+                Arc::clone(&previous.shared_permission),
+                Arc::clone(&previous.shared_session_permissions),
+            )));
     }
 
     pub fn prune_cache(&self) {

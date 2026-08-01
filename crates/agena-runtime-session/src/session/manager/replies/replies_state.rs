@@ -222,11 +222,21 @@ impl SessionManager {
         session: &Session,
         state: &SessionManagerState,
     ) -> crate::authorization::PermissionConfig {
-        let mut effective = state.config.permission.clone();
+        let mut effective = state
+            .shared_permission
+            .read()
+            .map(|permission| permission.clone())
+            .unwrap_or_else(|_| state.config.permission.clone());
         effective.merge_from(managed_project_state_permission(
             state.tool_executor.workspace_root(),
         ));
-        effective.merge_from(session.runtime.execution.selection.permission.clone());
+        let session_permission = state
+            .shared_session_permissions
+            .read()
+            .ok()
+            .and_then(|permissions| permissions.get(&session.id).cloned())
+            .unwrap_or_else(|| session.runtime.execution.selection.permission.clone());
+        effective.merge_from(session_permission);
         effective
     }
 
@@ -521,7 +531,10 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution)
-            .with_cancellation_token(cancellation);
+            .with_cancellation_token(cancellation)
+            .with_command_event_sink(
+                self.command_event_sink_for_pending_if_needed(session_id, pending_tool),
+            );
         scoped_executor.execute_invocation_detailed_with_prepared_shell(
             &pending_tool.invocation,
             session_id,
@@ -542,7 +555,10 @@ impl SessionManager {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution)
-            .with_cancellation_token(cancellation);
+            .with_cancellation_token(cancellation)
+            .with_command_event_sink(
+                self.command_event_sink_for_pending_if_needed(session_id, pending_tool),
+            );
         scoped_executor.execute_invocation_detailed_with_prepared_shell(
             &pending_tool.invocation,
             session_id,

@@ -42,18 +42,6 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
                         defaults: agena_provider::ProviderDefaults {
                             adapter: provider.default_adapter().map(ToString::to_string),
                             model: provider.default_model().to_string(),
-                            thinking_mode: provider_config.and_then(|provider_config| {
-                                provider_config.defaults.thinking_mode.clone()
-                            }),
-                            speed_mode: provider_config.and_then(|provider_config| {
-                                provider_config.defaults.speed_mode.clone()
-                            }),
-                            verbosity: provider_config.and_then(|provider_config| {
-                                provider_config.defaults.verbosity.clone()
-                            }),
-                            parallel_tool_calls: provider_config.and_then(|provider_config| {
-                                provider_config.defaults.parallel_tool_calls
-                            }),
                         },
                         adapters,
                     }

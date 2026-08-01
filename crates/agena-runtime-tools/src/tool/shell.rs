@@ -8,9 +8,11 @@
 use std::collections::HashMap;
 use std::io::{self, Read};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use agena_domain::CommandOutputStream;
 use agena_tool::{ShellError, ShellOutput, ShellRequest};
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +21,19 @@ use tokio_util::sync::CancellationToken;
 pub fn execute(
     request: &ShellRequest,
     cancellation: Option<&CancellationToken>,
+) -> Result<ShellOutput, ShellError> {
+    execute_with_callback(request, cancellation, None)
+}
+
+/// Run a command while forwarding stdout/stderr chunks to a synchronous
+/// callback. The callback is invoked by the parent watchdog thread, not by
+/// the pipe-draining threads, so callers may safely hand the event to an
+/// async runtime without making pipe reads depend on network/event-loop
+/// latency.
+pub fn execute_with_callback(
+    request: &ShellRequest,
+    cancellation: Option<&CancellationToken>,
+    output_callback: Option<&dyn Fn(CommandOutputStream, &[u8])>,
 ) -> Result<ShellOutput, ShellError> {
     validate(request)?;
 
@@ -52,15 +67,32 @@ pub fn execute(
 
     // Drain stdout / stderr off-thread so a child that fills its pipe
     // buffers cannot deadlock the parent.
-    let stdout_handle = child.stdout.take().map(spawn_drain);
-    let stderr_handle = child.stderr.take().map(spawn_drain);
+    let (chunk_tx, chunk_rx) = mpsc::channel();
+    let stdout_handle = child
+        .stdout
+        .take()
+        .map(|reader| spawn_drain(reader, CommandOutputStream::Stdout, chunk_tx.clone()));
+    let stderr_handle = child
+        .stderr
+        .take()
+        .map(|reader| spawn_drain(reader, CommandOutputStream::Stderr, chunk_tx.clone()));
+    drop(chunk_tx);
 
     let timeout = request.timeout_ms.map(Duration::from_millis);
-    let wait_outcome = wait_with_timeout(&mut child, timeout, cancellation)?;
+    let mut output_sequence = 0_u64;
+    let wait_outcome = wait_with_timeout(
+        &mut child,
+        timeout,
+        cancellation,
+        &chunk_rx,
+        output_callback,
+        &mut output_sequence,
+    )?;
 
     let duration = started.elapsed();
     let stdout = collect_drain(stdout_handle);
     let stderr = collect_drain(stderr_handle);
+    drain_chunks(&chunk_rx, output_callback, &mut output_sequence);
 
     if matches!(wait_outcome, WaitOutcome::Cancelled) {
         return Err(ShellError::Cancelled);
@@ -150,10 +182,14 @@ fn wait_with_timeout(
     child: &mut std::process::Child,
     timeout: Option<Duration>,
     cancellation: Option<&CancellationToken>,
+    chunks: &Receiver<OutputChunk>,
+    output_callback: Option<&dyn Fn(CommandOutputStream, &[u8])>,
+    output_sequence: &mut u64,
 ) -> Result<WaitOutcome, ShellError> {
     let started = Instant::now();
     let poll_interval = Duration::from_millis(20);
     loop {
+        drain_chunks(chunks, output_callback, output_sequence);
         match child.try_wait().map_err(ShellError::Wait)? {
             Some(status) => return Ok(WaitOutcome::Exited(status)),
             None => {
@@ -244,15 +280,50 @@ fn status_to_code(status: std::process::ExitStatus) -> i32 {
     })
 }
 
-fn spawn_drain<R>(mut reader: R) -> thread::JoinHandle<io::Result<String>>
+struct OutputChunk {
+    stream: CommandOutputStream,
+    bytes: Vec<u8>,
+}
+
+fn spawn_drain<R>(
+    mut reader: R,
+    stream: CommandOutputStream,
+    sender: Sender<OutputChunk>,
+) -> thread::JoinHandle<io::Result<String>>
 where
     R: Read + Send + 'static,
 {
     thread::spawn(move || {
         let mut buf = Vec::new();
-        reader.read_to_end(&mut buf)?;
+        let mut chunk = [0_u8; 8 * 1024];
+        loop {
+            let read = reader.read(&mut chunk)?;
+            if read == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..read]);
+            let _ = sender.send(OutputChunk {
+                stream: stream.clone(),
+                bytes: chunk[..read].to_vec(),
+            });
+        }
         Ok(String::from_utf8_lossy(&buf).into_owned())
     })
+}
+
+fn drain_chunks(
+    receiver: &Receiver<OutputChunk>,
+    output_callback: Option<&dyn Fn(CommandOutputStream, &[u8])>,
+    output_sequence: &mut u64,
+) {
+    let Some(output_callback) = output_callback else {
+        while receiver.try_recv().is_ok() {}
+        return;
+    };
+    while let Ok(chunk) = receiver.try_recv() {
+        *output_sequence = output_sequence.saturating_add(1);
+        output_callback(chunk.stream, chunk.bytes.as_slice());
+    }
 }
 
 fn collect_drain(handle: Option<thread::JoinHandle<io::Result<String>>>) -> String {

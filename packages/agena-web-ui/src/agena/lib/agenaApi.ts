@@ -1,11 +1,4 @@
-import {
-  apiBlob,
-  apiJson,
-  apiResponseError,
-  apiText,
-  apiUrl,
-  userErrorMessage,
-} from '../../lib/api'
+import { apiBlob, apiJson, apiResponseError, apiText, apiUrl, userErrorMessage } from '../../lib/api'
 import type { ApiFailure } from '../../lib/api'
 import { buildActiveUiAuthHeaders } from '../../lib/uiAuthToken'
 import { normalizeSseBuffer, parseSseEventBlock } from './sse'
@@ -308,10 +301,7 @@ export type PluginToolRegistryChangesResponse = {
 export type PluginUiToolInvokeResponse = {
   plugin_id: string
   tool: string
-  status:
-    | 'completed'
-    | 'capability_unavailable'
-    | 'tool_unavailable'
+  status: 'completed' | 'capability_unavailable' | 'tool_unavailable'
   title: string
   output_text: string
   payload?: unknown
@@ -684,7 +674,13 @@ export type SessionGoalResource = {
   completed_at?: string | null
 }
 
-export type PermissionMode = 'allow' | 'ask' | 'deny'
+export type PermissionMode = 'allow' | 'auto' | 'ask' | 'deny'
+
+export type ModelRef = {
+  provider_id: string
+  adapter_id?: string | null
+  model_id: string
+}
 
 export type PathAccessModes = {
   read?: PermissionMode
@@ -720,6 +716,7 @@ export type PermissionConfig = {
   network?: NetworkPermissionConfig
   entries?: ToolPermissionConfig
   tools?: ToolPermissionConfig
+  approval_model?: ModelRef
 }
 
 export type PermissionSubjectKind = 'tool' | 'path_access' | 'network_access'
@@ -991,6 +988,7 @@ export type ExecutionAccess = 'inherit' | 'read_only'
 export type SessionExecutionContextResource = {
   agent_id: string
   execution_access: ExecutionAccess
+  selected_permission?: PermissionConfig
   effective_permission?: PermissionConfig
   permission_ceiling?: PermissionConfig
   model_provider_id?: string | null
@@ -1042,8 +1040,7 @@ export type TranscriptActivity = {
 }
 
 export type TranscriptContentNode =
-  | { type: 'text'; segment: TranscriptTextSegment }
-  | { type: 'activity'; activity: TranscriptActivity }
+  { type: 'text'; segment: TranscriptTextSegment } | { type: 'activity'; activity: TranscriptActivity }
 
 export type TranscriptTurn = {
   id: string
@@ -1297,6 +1294,21 @@ export async function getSettings(input: ConfigSettingsGetRequest = {}): Promise
   if (input.source) params.set('source', input.source)
   const suffix = params.toString()
   return await apiJson<ConfigSettingsReadResponse>(`/api/v1/settings${suffix ? `?${suffix}` : ''}`)
+}
+
+export async function setSessionPermission(
+  sessionId: number,
+  permission: PermissionConfig,
+  expectedVersion?: number,
+): Promise<SessionExecutionResource> {
+  return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${sessionId}/permission`, {
+    method: 'PUT',
+    headers: {
+      'content-type': 'application/json',
+      ...(expectedVersion == null ? {} : { 'if-match': String(expectedVersion) }),
+    },
+    body: JSON.stringify({ permission }),
+  })
 }
 
 export async function listModelCatalogEntries(query: ModelCatalogListQuery = {}): Promise<ModelCatalogListResponse> {
@@ -2243,9 +2255,7 @@ export function streamSessionEvents(
       }
     } catch (error) {
       if (closed || controller.signal.aborted) return
-      options.onError?.(
-        new Error(userErrorMessage(error, 'Live session updates were interrupted. Reconnecting…')),
-      )
+      options.onError?.(new Error(userErrorMessage(error, 'Live session updates were interrupted. Reconnecting…')))
       scheduleReconnect(1_000)
     }
   }
@@ -2390,9 +2400,7 @@ export function streamNotifications(options: {
       }
     } catch (error) {
       if (closed || controller.signal.aborted) return
-      options.onError?.(
-        new Error(userErrorMessage(error, 'Live runtime updates were interrupted. Reconnecting…')),
-      )
+      options.onError?.(new Error(userErrorMessage(error, 'Live runtime updates were interrupted. Reconnecting…')))
       scheduleReconnect(reconnectDelayMs)
     }
   }
@@ -2641,10 +2649,7 @@ export async function cancelUserInput(input: {
   })
 }
 
-export async function rewindSession(input: {
-  sessionId: number
-  turnId: string
-}): Promise<SessionExecutionResource> {
+export async function rewindSession(input: { sessionId: number; turnId: string }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/rewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

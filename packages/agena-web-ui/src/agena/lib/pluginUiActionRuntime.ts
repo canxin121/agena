@@ -75,11 +75,12 @@ export async function resolvePluginCommandOutput(input: {
         kind: 'notice',
         message:
           output ||
-          ({
-            capability_unavailable:
-              'The current runtime does not provide the required capability.',
-            tool_unavailable: 'The requested tool is unavailable.',
-          } as const)[response.status],
+          (
+            {
+              capability_unavailable: 'The current runtime does not provide the required capability.',
+              tool_unavailable: 'The requested tool is unavailable.',
+            } as const
+          )[response.status],
       }
     }
     if (result.submit_output_as_prompt && output) {

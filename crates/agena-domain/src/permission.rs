@@ -6,6 +6,7 @@ use strum::{AsRefStr, Display, EnumString};
 #[serde(rename_all = "snake_case")]
 pub enum PermissionMode {
     Allow,
+    Auto,
     Ask,
     Deny,
 }
@@ -41,6 +42,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&PermissionMode::Ask).unwrap(),
             "\"ask\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PermissionMode::Auto).unwrap(),
+            "\"auto\""
         );
         assert_eq!(
             serde_json::to_string(&PermissionScope::Workspace).unwrap(),

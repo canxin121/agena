@@ -19,6 +19,7 @@ pub(crate) fn access_cache<T>(
 pub(crate) fn permission_mode_label(mode: PermissionMode) -> String {
     match mode {
         PermissionMode::Allow => "allow".to_string(),
+        PermissionMode::Auto => "auto".to_string(),
         PermissionMode::Ask => "ask".to_string(),
         PermissionMode::Deny => "deny".to_string(),
     }

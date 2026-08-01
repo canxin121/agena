@@ -30,15 +30,15 @@
     "path": {
       "workspace": {
         "read": "allow",
-        "write": "ask"
+        "write": "auto"
       },
       "external": {
-        "read": "ask",
-        "write": "ask"
+        "read": "auto",
+        "write": "auto"
       },
       "rules": {
         "<cwd>/.env*": {
-          "read": "ask",
+          "read": "auto",
           "write": "deny"
         },
         "<cwd>/secrets/**": {
@@ -48,34 +48,34 @@
       }
     },
     "network": {
-      "internet": "ask",
-      "private": "deny",
-      "loopback": "deny",
+      "internet": "auto",
+      "private": "auto",
+      "loopback": "auto",
       "rules": {
         "github.com:443": "allow",
         "api.github.com": "allow",
-        "*.corp.local": "ask",
+        "*.corp.local": "auto",
         "*.corp.local:8443": "allow",
         "10.0.0.0/8": "deny",
-        "172.16.0.0/12:*": "ask",
+        "172.16.0.0/12:*": "auto",
         "fd00::/8": "deny",
-        "[::1]:3000": "ask"
+        "[::1]:3000": "auto"
       }
     },
     "tools": {
       "tags": {
         "filesystem_read": "allow",
-        "filesystem_write": "ask",
+        "filesystem_write": "auto",
         "settings_read": "allow",
-        "settings_write": "ask",
-        "network": "ask",
-        "internet": "ask",
-        "task": "ask",
-        "shell": "ask"
+        "settings_write": "auto",
+        "network": "auto",
+        "internet": "auto",
+        "task": "auto",
+        "shell": "auto"
       },
       "names": {
-        "agena.shell.run": "ask",
-        "agena.fs.apply_patch": "ask"
+        "agena.shell.run": "auto",
+        "agena.fs.apply_patch": "auto"
       }
     }
   },

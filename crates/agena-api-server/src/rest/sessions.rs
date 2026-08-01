@@ -1,6 +1,10 @@
-use agena_application::session::{
-    session_execution_request, session_execution_resource, session_permission_reply_request,
-    session_resource_from_summary, session_user_input_reply_request, session_user_message_request,
+use agena_application::{
+    dto::SessionPermissionUpdateRequest,
+    session::{
+        session_execution_request, session_execution_resource, session_permission_reply_request,
+        session_resource_from_summary, session_user_input_reply_request,
+        session_user_message_request,
+    },
 };
 
 async fn session_execution_json_from_id(
@@ -57,6 +61,23 @@ pub async fn get_session_state(
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     session_execution_json_from_id(&state, session_id).await
+}
+
+pub async fn replace_session_permission(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    headers: HeaderMap,
+    Json(request): Json<SessionPermissionUpdateRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    assert_if_match_session_version(&state, session_id, &headers).await?;
+    let permission = agena_application::permission_config_domain_from_resource(request.permission)?;
+    let services = state.application().session_execution_services()?;
+    let outcome = services
+        .commands
+        .set_session_permission(session_id, permission)
+        .await
+        .map_err(|error| ServerError::from_failure(error.failure))?;
+    session_execution_json_from_id(&state, outcome.session_id).await
 }
 
 #[tracing::instrument(skip_all)]

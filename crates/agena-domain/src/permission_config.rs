@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionMode,
+    ModelRef, NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionMode,
     ToolPermissionConfig,
 };
 
@@ -20,31 +20,36 @@ pub struct PermissionConfig {
     pub network: Option<NetworkPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolPermissionConfig>,
+    /// Model used to make an automatic permission decision. The runtime must
+    /// fail closed to an interactive `ask` when this reference is absent or
+    /// cannot be resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_model: Option<ModelRef>,
 }
 
 impl PermissionConfig {
     pub fn global_default() -> Self {
-        let ask = PermissionMode::Ask;
+        let auto = PermissionMode::Auto;
         Self {
             path: Some(PathPermissionConfig {
                 workspace: Some(PathAccessModes {
                     read: Some(PermissionMode::Allow),
-                    write: Some(ask),
+                    write: Some(auto),
                 }),
                 external: Some(PathAccessModes {
-                    read: Some(ask),
-                    write: Some(ask),
+                    read: Some(auto),
+                    write: Some(auto),
                 }),
                 ..Default::default()
             }),
             network: Some(NetworkPermissionConfig {
-                internet: Some(ask),
-                private: Some(ask),
-                loopback: Some(ask),
+                internet: Some(auto),
+                private: Some(auto),
+                loopback: Some(auto),
                 ..Default::default()
             }),
             tools: Some(ToolPermissionConfig {
-                default: Some(ask),
+                default: Some(auto),
                 tags: BTreeMap::from([("filesystem_read".to_string(), PermissionMode::Allow)]),
                 names: BTreeMap::from([
                     ("agena.web.search".to_string(), PermissionMode::Allow),
@@ -52,6 +57,7 @@ impl PermissionConfig {
                 ]),
                 ..Default::default()
             }),
+            approval_model: None,
         }
     }
 
@@ -67,12 +73,16 @@ impl PermissionConfig {
                 .tools
                 .as_ref()
                 .is_none_or(ToolPermissionConfig::is_empty)
+            && self.approval_model.is_none()
     }
 
     pub fn merge_from(&mut self, overlay: Self) {
         merge_path_section(&mut self.path, overlay.path);
         merge_network_section(&mut self.network, overlay.network);
         merge_tool_section(&mut self.tools, overlay.tools);
+        if overlay.approval_model.is_some() {
+            self.approval_model = overlay.approval_model;
+        }
     }
 
     pub fn merged_with(&self, overlay: &Self) -> Self {

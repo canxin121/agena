@@ -275,6 +275,9 @@ impl ApplicationService {
             execution: SessionExecutionContextResource {
                 agent_id: context.agent_id,
                 execution_access: execution_access_from_domain(context.execution_access),
+                selected_permission: permission_config_resource_from_domain(
+                    &context.selected_permission,
+                ),
                 effective_permission: permission_config_resource_from_domain(
                     &context.effective_permission,
                 ),
@@ -678,7 +681,7 @@ pub(crate) const fn permission_scope_from_domain(
     }
 }
 
-pub(crate) fn permission_config_resource_from_domain(
+pub fn permission_config_resource_from_domain(
     value: &agena_domain::PermissionConfig,
 ) -> agena_api::resource::PermissionConfigResource {
     use agena_api::resource::{
@@ -776,7 +779,33 @@ pub(crate) fn permission_config_resource_from_domain(
                     })
                     .collect(),
             }),
+        approval_model: value
+            .approval_model
+            .as_ref()
+            .map(|model| agena_api::resource::ModelRef {
+                provider_id: model.provider_id.to_string(),
+                adapter_id: model.adapter_id.as_ref().map(ToString::to_string),
+                model_id: model.model_id.to_string(),
+            }),
     }
+}
+
+/// Convert the public permission configuration back to the domain-owned
+/// policy value. Both sides intentionally use the same JSON shape; going
+/// through serde here keeps the transport contract and the strict runtime
+/// `deny_unknown_fields` validation in lockstep.
+pub fn permission_config_domain_from_resource(
+    value: agena_api::resource::PermissionConfigResource,
+) -> ApplicationResult<agena_domain::PermissionConfig> {
+    let json = serde_json::to_value(value).map_err(|error| {
+        ApplicationError::internal(format!("invalid permission config: {error}"))
+    })?;
+    serde_json::from_value(json).map_err(|error| {
+        ApplicationError::bad_request_with_diagnostic(
+            "The permission configuration is invalid.",
+            error.to_string(),
+        )
+    })
 }
 
 fn path_access_modes_resource_from_domain(
@@ -793,6 +822,7 @@ const fn permission_mode_resource_from_domain(
 ) -> agena_api::resource::PermissionMode {
     match value {
         agena_domain::PermissionMode::Allow => agena_api::resource::PermissionMode::Allow,
+        agena_domain::PermissionMode::Auto => agena_api::resource::PermissionMode::Auto,
         agena_domain::PermissionMode::Ask => agena_api::resource::PermissionMode::Ask,
         agena_domain::PermissionMode::Deny => agena_api::resource::PermissionMode::Deny,
     }

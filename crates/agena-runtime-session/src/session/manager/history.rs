@@ -1058,9 +1058,11 @@ impl agena_runtime::SessionQueryService for SessionManager {
         &self,
         session_id: i64,
     ) -> Result<agena_runtime::SessionExecutionContext, agena_runtime::SessionQueryError> {
-        let session = SessionManager::get_session(self, session_id)
+        let mut session = SessionManager::get_session(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
+        let state = self.execution_state();
+        self.refresh_execution_policy(&mut session, state.as_ref());
         let runtime = session.runtime();
         Ok(agena_runtime::SessionExecutionContext {
             workflow_state: session.workflow_state(),

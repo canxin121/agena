@@ -674,6 +674,11 @@ mod tests {
             entry_id: TranscriptEntryId::AssistantReply(reply_id),
             content_id: TranscriptContentId::Activity(operation_activity_id),
         };
+        let permissions_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(reply_id),
+            content_id: TranscriptContentId::Activity(operation_activity_id),
+            section: crate::TranscriptActivitySection::Permissions,
+        };
         let expanded = crate::render_entry_detailed(
             &entries[1],
             100,
@@ -681,7 +686,7 @@ mod tests {
             crate::TranscriptDetailDefaults {
                 activity_expanded: false,
             },
-            &std::collections::BTreeMap::from([(key, true)]),
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
         let expanded_text = expanded
             .lines
@@ -689,15 +694,65 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(expanded_text.contains("Authorization"), "{expanded_text}");
         assert!(
-            expanded_text.contains("Allowed once · fs.write"),
+            expanded_text.contains("▸ Permissions · 1 permission"),
             "{expanded_text}"
         );
         assert!(
-            expanded_text.contains("approved for this edit"),
+            !expanded_text.contains("Allowed once · fs.write"),
             "{expanded_text}"
         );
+        assert!(
+            !expanded_text.contains("approved for this edit"),
+            "{expanded_text}"
+        );
+        let permissions_node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == permissions_key)
+            .expect("collapsed Permissions section");
+        assert!(permissions_node.toggleable);
+        assert!(!permissions_node.expanded);
+        assert!(
+            permissions_node
+                .copy_text
+                .contains("Allowed once · fs.write")
+        );
+
+        let permissions_expanded = crate::render_entry_detailed(
+            &entries[1],
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key, true), (permissions_key.clone(), true)]),
+        );
+        let permissions_expanded_text = permissions_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            permissions_expanded_text.contains("▾ Permissions"),
+            "{permissions_expanded_text}"
+        );
+        assert!(
+            permissions_expanded_text.contains("Allowed once · fs.write"),
+            "{permissions_expanded_text}"
+        );
+        assert!(
+            permissions_expanded_text.contains("approved for this edit"),
+            "{permissions_expanded_text}"
+        );
+        let permissions_node = permissions_expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == permissions_key)
+            .expect("expanded Permissions section");
+        assert!(permissions_node.toggleable);
+        assert!(permissions_node.expanded);
     }
 
     #[test]
@@ -816,7 +871,6 @@ mod tests {
             content_id: TranscriptContentId::Activity(activity_id),
             section: crate::TranscriptActivitySection::Input,
         };
-
         let collapsed = crate::render_entry_detailed(
             &entry,
             100,
@@ -983,6 +1037,11 @@ mod tests {
             content_id: TranscriptContentId::Activity(activity_id),
             section: crate::TranscriptActivitySection::Input,
         };
+        let result_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Result,
+        };
 
         let collapsed = crate::render_entry_detailed(
             &entry,
@@ -1042,7 +1101,7 @@ mod tests {
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
-        assert!(expanded_text.contains("› Result"), "{expanded_text}");
+        assert!(expanded_text.contains("▾ Result"), "{expanded_text}");
         assert!(expanded_text.contains("── Checks"), "{expanded_text}");
         assert!(
             expanded_text.contains("Passed: cargo test"),
@@ -1053,6 +1112,52 @@ mod tests {
         assert!(!expanded_text.contains("**Passed**"), "{expanded_text}");
         assert!(!expanded_text.contains("```"), "{expanded_text}");
         assert!(node.copy_text.contains(markdown_result));
+        let result_node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == result_key)
+            .expect("default-expanded Result section");
+        assert!(result_node.toggleable);
+        assert!(result_node.expanded);
+
+        let result_collapsed = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true), (result_key.clone(), false)]),
+        );
+        let result_collapsed_text = result_collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            result_collapsed_text.contains("▸ Result · Checks"),
+            "{result_collapsed_text}"
+        );
+        assert!(
+            !result_collapsed_text.contains("##"),
+            "{result_collapsed_text}"
+        );
+        assert!(
+            !result_collapsed_text.contains("Passed: cargo test"),
+            "{result_collapsed_text}"
+        );
+        assert!(
+            !result_collapsed_text.contains("┌─ rust"),
+            "{result_collapsed_text}"
+        );
+        let result_node = result_collapsed
+            .nodes
+            .iter()
+            .find(|node| node.key == result_key)
+            .expect("collapsed Result section");
+        assert!(result_node.toggleable);
+        assert!(!result_node.expanded);
 
         let input_expanded = crate::render_entry_detailed(
             &entry,
@@ -1133,6 +1238,11 @@ mod tests {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
         };
+        let error_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Error,
+        };
         let rendered = crate::render_entry_detailed(
             &entry,
             400,
@@ -1159,7 +1269,7 @@ mod tests {
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
-        assert!(expanded_text.contains("Error\n"), "{expanded_text}");
+        assert!(expanded_text.contains("▾ Error\n"), "{expanded_text}");
         assert!(!expanded_text.contains("Result\n"), "{expanded_text}");
         assert_eq!(
             expanded_text
@@ -1186,6 +1296,45 @@ mod tests {
             "{}",
             node.copy_text
         );
+        let error_node = rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == error_key)
+            .expect("default-expanded Error section");
+        assert!(error_node.toggleable);
+        assert!(error_node.expanded);
+
+        let error_collapsed = crate::render_entry_detailed(
+            &entry,
+            400,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key, true), (error_key.clone(), false)]),
+        );
+        let error_collapsed_text = error_collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            error_collapsed_text.contains("▸ Error ·"),
+            "{error_collapsed_text}"
+        );
+        assert!(
+            !error_collapsed_text.contains("which may read or write local files"),
+            "{error_collapsed_text}"
+        );
+        let error_node = error_collapsed
+            .nodes
+            .iter()
+            .find(|node| node.key == error_key)
+            .expect("collapsed Error section");
+        assert!(error_node.toggleable);
+        assert!(!error_node.expanded);
+        assert_eq!(error_node.copy_text, full_error);
     }
 
     #[test]

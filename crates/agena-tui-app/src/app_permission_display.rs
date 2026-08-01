@@ -34,6 +34,7 @@ pub(crate) fn permission_rule_draft_from_resource(
 const fn permission_mode_from_wire(mode: agena_api::resource::PermissionMode) -> PermissionMode {
     match mode {
         agena_api::resource::PermissionMode::Allow => PermissionMode::Allow,
+        agena_api::resource::PermissionMode::Auto => PermissionMode::Auto,
         agena_api::resource::PermissionMode::Ask => PermissionMode::Ask,
         agena_api::resource::PermissionMode::Deny => PermissionMode::Deny,
     }
@@ -116,7 +117,7 @@ pub(crate) fn permission_rule_draft_from_request(
         network_port: String::new(),
         scope,
         session_id,
-        mode: PermissionMode::Allow,
+        mode: PermissionMode::Auto,
     }
 }
 
@@ -209,6 +210,7 @@ pub(crate) fn permission_mode_display(i18n: &I18n, mode: PermissionMode) -> Stri
         i18n,
         match mode {
             PermissionMode::Allow => "value-allow",
+            PermissionMode::Auto => "value-auto",
             PermissionMode::Ask => "value-ask",
             PermissionMode::Deny => "value-deny",
         },
@@ -360,6 +362,10 @@ pub(crate) fn permission_rule_choice_overlay_spec(
                 choice_item(
                     "allow",
                     ui_text::t(i18n, "overlay-permission-rule-choice-mode-allow-detail"),
+                ),
+                choice_item(
+                    "auto",
+                    ui_text::t(i18n, "overlay-permission-rule-choice-mode-auto-detail"),
                 ),
                 choice_item(
                     "ask",

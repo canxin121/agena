@@ -682,8 +682,8 @@ pub(crate) fn apply_permission_studio_mode_input(
                 .and_then(|path| path.rules.get(pattern.as_str()))
                 .and_then(|rule| path_rule_modes(Some(rule)))
                 .unwrap_or(PathAccessModes {
-                    read: Some(PermissionMode::Ask),
-                    write: Some(PermissionMode::Ask),
+                    read: Some(PermissionMode::Auto),
+                    write: Some(PermissionMode::Auto),
                 });
             let mut next = current;
             if read {

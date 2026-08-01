@@ -8,12 +8,12 @@ use super::{
     ToolInvocationExecution, ToolPermissionCheck, Utc, append_resolved_message_part,
     ask_user_title, assistant_message_for_part, build_message, build_request_part,
     completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
-    max_permission_risk, operation_authorization, operation_blocks_from_tool_output,
-    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    permission_scope_label, push_unique_permission_action, resolve_pending_tool,
-    resolve_permission_with_persisted_rules, responses_api_request_metadata, run_abort_reason,
-    should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
-    update_resolved_tool_message,
+    managed_project_state_permission, max_permission_risk, operation_authorization,
+    operation_blocks_from_tool_output, pending_operation_for_resolved,
+    pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
+    push_unique_permission_action, resolve_pending_tool, resolve_permission_with_persisted_rules,
+    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
+    terminal_operation_title, tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -66,6 +66,89 @@ impl From<ToolError> for PendingToolPreparationError {
 }
 
 impl SessionManager {
+    /// Build a per-operation sink for process lifecycle/output events. Shell
+    /// execution is synchronous and may run on a blocking worker, so delivery
+    /// is handed back to Tokio immediately and never blocks the pipe reader.
+    pub(in crate::session::manager) fn command_event_sink_for_pending(
+        &self,
+        session_id: i64,
+        pending: &ResolvedPendingTool,
+    ) -> agena_tool::ToolRuntimeEventSink {
+        let publisher = Arc::clone(&self.publisher);
+        let handle = tokio::runtime::Handle::current();
+        let message_id = pending.pending.part.message_id;
+        let part_id = pending.pending.part.part_id;
+        let call_id = pending.call_id;
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<EventKind>();
+        handle.spawn(async move {
+            while let Some(kind) = event_rx.recv().await {
+                if let Err(error) = publisher
+                    .publish(crate::event::PublishContext::for_session(session_id), kind)
+                    .await
+                {
+                    tracing::debug!(
+                        target: "agena::session::command_events",
+                        session_id,
+                        error = %error,
+                        "failed to publish live command event"
+                    );
+                }
+            }
+        });
+
+        Arc::new(move |event| {
+            let kind = match event {
+                agena_tool::ToolRuntimeEvent::CommandBegin(mut event) => {
+                    event.context.session_id = session_id;
+                    event.context.call_id = call_id;
+                    event.context.message_id = Some(message_id);
+                    event.context.part_id = Some(part_id);
+                    EventKind::CommandBegin(event)
+                }
+                agena_tool::ToolRuntimeEvent::CommandOutputDelta(mut event) => {
+                    event.context.session_id = session_id;
+                    event.context.call_id = call_id;
+                    event.context.message_id = Some(message_id);
+                    event.context.part_id = Some(part_id);
+                    EventKind::CommandOutputDelta(event)
+                }
+                agena_tool::ToolRuntimeEvent::CommandEnd(mut event) => {
+                    event.context.session_id = session_id;
+                    event.context.call_id = call_id;
+                    event.context.message_id = Some(message_id);
+                    event.context.part_id = Some(part_id);
+                    EventKind::CommandEnd(event)
+                }
+            };
+            // A single queue preserves begin → delta → end ordering even
+            // though the shell itself runs on a blocking worker. Spawning one
+            // publisher task per chunk allowed Tokio scheduling to reorder
+            // stdout deltas and made the browser occasionally drop output.
+            let _ = event_tx.send(kind);
+        })
+    }
+
+    pub(in crate::session::manager) fn command_event_sink_for_pending_if_needed(
+        &self,
+        session_id: i64,
+        pending: &ResolvedPendingTool,
+    ) -> Option<agena_tool::ToolRuntimeEventSink> {
+        let command_capable = pending.prepared_shell_command.is_some()
+            || matches!(
+                pending.invocation.name.as_str(),
+                "shell"
+                    | "shell.run"
+                    | "agena.shell.run"
+                    | "powershell"
+                    | "powershell.run"
+                    | "agena.powershell.run"
+                    | "process"
+                    | "process.run"
+                    | "agena.process.run"
+            );
+        command_capable.then(|| self.command_event_sink_for_pending(session_id, pending))
+    }
+
     pub(in crate::session::manager) async fn run_until_stable(
         &self,
         mut session: Session,
@@ -961,6 +1044,7 @@ impl SessionManager {
         pending_tool: &SessionPendingTool,
         state: &SessionManagerState,
     ) -> Result<PendingToolBatchMember, AppError> {
+        self.refresh_execution_policy(session, state);
         let before_prepare = session.clone();
         let mut resolved = resolve_pending_tool(session, pending_tool)?;
         let cancellation = self.execution_registry.cancellation_token(session.id).await;
@@ -1124,9 +1208,12 @@ impl SessionManager {
         let mut handles = Vec::with_capacity(pending_tools.len());
         for pending_tool in pending_tools {
             let executor = state.tool_executor.clone();
+            let command_event_sink =
+                self.command_event_sink_for_pending_if_needed(session_id, &pending_tool);
             let scoped_executor = executor
                 .for_session_context(&pending_tool.session_runtime.execution)
-                .with_cancellation_token(cancellation.clone());
+                .with_cancellation_token(cancellation.clone())
+                .with_command_event_sink(command_event_sink);
             let acquire = semaphore.clone().acquire_owned();
             let permit = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
@@ -1168,6 +1255,7 @@ impl SessionManager {
         state: &SessionManagerState,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<PreparedPendingToolExecution, PendingToolPreparationError> {
+        self.refresh_execution_policy(session, state);
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution)
@@ -1529,6 +1617,137 @@ impl SessionManager {
         Ok(resolution)
     }
 
+    /// Resolve an `auto` policy decision through the explicitly configured
+    /// approval model. This path is deliberately fail-closed: a missing model,
+    /// an unavailable provider, a provider error, or an ambiguous response is
+    /// converted to an ordinary interactive Ask request.
+    async fn resolve_auto_permission_decision(
+        &self,
+        session_id: Option<i64>,
+        check: &ToolPermissionCheck,
+        reason: &str,
+    ) -> PermissionDecision {
+        let state = self.execution_state();
+        // Resolve the model from the same effective policy used by tool
+        // preflight. In particular, this includes the managed project-state
+        // allowance and the live shared session overlay, so changing a
+        // session's permission while a run is active also changes which
+        // approval model is used by the next check.
+        let approval_model = if let Some(session_id) = session_id {
+            let mut session = match self.get_session(session_id).await {
+                Ok(session) => session,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "agena::permission",
+                        session_id,
+                        error = %error,
+                        "could not reload session policy for automatic approval"
+                    );
+                    return PermissionDecision::Ask {
+                        reason: format!(
+                            "automatic approval policy could not be loaded; falling back to confirmation: {reason}"
+                        ),
+                    };
+                }
+            };
+            self.refresh_execution_policy(&mut session, &state);
+            session
+                .runtime
+                .execution
+                .effective_permission
+                .approval_model
+        } else {
+            let mut permission = state
+                .shared_permission
+                .read()
+                .map(|value| value.clone())
+                .unwrap_or_else(|_| state.config.permission.clone());
+            permission.merge_from(managed_project_state_permission(
+                state.tool_executor.workspace_root(),
+            ));
+            permission.approval_model
+        };
+
+        let Some(model) = approval_model else {
+            return PermissionDecision::Ask {
+                reason: format!(
+                    "automatic approval is not configured; falling back to confirmation: {reason}"
+                ),
+            };
+        };
+
+        let action = serde_json::to_string(&check.action)
+            .unwrap_or_else(|_| "{\"action\":\"unserializable\"}".to_owned());
+        let prompt = format!(
+            "Permission request:\n{action}\nPolicy reason: {reason}\n\nReturn exactly one token: ALLOW or DENY. ALLOW only when the requested action is clearly safe and within the configured workspace policy. Return DENY when it is clearly unsafe. Never return any other text."
+        );
+        let request = agena_provider::CompletionRequest {
+            model: model.model_id.clone(),
+            system: Some(
+                "You are Agena's permission approval model. You are a safety gate, not an agent. Evaluate the supplied permission request without tools. Output exactly ALLOW or DENY. When uncertain, output DENY."
+                    .to_owned(),
+            ),
+            messages: vec![agena_provider::CompletionInputMessage {
+                role: Role::User,
+                parts: vec![agena_provider::CompletionInputPart::Text { text: prompt }],
+                provider_state: Default::default(),
+            }],
+            tool_api_functions: Vec::new(),
+            provider_native_tools: Default::default(),
+            disable_tools: true,
+            temperature: Some(0.0),
+            max_output_tokens: Some(8),
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: Some(agena_provider::ResponseFormat::Text),
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        };
+
+        let response = match state
+            .processor
+            .provider_registry()
+            .complete(&model, request)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    target: "agena::permission",
+                    session_id,
+                    model = %model,
+                    error = %error,
+                    "automatic permission approval failed; falling back to interactive confirmation"
+                );
+                return PermissionDecision::Ask {
+                    reason: format!(
+                        "automatic approval model unavailable; falling back to confirmation: {reason}"
+                    ),
+                };
+            }
+        };
+
+        match response.text.trim().to_ascii_uppercase().as_str() {
+            "ALLOW" => PermissionDecision::Allow,
+            "DENY" => PermissionDecision::Deny {
+                reason: format!("automatic approval model denied the action: {reason}"),
+            },
+            _ => PermissionDecision::Ask {
+                reason: format!(
+                    "automatic approval model returned an ambiguous answer; falling back to confirmation: {reason}"
+                ),
+            },
+        }
+    }
+
     pub(in crate::session::manager) async fn aggregate_permission_outcome(
         &self,
         session_id: Option<i64>,
@@ -1542,8 +1761,29 @@ impl SessionManager {
         for check in checks {
             let action = check.action.clone();
             push_unique_permission_action(&mut related_actions, action.clone());
-            let resolution = self.resolve_permission_decision(session_id, check).await?;
-            match resolution.decision {
+            let mut resolution = self.resolve_permission_decision(session_id, check).await?;
+            let auto_approval = matches!(&resolution.decision, PermissionDecision::Auto { .. });
+            let auto_reason = match &resolution.decision {
+                PermissionDecision::Auto { reason } => Some(reason.clone()),
+                _ => None,
+            };
+            if let Some(reason) = auto_reason {
+                resolution.decision = self
+                    .resolve_auto_permission_decision(session_id, check, reason.as_str())
+                    .await;
+            }
+            // `resolve_auto_permission_decision` normally materializes an auto
+            // decision as allow, deny, or ask. Keep the fallback fail-closed
+            // if a future resolver ever leaves the marker unresolved.
+            let decision = match resolution.decision {
+                PermissionDecision::Auto { reason } => PermissionDecision::Ask {
+                    reason: format!(
+                        "automatic approval was not resolved; falling back to confirmation: {reason}"
+                    ),
+                },
+                decision => decision,
+            };
+            match decision {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Deny { reason } => {
                     let (source, scope, operator, authority, rule_id, rule_revision_ms) =
@@ -1573,7 +1813,9 @@ impl SessionManager {
                                         .or_else(|| Some("static_policy".to_string())),
                                     None,
                                     plugin_step.and_then(|step| step.operator.clone()),
-                                    if plugin_step.is_some() {
+                                    if auto_approval {
+                                        agena_domain::PermissionAuthorityKind::AutoApprovalModel
+                                    } else if plugin_step.is_some() {
                                         agena_domain::PermissionAuthorityKind::PluginPolicy
                                     } else {
                                         agena_domain::PermissionAuthorityKind::StaticPolicy
@@ -1605,7 +1847,7 @@ impl SessionManager {
                         });
                     }
                 }
-                PermissionDecision::Ask { reason } => {
+                PermissionDecision::Ask { reason } | PermissionDecision::Auto { reason } => {
                     push_unique_permission_action(&mut requested_actions, action.clone());
                     let (source, scope, operator) = match resolution.source {
                         agena_domain::PermissionResolutionSource::PersistedRule {
@@ -2098,13 +2340,13 @@ impl SessionManager {
         persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        self.apply_tool_success_with_rules(
+        Box::pin(self.apply_tool_success_with_rules(
             session,
             pending_tool,
             execution,
             persisted_rule.into_iter().collect(),
             state,
-        )
+        ))
         .await
     }
 
@@ -2190,14 +2432,14 @@ impl SessionManager {
         }
         let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
 
-        self.persist_tool_completion(
+        Box::pin(self.persist_tool_completion(
             session,
             assistant_message,
             &resolved,
             persisted_rules,
             Vec::new(),
             state,
-        )
+        ))
         .await
     }
 }

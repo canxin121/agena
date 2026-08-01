@@ -119,9 +119,7 @@ function parseFailure(value: JsonLike): ApiFailure | undefined {
 
 function parseJsonBody(text: string, contentType: string): JsonLike {
   const looksJson =
-    contentType.toLowerCase().includes('application/json') ||
-    text.trim().startsWith('{') ||
-    text.trim().startsWith('[')
+    contentType.toLowerCase().includes('application/json') || text.trim().startsWith('{') || text.trim().startsWith('[')
   if (!text || !looksJson) return undefined
   try {
     return JSON.parse(text) as JsonLike

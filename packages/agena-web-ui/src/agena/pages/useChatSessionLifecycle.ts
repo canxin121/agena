@@ -34,6 +34,7 @@ export type ChatSessionLifecycleInput = {
   composer: Ref<string>
   errorMessage: Ref<string>
   loading: Ref<boolean>
+  liveCommandEvents: Ref<DomainEventRecord[]>
   localCommandNotice: Ref<string>
   messages: Ref<MessageResource[]>
   providerModels: Record<string, ProviderModel[]>
@@ -123,6 +124,7 @@ export function useChatSessionLifecycle(
     {
       errorMessage: input.errorMessage,
       loading: input.loading,
+      liveCommandEvents: input.liveCommandEvents,
       messages: input.messages,
       selectedSessionId: input.selectedSessionId,
       sessionState: input.sessionState,
@@ -175,6 +177,7 @@ export function useChatSessionLifecycle(
       if (!match) continue
       input.sessions.value = workspaceSessions
       input.selectedWorkspaceId.value = workspace.id
+      input.liveCommandEvents.value = []
       input.selectedSessionId.value = match.id
       await refreshSelectedConversation()
       return true
@@ -307,6 +310,7 @@ export function useChatSessionLifecycle(
   async function selectSession(sessionId: number) {
     stopEventStream()
     clearScheduledConversationRefresh()
+    if (input.selectedSessionId.value !== sessionId) input.liveCommandEvents.value = []
     input.selectedSessionId.value = sessionId
     await refreshSelectedConversation()
   }
@@ -331,6 +335,7 @@ export function useChatSessionLifecycle(
 
   function clearConversationSelection() {
     input.selectedSessionId.value = null
+    input.liveCommandEvents.value = []
     input.messages.value = []
     input.timelineEvents.value = []
     input.sessionState.value = null
@@ -350,6 +355,7 @@ export function useChatSessionLifecycle(
         return
       }
       if (routeSessionId === input.selectedSessionId.value) return
+      input.liveCommandEvents.value = []
       input.selectedSessionId.value = routeSessionId
       void loadSidebar().catch((err) => {
         input.errorMessage.value = userErrorMessage(err)

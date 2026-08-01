@@ -36,22 +36,6 @@ pub enum ConfigOverride {
         provider_id: String,
         value: String,
     },
-    ProviderDefaultsThinkingMode {
-        provider_id: String,
-        value: String,
-    },
-    ProviderDefaultsSpeedMode {
-        provider_id: String,
-        value: String,
-    },
-    ProviderDefaultsVerbosity {
-        provider_id: String,
-        value: String,
-    },
-    ProviderDefaultsParallelToolCalls {
-        provider_id: String,
-        value: bool,
-    },
     ProviderAuthBaseUrl {
         provider_id: String,
         value: String,
@@ -156,15 +140,11 @@ fn parse_provider_override(
             "provider" => Ok(ConfigOverride::ProviderDefaultsProvider { provider_id, value }),
             "adapter" => Ok(ConfigOverride::ProviderDefaultsAdapter { provider_id, value }),
             "model" => Ok(ConfigOverride::ProviderDefaultsModel { provider_id, value }),
-            "thinking_mode" => {
-                Ok(ConfigOverride::ProviderDefaultsThinkingMode { provider_id, value })
+            "thinking_mode" | "speed_mode" | "verbosity" | "parallel_tool_calls" => {
+                Err(RuntimeConfigOverrideError::InvalidOverride(format!(
+                    "{key} is no longer supported; configure a model capability or explicit session/run option"
+                )))
             }
-            "speed_mode" => Ok(ConfigOverride::ProviderDefaultsSpeedMode { provider_id, value }),
-            "verbosity" => Ok(ConfigOverride::ProviderDefaultsVerbosity { provider_id, value }),
-            "parallel_tool_calls" => Ok(ConfigOverride::ProviderDefaultsParallelToolCalls {
-                provider_id,
-                value: parse_bool(key, raw_value)?,
-            }),
             _ => Err(RuntimeConfigOverrideError::InvalidOverride(key.to_owned())),
         },
         "network.request_timeout_secs" => Ok(ConfigOverride::ProviderRequestTimeoutSecs {
@@ -267,7 +247,7 @@ mod tests {
             Err(RuntimeConfigOverrideError::UnsupportedModeConfig { .. })
         ));
         assert!(matches!(
-            "providers.demo.defaults.parallel_tool_calls=maybe".parse::<ConfigOverride>(),
+            "providers.demo.defaults.parallel_tool_calls=true".parse::<ConfigOverride>(),
             Err(RuntimeConfigOverrideError::InvalidOverride(_))
         ));
     }

@@ -426,6 +426,7 @@ pub(super) fn baseline_permission(loopback: PermissionMode) -> PermissionConfig 
             default: Some(PermissionMode::Allow),
             ..Default::default()
         }),
+        approval_model: None,
     }
 }
 

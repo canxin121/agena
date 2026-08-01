@@ -1,4 +1,5 @@
 import { onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
+import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import type { PluginsTab, RuntimeTab, SettingsTab } from './runtimePageStateModel'
 
@@ -9,6 +10,7 @@ export type RuntimeRouteLifecycleInput = {
   load: () => Promise<void>
   loadMarketplacePanel: () => Promise<void>
   routePath: Ref<string>
+  routeQuery: Ref<RouteLocationNormalizedLoaded['query']>
   routeSection: Ref<'runtime' | 'settings' | 'plugins'>
   stopPluginLogPolling: () => void
   syncPluginLogPolling: () => void
@@ -50,10 +52,22 @@ export function useRuntimeRouteLifecycle(
   })
 
   watch(
-    () => [input.routePath.value, input.routeSection.value],
+    () => [input.routePath.value, input.routeSection.value, input.routeQuery.value],
     () => {
       input.syncTabsFromRoute()
     },
+    { deep: true },
+  )
+
+  // Settings uses the session query as part of its data source. A query-only
+  // navigation keeps the same component instance alive, so route path
+  // watchers alone would leave the editor bound to the previous session.
+  watch(
+    input.routeQuery,
+    () => {
+      void input.load()
+    },
+    { deep: true },
   )
 
   watch(input.routeSection, (section) => {

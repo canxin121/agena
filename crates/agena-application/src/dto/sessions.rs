@@ -33,6 +33,12 @@ pub struct SessionUpdateRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionPermissionUpdateRequest {
+    pub permission: agena_api::resource::PermissionConfigResource,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct SessionCreateRequest {
     pub workspace_id: i64,
     #[serde(flatten)]

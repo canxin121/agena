@@ -517,6 +517,153 @@ button {
   word-break: break-word;
 }
 
+.markdown-body {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 0.85em 0 0.35em;
+  line-height: 1.25;
+}
+
+.markdown-body p,
+.markdown-body blockquote,
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.55em 0;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5em;
+}
+
+.markdown-body blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--ink-dim);
+}
+
+.markdown-table-wrap {
+  overflow-x: auto;
+  margin: 10px 0;
+}
+
+.markdown-table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.markdown-table th,
+.markdown-table td {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-table th {
+  background: var(--surface-subtle);
+  font-weight: 650;
+}
+
+.markdown-body code {
+  padding: 0.12em 0.35em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent-soft) 72%, var(--surface));
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.92em;
+}
+
+.markdown-code,
+.terminal-output,
+.diff-output {
+  margin: 10px 0;
+  padding: 12px 14px;
+  overflow: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: #17211f;
+  color: #e6f0ec;
+  white-space: pre;
+  line-height: 1.45;
+}
+
+.markdown-code code,
+.terminal-output code,
+.diff-output code {
+  padding: 0;
+  background: transparent;
+  font-family: 'IBM Plex Mono', monospace;
+}
+
+.terminal-output {
+  background: #101820;
+  color: #d8e7ef;
+}
+
+.diff-output {
+  background: #171c22;
+}
+
+.diff-added {
+  display: inline-block;
+  width: 100%;
+  background: rgba(51, 161, 92, 0.22);
+}
+
+.diff-removed {
+  display: inline-block;
+  width: 100%;
+  background: rgba(205, 67, 67, 0.24);
+}
+
+.diff-header,
+.diff-hunk {
+  display: inline-block;
+  width: 100%;
+  color: #a9c7f4;
+}
+
+.message-output-block {
+  display: grid;
+  gap: 4px;
+}
+
+.message-output-title {
+  padding: 0 2px;
+  color: var(--ink-dim);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.message-output-summary {
+  padding: 0 2px;
+  font-size: 0.78rem;
+}
+
 .mono {
   font-family: 'IBM Plex Mono', monospace;
 }

@@ -86,7 +86,7 @@ impl Default for PermissionRuleDraft {
             network_port: String::new(),
             scope: "workspace".to_string(),
             session_id: String::new(),
-            mode: PermissionMode::Ask,
+            mode: PermissionMode::Auto,
         }
     }
 }

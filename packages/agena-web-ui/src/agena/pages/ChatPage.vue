@@ -1,8 +1,8 @@
-import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
 import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import { userErrorMessage } from '@/lib/api'
 import {
   permissionActionView,
   permissionExplainability,
@@ -43,6 +43,7 @@ const {
   inspectedMessageParts,
   inspectedPart,
   loading,
+  liveCommandEvents,
   localCommandNotice,
   messages,
   newSessionTitle,
@@ -203,6 +204,7 @@ const {
     selectedSpeedMode,
     selectedVerbosity,
     selectedParallelToolCalls,
+    selectedSessionId,
     selectedWorkspaceId,
     userInputDrafts,
     workspaces,
@@ -226,6 +228,7 @@ const {
   composer,
   errorMessage,
   loading,
+  liveCommandEvents,
   localCommandNotice,
   messages,
   providerModels,

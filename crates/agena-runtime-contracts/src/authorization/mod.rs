@@ -107,6 +107,7 @@ fn path_access_shorthand(value: &str) -> Result<PathAccessModes, PermissionConfi
     };
     match normalized.as_str() {
         "allow" => Ok(both(PermissionMode::Allow)),
+        "auto" => Ok(both(PermissionMode::Auto)),
         "ask" => Ok(both(PermissionMode::Ask)),
         "deny" | "none" => Ok(both(PermissionMode::Deny)),
         "read" | "read_only" | "ro" => Ok(PathAccessModes {
@@ -436,6 +437,8 @@ fn restrictive_decision(
         (_, PermissionDecision::Deny { .. }) => ceiling,
         (PermissionDecision::Ask { .. }, _) => primary,
         (_, PermissionDecision::Ask { .. }) => ceiling,
+        (PermissionDecision::Auto { .. }, _) => primary,
+        (_, PermissionDecision::Auto { .. }) => ceiling,
         (PermissionDecision::Allow, PermissionDecision::Allow) => PermissionDecision::Allow,
     }
 }
@@ -467,7 +470,7 @@ mod permission_ceiling_tests {
         assert!(matches!(
             principal
                 .authorize_network_connect(&"https://example.com".parse().expect("network target")),
-            PermissionDecision::Ask { .. }
+            PermissionDecision::Auto { .. }
         ));
 
         let allow_network = PermissionConfig {

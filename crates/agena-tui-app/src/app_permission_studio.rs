@@ -160,7 +160,7 @@ impl App {
         self.open_choice_overlay(self.build_choice_overlay(
             ui_text::t(&self.i18n, "overlay-permission-rule-choice-mode-title"),
             ui_text::t(&self.i18n, "overlay-permission-rule-choice-mode-prompt"),
-            Some("ask".to_owned()),
+            Some("auto".to_owned()),
             permission_mode_choice_items(&self.i18n),
             ChoiceOverlayAction::PermissionStudioAddEntriesMode {
                 kind,

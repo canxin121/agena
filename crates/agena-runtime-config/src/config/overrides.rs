@@ -102,46 +102,6 @@ pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawCo
                 .get_or_insert_with(Default::default)
                 .model = Some(value.clone());
         }
-        ConfigOverride::ProviderDefaultsThinkingMode { provider_id, value } => {
-            config
-                .providers
-                .providers
-                .entry(provider_id.clone())
-                .or_default()
-                .defaults
-                .get_or_insert_with(Default::default)
-                .thinking_mode = Some(value.clone());
-        }
-        ConfigOverride::ProviderDefaultsSpeedMode { provider_id, value } => {
-            config
-                .providers
-                .providers
-                .entry(provider_id.clone())
-                .or_default()
-                .defaults
-                .get_or_insert_with(Default::default)
-                .speed_mode = Some(value.clone());
-        }
-        ConfigOverride::ProviderDefaultsVerbosity { provider_id, value } => {
-            config
-                .providers
-                .providers
-                .entry(provider_id.clone())
-                .or_default()
-                .defaults
-                .get_or_insert_with(Default::default)
-                .verbosity = Some(value.clone());
-        }
-        ConfigOverride::ProviderDefaultsParallelToolCalls { provider_id, value } => {
-            config
-                .providers
-                .providers
-                .entry(provider_id.clone())
-                .or_default()
-                .defaults
-                .get_or_insert_with(Default::default)
-                .parallel_tool_calls = Some(*value);
-        }
         ConfigOverride::ProviderAuthBaseUrl { provider_id, value } => {
             config
                 .providers

@@ -65,6 +65,7 @@ pub fn resolve_permission_with_persisted_rules(
 fn risk_for_decision(decision: &PermissionDecision) -> PermissionRiskLevel {
     match decision {
         PermissionDecision::Allow => PermissionRiskLevel::Low,
+        PermissionDecision::Auto { .. } => PermissionRiskLevel::Medium,
         PermissionDecision::Ask { .. } => PermissionRiskLevel::Medium,
         PermissionDecision::Deny { .. } => PermissionRiskLevel::High,
     }
@@ -79,10 +80,11 @@ fn persisted_rule_reason(rule: &PersistedPermissionRule, base: &PermissionDecisi
 
     match rule.mode {
         PermissionMode::Allow => "allowed by persisted permission rule".to_string(),
+        PermissionMode::Auto => "permission is eligible for automatic approval".to_string(),
         PermissionMode::Ask => match base {
-            PermissionDecision::Ask { reason } | PermissionDecision::Deny { reason } => {
-                reason.clone()
-            }
+            PermissionDecision::Auto { reason }
+            | PermissionDecision::Ask { reason }
+            | PermissionDecision::Deny { reason } => reason.clone(),
             PermissionDecision::Allow => "permission requires confirmation".to_string(),
         },
         PermissionMode::Deny => "permission denied by persisted rule".to_string(),
@@ -122,6 +124,7 @@ fn merged_persisted_rule_explanation(persisted_rules: &[PersistedPermissionRule]
 fn static_policy_explanation(base: &PermissionDecision) -> String {
     match base {
         PermissionDecision::Allow => "matched static permission policy".to_string(),
+        PermissionDecision::Auto { reason } => reason.clone(),
         PermissionDecision::Ask { reason } => reason.clone(),
         PermissionDecision::Deny { reason } => reason.clone(),
     }

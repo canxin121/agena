@@ -106,6 +106,7 @@ pub fn path_access_shorthand_modes(value: &str) -> Option<PathAccessModes> {
     };
     match normalized.as_str() {
         "allow" | "read_write" | "rw" => Some(both(PermissionMode::Allow)),
+        "auto" => Some(both(PermissionMode::Auto)),
         "ask" => Some(both(PermissionMode::Ask)),
         "deny" | "none" => Some(both(PermissionMode::Deny)),
         "read" | "read_only" | "ro" => Some(PathAccessModes {
@@ -189,6 +190,7 @@ pub fn parse_permission_studio_key_input(
 pub fn permission_mode_token(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Allow => "allow",
+        PermissionMode::Auto => "auto",
         PermissionMode::Ask => "ask",
         PermissionMode::Deny => "deny",
     }
@@ -304,6 +306,7 @@ pub fn normalize_permission_config(permission: &mut PermissionConfig) {
 pub fn permission_mode_label(i18n: &I18n, mode: PermissionMode) -> String {
     i18n.text(match mode {
         PermissionMode::Allow => "value-allow",
+        PermissionMode::Auto => "value-auto",
         PermissionMode::Ask => "value-ask",
         PermissionMode::Deny => "value-deny",
     })
@@ -339,6 +342,7 @@ pub fn path_access_modes_summary(i18n: &I18n, modes: Option<&PathAccessModes>) -
 fn parse_permission_mode_token(i18n: &I18n, token: &str) -> Result<PermissionMode, String> {
     match token.to_ascii_lowercase().as_str() {
         "allow" => Ok(PermissionMode::Allow),
+        "auto" => Ok(PermissionMode::Auto),
         "ask" => Ok(PermissionMode::Ask),
         "deny" => Ok(PermissionMode::Deny),
         _ => Err(i18n.text("permission-rule-error-invalid-mode")),

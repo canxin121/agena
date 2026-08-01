@@ -37,6 +37,7 @@ export type ChatPageUiStateInput = {
   selectedSpeedMode: Ref<string>
   selectedVerbosity: Ref<string>
   selectedParallelToolCalls: Ref<string>
+  selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   userInputDrafts: Record<string, Record<string, string>>
   workspaces: Ref<WorkspaceResource[]>
@@ -112,7 +113,11 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   }
 
   function openPermissionSettings(mode?: string) {
-    const query = mode?.trim() ? { mode: mode.trim().toLowerCase() } : undefined
+    const query: Record<string, string> = {}
+    if (mode?.trim()) query.mode = mode.trim().toLowerCase()
+    if (input.selectedSessionId.value != null) {
+      query.session = String(input.selectedSessionId.value)
+    }
     void deps.router.push({ path: buildRuntimeSectionPath('settings', 'permissions'), query })
   }
 

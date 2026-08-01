@@ -44,7 +44,12 @@ pub(super) fn execute(
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
-    let execution = executor.execute_shell_command(&request)?;
+    let execution = executor.execute_shell_command(
+        &request,
+        input.command.as_str(),
+        context.session_id,
+        context.call_id,
+    )?;
     let (trimmed_output, truncated) = truncate_shell_output(&execution.aggregated_output);
 
     let status_text = if execution.timed_out {

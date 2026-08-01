@@ -1,5 +1,6 @@
 import { userErrorMessage } from '@/lib/api'
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue'
+import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import type {
   AuthProvider,
@@ -40,6 +41,7 @@ export type RuntimeSectionLoadActionsInput = {
   providers: Ref<ProviderSummary[]>
   replaceProviderModels: (providerModels: Record<string, ProviderModel[]>) => void
   routeSection: Ref<'runtime' | 'settings' | 'plugins'>
+  routeQuery: Ref<RouteLocationNormalizedLoaded['query']>
   runtime: Ref<RuntimeStatus | null>
   selectedPlugin: Ref<PluginInspect | null>
   selectedPluginId: Ref<string>
@@ -121,6 +123,18 @@ export function useRuntimeSectionLoadActions(
     input.permissionRules.value = data.permissionRules
     input.settingsPlugins.value = data.settingsPlugins
     input.pluginUiPresentation.value = data.settingsPlugins.uiPresentation
+
+    const rawSessionId = input.routeQuery.value.session ?? input.routeQuery.value.session_id
+    const sessionIdText = Array.isArray(rawSessionId) ? rawSessionId[0] : rawSessionId
+    const sessionId = typeof sessionIdText === 'string' ? Number.parseInt(sessionIdText, 10) : Number.NaN
+    if (Number.isSafeInteger(sessionId) && sessionId > 0) {
+      input.selectedSessionId.value = sessionId
+      await input.loadSessionExecution(sessionId)
+    } else {
+      input.selectedSessionId.value = null
+      input.sessionExecution.value = null
+      input.sessionTimeline.value = []
+    }
   }
 
   async function loadPluginsSection() {

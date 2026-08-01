@@ -272,7 +272,7 @@ pub(crate) fn provider_default_selection_summary(
 }
 
 pub(crate) fn provider_default_route_summary(
-    i18n: &I18n,
+    _i18n: &I18n,
     provider: &ProviderSummaryResource,
 ) -> String {
     let mut route = vec![provider.provider_id.clone()];
@@ -288,56 +288,7 @@ pub(crate) fn provider_default_route_summary(
         route.push(provider.defaults.model.trim().to_owned());
     }
 
-    let mut parts = vec![route.join(" / ")];
-    if let Some(thinking_mode) = provider
-        .defaults
-        .thinking_mode
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        parts.push(i18n.text_args(
-            "run-options-summary-thinking",
-            &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
-        ));
-    }
-    if let Some(speed_mode) = provider
-        .defaults
-        .speed_mode
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        parts.push(i18n.text_args(
-            "run-options-summary-speed",
-            &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
-        ));
-    }
-    if let Some(verbosity) = provider
-        .defaults
-        .verbosity
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        parts.push(i18n.text_args(
-            "run-options-summary-verbosity",
-            &agena_tui::fl_args!("value" => verbosity.to_string()),
-        ));
-    }
-    if let Some(parallel_tool_calls) = provider.defaults.parallel_tool_calls {
-        parts.push(i18n.text_args(
-            "run-options-summary-parallel-tools",
-            &agena_tui::fl_args!(
-                "value" => ui_text::t(
-                    i18n,
-                    if parallel_tool_calls {
-                        "value-on"
-                    } else {
-                        "value-off"
-                    },
-                )
-            ),
-        ));
-    }
-    join_inline_segments(parts)
+    join_inline_segments(vec![route.join(" / ")])
 }
 
 pub(crate) fn provider_defaults_settings_path(provider_id: &str) -> String {

@@ -8,6 +8,7 @@ pub enum PermissionAuthorityKind {
     StaticPolicy,
     PersistedRule,
     PluginPolicy,
+    AutoApprovalModel,
 }
 
 /// A normal non-execution outcome produced when an effective permission rule

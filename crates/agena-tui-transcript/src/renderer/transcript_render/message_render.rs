@@ -1,4 +1,4 @@
-use super::super::transcript_ast::{MarkdownNode, render_attachment_image};
+use super::super::transcript_ast::{MarkdownNode, markdown_inline_line, render_attachment_image};
 use super::super::{
     I18n, Local, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
@@ -147,7 +147,8 @@ struct CanonicalActivityDetail {
     title: Option<String>,
     body: String,
     format: CanonicalActivityDetailFormat,
-    default_collapsed: bool,
+    stable_section: Option<TranscriptActivitySection>,
+    default_expanded: Option<bool>,
 }
 
 impl CanonicalActivityDetail {
@@ -160,20 +161,24 @@ impl CanonicalActivityDetail {
             title: Some(title.into()),
             body: body.into(),
             format,
-            default_collapsed: false,
+            stable_section: None,
+            default_expanded: Some(true),
         }
     }
 
-    fn collapsed_section(
+    fn identified_section(
+        stable_section: TranscriptActivitySection,
         title: impl Into<String>,
         body: impl Into<String>,
         format: CanonicalActivityDetailFormat,
+        default_expanded: bool,
     ) -> Self {
         Self {
             title: Some(title.into()),
             body: body.into(),
             format,
-            default_collapsed: true,
+            stable_section: Some(stable_section),
+            default_expanded: Some(default_expanded),
         }
     }
 
@@ -182,7 +187,8 @@ impl CanonicalActivityDetail {
             title: None,
             body: body.into(),
             format,
-            default_collapsed: false,
+            stable_section: None,
+            default_expanded: None,
         }
     }
 
@@ -191,6 +197,15 @@ impl CanonicalActivityDetail {
             || self.body.clone(),
             |title| format!("{title}\n{}", self.body),
         )
+    }
+
+    fn navigation_section(&self, detail_index: &mut usize) -> TranscriptActivitySection {
+        if let Some(section) = self.stable_section {
+            return section;
+        }
+        let section = TranscriptActivitySection::Detail(*detail_index);
+        *detail_index = detail_index.saturating_add(1);
+        section
     }
 }
 
@@ -276,10 +291,12 @@ fn canonical_activity_details(
                     })
                     .collect::<Vec<_>>()
                     .join("\n\n");
-                details.push(CanonicalActivityDetail::section(
-                    "Authorization",
+                details.push(CanonicalActivityDetail::identified_section(
+                    TranscriptActivitySection::Permissions,
+                    "Permissions",
                     permissions,
                     CanonicalActivityDetailFormat::Plain,
+                    false,
                 ));
             }
             if !operation.invocation.input.is_empty()
@@ -287,10 +304,12 @@ fn canonical_activity_details(
                     operation.invocation.input.clone(),
                 ))
             {
-                details.push(CanonicalActivityDetail::collapsed_section(
+                details.push(CanonicalActivityDetail::identified_section(
+                    TranscriptActivitySection::Input,
                     "Input",
                     input,
                     CanonicalActivityDetailFormat::Json,
+                    false,
                 ));
             }
             // Failed runtime Operations intentionally mirror the safe failure
@@ -301,10 +320,12 @@ fn canonical_activity_details(
                     canonical_text_equivalent(operation.model_output_text.as_str(), error)
                 })
             {
-                details.push(CanonicalActivityDetail::section(
+                details.push(CanonicalActivityDetail::identified_section(
+                    TranscriptActivitySection::Result,
                     "Result",
                     operation.model_output_text.clone(),
                     CanonicalActivityDetailFormat::Auto,
+                    true,
                 ));
                 has_result_presentation = true;
             }
@@ -342,15 +363,18 @@ fn canonical_activity_details(
                 && let Some(output) = operation.details.to_json_payload()
                 && let Ok(output) = serde_json::to_string_pretty(&output)
             {
-                details.push(CanonicalActivityDetail::section(
+                details.push(CanonicalActivityDetail::identified_section(
+                    TranscriptActivitySection::StructuredResult,
                     "Structured result",
                     output,
                     CanonicalActivityDetailFormat::Json,
+                    true,
                 ));
                 has_result_presentation = true;
             }
             if !operation.details.managed_outputs.is_empty() {
-                details.push(CanonicalActivityDetail::section(
+                details.push(CanonicalActivityDetail::identified_section(
+                    TranscriptActivitySection::ManagedOutputs,
                     "Managed outputs",
                     operation
                         .details
@@ -360,6 +384,7 @@ fn canonical_activity_details(
                         .collect::<Vec<_>>()
                         .join("\n"),
                     CanonicalActivityDetailFormat::Plain,
+                    true,
                 ));
                 has_result_presentation = true;
             }
@@ -368,10 +393,12 @@ fn canonical_activity_details(
             // only a fallback result when the producer supplied no detailed
             // result at all; failures are rendered exclusively from `error`.
             if operation.error.is_none() && !has_result_presentation && !summary.trim().is_empty() {
-                details.push(CanonicalActivityDetail::section(
+                details.push(CanonicalActivityDetail::identified_section(
+                    TranscriptActivitySection::Result,
                     "Result",
                     summary,
                     CanonicalActivityDetailFormat::Auto,
+                    true,
                 ));
             }
             details
@@ -645,7 +672,7 @@ fn render_canonical_activity_detail(
         .as_deref()
         .filter(|title| !title.trim().is_empty())
     {
-        let disclosure = if detail.default_collapsed {
+        let disclosure = if detail.default_expanded.is_some() {
             if expanded { "▾" } else { "▸" }
         } else {
             "›"
@@ -705,6 +732,15 @@ fn render_canonical_activity_detail(
 }
 
 fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option<String> {
+    if detail.stable_section == Some(TranscriptActivitySection::Permissions) {
+        let count = detail
+            .body
+            .split("\n\n")
+            .filter(|permission| !permission.trim().is_empty())
+            .count();
+        return (count > 0)
+            .then(|| format!("{count} permission{}", if count == 1 { "" } else { "s" }));
+    }
     match detail.format {
         CanonicalActivityDetailFormat::Json => {
             serde_json::from_str::<serde_json::Value>(detail.body.as_str())
@@ -723,14 +759,38 @@ fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option
                     _ => None,
                 })
         }
-        CanonicalActivityDetailFormat::Auto
-        | CanonicalActivityDetailFormat::Markdown
-        | CanonicalActivityDetailFormat::Plain => detail
+        CanonicalActivityDetailFormat::Auto | CanonicalActivityDetailFormat::Markdown => detail
+            .body
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .map(canonical_activity_markdown_preview),
+        CanonicalActivityDetailFormat::Plain => detail
             .body
             .lines()
             .find(|line| !line.trim().is_empty())
             .map(|line| concise_text(line, 48)),
     }
+}
+
+fn canonical_activity_markdown_preview(line: &str) -> String {
+    let line = line.trim();
+    let line = if line.starts_with('#') {
+        line.trim_start_matches('#').trim_start()
+    } else {
+        ["- [x] ", "- [X] ", "- [ ] ", "- ", "* ", "+ ", "> "]
+            .into_iter()
+            .find_map(|prefix| line.strip_prefix(prefix))
+            .unwrap_or(line)
+    };
+    let plain = markdown_inline_line(line, Style::default())
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .unwrap_or_else(|| line.to_owned());
+    concise_text(plain.as_str(), 48)
 }
 
 fn rendered_activity_section_node(
@@ -1249,23 +1309,18 @@ pub(crate) fn render_part_node(
             }
             if expanded {
                 for detail in &details {
-                    let section = if detail.default_collapsed {
-                        TranscriptActivitySection::Input
-                    } else {
-                        let section = TranscriptActivitySection::Detail(detail_index);
-                        detail_index = detail_index.saturating_add(1);
-                        section
-                    };
+                    let section = detail.navigation_section(&mut detail_index);
                     let section_key = TranscriptNodeKey::ActivitySection {
                         entry_id: message.id,
                         content_id: part.id,
                         section,
                     };
-                    let section_expanded = if detail.default_collapsed {
-                        expansions.get(&section_key).copied().unwrap_or(false)
-                    } else {
-                        true
-                    };
+                    let section_expanded = detail.default_expanded.is_none_or(|default_expanded| {
+                        expansions
+                            .get(&section_key)
+                            .copied()
+                            .unwrap_or(default_expanded)
+                    });
                     let section_start = out.len();
                     render_canonical_activity_detail(out, detail, width, None, section_expanded);
                     if let Some(child) = rendered_activity_section_node(
@@ -1273,7 +1328,7 @@ pub(crate) fn render_part_node(
                         section_start,
                         out.len(),
                         detail.copy_text(),
-                        detail.default_collapsed,
+                        detail.default_expanded.is_some(),
                         section_expanded,
                         out,
                     ) {
@@ -1302,6 +1357,12 @@ pub(crate) fn render_part_node(
                 }
             }
             if expanded && let Some(ref error_str) = error_text {
+                let section_key = TranscriptNodeKey::ActivitySection {
+                    entry_id: message.id,
+                    content_id: part.id,
+                    section: TranscriptActivitySection::Error,
+                };
+                let section_expanded = expansions.get(&section_key).copied().unwrap_or(true);
                 let section_start = out.len();
                 render_canonical_activity_detail(
                     out,
@@ -1312,19 +1373,15 @@ pub(crate) fn render_part_node(
                     ),
                     width,
                     Some(Style::default().fg(agena_tui_components::theme::danger_color())),
-                    true,
+                    section_expanded,
                 );
                 if let Some(child) = rendered_activity_section_node(
-                    TranscriptNodeKey::ActivitySection {
-                        entry_id: message.id,
-                        content_id: part.id,
-                        section: TranscriptActivitySection::Error,
-                    },
+                    section_key,
                     section_start,
                     out.len(),
                     error_str.clone(),
-                    false,
                     true,
+                    section_expanded,
                     out,
                 ) {
                     children.push(child);

@@ -188,7 +188,7 @@ export function useRuntimePageState(input: {
     providerModels,
     providers,
     routePath: computed(() => input.route.path),
-    routeQuery: input.route.query,
+    routeQuery: computed(() => input.route.query),
     router: input.router,
     routeSection,
     runtime,

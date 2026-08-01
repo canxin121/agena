@@ -42,8 +42,95 @@ impl ToolExecutor {
     pub(crate) fn execute_shell_command(
         &self,
         request: &ShellRequest,
+        command_text: &str,
+        session_id: Option<i64>,
+        call_id: Option<i64>,
     ) -> Result<ShellOutput, ToolError> {
-        match shell::execute(request, self.cancellation_token()) {
+        let Some(sink) = self.command_event_sink.clone() else {
+            return match shell::execute(request, self.cancellation_token()) {
+                Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),
+                result => result.map_err(ToolError::from),
+            };
+        };
+
+        let context = agena_domain::CommandContext {
+            session_id: session_id.unwrap_or(-1),
+            call_id: call_id.unwrap_or(-1),
+            message_id: None,
+            part_id: None,
+        };
+        let now = || chrono::Utc::now().timestamp_millis();
+        (sink)(agena_tool::ToolRuntimeEvent::CommandBegin(
+            agena_domain::CommandBeginEvent {
+                context: context.clone(),
+                command: command_text.to_owned(),
+                cwd: request.cwd.display().to_string(),
+                argv: request.command.clone(),
+                is_user_initiated: false,
+                ts_ms: now(),
+            },
+        ));
+
+        let output_sequence = std::cell::Cell::new(0_u64);
+        let output_callback = |stream: agena_domain::CommandOutputStream, bytes: &[u8]| {
+            output_sequence.set(output_sequence.get().saturating_add(1));
+            (sink)(agena_tool::ToolRuntimeEvent::CommandOutputDelta(
+                agena_domain::CommandOutputDeltaEvent {
+                    context: context.clone(),
+                    stream,
+                    seq: output_sequence.get(),
+                    ts_ms: now(),
+                    chunk: bytes.to_vec(),
+                    preview_text: String::from_utf8_lossy(bytes).into_owned(),
+                    preview_lossy: std::str::from_utf8(bytes).is_err(),
+                },
+            ));
+        };
+
+        let result = shell::execute_with_callback(
+            request,
+            self.cancellation_token(),
+            Some(&output_callback),
+        );
+        match &result {
+            Ok(output) => {
+                (sink)(agena_tool::ToolRuntimeEvent::CommandEnd(
+                    agena_domain::CommandEndEvent {
+                        context: context.clone(),
+                        status: if output.timed_out {
+                            agena_domain::ExecutionStatus::Failed
+                        } else {
+                            agena_domain::ExecutionStatus::Completed
+                        },
+                        exit_code: output.exit_code,
+                        duration_ms: output.duration.as_millis() as u64,
+                        stdout: output.stdout.clone(),
+                        stderr: output.stderr.clone(),
+                        aggregated_output: output.aggregated_output.clone(),
+                        ts_ms: now(),
+                    },
+                ));
+            }
+            Err(error) => {
+                (sink)(agena_tool::ToolRuntimeEvent::CommandEnd(
+                    agena_domain::CommandEndEvent {
+                        context: context.clone(),
+                        status: if matches!(error, &agena_tool::ShellError::Cancelled) {
+                            agena_domain::ExecutionStatus::Cancelled
+                        } else {
+                            agena_domain::ExecutionStatus::Failed
+                        },
+                        exit_code: -1,
+                        duration_ms: 0,
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        aggregated_output: String::new(),
+                        ts_ms: now(),
+                    },
+                ));
+            }
+        }
+        match result {
             Err(agena_tool::ShellError::Cancelled) => Err(ToolError::Cancelled),
             result => result.map_err(ToolError::from),
         }

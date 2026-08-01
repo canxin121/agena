@@ -46,7 +46,8 @@ pub struct RawConfigFile {
 impl RawConfigFile {
     pub fn read(path: &Path) -> Result<Self, ConfigError> {
         match crate::read_config_json(path)? {
-            Some(value) => {
+            Some(mut value) => {
+                strip_legacy_provider_default_variants(&mut value);
                 reject_unsupported_fields_value(&value)?;
                 let merge_keys = RawProjectMergeKeys::from_value(&value);
                 let config = serde_json::from_value::<RawConfig>(value).map_err(|source| {
@@ -177,7 +178,8 @@ fn parse_raw_config_text(
     path: &Path,
     text: &str,
 ) -> Result<(RawConfig, RawProjectMergeKeys), ConfigError> {
-    let value = crate::parse_config_json(path, text)?;
+    let mut value = crate::parse_config_json(path, text)?;
+    strip_legacy_provider_default_variants(&mut value);
     reject_unsupported_fields_value(&value)?;
     let merge_keys = RawProjectMergeKeys::from_value(&value);
     let config =
@@ -186,6 +188,35 @@ fn parse_raw_config_text(
             source,
         })?;
     Ok((config, merge_keys))
+}
+
+/// Provider defaults used to carry request variants such as thinking mode,
+/// verbosity, and parallel tool calls. Those values now belong to a model
+/// capability or an explicit session/run option. Silently discard the legacy
+/// keys while loading so an existing user configuration keeps working, but do
+/// not let the removed fields enter the typed configuration or effective
+/// configuration output.
+fn strip_legacy_provider_default_variants(value: &mut Value) {
+    let Some(providers) = value.get_mut("providers").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for provider in providers.values_mut() {
+        let Some(defaults) = provider
+            .as_object_mut()
+            .and_then(|provider| provider.get_mut("defaults"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        for field in [
+            "thinking_mode",
+            "speed_mode",
+            "verbosity",
+            "parallel_tool_calls",
+        ] {
+            defaults.remove(field);
+        }
+    }
 }
 
 fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
@@ -543,10 +574,6 @@ fn resolve_default_selection(
         provider: Some(provider_id),
         adapter: provider.defaults.adapter.clone(),
         model: provider.defaults.model.clone(),
-        thinking_mode: provider.defaults.thinking_mode.clone(),
-        speed_mode: provider.defaults.speed_mode.clone(),
-        verbosity: provider.defaults.verbosity.clone(),
-        parallel_tool_calls: provider.defaults.parallel_tool_calls,
         ..Default::default()
     })
 }
@@ -1518,6 +1545,34 @@ mod openai_protocol_adapter_tests {
         .expect_err("the detached string default was removed");
 
         assert!(error.to_string().contains("default_thinking_mode"));
+    }
+
+    #[test]
+    fn provider_default_model_variants_are_removed_while_loading() {
+        let mut value = serde_json::json!({
+            "providers": {
+                "test": {
+                    "defaults": {
+                        "adapter": "openai_responses",
+                        "model": "gpt-test",
+                        "thinking_mode": "high",
+                        "speed_mode": "fast",
+                        "verbosity": "low",
+                        "parallel_tool_calls": true
+                    },
+                    "adapters": {}
+                }
+            }
+        });
+        super::strip_legacy_provider_default_variants(&mut value);
+        let defaults = &value["providers"]["test"]["defaults"];
+        assert_eq!(
+            defaults,
+            &serde_json::json!({
+                "adapter": "openai_responses",
+                "model": "gpt-test"
+            })
+        );
     }
 
     #[test]

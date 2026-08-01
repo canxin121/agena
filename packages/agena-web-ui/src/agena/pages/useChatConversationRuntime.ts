@@ -10,12 +10,13 @@ import {
   type SessionEventStreamHandle,
   type SessionExecutionResource,
 } from '../lib/agenaApi'
-import { applySessionEvent, type ChatEventState } from './chatPageModel'
+import { applyLiveCommandEvent, applySessionEvent, type ChatEventState } from './chatPageModel'
 import { transcriptMessages } from './chatRenderModel'
 
 export type ChatConversationRuntimeInput = {
   errorMessage: Ref<string>
   loading: Ref<boolean>
+  liveCommandEvents: Ref<DomainEventRecord[]>
   messages: Ref<MessageResource[]>
   selectedSessionId: Ref<number | null>
   sessionState: Ref<SessionExecutionResource | null>
@@ -98,6 +99,13 @@ export function useChatConversationRuntime(
   }
 
   function applyChatSessionEvent(event: DomainEventRecord): boolean {
+    if (event.kind === 'command_begin' || event.kind === 'command_output_delta' || event.kind === 'command_end') {
+      if (!input.liveCommandEvents.value.some((item) => item.seq_global === event.seq_global)) {
+        input.liveCommandEvents.value = [...input.liveCommandEvents.value, event].sort(
+          (left, right) => left.seq_global - right.seq_global,
+        )
+      }
+    }
     const result = deps.applySessionEvent(
       {
         messages: input.messages.value,
@@ -145,7 +153,12 @@ export function useChatConversationRuntime(
       onLagged: () => scheduleConversationRefresh(0),
       onEvent: (event) => {
         if (input.selectedSessionId.value !== sessionId) return
-        if (input.sessionState.value) {
+        const isEphemeralTranscriptEvent =
+          event.kind === 'transcript_part_upserted' ||
+          event.kind === 'command_begin' ||
+          event.kind === 'command_output_delta' ||
+          event.kind === 'command_end'
+        if (input.sessionState.value && !isEphemeralTranscriptEvent) {
           input.sessionState.value = {
             ...input.sessionState.value,
             latest_event_seq: Math.max(input.sessionState.value.latest_event_seq ?? 0, event.seq_global),
@@ -201,6 +214,16 @@ export function useChatConversationRuntime(
         state.active_execution !== null
       input.sessionState.value = locallyTerminalAtSameFence ? { ...state, active_execution: null } : state
       input.messages.value = transcriptMessages(state.transcript)
+      if (state.active_execution) {
+        for (const event of input.liveCommandEvents.value) {
+          input.messages.value = applyLiveCommandEvent(input.messages.value, event, sessionId)
+        }
+      } else {
+        // Once the canonical projection is terminal it is the durable source
+        // of truth; discard the ephemeral overlay so a later session refresh
+        // cannot resurrect a finished command.
+        input.liveCommandEvents.value = []
+      }
       input.timelineEvents.value = eventItems
       const rootId = state.session.parent_id ? state.session.parent_id : state.session.id
       await Promise.all([options.loadSessionTree(rootId), options.loadRewindCheckpoints(sessionId)])

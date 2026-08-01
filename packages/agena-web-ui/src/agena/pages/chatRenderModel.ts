@@ -10,11 +10,12 @@ import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
 
 export type RenderBlock = {
   body: string
-  kind: 'text' | 'diff' | 'input_activity' | 'operation_outcome'
+  kind: 'markdown' | 'terminal' | 'diff' | 'input_activity' | 'operation_outcome'
   activityLabel?: string
   summary?: string
   title?: string
   outcome?: 'policy_denied' | 'user_declined' | 'capability_unavailable' | 'tool_unavailable'
+  language?: string
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -332,12 +333,27 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
     const diff = readString(applyPatch.diff)
     const blocks: RenderBlock[] = []
     if (output) {
-      blocks.push({ body: output, kind: 'text' })
+      blocks.push({ body: output, kind: 'markdown' })
     }
     if (diff) {
       blocks.push({
         body: diff,
         kind: 'diff',
+        summary: applyPatchDiffSummary(applyPatch),
+      })
+    }
+    const changes = Array.isArray(applyPatch.changes) ? applyPatch.changes : []
+    if (!diff && changes.length) {
+      blocks.push({
+        body: changes
+          .map((value) => {
+            const change = asRecord(value)
+            const path = readString(change?.path) || 'unknown path'
+            const kind = readString(change?.kind) || 'updated'
+            return `- **${kind}** \`${path}\``
+          })
+          .join('\n'),
+        kind: 'markdown',
         summary: applyPatchDiffSummary(applyPatch),
       })
     }
@@ -348,42 +364,68 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
   if (operationBlocks.length) return operationBlocks
 
   const body = partBody(part)
-  return body.trim().length > 0 ? [{ body, kind: 'text' }] : []
+  return body.trim().length > 0 ? [{ body, kind: 'markdown' }] : []
 }
 
 function operationRenderBlocks(content: Record<string, unknown> | null): RenderBlock[] {
   if (!content || content.type !== 'operation') return []
   const blocks = Array.isArray(content.blocks) ? content.blocks : []
+  const operationTitle = readString(content.title)
   const rendered: RenderBlock[] = []
 
   for (const item of blocks) {
     const block = asRecord(item)
     if (!block) continue
     const blockType = readString(block.type)
-    if (blockType === 'text' || blockType === 'markdown' || blockType === 'log') {
+    if (blockType === 'text' || blockType === 'markdown') {
       const body = readString(block.text)
-      if (body) rendered.push({ body, kind: 'text' })
+      if (body) rendered.push({ body, kind: 'markdown', title: operationTitle || undefined })
+      continue
+    }
+    if (blockType === 'log') {
+      const body = readString(block.text)
+      if (body) rendered.push({ body, kind: 'terminal', language: 'text', title: operationTitle || undefined })
       continue
     }
     if (blockType === 'diff') {
       const body = readString(block.diff)
-      if (body) rendered.push({ body, kind: 'diff', summary: 'Diff' })
+      if (body) rendered.push({ body, kind: 'diff', summary: 'Diff', language: readString(block.language) || 'diff' })
       continue
     }
     if (blockType === 'command') {
       const command = readString(block.command)
       const stdout = readString(block.stdout)
       const stderr = readString(block.stderr)
-      const body = [command ? `$ ${command}` : '', stdout, stderr]
-        .filter((value): value is string => Boolean(value))
-        .join('\n\n')
-      if (body) rendered.push({ body, kind: 'text' })
+      const cwd = readString(block.cwd)
+      const exitCode = readFiniteNumber(block.exit_code)
+      const commandSummary = [cwd ? `cwd ${cwd}` : '', exitCode == null ? '' : `exit ${exitCode}`]
+        .filter(Boolean)
+        .join(' · ')
+      if (command) {
+        rendered.push({
+          body: `$ ${command}`,
+          kind: 'terminal',
+          language: 'shell',
+          title: operationTitle || 'Command',
+          summary: commandSummary || undefined,
+        })
+      }
+      if (stdout) rendered.push({ body: stdout, kind: 'terminal', language: 'text', title: 'stdout' })
+      if (stderr) rendered.push({ body: stderr, kind: 'terminal', language: 'text', title: 'stderr' })
       continue
     }
     if (blockType === 'file_changes') {
       const changes = Array.isArray(block.changes) ? block.changes : []
-      if (changes.length)
-        rendered.push({ body: `${changes.length} file change${changes.length === 1 ? '' : 's'}`, kind: 'text' })
+      if (changes.length) {
+        const lines = changes.map((value) => {
+          const change = asRecord(value)
+          const path = readString(change?.path) || 'unknown path'
+          const kind = readString(change?.kind) || 'updated'
+          const from = readString(change?.from_path)
+          return `- **${kind}** \`${from ? `${from} → ` : ''}${path}\``
+        })
+        rendered.push({ body: lines.join('\n'), kind: 'markdown', title: 'File changes' })
+      }
       continue
     }
     if (blockType === 'checklist') {
@@ -393,7 +435,32 @@ function operationRenderBlocks(content: Record<string, unknown> | null): RenderB
         .filter((value): value is Record<string, unknown> => Boolean(value))
         .map((value) => readString(value.content))
         .filter((value): value is string => Boolean(value))
-      if (lines.length) rendered.push({ body: lines.map((line) => `- ${line}`).join('\n'), kind: 'text' })
+      if (lines.length) rendered.push({ body: lines.map((line) => `- ${line}`).join('\n'), kind: 'markdown' })
+      continue
+    }
+    if (blockType === 'json') {
+      if (block.value !== undefined) {
+        rendered.push({ body: JSON.stringify(block.value, null, 2), kind: 'terminal', language: 'json' })
+      }
+      continue
+    }
+    if (blockType === 'table') {
+      const columns = Array.isArray(block.columns) ? block.columns : []
+      const rows = Array.isArray(block.rows) ? block.rows : []
+      const labels = columns.map((value) => {
+        const column = asRecord(value)
+        return readString(column?.label) || readString(column?.key) || ''
+      })
+      if (labels.length) {
+        const separator = labels.map(() => '---')
+        const tableRows = rows.map((row) =>
+          Array.isArray(row) ? `| ${row.map((value) => String(value ?? '')).join(' | ')} |` : '| |',
+        )
+        rendered.push({
+          body: [`| ${labels.join(' | ')} |`, `| ${separator.join(' | ')} |`, ...tableRows].join('\n'),
+          kind: 'markdown',
+        })
+      }
     }
   }
 

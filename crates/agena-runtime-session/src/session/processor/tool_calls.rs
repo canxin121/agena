@@ -131,6 +131,39 @@ impl SessionProcessor {
             }
         }
 
+        // Providers can stream a tool name after the placeholder operation was
+        // created. Publish that identity immediately so the Activity title is
+        // useful while arguments are still arriving; waiting for final
+        // argument assembly made running activities look blank or generic.
+        if let (Some(part_id), Some(name)) = (
+            pending.part_id,
+            pending
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty()),
+        ) {
+            let part = assistant
+                .parts
+                .iter_mut()
+                .find(|part| part.id == part_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "tool part missing from assistant snapshot: {part_id}"
+                    ))
+                })?;
+            if let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                operation,
+            ))) = part.content.as_mut()
+                && (operation.invocation.name != name
+                    || operation.title != tool_execution_title(Some(name)))
+            {
+                operation.invocation.name = name.to_owned();
+                operation.set_title(tool_execution_title(Some(name)));
+                should_emit = true;
+            }
+        }
+
         if should_emit && let Some(part_id) = pending.part_id {
             self.checkpoint_part(run, assistant, part_id).await?;
         }

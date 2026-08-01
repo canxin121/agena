@@ -491,6 +491,7 @@ fn permission_rule_write_command_from_request(
 fn permission_mode_from_string(value: &str) -> ApplicationResult<agena_domain::PermissionMode> {
     match value {
         "allow" => Ok(agena_domain::PermissionMode::Allow),
+        "auto" => Ok(agena_domain::PermissionMode::Auto),
         "ask" => Ok(agena_domain::PermissionMode::Ask),
         "deny" => Ok(agena_domain::PermissionMode::Deny),
         _ => Err(ApplicationError::internal(format!(
@@ -504,6 +505,7 @@ const fn permission_mode_to_domain(
 ) -> agena_domain::PermissionMode {
     match mode {
         agena_api::resource::PermissionMode::Allow => agena_domain::PermissionMode::Allow,
+        agena_api::resource::PermissionMode::Auto => agena_domain::PermissionMode::Auto,
         agena_api::resource::PermissionMode::Ask => agena_domain::PermissionMode::Ask,
         agena_api::resource::PermissionMode::Deny => agena_domain::PermissionMode::Deny,
     }

@@ -49,7 +49,11 @@ pub enum TranscriptNodeKey {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TranscriptActivitySection {
+    Permissions,
     Input,
+    Result,
+    StructuredResult,
+    ManagedOutputs,
     Detail(usize),
     Error,
 }

@@ -1,13 +1,26 @@
 use std::fmt;
 
-use super::{BTreeMap, Serialize};
+use super::{BTreeMap, Deserialize, Serialize};
 use agena_provider::{
     BedrockSigv4AuthConfig, OpenAiResponsesBackendConfig, ProviderCapabilityFamilyConfig,
     ProviderCredentialAuthConfig, ProviderGitlabApiAccessConfig, ProviderModelDiscoveryConfig,
     ProviderProtocolPathsConfig, ProviderSecretSourceConfig, StreamTransportMode,
 };
 
-pub type ProviderDefaultsConfig = agena_domain::ModelSelectionConfig;
+/// Provider routing defaults intentionally contain only the route itself.
+/// Model variants are model capabilities or explicit session/run options; a
+/// provider must not silently impose a variant while its model catalog is
+/// refreshed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderDefaultsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]

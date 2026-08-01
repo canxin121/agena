@@ -1255,7 +1255,7 @@ mod tests {
             .permissions
             .tags;
         let config = ToolPermissionConfig {
-            default: Some(PermissionMode::Ask),
+            default: Some(PermissionMode::Auto),
             tags: BTreeMap::from([
                 ("settings_read".to_string(), PermissionMode::Allow),
                 ("settings_write".to_string(), PermissionMode::Deny),
@@ -1265,7 +1265,7 @@ mod tests {
         };
         let policy = crate::authorization::apply_tool_permission_config(
             &config,
-            ToolPermissionPolicy::new(PermissionMode::Ask),
+            ToolPermissionPolicy::new(PermissionMode::Auto),
         )
         .expect("valid settings policy");
 

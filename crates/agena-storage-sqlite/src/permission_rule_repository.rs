@@ -303,6 +303,7 @@ fn persisted_rule_from_row(
 fn mode_to_string(mode: PermissionMode) -> String {
     match mode {
         PermissionMode::Allow => "allow",
+        PermissionMode::Auto => "auto",
         PermissionMode::Ask => "ask",
         PermissionMode::Deny => "deny",
     }
@@ -311,6 +312,7 @@ fn mode_to_string(mode: PermissionMode) -> String {
 fn mode_from_string(value: &str) -> Option<PermissionMode> {
     match value {
         "allow" => Some(PermissionMode::Allow),
+        "auto" => Some(PermissionMode::Auto),
         "ask" => Some(PermissionMode::Ask),
         "deny" => Some(PermissionMode::Deny),
         _ => None,

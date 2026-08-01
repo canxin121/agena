@@ -617,6 +617,7 @@ pub struct ToolExecutor {
     pub(super) tool_presentation: agena_plugin_host::ToolPresentationConfig,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
+    pub(super) command_event_sink: Option<agena_tool::ToolRuntimeEventSink>,
 }
 
 /// Runtime-owned extension point for adding execution-time permission checks

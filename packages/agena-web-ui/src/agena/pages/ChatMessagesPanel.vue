@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
+import { renderDiff, renderMarkdown, renderTerminal } from '@/agena/lib/markdown'
 
 type ChatMessageRenderBlock = {
   body: string
-  kind: 'text' | 'diff' | 'input_activity' | 'operation_outcome'
+  kind: 'markdown' | 'terminal' | 'diff' | 'input_activity' | 'operation_outcome'
   activityLabel?: string
   summary?: string
   title?: string
   outcome?: 'policy_denied' | 'user_declined' | 'capability_unavailable' | 'tool_unavailable'
+  language?: string
 }
 
 const props = defineProps<{
@@ -24,6 +26,12 @@ const props = defineProps<{
   messageUsageFacts: (message: MessageResource) => string[]
   messageBlocks: (message: MessageResource) => ChatMessageRenderBlock[]
 }>()
+
+function blockMarkup(block: ChatMessageRenderBlock): string {
+  if (block.kind === 'diff') return renderDiff(block.body)
+  if (block.kind === 'terminal') return renderTerminal(block.body, block.language)
+  return renderMarkdown(block.body)
+}
 </script>
 
 <template>
@@ -83,11 +91,11 @@ const props = defineProps<{
                 <strong>{{ block.title }}</strong>
                 <span v-if="block.summary" class="muted mono">{{ block.summary }}</span>
               </div>
-              <div>{{ block.body }}</div>
+              <div class="markdown-body" v-html="renderMarkdown(block.body)"></div>
             </div>
             <details v-else-if="block.kind === 'diff'" class="message-diff">
-              <summary>{{ block.summary || 'Patch diff' }}</summary>
-              <pre class="message-block mono">{{ block.body }}</pre>
+              <summary>{{ block.summary || block.title || 'Patch diff' }}</summary>
+              <div v-html="blockMarkup(block)"></div>
             </details>
             <details v-else-if="block.kind === 'input_activity'" class="message-input-activity">
               <summary class="message-input-activity-head">
@@ -95,9 +103,17 @@ const props = defineProps<{
                 <strong>{{ block.title || 'Input' }}</strong>
                 <span v-if="block.summary" class="muted mono">{{ block.summary }}</span>
               </summary>
-              <pre class="message-block mono">{{ block.body }}</pre>
+              <div class="markdown-body" v-html="renderMarkdown(block.body)"></div>
             </details>
-            <pre v-else class="message-block mono">{{ block.body }}</pre>
+            <section v-else-if="block.kind === 'terminal'" class="message-output-block">
+              <div v-if="block.title" class="message-output-title">{{ block.title }}</div>
+              <div v-if="block.summary" class="muted mono message-output-summary">{{ block.summary }}</div>
+              <div v-html="blockMarkup(block)"></div>
+            </section>
+            <section v-else class="message-output-block">
+              <div v-if="block.title" class="message-output-title">{{ block.title }}</div>
+              <div v-html="renderMarkdown(block.body)"></div>
+            </section>
           </template>
         </div>
         <div v-else class="muted">No renderable parts.</div>

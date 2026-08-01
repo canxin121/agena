@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { SettingsTab } from './runtimePageStateModel'
 import type { useSettingsPageState } from './useSettingsPageState'
+import type { SessionExecutionResource } from '../lib/agenaApi'
 
 import SettingsConfigurationPageContent from './SettingsConfigurationPageContent.vue'
 import SettingsMemoryPageContent from './SettingsMemoryPageContent.vue'
@@ -13,6 +14,9 @@ const props = defineProps<{
   loading: boolean
   load: () => Promise<void>
   panels: ReturnType<typeof useSettingsPageState>['panels']
+  permissionScope: 'global' | 'session'
+  selectedSessionId: number | null
+  sessionExecution: SessionExecutionResource | null
 }>()
 </script>
 
@@ -33,5 +37,8 @@ const props = defineProps<{
     :loading="props.loading"
     :load="props.load"
     :permissions="props.panels.permissions"
+    :permission-scope="props.permissionScope"
+    :selected-session-id="props.selectedSessionId"
+    :session-execution="props.sessionExecution"
   />
 </template>

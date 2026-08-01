@@ -17,7 +17,7 @@ import type { ReturnTypeOfUseRuntimePageStore } from './useRuntimePageStore.type
 
 export type RuntimePageAssemblyInput = {
   routePath: Ref<string>
-  routeQuery: RouteLocationNormalizedLoaded['query']
+  routeQuery: Ref<RouteLocationNormalizedLoaded['query']>
   router: Pick<Router, 'push' | 'replace'>
   routeSection: Ref<RuntimeRouteSection>
   selectedPluginManifest: Ref<Record<string, unknown> | null>
@@ -185,6 +185,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     replaceProviderModels: (nextProviderModels) =>
       replaceProviderModelsRecord(input.providerModels, nextProviderModels),
     routeSection: input.routeSection,
+    routeQuery: input.routeQuery,
     runtime: input.runtime,
     selectedPlugin: input.selectedPlugin,
     selectedPluginId: input.selectedPluginId,
@@ -206,6 +207,7 @@ export function useRuntimePageAssembly(input: RuntimePageAssemblyInput) {
     load,
     loadMarketplacePanel,
     routePath: input.routePath,
+    routeQuery: input.routeQuery,
     routeSection: input.routeSection,
     stopPluginLogPolling,
     syncPluginLogPolling,

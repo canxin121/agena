@@ -18,7 +18,7 @@ agena config validate
 
 - `tracing`: 日志过滤。
 - `providers.default`: 全局默认 provider 名称。
-- `providers.<id>.defaults`: provider-local 默认 adapter/model/thinking/speed/verbosity/parallel 设置。
+- `providers.<id>.defaults`: provider-local 默认 adapter/model 路由；variant 由 model capability 或显式 session/run 选项决定。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.mode`: 该 model route 的唯一工具模式：`provider_protocol`、`prompt_envelope` 或 `disabled`。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_compaction`: 是否优先使用该路由的 Provider 原生会话压缩接口，默认 `true`；不支持或调用失败时回退到 Agena 文本总结。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
@@ -70,7 +70,7 @@ agena config validate
 工作区配置使用主键边界合并，避免同名实体被跨层深层混合：
 
 - `plugins.list.<id>`: 同 plugin id 整体替换；`plugins.host.quotas.<plugin-id>` 和 `plugins.host.trusted_keys.<key-id>` 按各自主键覆盖，其他 plugin host 标量按字段覆盖。
-- `providers.<id>.defaults`: 默认 provider/adapter/model/thinking/speed/verbosity/parallel 选择作为一个元组整体替换。
+- `providers.<id>.defaults`: 默认 provider/adapter/model 路由作为一个元组整体替换。
 - `providers.<id>.auth`: auth 配置整体替换。
 - `providers.<id>.adapters.<adapter-id>`: adapter 内的标量字段按字段覆盖，`models.<model-id>` 按 model id 整体替换。
 - `permission` 和 `harnesses`: 按各自配置里的自然键覆盖，例如 path/network/tool rules、tool tag/name、harness name。
@@ -145,10 +145,6 @@ Provider 覆盖：
 providers.<id>.defaults.provider
 providers.<id>.defaults.adapter
 providers.<id>.defaults.model
-providers.<id>.defaults.thinking_mode
-providers.<id>.defaults.speed_mode
-providers.<id>.defaults.verbosity
-providers.<id>.defaults.parallel_tool_calls
 providers.<id>.auth.base_url
 providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
@@ -400,7 +396,7 @@ Agena 只在顶层 `runtime` 暴露 provider 客户端身份版本，在顶层 `
 Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 
 - `[providers.default]`：全局默认 provider 名称。
-- `[providers.<id>.defaults]`：provider-local 默认 adapter/model/thinking/speed/verbosity/parallel。
+- `[providers.<id>.defaults]`：provider-local 默认 adapter/model 路由。thinking/speed 等 variant 不在 provider 层设置。
 - `[providers.<id>.auth]`：认证与身份来源。
 - `[providers.<id>.adapters.<adapter-id>]`：协议实现。
 - `[providers.<id>.adapters.<adapter-id>.models."<model-id>"]`：真实上游模型节点，以及该 model 的能力覆盖、Agena 工具传输和 Provider 工具配置。

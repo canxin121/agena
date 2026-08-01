@@ -492,4 +492,26 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn catalog_refresh_never_replaces_provider_route_defaults() {
+        let target: Arc<dyn ModelRuntime> = Arc::new(ToolModeRuntime {
+            default_model: ModelId::new("configured-default"),
+        });
+        let provider = CatalogedModelsProvider::new(
+            Arc::clone(&target),
+            ProviderModelCatalog {
+                models: [(
+                    "newly-discovered".to_owned(),
+                    ConfiguredModelDefinition::default(),
+                )]
+                .into_iter()
+                .collect(),
+                appendable_model_ids: ["newly-discovered".to_owned()].into_iter().collect(),
+            },
+        );
+
+        assert_eq!(provider.default_model().as_ref(), "configured-default");
+        assert_eq!(provider.default_adapter(), target.default_adapter());
+    }
 }

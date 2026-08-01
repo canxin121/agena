@@ -501,8 +501,6 @@ impl SessionManager {
             .store
             .load_session(session_id, state.cache_policy())
             .await?;
-        let mut session = session;
-        self.refresh_execution_policy(&mut session, &state);
         Ok((state, session))
     }
 
@@ -572,26 +570,24 @@ impl SessionManager {
             .await
         };
         match mode {
-            ReplyExecutionMode::Await => self
-                .execute_registered(
-                    session_id,
-                    run_source,
-                    ExecutionConversationTarget::ExistingReply(conversation_identity),
-                    "reply continuation execution",
-                    operation,
-                )
-                .await
-                .map(|session| ReplyDispatch::Completed(Box::new(session))),
-            ReplyExecutionMode::Start => self
-                .start_registered(
-                    session_id,
-                    run_source,
-                    ExecutionConversationTarget::ExistingReply(conversation_identity),
-                    "reply continuation execution",
-                    operation,
-                )
-                .await
-                .map(ReplyDispatch::Accepted),
+            ReplyExecutionMode::Await => Box::pin(self.execute_registered(
+                session_id,
+                run_source,
+                ExecutionConversationTarget::ExistingReply(conversation_identity),
+                "reply continuation execution",
+                operation,
+            ))
+            .await
+            .map(|session| ReplyDispatch::Completed(Box::new(session))),
+            ReplyExecutionMode::Start => Box::pin(self.start_registered(
+                session_id,
+                run_source,
+                ExecutionConversationTarget::ExistingReply(conversation_identity),
+                "reply continuation execution",
+                operation,
+            ))
+            .await
+            .map(ReplyDispatch::Accepted),
         }
     }
 
@@ -670,26 +666,24 @@ impl SessionManager {
             .await
         };
         match mode {
-            ReplyExecutionMode::Await => self
-                .execute_registered(
-                    session_id,
-                    ExecutionSource::PermissionReply,
-                    ExecutionConversationTarget::ExistingReply(conversation_identity),
-                    "approved permission execution",
-                    operation,
-                )
-                .await
-                .map(|session| ReplyDispatch::Completed(Box::new(session))),
-            ReplyExecutionMode::Start => self
-                .start_registered(
-                    session_id,
-                    ExecutionSource::PermissionReply,
-                    ExecutionConversationTarget::ExistingReply(conversation_identity),
-                    "approved permission execution",
-                    operation,
-                )
-                .await
-                .map(ReplyDispatch::Accepted),
+            ReplyExecutionMode::Await => Box::pin(self.execute_registered(
+                session_id,
+                ExecutionSource::PermissionReply,
+                ExecutionConversationTarget::ExistingReply(conversation_identity),
+                "approved permission execution",
+                operation,
+            ))
+            .await
+            .map(|session| ReplyDispatch::Completed(Box::new(session))),
+            ReplyExecutionMode::Start => Box::pin(self.start_registered(
+                session_id,
+                ExecutionSource::PermissionReply,
+                ExecutionConversationTarget::ExistingReply(conversation_identity),
+                "approved permission execution",
+                operation,
+            ))
+            .await
+            .map(ReplyDispatch::Accepted),
         }
     }
 
@@ -913,20 +907,19 @@ impl SessionManager {
                     if session.blocked() {
                         return Ok(ReplyDispatch::Completed(Box::new(session)));
                     }
-                    return self
-                        .dispatch_reply_session(
-                            session,
-                            ReplySessionContinuation {
-                                session_id: request.request.session_id,
-                                conversation_identity,
-                                options: request.request.options,
-                                run_source: ExecutionSource::PermissionReply,
-                                model_turn_id: reply_model_turn_id,
-                                state,
-                            },
-                            mode,
-                        )
-                        .await;
+                    return Box::pin(self.dispatch_reply_session(
+                        session,
+                        ReplySessionContinuation {
+                            session_id: request.request.session_id,
+                            conversation_identity,
+                            options: request.request.options,
+                            run_source: ExecutionSource::PermissionReply,
+                            model_turn_id: reply_model_turn_id,
+                            state,
+                        },
+                        mode,
+                    ))
+                    .await;
                 }
 
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
@@ -992,7 +985,7 @@ impl SessionManager {
             return Ok(ReplyDispatch::Completed(Box::new(session)));
         }
 
-        self.dispatch_reply_session(
+        Box::pin(self.dispatch_reply_session(
             session,
             ReplySessionContinuation {
                 session_id: request.request.session_id,
@@ -1003,7 +996,7 @@ impl SessionManager {
                 state,
             },
             mode,
-        )
+        ))
         .await
     }
 
@@ -1190,7 +1183,7 @@ impl SessionManager {
             return Ok(dispatch);
         }
 
-        self.dispatch_reply_session(
+        Box::pin(self.dispatch_reply_session(
             session,
             ReplySessionContinuation {
                 session_id: request.session_id,
@@ -1201,7 +1194,7 @@ impl SessionManager {
                 state,
             },
             mode,
-        )
+        ))
         .await
     }
 

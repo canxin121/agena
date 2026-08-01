@@ -1,4 +1,4 @@
-import type { PermissionMode } from '../lib/agenaApi'
+import type { ModelRef, PermissionConfig, PermissionMode } from '../lib/agenaApi'
 
 export type PermissionZoneModes = {
   read: PermissionMode
@@ -22,6 +22,11 @@ export type PermissionEditorModel = {
     names: Record<string, PermissionMode>
     rules: Record<string, Record<string, PermissionMode>>
   }
+  approvalModel: {
+    providerId: string
+    adapterId: string
+    modelId: string
+  }
 }
 
 export type PermissionOverviewCounts = {
@@ -38,21 +43,21 @@ export function permissionModeLabel(mode: PermissionMode): string {
 
 export function permissionModeBadgeClass(mode: PermissionMode): 'success' | 'warn' | 'danger' {
   if (mode === 'allow') return 'success'
-  if (mode === 'ask') return 'warn'
+  if (mode === 'auto' || mode === 'ask') return 'warn'
   return 'danger'
 }
 
 export function createPermissionEditorModel(): PermissionEditorModel {
   return {
     path: {
-      workspace: { read: 'allow', write: 'ask' },
-      external: { read: 'ask', write: 'ask' },
+      workspace: { read: 'allow', write: 'auto' },
+      external: { read: 'auto', write: 'auto' },
       rules: {},
     },
     network: {
-      internet: 'ask',
-      private: 'deny',
-      loopback: 'deny',
+      internet: 'auto',
+      private: 'auto',
+      loopback: 'auto',
       rules: {},
     },
     entries: {
@@ -60,6 +65,7 @@ export function createPermissionEditorModel(): PermissionEditorModel {
       names: {},
       rules: {},
     },
+    approvalModel: { providerId: '', adapterId: '', modelId: '' },
   }
 }
 
@@ -71,6 +77,7 @@ export function normalizePermissionEditorModel(value: unknown): PermissionEditor
   const root = isRecord(value) ? value : {}
   const fallback = createPermissionEditorModel()
   const entriesRoot = isRecord(root.entries) ? root.entries : isRecord(root.tools) ? root.tools : {}
+  const approvalModel = isRecord(root.approval_model) ? root.approval_model : {}
 
   return {
     path: {
@@ -97,6 +104,11 @@ export function normalizePermissionEditorModel(value: unknown): PermissionEditor
       tags: normalizeModeRecord(isRecord(entriesRoot) ? entriesRoot.tags : undefined),
       names: normalizeModeRecord(isRecord(entriesRoot) ? entriesRoot.names : undefined),
       rules: normalizeCommandRules(isRecord(entriesRoot) ? entriesRoot.rules : undefined),
+    },
+    approvalModel: {
+      providerId: typeof approvalModel.provider_id === 'string' ? approvalModel.provider_id : '',
+      adapterId: typeof approvalModel.adapter_id === 'string' ? approvalModel.adapter_id : '',
+      modelId: typeof approvalModel.model_id === 'string' ? approvalModel.model_id : '',
     },
   }
 }
@@ -125,7 +137,7 @@ export function commandRuleRows(value: Record<string, PermissionMode> | undefine
     })
     .map(([pattern, access]) => ({
       pattern,
-      access: normalizePermissionMode(access, 'ask'),
+      access: normalizePermissionMode(access, 'auto'),
     }))
 }
 
@@ -163,6 +175,31 @@ export function replacePermissionEditorModel(target: PermissionEditorModel, sour
   replaceRecord(target.entries.tags, source.entries.tags)
   replaceRecord(target.entries.names, source.entries.names)
   replaceRecord(target.entries.rules, source.entries.rules)
+  target.approvalModel.providerId = source.approvalModel.providerId
+  target.approvalModel.adapterId = source.approvalModel.adapterId
+  target.approvalModel.modelId = source.approvalModel.modelId
+}
+
+/** Convert the editor's UI-only `entries` shape to the strict runtime shape. */
+export function permissionConfigFromEditorModel(model: PermissionEditorModel): PermissionConfig {
+  const providerId = model.approvalModel.providerId.trim()
+  const adapterId = model.approvalModel.adapterId.trim()
+  const modelId = model.approvalModel.modelId.trim()
+  const approval_model: ModelRef | undefined =
+    providerId && modelId
+      ? {
+          provider_id: providerId,
+          ...(adapterId ? { adapter_id: adapterId } : {}),
+          model_id: modelId,
+        }
+      : undefined
+
+  return {
+    path: model.path,
+    network: model.network,
+    tools: model.entries,
+    ...(approval_model ? { approval_model } : {}),
+  }
 }
 
 function normalizePathRules(value: unknown): Record<string, PermissionZoneModes> {
@@ -180,11 +217,11 @@ function normalizePathRule(value: unknown): PermissionZoneModes {
     return decodePathRuleString(value)
   }
   if (!isRecord(value)) {
-    return { read: 'ask', write: 'ask' }
+    return { read: 'auto', write: 'auto' }
   }
   return {
-    read: normalizePermissionMode(value.read, 'ask'),
-    write: normalizePermissionMode(value.write, 'ask'),
+    read: normalizePermissionMode(value.read, 'auto'),
+    write: normalizePermissionMode(value.write, 'auto'),
   }
 }
 
@@ -193,6 +230,8 @@ function decodePathRuleString(value: string): PermissionZoneModes {
   switch (normalized) {
     case 'allow':
       return { read: 'allow', write: 'allow' }
+    case 'auto':
+      return { read: 'auto', write: 'auto' }
     case 'ask':
       return { read: 'ask', write: 'ask' }
     case 'deny':
@@ -210,7 +249,7 @@ function decodePathRuleString(value: string): PermissionZoneModes {
     case 'rw':
       return { read: 'allow', write: 'allow' }
     default:
-      return { read: 'ask', write: 'ask' }
+      return { read: 'auto', write: 'auto' }
   }
 }
 
@@ -231,7 +270,7 @@ function normalizeModeRecord(value: unknown): Record<string, PermissionMode> {
   if (!isRecord(value)) return {}
   const out: Record<string, PermissionMode> = {}
   for (const [key, mode] of Object.entries(value)) {
-    out[key] = normalizePermissionMode(mode, 'ask')
+    out[key] = normalizePermissionMode(mode, 'auto')
   }
   return out
 }
@@ -247,14 +286,14 @@ function normalizeCommandRules(value: unknown): Record<string, Record<string, Pe
 
 function normalizeCommandRule(value: unknown): Record<string, PermissionMode> {
   if (typeof value === 'string') {
-    return { '*': normalizePermissionMode(value, 'ask') }
+    return { '*': normalizePermissionMode(value, 'auto') }
   }
   if (!isRecord(value)) {
     return {}
   }
   const out: Record<string, PermissionMode> = {}
   for (const [pattern, mode] of Object.entries(value)) {
-    out[pattern] = normalizePermissionMode(mode, 'ask')
+    out[pattern] = normalizePermissionMode(mode, 'auto')
   }
   return out
 }
@@ -293,12 +332,12 @@ function countLeaves(value: unknown): number {
 }
 
 function normalizePermissionMode(value: unknown, fallback: PermissionMode): PermissionMode {
-  if (value === 'allow' || value === 'ask' || value === 'deny') {
+  if (value === 'allow' || value === 'auto' || value === 'ask' || value === 'deny') {
     return value
   }
   if (typeof value === 'string') {
     const normalized = value.trim().toLowerCase()
-    if (normalized === 'allow' || normalized === 'ask' || normalized === 'deny') {
+    if (normalized === 'allow' || normalized === 'auto' || normalized === 'ask' || normalized === 'deny') {
       return normalized
     }
   }

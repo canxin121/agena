@@ -83,7 +83,7 @@ mod tests {
                 },
                 PermissionRuleStudioItem {
                     label: "Mode".into(),
-                    value: "ask".into(),
+                    value: "auto".into(),
                     detail: String::new(),
                     action: (),
                 },

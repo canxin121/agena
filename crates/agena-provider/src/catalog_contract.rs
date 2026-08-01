@@ -230,10 +230,6 @@ pub struct ProviderNativeToolBinding {
 pub struct ProviderDefaults {
     pub adapter: Option<String>,
     pub model: String,
-    pub thinking_mode: Option<String>,
-    pub speed_mode: Option<String>,
-    pub verbosity: Option<String>,
-    pub parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

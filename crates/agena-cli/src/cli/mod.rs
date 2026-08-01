@@ -364,6 +364,7 @@ pub enum PermissionScopeArg {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum PermissionModeArg {
     Allow,
+    Auto,
     Ask,
     Deny,
 }

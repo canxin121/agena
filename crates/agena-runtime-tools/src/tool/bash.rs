@@ -142,7 +142,12 @@ pub(super) fn execute(
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
 
-    let execution = executor.execute_shell_command(&request)?;
+    let execution = executor.execute_shell_command(
+        &request,
+        final_command.as_str(),
+        context.session_id,
+        context.call_id,
+    )?;
 
     // Plugin chain: command.execute.after. Plugins can observe or rewrite
     // stdout/stderr; we use the (potentially patched) combined output.

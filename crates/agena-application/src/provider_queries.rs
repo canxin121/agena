@@ -31,10 +31,6 @@ pub fn list_providers_response(state: &Application) -> Vec<ProviderSummaryResour
             defaults: ProviderDefaultsResource {
                 adapter: provider.defaults.adapter,
                 model: provider.defaults.model,
-                thinking_mode: provider.defaults.thinking_mode,
-                speed_mode: provider.defaults.speed_mode,
-                verbosity: provider.defaults.verbosity,
-                parallel_tool_calls: provider.defaults.parallel_tool_calls,
             },
             adapters: provider
                 .adapters

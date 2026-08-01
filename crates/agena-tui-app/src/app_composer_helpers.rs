@@ -49,6 +49,7 @@ pub(crate) fn non_empty_owned(value: String) -> Option<String> {
 pub(crate) fn permission_mode_name(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Allow => "allow",
+        PermissionMode::Auto => "auto",
         PermissionMode::Ask => "ask",
         PermissionMode::Deny => "deny",
     }

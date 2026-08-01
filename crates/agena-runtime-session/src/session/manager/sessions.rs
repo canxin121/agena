@@ -207,8 +207,16 @@ impl SessionManager {
         if !self.apply_run_selection_to_session(&mut session, &options) {
             return Ok(session);
         }
-        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
-            .await
+        let persisted = self
+            .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+            .await?;
+        if let Ok(mut permissions) = state.shared_session_permissions.write() {
+            permissions.insert(
+                session_id,
+                persisted.runtime.execution.selection.permission.clone(),
+            );
+        }
+        Ok(persisted)
     }
 
     /// Persist a validated model override for future session turns. This is
@@ -405,11 +413,43 @@ impl SessionManager {
             .store
             .load_session(session_id, state.cache_policy())
             .await?;
+        let previous_shared_permission = state
+            .shared_session_permissions
+            .write()
+            .ok()
+            .and_then(|mut permissions| permissions.insert(session_id, permission.clone()));
         session.runtime.execution.selection.permission = permission;
         session.runtime.execution.effective_permission =
             self.resolve_effective_session_permission(&session, &state);
-        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+        let persisted = match self
+            .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
             .await
+        {
+            Ok(persisted) => persisted,
+            Err(error) => {
+                if let Ok(mut permissions) = state.shared_session_permissions.write() {
+                    match previous_shared_permission {
+                        Some(previous) => {
+                            permissions.insert(session_id, previous);
+                        }
+                        None => {
+                            permissions.remove(&session_id);
+                        }
+                    }
+                }
+                return Err(error);
+            }
+        };
+        // An execution may already hold an older in-memory Session snapshot.
+        // Keep the shared overlay in sync with the durable write so its next
+        // permission preflight observes this update immediately.
+        if let Ok(mut permissions) = state.shared_session_permissions.write() {
+            permissions.insert(
+                session_id,
+                persisted.runtime.execution.selection.permission.clone(),
+            );
+        }
+        Ok(persisted)
     }
 
     pub async fn is_run_active(&self, session_id: i64) -> bool {

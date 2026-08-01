@@ -190,7 +190,7 @@ pub const ALL_KINDS: &[&str] = &[
     "subtask_status_changed",
     "stream_error",
     "message_part_checkpointed",
-    "message_part_delta",
+    "transcript_part_upserted",
     "command_begin",
     "command_output_delta",
     "command_end",

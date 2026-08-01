@@ -80,7 +80,10 @@ const filteredPlugins = computed(() => {
   const query = pluginSearch.value.trim().toLowerCase()
   if (!query) return props.plugins
   return props.plugins.filter((plugin) =>
-    [plugin.plugin_id, plugin.kind, plugin.state, plugin.last_failure?.user.fallback || ''].join(' ').toLowerCase().includes(query),
+    [plugin.plugin_id, plugin.kind, plugin.state, plugin.last_failure?.user.fallback || '']
+      .join(' ')
+      .toLowerCase()
+      .includes(query),
   )
 })
 const manifest = computed(() => props.selectedPlugin?.manifest ?? null)

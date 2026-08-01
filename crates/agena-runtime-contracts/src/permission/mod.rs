@@ -277,6 +277,9 @@ impl ToolPermissionPolicy {
     fn decision_for_mode(&self, name: &str, mode: PermissionMode) -> PermissionDecision {
         match mode {
             PermissionMode::Allow => PermissionDecision::Allow,
+            PermissionMode::Auto => PermissionDecision::Auto {
+                reason: format!("tool '{name}' is eligible for automatic approval"),
+            },
             PermissionMode::Ask => PermissionDecision::Ask {
                 reason: format!("tool '{name}' requires confirmation by policy"),
             },
@@ -295,6 +298,12 @@ impl ToolPermissionPolicy {
             if rule.matches(normalized) {
                 let decision = match rule.mode {
                     PermissionMode::Allow => PermissionDecision::Allow,
+                    PermissionMode::Auto => PermissionDecision::Auto {
+                        reason: format!(
+                            "bash command matches `{}` and is eligible for automatic approval",
+                            rule.pattern
+                        ),
+                    },
                     PermissionMode::Ask => PermissionDecision::Ask {
                         reason: format!(
                             "bash command matches `{}` and requires confirmation",
@@ -323,6 +332,12 @@ impl ToolPermissionPolicy {
             if rule.matches(normalized) {
                 let decision = match rule.mode {
                     PermissionMode::Allow => PermissionDecision::Allow,
+                    PermissionMode::Auto => PermissionDecision::Auto {
+                        reason: format!(
+                            "bash command matches `{}` and is eligible for automatic approval",
+                            rule.pattern
+                        ),
+                    },
                     PermissionMode::Ask => PermissionDecision::Ask {
                         reason: format!(
                             "bash command matches `{}` and requires confirmation",
@@ -369,6 +384,7 @@ pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> 
     match (left, right) {
         (PermissionMode::Deny, _) | (_, PermissionMode::Deny) => PermissionMode::Deny,
         (PermissionMode::Ask, _) | (_, PermissionMode::Ask) => PermissionMode::Ask,
+        (PermissionMode::Auto, _) | (_, PermissionMode::Auto) => PermissionMode::Auto,
         (PermissionMode::Allow, PermissionMode::Allow) => PermissionMode::Allow,
     }
 }

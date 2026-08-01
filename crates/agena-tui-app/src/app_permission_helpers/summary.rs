@@ -77,6 +77,7 @@ pub(crate) fn permission_resource_override_summary(
                 "permission-studio-tool-default-summary",
                 &agena_tui::fl_args!("value" => permission_mode_label(i18n, match mode {
                     agena_api::resource::PermissionMode::Allow => PermissionMode::Allow,
+                    agena_api::resource::PermissionMode::Auto => PermissionMode::Auto,
                     agena_api::resource::PermissionMode::Ask => PermissionMode::Ask,
                     agena_api::resource::PermissionMode::Deny => PermissionMode::Deny,
                 })),

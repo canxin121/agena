@@ -23,7 +23,10 @@ fn visible_shortcut_hints_track_the_central_keymap() {
     assert!(composer.contains("Ctrl+R input"));
     assert!(composer.contains("Ctrl+L approval"));
     for removed in ["F2", "Alt+U", "Alt+A", "F3", "F4", "F6"] {
-        assert!(!composer.contains(removed), "composer still references {removed}");
+        assert!(
+            !composer.contains(removed),
+            "composer still references {removed}"
+        );
     }
     assert!(global.contains("Tab/Shift+Tab"));
     assert!(!global.contains("Alt+Tab"));

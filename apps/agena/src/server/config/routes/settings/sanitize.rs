@@ -102,7 +102,6 @@ impl<'a> SettingsUpdateSanitizer<'a> {
             "githubClientId",
             "githubScopes",
             "defaultModel",
-            "defaultVariant",
             "defaultGitIdentityId",
         ] {
             if let Some(Value::String(v)) = self.input.get(key) {

@@ -275,7 +275,7 @@ mod permission_overlay_tests {
         assert_eq!(tool.qualifier, "git push origin main");
         assert_eq!(tool.scope, "session");
         assert_eq!(tool.session_id, "42");
-        assert_eq!(tool.mode, PermissionMode::Allow);
+        assert_eq!(tool.mode, PermissionMode::Auto);
 
         let path = permission_rule_draft_from_request(&request_for(
             PermissionAction::PathAccess {

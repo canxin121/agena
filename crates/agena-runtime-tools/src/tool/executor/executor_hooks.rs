@@ -29,7 +29,14 @@ impl ToolExecutor {
         call_id: i64,
         mut execution: ToolInvocationExecution,
     ) -> Result<ToolInvocationExecution, ToolError> {
+        execution.view.normalize_presentation();
         self.apply_after_hooks(invocation, session_id, call_id, &mut execution)?;
+        execution.view.normalize_presentation();
+        if execution.view.summary.is_empty() {
+            return Err(ToolError::plugin(format!(
+                "tool `{model_tool_name}` returned an empty activity summary; every tool result must provide a concise outcome summary"
+            )));
+        }
         self.apply_result_policy(model_tool_name, result_policy, call_id, &mut execution)?;
         self.apply_model_output_boundary(model_tool_name, call_id, &mut execution)?;
         Ok(execution)
@@ -59,6 +66,7 @@ impl ToolExecutor {
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
             title: summary.title,
+            summary: summary.summary,
             output_text: summary.output_text,
             payload: summary.payload,
             metadata: summary.metadata.into_iter().collect(),
@@ -71,7 +79,7 @@ impl ToolExecutor {
 
         execution.view.apply_neutral_fields(
             hooked.title,
-            execution.view.summary.clone(),
+            hooked.summary,
             hooked.output_text,
             hooked.metadata,
         );

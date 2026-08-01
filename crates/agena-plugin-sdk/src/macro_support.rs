@@ -92,13 +92,53 @@ where
         Value::String(value) => value.clone(),
         _ => payload.to_string(),
     };
+    let summary = typed_tool_summary(&payload);
     Ok(crate::ToolInvokeOutput::from_parts(
         String::new(),
+        summary,
         output_text,
         Some(payload),
         Default::default(),
         Vec::new(),
     ))
+}
+
+/// Structural summary for SDK shorthand outputs. Tools that need a semantic
+/// result sentence should return `ToolInvokeOutput` directly; this adapter is
+/// intentionally limited to stable shape/count information.
+pub fn typed_tool_summary(value: &Value) -> String {
+    match value {
+        Value::Null => "No result".to_string(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => agena_tool::normalize_tool_summary(value),
+        Value::Array(items) => format!("{} items", items.len()),
+        Value::Object(fields) => {
+            if let Some(summary) = fields
+                .get("summary")
+                .and_then(Value::as_str)
+                .filter(|summary| !summary.trim().is_empty())
+            {
+                return agena_tool::normalize_tool_summary(summary);
+            }
+            if let Some(status) = fields
+                .get("status")
+                .and_then(Value::as_str)
+                .filter(|status| !status.trim().is_empty())
+            {
+                return format!("Status {status}");
+            }
+            for key in ["results", "items", "files", "matches", "entries"] {
+                if let Some(items) = fields.get(key).and_then(Value::as_array) {
+                    return format!("{} {key}", items.len());
+                }
+            }
+            if let Some(count) = fields.get("count").and_then(Value::as_u64) {
+                return format!("{count} items");
+            }
+            format!("{} fields", fields.len())
+        }
+    }
 }
 
 pub fn dedupe_tool_tags(tags: &mut Vec<ToolTag>) {

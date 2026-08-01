@@ -20,6 +20,7 @@ pub(super) enum OpenAiProviderNativeToolEvent {
         id: Option<String>,
         invocation: ToolInvocation,
         title: String,
+        summary: String,
         output_text: String,
         blocks: Vec<ProviderNativeToolOutputBlock>,
         details: ToolOutput,
@@ -79,6 +80,7 @@ pub(super) fn responses_provider_native_tool_event(
                 id,
                 invocation,
                 title,
+                summary,
                 output_text,
                 blocks,
                 details,
@@ -90,6 +92,7 @@ pub(super) fn responses_provider_native_tool_event(
                 id,
                 invocation,
                 title,
+                summary,
                 output_text,
                 blocks,
                 details,
@@ -135,13 +138,22 @@ pub(super) fn openai_web_search_tool_event(
             raw,
         }
     } else {
+        let blocks = openai_web_search_blocks(action);
+        let result_count = blocks
+            .iter()
+            .filter_map(|block| match block {
+                ProviderNativeToolOutputBlock::SearchResults { results, .. } => Some(results.len()),
+                _ => None,
+            })
+            .sum::<usize>();
         OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
             invocation,
-            title: String::new(),
+            title: "Web search".to_string(),
+            summary: format!("{result_count} results"),
             output_text: String::new(),
-            blocks: openai_web_search_blocks(action),
+            blocks,
             details,
             raw,
         }
@@ -185,13 +197,22 @@ pub(super) fn openai_file_search_tool_event(
             raw,
         }
     } else {
+        let blocks = openai_file_search_blocks(queries.as_slice(), item.get("results"));
+        let result_count = blocks
+            .iter()
+            .filter_map(|block| match block {
+                ProviderNativeToolOutputBlock::SearchResults { results, .. } => Some(results.len()),
+                _ => None,
+            })
+            .sum::<usize>();
         OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
             invocation,
             title,
+            summary: format!("{result_count} results"),
             output_text: String::new(),
-            blocks: openai_file_search_blocks(queries.as_slice(), item.get("results")),
+            blocks,
             details,
             raw,
         }
@@ -249,6 +270,7 @@ pub(super) fn openai_code_interpreter_tool_event(
             id,
             invocation,
             title,
+            summary: format!("{} outputs", blocks.len()),
             output_text: openai_code_interpreter_output_text(blocks.as_slice()),
             blocks,
             details,
@@ -300,13 +322,19 @@ pub(super) fn openai_image_generation_tool_event(
             raw,
         }
     } else {
+        let blocks = openai_image_generation_blocks(item);
+        let image_count = blocks
+            .iter()
+            .filter(|block| matches!(block, ProviderNativeToolOutputBlock::Media { .. }))
+            .count();
         OpenAiProviderNativeToolEvent::Completed {
             stream_key,
             id,
             invocation,
             title,
+            summary: format!("{image_count} images"),
             output_text: revised_prompt.unwrap_or_default().to_owned(),
-            blocks: openai_image_generation_blocks(item),
+            blocks,
             details,
             raw,
         }

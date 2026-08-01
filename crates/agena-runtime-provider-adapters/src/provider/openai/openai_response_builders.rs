@@ -818,10 +818,14 @@ mod tool_api_history_tests {
             vec![PartContent::operation(OperationPart::completed(
                 0,
                 invocation,
-                "help output".to_owned(),
-                Vec::new(),
-                Vec::new(),
-                ToolOutput::default(),
+                agena_runtime_contracts::message::OperationCompletion::new(
+                    "Tool help",
+                    "Help returned",
+                    "help output".to_owned(),
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                ),
                 TimeRange::default(),
             ))],
         );

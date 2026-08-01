@@ -912,10 +912,14 @@ mod tests {
             vec![PartContent::operation(OperationPart::completed(
                 0,
                 invocation,
-                "ok".to_owned(),
-                Vec::new(),
-                Vec::new(),
-                ToolOutput::default(),
+                agena_runtime_contracts::message::OperationCompletion::new(
+                    "Provider tool",
+                    "Completed",
+                    "ok".to_owned(),
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                ),
                 TimeRange::default(),
             ))],
         )

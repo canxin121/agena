@@ -31,8 +31,12 @@ pub fn execution_from_answers(
         }
     }
 
-    let mut view = ToolExecutionView::simple("Ask user", lines.join("\n"));
     let selection_count: usize = answers.values().map(Vec::len).sum();
+    let mut view = ToolExecutionView::simple(
+        "Ask user",
+        format!("{selection_count} answers"),
+        lines.join("\n"),
+    );
     view.metadata
         .insert("answer_count".to_string(), selection_count.to_string());
     view.metadata.insert(
@@ -52,6 +56,7 @@ pub fn execution_from_answers(
 pub fn execution_from_timeout(input: &AskUserToolInput) -> ToolPayloadExecution {
     let mut view = ToolExecutionView::simple(
         "Ask user",
+        "Timed out",
         "No user response before the deadline. Continue with best judgment.",
     );
     view.metadata

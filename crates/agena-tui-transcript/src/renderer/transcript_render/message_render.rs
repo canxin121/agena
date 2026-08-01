@@ -3,9 +3,10 @@ use super::super::{
     I18n, Local, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
-    TranscriptNodeKind, UnicodeWidthStr, activity_status_icon, concise_text, format_timestamp,
-    push_label_value, push_markdown, push_multiline, push_section_heading, push_single_line,
-    push_wrapped_line, render_entry_detailed, strip_terminal_ansi_sequences, style_for_role,
+    TranscriptNodeKind, UnicodeWidthStr, concise_text, format_timestamp, push_activity_headline,
+    push_expanded_markdown, push_expanded_tool_text, push_label_value, push_markdown_document,
+    push_section_heading, push_wrapped_line, render_entry_detailed,
+    render_expanded_tool_text_block, strip_terminal_ansi_sequences, style_for_role,
     tool_output_copy_text, transcript_message_parts, transcript_part_content,
     transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
@@ -14,7 +15,7 @@ use super::request_render::{preview_for_part, render_user_input_request};
 use crate::snapshot::activity_presentation;
 use crate::ui_text;
 use crate::{
-    MessageRequestPartResource, PartExecutionStatusResource, TranscriptActivityContent,
+    MessageRequestPartResource, TranscriptActivityContent, TranscriptActivitySection,
     TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
 use agena_api::resource::{
@@ -59,6 +60,10 @@ pub(crate) struct RenderedNodeDraft {
     copy_text: String,
     toggleable: bool,
     expanded: bool,
+    /// Canonical Activities with independently navigable sections own only
+    /// their headline range. Other nodes default to all lines they rendered.
+    end_line: Option<usize>,
+    children: Vec<RenderedTranscriptNode>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -77,18 +82,22 @@ pub(crate) fn append_rendered_part_node(
     let start_line = lines.len();
     let node = render_part_node(message, part, width, lines, i18n, defaults, expansions);
     if lines.len() > start_line {
+        let end_line = node.end_line.unwrap_or(lines.len());
         let atomic = node.kind.uses_atomic_navigation()
-            || lines[start_line..].iter().any(|line| !line.math.is_empty());
+            || lines[start_line..end_line]
+                .iter()
+                .any(|line| !line.math.is_empty());
         nodes.push(RenderedTranscriptNode {
             key: node.key,
             kind: node.kind,
             start_line,
-            end_line: lines.len(),
+            end_line,
             copy_text: node.copy_text,
             atomic,
             toggleable: node.toggleable,
             expanded: node.expanded,
         });
+        nodes.extend(node.children);
     }
 }
 
@@ -123,23 +132,77 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
     )
 }
 
-fn activity_headline(
-    title: &str,
-    status: PartExecutionStatusResource,
-    expanded: bool,
-    toggleable: bool,
-) -> String {
-    let disclosure = if toggleable && expanded { "▾" } else { "▸" };
-    format!("{disclosure} {} {title}", activity_status_icon(status))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CanonicalActivityDetailFormat {
+    /// Render line-oriented output as plain text, but promote recognisable
+    /// Markdown documents to the shared AST renderer.
+    Auto,
+    Markdown,
+    Json,
+    Plain,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CanonicalActivityDetail {
+    title: Option<String>,
+    body: String,
+    format: CanonicalActivityDetailFormat,
+    default_collapsed: bool,
+}
+
+impl CanonicalActivityDetail {
+    fn section(
+        title: impl Into<String>,
+        body: impl Into<String>,
+        format: CanonicalActivityDetailFormat,
+    ) -> Self {
+        Self {
+            title: Some(title.into()),
+            body: body.into(),
+            format,
+            default_collapsed: false,
+        }
+    }
+
+    fn collapsed_section(
+        title: impl Into<String>,
+        body: impl Into<String>,
+        format: CanonicalActivityDetailFormat,
+    ) -> Self {
+        Self {
+            title: Some(title.into()),
+            body: body.into(),
+            format,
+            default_collapsed: true,
+        }
+    }
+
+    fn body(body: impl Into<String>, format: CanonicalActivityDetailFormat) -> Self {
+        Self {
+            title: None,
+            body: body.into(),
+            format,
+            default_collapsed: false,
+        }
+    }
+
+    fn copy_text(&self) -> String {
+        self.title.as_ref().map_or_else(
+            || self.body.clone(),
+            |title| format!("{title}\n{}", self.body),
+        )
+    }
 }
 
 fn canonical_activity_details(
     payload: &agena_domain::ActivityPayload,
     summary: &str,
-) -> Vec<String> {
+    error_equivalence_text: Option<&str>,
+) -> Vec<CanonicalActivityDetail> {
     match payload {
         agena_domain::ActivityPayload::Operation(operation) => {
             let mut details = Vec::new();
+            let mut has_result_presentation = false;
             if !operation.authorization.permissions.is_empty() {
                 let permissions = operation
                     .authorization
@@ -213,19 +276,37 @@ fn canonical_activity_details(
                     })
                     .collect::<Vec<_>>()
                     .join("\n\n");
-                details.push(format!("Authorization\n{permissions}"));
+                details.push(CanonicalActivityDetail::section(
+                    "Authorization",
+                    permissions,
+                    CanonicalActivityDetailFormat::Plain,
+                ));
             }
             if !operation.invocation.input.is_empty()
                 && let Ok(input) = serde_json::to_string_pretty(&serde_json::Value::from(
                     operation.invocation.input.clone(),
                 ))
             {
-                details.push(format!("Input\n{input}"));
+                details.push(CanonicalActivityDetail::collapsed_section(
+                    "Input",
+                    input,
+                    CanonicalActivityDetailFormat::Json,
+                ));
             }
+            // Failed runtime Operations intentionally mirror the safe failure
+            // text into `model_output_text` so the model can react to it.
+            // That provider-facing copy is not a second human-facing Result.
             if !operation.model_output_text.trim().is_empty()
-                && operation.model_output_text.trim() != summary.trim()
+                && !error_equivalence_text.is_some_and(|error| {
+                    canonical_text_equivalent(operation.model_output_text.as_str(), error)
+                })
             {
-                details.push(format!("Result\n{}", operation.model_output_text));
+                details.push(CanonicalActivityDetail::section(
+                    "Result",
+                    operation.model_output_text.clone(),
+                    CanonicalActivityDetailFormat::Auto,
+                ));
+                has_result_presentation = true;
             }
             // Named sections are the tool's explicit expanded presentation.
             // Keep them structured through the domain projection and render
@@ -236,14 +317,20 @@ fn canonical_activity_details(
                 let text = section.text.trim();
                 if title.is_empty()
                     || text.is_empty()
-                    || text == summary.trim()
-                    || text == operation.model_output_text.trim()
+                    || canonical_text_equivalent(text, operation.model_output_text.as_str())
+                    || error_equivalence_text
+                        .is_some_and(|error| canonical_text_equivalent(text, error))
                 {
                     continue;
                 }
-                let detail = format!("{title}\n{text}");
+                let detail = CanonicalActivityDetail::section(
+                    title,
+                    text,
+                    CanonicalActivityDetailFormat::Markdown,
+                );
                 if !details.iter().any(|existing| existing == &detail) {
                     details.push(detail);
+                    has_result_presentation = true;
                 }
             }
             // The model-visible result is the primary human-facing section.
@@ -255,115 +342,418 @@ fn canonical_activity_details(
                 && let Some(output) = operation.details.to_json_payload()
                 && let Ok(output) = serde_json::to_string_pretty(&output)
             {
-                details.push(format!("Structured result\n{output}"));
+                details.push(CanonicalActivityDetail::section(
+                    "Structured result",
+                    output,
+                    CanonicalActivityDetailFormat::Json,
+                ));
+                has_result_presentation = true;
             }
             if !operation.details.managed_outputs.is_empty() {
-                details.push(format!(
-                    "Managed outputs\n{}",
+                details.push(CanonicalActivityDetail::section(
+                    "Managed outputs",
                     operation
                         .details
                         .managed_outputs
                         .iter()
                         .map(|output| output.path.as_str())
                         .collect::<Vec<_>>()
-                        .join("\n")
+                        .join("\n"),
+                    CanonicalActivityDetailFormat::Plain,
+                ));
+                has_result_presentation = true;
+            }
+            // `summary` is the compact collapsed projection. Expanded
+            // Operations render the actual output/sections instead. It is
+            // only a fallback result when the producer supplied no detailed
+            // result at all; failures are rendered exclusively from `error`.
+            if operation.error.is_none() && !has_result_presentation && !summary.trim().is_empty() {
+                details.push(CanonicalActivityDetail::section(
+                    "Result",
+                    summary,
+                    CanonicalActivityDetailFormat::Auto,
                 ));
             }
             details
         }
-        agena_domain::ActivityPayload::SkillReference(skill) => [
-            (!skill.instructions.trim().is_empty()).then(|| skill.instructions.clone()),
-            Some(format!("{} · {}", skill.source, skill.content_hash)),
-        ]
-        .into_iter()
-        .flatten()
-        .collect(),
-        agena_domain::ActivityPayload::SkillExecution(skill) => vec![format!(
-            "execution {}{}",
-            skill.execution_id,
-            skill
-                .parent_activity_id
-                .map(|id| format!(" · parent {id}"))
-                .unwrap_or_default()
-        )],
+        agena_domain::ActivityPayload::SkillReference(skill) => {
+            let mut details = Vec::new();
+            if !skill.instructions.trim().is_empty() {
+                details.push(CanonicalActivityDetail::section(
+                    "Instructions",
+                    skill.instructions.clone(),
+                    CanonicalActivityDetailFormat::Markdown,
+                ));
+            }
+            details.push(CanonicalActivityDetail::section(
+                "Source",
+                format!("{} · {}", skill.source, skill.content_hash),
+                CanonicalActivityDetailFormat::Plain,
+            ));
+            details
+        }
+        agena_domain::ActivityPayload::SkillExecution(skill) => {
+            vec![CanonicalActivityDetail::section(
+                "Execution",
+                format!(
+                    "{}{}",
+                    skill.execution_id,
+                    skill
+                        .parent_activity_id
+                        .map(|id| format!(" · parent {id}"))
+                        .unwrap_or_default()
+                ),
+                CanonicalActivityDetailFormat::Plain,
+            )]
+        }
         agena_domain::ActivityPayload::Progress(progress) => {
             match (progress.current, progress.total) {
-                (Some(current), Some(total)) => vec![format!("{current}/{total}")],
-                (Some(current), None) => vec![current.to_string()],
-                (None, Some(total)) => vec![format!("total {total}")],
+                (Some(current), Some(total)) => vec![CanonicalActivityDetail::body(
+                    format!("{current}/{total}"),
+                    CanonicalActivityDetailFormat::Plain,
+                )],
+                (Some(current), None) => vec![CanonicalActivityDetail::body(
+                    current.to_string(),
+                    CanonicalActivityDetailFormat::Plain,
+                )],
+                (None, Some(total)) => vec![CanonicalActivityDetail::body(
+                    format!("total {total}"),
+                    CanonicalActivityDetailFormat::Plain,
+                )],
                 (None, None) => Vec::new(),
             }
         }
-        agena_domain::ActivityPayload::Checklist(checklist) => checklist
-            .items
-            .iter()
-            .map(|item| format!("{:?} · {:?} · {}", item.status, item.priority, item.content))
-            .collect(),
-        agena_domain::ActivityPayload::Search(search) => search
-            .results
-            .iter()
-            .filter_map(|result| serde_json::to_string_pretty(result).ok())
-            .collect(),
-        agena_domain::ActivityPayload::FileChanges(changes) => changes
-            .changes
-            .iter()
-            .filter_map(|change| serde_json::to_string_pretty(change).ok())
-            .collect(),
-        agena_domain::ActivityPayload::NestedTask(task) => vec![format!(
-            "task {}{}",
-            task.task_id,
-            task.session_id
-                .map(|id| format!(" · session {id}"))
-                .unwrap_or_default()
-        )],
-        agena_domain::ActivityPayload::Maintenance(maintenance) => {
-            serde_json::to_string_pretty(maintenance)
-                .ok()
+        agena_domain::ActivityPayload::Checklist(checklist) => {
+            let body = checklist
+                .items
+                .iter()
+                .map(|item| {
+                    format!(
+                        "- [{checked}] **{:?}** · {}",
+                        item.priority,
+                        item.content,
+                        checked = if format!("{:?}", item.status).eq_ignore_ascii_case("completed")
+                        {
+                            "x"
+                        } else {
+                            " "
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!body.is_empty())
+                .then(|| {
+                    CanonicalActivityDetail::section(
+                        "Checklist",
+                        body,
+                        CanonicalActivityDetailFormat::Markdown,
+                    )
+                })
                 .into_iter()
                 .collect()
         }
-        agena_domain::ActivityPayload::Error(error) => {
-            let fallback = error.problem.user.fallback.clone();
-            if !fallback.is_empty() {
-                vec![fallback]
-            } else {
-                Vec::new()
-            }
+        agena_domain::ActivityPayload::Search(search) => {
+            serde_json::to_string_pretty(&search.results)
+                .ok()
+                .map(|results| {
+                    CanonicalActivityDetail::section(
+                        "Results",
+                        results,
+                        CanonicalActivityDetailFormat::Json,
+                    )
+                })
+                .into_iter()
+                .collect()
         }
+        agena_domain::ActivityPayload::FileChanges(changes) => {
+            serde_json::to_string_pretty(&changes.changes)
+                .ok()
+                .map(|changes| {
+                    CanonicalActivityDetail::section(
+                        "Changes",
+                        changes,
+                        CanonicalActivityDetailFormat::Json,
+                    )
+                })
+                .into_iter()
+                .collect()
+        }
+        agena_domain::ActivityPayload::NestedTask(task) => {
+            vec![CanonicalActivityDetail::section(
+                "Task",
+                format!(
+                    "{}{}",
+                    task.task_id,
+                    task.session_id
+                        .map(|id| format!(" · session {id}"))
+                        .unwrap_or_default()
+                ),
+                CanonicalActivityDetailFormat::Plain,
+            )]
+        }
+        agena_domain::ActivityPayload::Maintenance(maintenance) => {
+            serde_json::to_string_pretty(maintenance)
+                .ok()
+                .map(|maintenance| {
+                    CanonicalActivityDetail::section(
+                        "Details",
+                        maintenance,
+                        CanonicalActivityDetailFormat::Json,
+                    )
+                })
+                .into_iter()
+                .collect()
+        }
+        // The problem is rendered once by the shared red Error section.
+        agena_domain::ActivityPayload::Error(_) => Vec::new(),
         agena_domain::ActivityPayload::Custom(custom) => {
-            let mut details = vec![format!("schema version {}", custom.schema_version)];
+            let mut details = vec![CanonicalActivityDetail::section(
+                "Schema",
+                format!("{} · version {}", custom.schema, custom.schema_version),
+                CanonicalActivityDetailFormat::Plain,
+            )];
             if let Ok(data) = serde_json::to_string_pretty(&custom.data) {
-                details.push(data);
+                details.push(CanonicalActivityDetail::section(
+                    "Data",
+                    data,
+                    CanonicalActivityDetailFormat::Json,
+                ));
             }
             details
         }
         agena_domain::ActivityPayload::Resource(resource) => {
             let mut details = Vec::new();
             if let Some(media_type) = resource.media_type.as_ref() {
-                details.push(media_type.clone());
+                details.push(format!("Type: {media_type}"));
             }
             if let Some(size) = resource.size_bytes {
-                details.push(format!("{size} bytes"));
+                details.push(format!("Size: {size} bytes"));
             }
             if let (Some(width), Some(height)) = (resource.width, resource.height) {
-                details.push(format!("{width}×{height}"));
+                details.push(format!("Dimensions: {width}×{height}"));
             }
-            details
+            (!details.is_empty())
+                .then(|| {
+                    CanonicalActivityDetail::section(
+                        "Details",
+                        details.join("\n"),
+                        CanonicalActivityDetailFormat::Plain,
+                    )
+                })
+                .into_iter()
+                .collect()
         }
         agena_domain::ActivityPayload::TextArtifact(artifact) => artifact
             .language
             .as_ref()
-            .map(|language| format!("language {language}"))
+            .map(|language| {
+                CanonicalActivityDetail::section(
+                    "Language",
+                    language,
+                    CanonicalActivityDetailFormat::Plain,
+                )
+            })
             .into_iter()
             .collect(),
         agena_domain::ActivityPayload::Interaction(interaction) => {
             serde_json::to_string_pretty(interaction)
                 .ok()
+                .map(|interaction| {
+                    CanonicalActivityDetail::section(
+                        "Request",
+                        interaction,
+                        CanonicalActivityDetailFormat::Json,
+                    )
+                })
                 .into_iter()
                 .collect()
         }
         agena_domain::ActivityPayload::Reasoning(_) => Vec::new(),
     }
+}
+
+fn canonical_text_equivalent(left: &str, right: &str) -> bool {
+    let normalize = |value: &str| {
+        sanitize_terminal_text(value)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let left = normalize(left);
+    let right = normalize(right);
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+    left == right
+}
+
+fn canonical_activity_copy_text(
+    title: String,
+    summary: String,
+    details: &[CanonicalActivityDetail],
+    error_text: Option<String>,
+    include_summary: bool,
+) -> String {
+    let mut sections = vec![title];
+    let candidates = [
+        (include_summary && error_text.is_none()).then_some(summary),
+        (!details.is_empty()).then_some(
+            details
+                .iter()
+                .map(CanonicalActivityDetail::copy_text)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        error_text,
+    ];
+    for section in candidates.into_iter().flatten() {
+        if section.trim().is_empty() {
+            continue;
+        }
+        if !sections
+            .iter()
+            .any(|existing| canonical_text_equivalent(existing.as_str(), section.as_str()))
+        {
+            sections.push(section);
+        }
+    }
+    sections.join("\n")
+}
+
+fn patch_rendered_lines_style(lines: &mut [RenderedLine], style: Style) {
+    for line in lines {
+        line.style = line.style.patch(style);
+        if let Some(rich_line) = line.rich_line.take() {
+            line.rich_line = Some(rich_line.patch_style(style));
+        }
+    }
+}
+
+fn render_canonical_activity_detail(
+    out: &mut Vec<RenderedLine>,
+    detail: &CanonicalActivityDetail,
+    width: u16,
+    accent: Option<Style>,
+    expanded: bool,
+) {
+    if detail.body.trim().is_empty() {
+        return;
+    }
+    if let Some(title) = detail
+        .title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty())
+    {
+        let disclosure = if detail.default_collapsed {
+            if expanded { "▾" } else { "▸" }
+        } else {
+            "›"
+        };
+        let preview = (!expanded)
+            .then(|| canonical_activity_detail_preview(detail))
+            .flatten()
+            .map(|preview| format!(" · {preview}"))
+            .unwrap_or_default();
+        push_section_heading(
+            out,
+            format!("    {disclosure} {title}{preview}").as_str(),
+            accent.map_or_else(
+                || {
+                    Style::default()
+                        .fg(agena_tui_components::theme::special_color())
+                        .add_modifier(Modifier::BOLD)
+                },
+                |style| style.add_modifier(Modifier::BOLD),
+            ),
+            width,
+        );
+    }
+    if !expanded {
+        return;
+    }
+    let body_prefix = if detail.title.is_some() {
+        "      "
+    } else {
+        "    "
+    };
+    let body_start = out.len();
+    match detail.format {
+        CanonicalActivityDetailFormat::Auto => {
+            render_expanded_tool_text_block(out, body_prefix, detail.body.as_str(), width);
+        }
+        CanonicalActivityDetailFormat::Markdown => {
+            push_expanded_markdown(out, body_prefix, detail.body.as_str(), width);
+        }
+        CanonicalActivityDetailFormat::Json => {
+            let markdown = format!("```json\n{}\n```", detail.body.trim());
+            push_expanded_markdown(out, body_prefix, markdown.as_str(), width);
+        }
+        CanonicalActivityDetailFormat::Plain => {
+            push_expanded_tool_text(
+                out,
+                body_prefix,
+                detail.body.as_str(),
+                Style::default(),
+                width,
+            );
+        }
+    }
+    if let Some(style) = accent {
+        patch_rendered_lines_style(&mut out[body_start..], style);
+    }
+}
+
+fn canonical_activity_detail_preview(detail: &CanonicalActivityDetail) -> Option<String> {
+    match detail.format {
+        CanonicalActivityDetailFormat::Json => {
+            serde_json::from_str::<serde_json::Value>(detail.body.as_str())
+                .ok()
+                .and_then(|value| match value {
+                    serde_json::Value::Object(fields) => Some(format!(
+                        "{} field{}",
+                        fields.len(),
+                        if fields.len() == 1 { "" } else { "s" }
+                    )),
+                    serde_json::Value::Array(items) => Some(format!(
+                        "{} item{}",
+                        items.len(),
+                        if items.len() == 1 { "" } else { "s" }
+                    )),
+                    _ => None,
+                })
+        }
+        CanonicalActivityDetailFormat::Auto
+        | CanonicalActivityDetailFormat::Markdown
+        | CanonicalActivityDetailFormat::Plain => detail
+            .body
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| concise_text(line, 48)),
+    }
+}
+
+fn rendered_activity_section_node(
+    key: TranscriptNodeKey,
+    start_line: usize,
+    end_line: usize,
+    copy_text: String,
+    toggleable: bool,
+    expanded: bool,
+    lines: &[RenderedLine],
+) -> Option<RenderedTranscriptNode> {
+    (end_line > start_line).then(|| RenderedTranscriptNode {
+        key,
+        kind: TranscriptNodeKind::Activity,
+        start_line,
+        end_line,
+        copy_text,
+        atomic: lines[start_line..end_line]
+            .iter()
+            .any(|line| !line.math.is_empty()),
+        toggleable,
+        expanded,
+    })
 }
 
 fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> MessageAttachment {
@@ -424,19 +814,19 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
                     e.user.fallback.clone()
                 }
             });
-            let details = canonical_activity_details(payload, summary.as_str());
-            Some(
-                [
-                    Some(title),
-                    (!summary.is_empty()).then_some(summary),
-                    (!details.is_empty()).then_some(details.join("\n")),
-                    error_text,
-                ]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join("\n"),
-            )
+            let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
+            let details =
+                canonical_activity_details(payload, summary.as_str(), error_equivalence_text);
+            Some(canonical_activity_copy_text(
+                title,
+                summary,
+                details.as_slice(),
+                error_text,
+                !matches!(
+                    payload.as_ref(),
+                    agena_domain::ActivityPayload::Operation(_)
+                ),
+            ))
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             Some(reasoning.preferred_text())
@@ -775,10 +1165,12 @@ pub(crate) fn render_part_node(
                 copy_text,
                 toggleable: false,
                 expanded: true,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Text(text) => {
-            push_markdown(out, "  ", text.text.as_str(), width);
+            push_markdown_document(out, "  ", text.text.as_str(), width);
             RenderedNodeDraft {
                 key: TranscriptNodeKey::Content {
                     entry_id: message.id,
@@ -788,6 +1180,8 @@ pub(crate) fn render_part_node(
                 copy_text: text.text.clone(),
                 toggleable: false,
                 expanded: true,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
@@ -800,80 +1194,6 @@ pub(crate) fn render_part_node(
                 .copied()
                 .unwrap_or(defaults.activity_expanded);
             let (_, title, summary, error) = activity_presentation(payload);
-            let details = canonical_activity_details(payload, summary.as_str());
-            let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
-            // A persisted Activity header consists of title + compact summary.
-            // The collapsed transcript must consume both, while avoiding a
-            // second copy when a specialised title (for example tools_list)
-            // already incorporates that same summary.
-            let headline_title = if summary.trim().is_empty()
-                || title.contains(summary.trim())
-                || title.contains('→')
-            {
-                title.clone()
-            } else {
-                format!("{title} · {}", concise_text(summary.as_str(), 72))
-            };
-            push_single_line(
-                out,
-                "  ",
-                activity_headline(headline_title.as_str(), part.status, expanded, toggleable)
-                    .as_str(),
-                Style::default()
-                    .fg(match part.status {
-                        PartExecutionStatusResource::Failed => {
-                            agena_tui_components::theme::danger_color()
-                        }
-                        PartExecutionStatusResource::Completed => {
-                            agena_tui_components::theme::success_color()
-                        }
-                        _ => agena_tui_components::theme::muted_color(),
-                    })
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
-            if expanded
-                && matches!(
-                    payload.as_ref(),
-                    agena_domain::ActivityPayload::Operation(_)
-                )
-                && !summary.trim().is_empty()
-            {
-                push_single_line(
-                    out,
-                    "    ",
-                    "Result",
-                    Style::default()
-                        .fg(agena_tui_components::theme::muted_color())
-                        .add_modifier(Modifier::BOLD),
-                    width,
-                );
-            }
-            if expanded && !summary.trim().is_empty() {
-                push_multiline(
-                    out,
-                    if matches!(
-                        payload.as_ref(),
-                        agena_domain::ActivityPayload::Operation(_)
-                    ) {
-                        "      "
-                    } else {
-                        "    "
-                    },
-                    summary.as_str(),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                    width,
-                );
-            }
-            if expanded {
-                for detail in &details {
-                    push_multiline(out, "    ", detail, Style::default(), width);
-                }
-                if let agena_domain::ActivityPayload::Resource(resource) = payload.as_ref() {
-                    let attachment = canonical_resource_attachment(resource);
-                    let _ = render_attachment_image(out, "    ", &attachment, width);
-                }
-            }
             let error_text = error.as_ref().map(|e| {
                 if e.is_unexpected() {
                     format!("{} Reference: {}", e.user.fallback, e.id)
@@ -881,34 +1201,150 @@ pub(crate) fn render_part_node(
                     e.user.fallback.clone()
                 }
             });
-            if expanded
-                && let Some(ref error_str) = error_text
-                && error_str.trim() != summary.trim()
-            {
-                push_multiline(
-                    out,
-                    "    ",
-                    error_str.as_str(),
-                    Style::default().fg(agena_tui_components::theme::danger_color()),
-                    width,
+            let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
+            let details =
+                canonical_activity_details(payload, summary.as_str(), error_equivalence_text);
+            let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
+            push_activity_headline(
+                out,
+                part.status,
+                expanded,
+                toggleable,
+                title.as_str(),
+                summary.as_str(),
+                width,
+            );
+            let headline_end = out.len();
+            let mut children = Vec::new();
+            let mut detail_index = 0_usize;
+            let is_operation = matches!(
+                payload.as_ref(),
+                agena_domain::ActivityPayload::Operation(_)
+            );
+            let render_summary =
+                expanded && !is_operation && error.is_none() && !summary.trim().is_empty();
+            if render_summary {
+                let summary_start = out.len();
+                render_expanded_tool_text_block(out, "    ", summary.as_str(), width);
+                patch_rendered_lines_style(
+                    &mut out[summary_start..],
+                    Style::default().fg(agena_tui_components::theme::muted_color()),
                 );
+                if let Some(child) = rendered_activity_section_node(
+                    TranscriptNodeKey::ActivitySection {
+                        entry_id: message.id,
+                        content_id: part.id,
+                        section: TranscriptActivitySection::Detail(detail_index),
+                    },
+                    summary_start,
+                    out.len(),
+                    summary.clone(),
+                    false,
+                    true,
+                    out,
+                ) {
+                    children.push(child);
+                    detail_index = detail_index.saturating_add(1);
+                }
             }
-            let copy_text = [
-                Some(title),
-                (!summary.is_empty()).then_some(summary),
-                (!details.is_empty()).then_some(details.join("\n")),
+            if expanded {
+                for detail in &details {
+                    let section = if detail.default_collapsed {
+                        TranscriptActivitySection::Input
+                    } else {
+                        let section = TranscriptActivitySection::Detail(detail_index);
+                        detail_index = detail_index.saturating_add(1);
+                        section
+                    };
+                    let section_key = TranscriptNodeKey::ActivitySection {
+                        entry_id: message.id,
+                        content_id: part.id,
+                        section,
+                    };
+                    let section_expanded = if detail.default_collapsed {
+                        expansions.get(&section_key).copied().unwrap_or(false)
+                    } else {
+                        true
+                    };
+                    let section_start = out.len();
+                    render_canonical_activity_detail(out, detail, width, None, section_expanded);
+                    if let Some(child) = rendered_activity_section_node(
+                        section_key,
+                        section_start,
+                        out.len(),
+                        detail.copy_text(),
+                        detail.default_collapsed,
+                        section_expanded,
+                        out,
+                    ) {
+                        children.push(child);
+                    }
+                }
+                if let agena_domain::ActivityPayload::Resource(resource) = payload.as_ref() {
+                    let section_start = out.len();
+                    let attachment = canonical_resource_attachment(resource);
+                    let _ = render_attachment_image(out, "    ", &attachment, width);
+                    if let Some(child) = rendered_activity_section_node(
+                        TranscriptNodeKey::ActivitySection {
+                            entry_id: message.id,
+                            content_id: part.id,
+                            section: TranscriptActivitySection::Detail(detail_index),
+                        },
+                        section_start,
+                        out.len(),
+                        resource.name.clone(),
+                        false,
+                        true,
+                        out,
+                    ) {
+                        children.push(child);
+                    }
+                }
+            }
+            if expanded && let Some(ref error_str) = error_text {
+                let section_start = out.len();
+                render_canonical_activity_detail(
+                    out,
+                    &CanonicalActivityDetail::section(
+                        "Error",
+                        error_str,
+                        CanonicalActivityDetailFormat::Auto,
+                    ),
+                    width,
+                    Some(Style::default().fg(agena_tui_components::theme::danger_color())),
+                    true,
+                );
+                if let Some(child) = rendered_activity_section_node(
+                    TranscriptNodeKey::ActivitySection {
+                        entry_id: message.id,
+                        content_id: part.id,
+                        section: TranscriptActivitySection::Error,
+                    },
+                    section_start,
+                    out.len(),
+                    error_str.clone(),
+                    false,
+                    true,
+                    out,
+                ) {
+                    children.push(child);
+                }
+            }
+            let copy_text = canonical_activity_copy_text(
+                title,
+                summary,
+                details.as_slice(),
                 error_text,
-            ]
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>()
-            .join("\n");
+                !is_operation,
+            );
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
                 copy_text,
                 toggleable,
                 expanded,
+                end_line: Some(headline_end),
+                children,
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
@@ -921,29 +1357,21 @@ pub(crate) fn render_part_node(
                 .copied()
                 .unwrap_or(defaults.activity_expanded);
             let summary = reasoning.preferred_text();
+            push_activity_headline(
+                out,
+                part.status,
+                expanded,
+                true,
+                "thinking",
+                concise_text(summary.as_str(), 112).as_str(),
+                width,
+            );
             if expanded {
-                push_section_heading(
-                    out,
-                    "  ▾ thinking",
-                    Style::default()
-                        .fg(agena_tui_components::theme::muted_color())
-                        .add_modifier(Modifier::BOLD),
-                    width,
-                );
-                push_multiline(
-                    out,
-                    "    ",
-                    summary.as_str(),
+                let body_start = out.len();
+                render_expanded_tool_text_block(out, "    ", summary.as_str(), width);
+                patch_rendered_lines_style(
+                    &mut out[body_start..],
                     Style::default().fg(agena_tui_components::theme::muted_color()),
-                    width,
-                );
-            } else {
-                push_single_line(
-                    out,
-                    "  ▸ ",
-                    thinking_collapsed_summary(part.status, summary.as_str()).as_str(),
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                    width,
                 );
             }
             RenderedNodeDraft {
@@ -952,6 +1380,8 @@ pub(crate) fn render_part_node(
                 copy_text: summary,
                 toggleable: true,
                 expanded,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) => {
@@ -970,9 +1400,16 @@ pub(crate) fn render_part_node(
                 copy_text: tool_output_copy_text(part, tool, i18n),
                 toggleable: true,
                 expanded,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
+            };
+            let expanded = expansions.get(&key).copied().unwrap_or(true);
             let text = if error.problem.is_unexpected() {
                 format!(
                     "{} Reference: {}",
@@ -981,22 +1418,36 @@ pub(crate) fn render_part_node(
             } else {
                 error.problem.user.fallback.clone()
             };
-            push_multiline(
+            push_activity_headline(
                 out,
-                "  ▸ × ",
-                &text,
-                Style::default().fg(agena_tui_components::theme::danger_color()),
+                part.status,
+                expanded,
+                true,
+                "Error",
+                text.as_str(),
                 width,
             );
+            if expanded {
+                render_canonical_activity_detail(
+                    out,
+                    &CanonicalActivityDetail::section(
+                        "Error",
+                        text.as_str(),
+                        CanonicalActivityDetailFormat::Auto,
+                    ),
+                    width,
+                    Some(Style::default().fg(agena_tui_components::theme::danger_color())),
+                    true,
+                );
+            }
             RenderedNodeDraft {
-                key: TranscriptNodeKey::Activity {
-                    entry_id: message.id,
-                    content_id: part.id,
-                },
+                key,
                 kind: TranscriptNodeKind::Activity,
                 copy_text: text,
-                toggleable: false,
-                expanded: true,
+                toggleable: true,
+                expanded,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
@@ -1017,26 +1468,7 @@ pub(crate) fn render_part_node(
                     }
                 },
             );
-            push_single_line(
-                out,
-                "  ",
-                format!("▸ {title}").as_str(),
-                Style::default()
-                    .fg(match status {
-                        TranscriptAssistantReplyLifecycle::Running => {
-                            agena_tui_components::theme::special_color()
-                        }
-                        TranscriptAssistantReplyLifecycle::Completed => {
-                            agena_tui_components::theme::success_color()
-                        }
-                        TranscriptAssistantReplyLifecycle::Failed
-                        | TranscriptAssistantReplyLifecycle::Cancelled => {
-                            agena_tui_components::theme::danger_color()
-                        }
-                    })
-                    .add_modifier(Modifier::BOLD),
-                width,
-            );
+            push_activity_headline(out, part.status, false, false, title.as_str(), "", width);
             RenderedNodeDraft {
                 key: TranscriptNodeKey::Activity {
                     entry_id: message.id,
@@ -1046,6 +1478,8 @@ pub(crate) fn render_part_node(
                 copy_text: title,
                 toggleable: false,
                 expanded: true,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
@@ -1067,19 +1501,13 @@ pub(crate) fn render_part_node(
                     .unwrap_or_else(|| item.mime.clone());
                 labels.push(label);
             }
-            push_single_line(
+            push_activity_headline(
                 out,
-                "  ",
-                format!(
-                    "{} {}: {}",
-                    if expanded { "▾" } else { "▸" },
-                    ui_text::t(i18n, "message-input-activity-attachment"),
-                    labels.join(", ")
-                )
-                .as_str(),
-                Style::default()
-                    .fg(agena_tui_components::theme::special_color())
-                    .add_modifier(Modifier::BOLD),
+                part.status,
+                expanded,
+                true,
+                ui_text::t(i18n, "message-input-activity-attachment").as_str(),
+                labels.join(", ").as_str(),
                 width,
             );
             if expanded {
@@ -1101,6 +1529,8 @@ pub(crate) fn render_part_node(
                 copy_text: labels.join("\n"),
                 toggleable: true,
                 expanded,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
@@ -1114,50 +1544,51 @@ pub(crate) fn render_part_node(
                 .unwrap_or(defaults.activity_expanded);
             let mut labels = Vec::new();
             for skill in &reference.skills {
-                let label = if skill.description.trim().is_empty() {
-                    skill.name.clone()
-                } else {
-                    format!("{} — {}", skill.name, skill.description.trim())
-                };
-                labels.push(label);
+                labels.push(skill.name.clone());
             }
-            push_single_line(
+            push_activity_headline(
                 out,
-                "  ",
-                format!(
-                    "{} {}: {}",
-                    if expanded { "▾" } else { "▸" },
-                    ui_text::t(i18n, "message-input-activity-skill"),
-                    labels.join(", ")
-                )
-                .as_str(),
-                Style::default()
-                    .fg(agena_tui_components::theme::special_color())
-                    .add_modifier(Modifier::BOLD),
+                part.status,
+                expanded,
+                true,
+                ui_text::t(i18n, "message-input-activity-skill").as_str(),
+                labels.join(", ").as_str(),
                 width,
             );
             if expanded {
                 for skill in &reference.skills {
-                    push_label_value(
+                    render_canonical_activity_detail(
                         out,
-                        "    - ",
-                        skill.description.as_str(),
-                        Style::default(),
+                        &CanonicalActivityDetail::section(
+                            skill.name.as_str(),
+                            skill.description.as_str(),
+                            CanonicalActivityDetailFormat::Auto,
+                        ),
                         width,
+                        None,
+                        true,
                     );
-                    push_label_value(
+                    render_canonical_activity_detail(
                         out,
-                        "      ",
-                        format!("{} · {}", skill.source, skill.content_hash).as_str(),
-                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                        &CanonicalActivityDetail::section(
+                            "Instructions",
+                            skill.instructions.as_str(),
+                            CanonicalActivityDetailFormat::Markdown,
+                        ),
                         width,
+                        None,
+                        true,
                     );
-                    push_multiline(
+                    render_canonical_activity_detail(
                         out,
-                        "      ",
-                        skill.instructions.as_str(),
-                        Style::default().fg(agena_tui_components::theme::muted_color()),
+                        &CanonicalActivityDetail::section(
+                            "Source",
+                            format!("{} · {}", skill.source, skill.content_hash),
+                            CanonicalActivityDetailFormat::Plain,
+                        ),
                         width,
+                        None,
+                        true,
                     );
                 }
             }
@@ -1167,6 +1598,8 @@ pub(crate) fn render_part_node(
                 copy_text: labels.join("\n"),
                 toggleable: true,
                 expanded,
+                end_line: None,
+                children: Vec::new(),
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
@@ -1187,6 +1620,8 @@ pub(crate) fn render_part_node(
                             .join("\n"),
                         toggleable: false,
                         expanded: true,
+                        end_line: None,
+                        children: Vec::new(),
                     }
                 }
             }
@@ -1294,8 +1729,9 @@ fn push_user_document_line(out: &mut Vec<RenderedLine>, tokens: Vec<UserDocument
     out.push(RenderedLine::rich(Line::from(spans)).with_copy_projection(copy_text, 2));
 }
 
+#[cfg(test)]
 pub(crate) fn thinking_collapsed_summary(
-    status: PartExecutionStatusResource,
+    status: agena_api::message_part::PartExecutionStatusResource,
     text: &str,
 ) -> String {
     let normalized = trim_empty_line_edges(sanitize_terminal_text(text).as_str());
@@ -1312,7 +1748,7 @@ pub(crate) fn thinking_collapsed_summary(
     let suffix = if additional_content { " …" } else { "" };
     format!(
         "{} thinking · {}{suffix}",
-        activity_status_icon(status),
+        super::super::transcript_tool_summary::activity_status_icon(status),
         concise_text(preview, 112)
     )
 }

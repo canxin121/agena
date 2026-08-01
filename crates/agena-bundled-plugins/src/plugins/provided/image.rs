@@ -287,6 +287,7 @@ impl OpenAiToolsPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             title,
+            format!("image/png · {} bytes", bytes.len()),
             format!("Saved OpenAI image artifact to '{}'.", path.display()),
             Some(serde_json::json!({
                 "provider": "openai",
@@ -378,6 +379,7 @@ impl OpenAiToolsPlugin {
             .unwrap_or_else(|| "OpenAI web search completed without a text summary.".to_owned());
         Ok(ToolInvokeOutput::from_parts(
             "OpenAI web search",
+            "Response received",
             output_text,
             Some(value),
             std::collections::BTreeMap::from([

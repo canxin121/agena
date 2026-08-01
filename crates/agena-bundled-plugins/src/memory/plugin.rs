@@ -318,7 +318,8 @@ impl MemoryPlugin {
             "results": results,
         });
         Ok(ToolInvokeOutput::from_parts(
-            "memory search",
+            format!("Search memory · {query}"),
+            format!("{} matches", results.len()),
             lines.join("\n"),
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -341,7 +342,8 @@ impl MemoryPlugin {
         let payload = serde_json::to_value(memory_record_output(&entry))
             .map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
-            "memory get",
+            format!("Read memory · {}", memory_name(&entry)),
+            format!("Loaded {}", memory_name(&entry)),
             format_memory_entry(&entry),
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -391,7 +393,8 @@ impl MemoryPlugin {
                 .join("\n")
         };
         Ok(ToolInvokeOutput::from_parts(
-            "memory list",
+            "List memory",
+            format!("{} records", entries.len()),
             text,
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -427,7 +430,8 @@ impl MemoryPlugin {
         let payload = serde_json::to_value(memory_record_output(&entry))
             .map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
-            "memory write",
+            format!("Write memory · {}", memory_name(&entry)),
+            format!("Saved {}", memory_name(&entry)),
             format!("Saved memory '{}'.", memory_name(&entry)),
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -449,7 +453,8 @@ impl MemoryPlugin {
             .forget(name.as_str())
             .map_err(memory_error_to_plugin)?;
         Ok(ToolInvokeOutput::from_parts(
-            "memory delete",
+            format!("Delete memory · {name}"),
+            format!("Deleted {name}"),
             format!("Deleted memory '{}'.", name),
             None,
             std::collections::BTreeMap::new(),

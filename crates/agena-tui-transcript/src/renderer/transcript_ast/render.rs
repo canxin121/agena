@@ -186,6 +186,24 @@ fn render_paragraph(
     render_inline_flow(out, prefix, prefix, inlines, Style::default(), width);
 }
 
+/// Parse one compact Markdown inline field into a rich terminal line.
+///
+/// Activity titles and summaries are deliberately one-line producer fields,
+/// so block Markdown is rejected here instead of being flattened into a
+/// surprising headline. Callers can fall back to a plain span when this
+/// returns `None`.
+pub fn markdown_inline_line(source: &str, base_style: Style) -> Option<Line<'static>> {
+    let blocks = parse_markdown_document(source);
+    let [block] = blocks.as_slice() else {
+        return None;
+    };
+    let MarkdownNode::Paragraph(inlines) = &block.parsed else {
+        return None;
+    };
+    let mut lines = rich_inline_lines(inlines, base_style);
+    (lines.len() == 1).then(|| lines.remove(0))
+}
+
 /// Render one inline flow with distinct first-line and continuation prefixes.
 ///
 /// Lists and headings use this to place their marker on the row that actually

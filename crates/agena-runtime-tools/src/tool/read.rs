@@ -51,7 +51,13 @@ pub(super) fn execute(
             attachment: None,
         };
 
-        let mut view = ToolExecutionView::simple(format!("Read {}", display_path), preview);
+        let summary = if truncated {
+            format!("{count} items · more available")
+        } else {
+            format!("{count} items")
+        };
+        let mut view =
+            ToolExecutionView::simple(format!("Read {}", display_path), summary, preview);
         view.metadata
             .insert("kind".to_string(), "directory".to_string());
         view.metadata
@@ -85,7 +91,12 @@ pub(super) fn execute(
         attachment: None,
     };
 
-    let mut view = ToolExecutionView::simple(format!("Read {}", display_path), preview);
+    let summary = if truncated {
+        format!("{rendered_lines} of {total_lines} lines")
+    } else {
+        format!("{total_lines} lines")
+    };
+    let mut view = ToolExecutionView::simple(format!("Read {}", display_path), summary, preview);
     view.metadata.insert("kind".to_string(), "file".to_string());
     view.metadata
         .insert("offset".to_string(), offset.to_string());

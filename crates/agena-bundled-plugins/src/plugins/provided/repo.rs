@@ -90,6 +90,7 @@ impl SnapshotPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             "snapshot status",
+            format!("{} active snapshots", response.snapshots.len()),
             output,
             Some(payload),
             std::collections::BTreeMap::new(),

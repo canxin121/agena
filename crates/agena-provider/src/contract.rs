@@ -1588,6 +1588,7 @@ pub enum CompletionStreamEvent {
         invocation: agena_domain::ToolInvocation,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         title: String,
+        summary: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         output_text: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

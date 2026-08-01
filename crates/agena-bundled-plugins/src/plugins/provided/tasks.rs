@@ -283,7 +283,7 @@ impl TasksPlugin {
         .await?;
         spawn_task(host, Arc::clone(&entry), request, callback_context(context));
         Ok(task_output(
-            "task created",
+            "Start task",
             format!(
                 "Started delegated task '{task_id}' in the background. Use tasks.get, tasks.output, or tasks.wait to inspect it."
             ),
@@ -321,7 +321,7 @@ impl TasksPlugin {
             })
             .collect::<Vec<_>>();
         Ok(task_output(
-            "task list",
+            "List tasks",
             format!("{} delegated task(s).", states.len()),
             states,
             false,
@@ -345,7 +345,7 @@ impl TasksPlugin {
         let state =
             entry_state_for_parent(&self.tasks, input.task_id.as_str(), context.session_id)?;
         Ok(task_output(
-            format!("task {}", input.task_id),
+            "Task details",
             format!("Task '{}' is {}.", input.task_id, state.status),
             vec![state],
             false,
@@ -394,7 +394,16 @@ impl TasksPlugin {
                 .join("\n\n")
         };
         Ok(ToolInvokeOutput::from_parts(
-            format!("task output {}", input.task_id),
+            "Task output",
+            if output.has_more {
+                format!(
+                    "{} chunks · {} · more available",
+                    output.chunks.len(),
+                    state.status
+                )
+            } else {
+                format!("{} chunks · {}", output.chunks.len(), state.status)
+            },
             text,
             Some(serde_json::json!({
                 "task": state,
@@ -445,7 +454,7 @@ impl TasksPlugin {
             entry_state_for_parent(&self.tasks, input.task_id.as_str(), context.session_id)?;
         persist_task_state(&self.inner.host()?, callback_context(context), &state).await?;
         Ok(task_output(
-            format!("task cancel {}", input.task_id),
+            "Cancel task",
             format!("Cancellation requested for task '{}'.", input.task_id),
             vec![entry_state_for_parent(
                 &self.tasks,
@@ -486,7 +495,7 @@ impl TasksPlugin {
             })
             .await?;
         Ok(task_output(
-            format!("task message {}", input.task_id),
+            "Send task message",
             format!("Guidance delivered to task '{}'.", input.task_id),
             vec![state],
             false,
@@ -549,7 +558,7 @@ impl TasksPlugin {
         .await?;
         spawn_task(host, Arc::clone(&entry), request, callback_context(context));
         Ok(task_output(
-            format!("task followup {}", input.task_id),
+            "Follow up task",
             format!("Resumed task '{}' with a follow-up prompt.", input.task_id),
             vec![entry_state_for_parent(
                 &self.tasks,
@@ -613,7 +622,7 @@ impl TasksPlugin {
             }
         };
         Ok(task_output(
-            "task wait",
+            "Wait for tasks",
             if timed_out {
                 format!("Wait timed out after {} ms.", input.timeout_ms)
             } else {
@@ -946,8 +955,20 @@ fn task_output(
     tasks: Vec<AsyncTaskState>,
     timed_out: bool,
 ) -> ToolInvokeOutput {
+    let summary = if timed_out {
+        format!("Timed out · {} tasks", tasks.len())
+    } else if let [task] = tasks.as_slice() {
+        task.status.clone()
+    } else {
+        let terminal = tasks
+            .iter()
+            .filter(|task| is_terminal(task.status.as_str()))
+            .count();
+        format!("{} tasks · {terminal} terminal", tasks.len())
+    };
     ToolInvokeOutput::from_parts(
         title,
+        summary,
         text,
         Some(serde_json::json!({ "tasks": tasks, "timed_out": timed_out })),
         BTreeMap::from([

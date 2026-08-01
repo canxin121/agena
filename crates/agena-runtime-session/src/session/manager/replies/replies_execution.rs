@@ -1766,8 +1766,7 @@ impl SessionManager {
                     return;
                 };
                 operation.authorization.push_pending(request.clone());
-                operation.summary = format!("Awaiting approval · {reason}");
-                operation.result.display.summary = operation.summary.clone();
+                operation.set_summary(format!("Awaiting approval · {reason}"));
                 tool_part.status = ExecutionStatus::Pending;
                 tool_part.summary = Some(operation.summary.clone());
             })?;
@@ -2024,7 +2023,7 @@ impl SessionManager {
             ))) = part.content.as_ref()
             {
                 let mut operation = operation.clone();
-                operation.summary = "Execution cancelled".to_string();
+                operation.set_summary("Execution cancelled");
                 operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
                 part.set_content(PartContent::operation(operation));
             }
@@ -2157,17 +2156,17 @@ impl SessionManager {
             let mut operation = OperationPart::completed(
                 resolved.call_id,
                 resolved.invocation.clone(),
-                output_text.clone(),
-                blocks.clone(),
-                execution.view.attachments.clone(),
-                tool_output.clone(),
+                crate::message::OperationCompletion::new(
+                    completion_title.clone(),
+                    presentation_summary.clone(),
+                    output_text.clone(),
+                    blocks.clone(),
+                    execution.view.attachments.clone(),
+                    tool_output.clone(),
+                ),
                 lifecycle.clone(),
             );
             operation.authorization = authorization.clone();
-            operation.set_title(completion_title.clone());
-            if !presentation_summary.trim().is_empty() {
-                operation.set_summary(presentation_summary.clone());
-            }
             operation.set_presentation_sections(summary.sections.clone());
             operation.result.metadata.extend(
                 summary

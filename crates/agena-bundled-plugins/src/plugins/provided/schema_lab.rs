@@ -46,6 +46,7 @@ impl SchemaLabPlugin {
         let target = section.unwrap_or_else(|| "all sections".to_owned());
         Ok(ToolInvokeOutput::from_parts(
             "Schema Lab",
+            format!("Inspected {target}"),
             format!(
                 "agena.schema_lab is a no-op fixture plugin.\nRequested section: {target}\nInclude defaults: {include_defaults}"
             ),
@@ -64,6 +65,7 @@ impl SchemaLabPlugin {
         let label = label.unwrap_or_else(|| "schema-lab".to_owned());
         Ok(ToolInvokeOutput::from_parts(
             "Schema Lab",
+            format!("Echoed {label}"),
             format!("Schema lab echo for `{label}` completed without side effects."),
             Some(json!({
                 "label": label,

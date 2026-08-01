@@ -106,6 +106,7 @@ impl EnvironmentPlugin {
                     let elapsed_ms = started.elapsed().as_millis() as u64;
                     return Ok(ToolInvokeOutput::from_parts(
                         "environment ready",
+                        format!("Ready after {elapsed_ms} ms · {summary}"),
                         format!("Environment became ready after {elapsed_ms} ms: {summary}"),
                         Some(serde_json::json!({
                             "ready": true,

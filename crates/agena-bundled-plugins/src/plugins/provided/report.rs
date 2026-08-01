@@ -139,6 +139,7 @@ impl ReportPlugin {
         .collect::<std::collections::BTreeMap<_, _>>();
         Ok(ToolInvokeOutput::from_parts(
             format!("{} finding(s)", input.findings.len()),
+            input.summary.clone(),
             lines.join("\n\n"),
             Some(serde_json::json!({
                 "summary": input.summary,

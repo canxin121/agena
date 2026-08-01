@@ -17,7 +17,7 @@ pub use tool::{
     CronRetryPolicyInput, CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput,
     GlobToolInput, GrepToolInput, InteractionNotifyToolInput, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ModelVisibleOutput,
-    OperationBlock, OperationPart, ReadToolInput, ScheduleWakeupToolInput, ShellCommandInput,
-    ShellMonitorInput, ShellMonitorPatternKind, ShellToolInput, TaskAccess, TaskToolInput,
-    ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    OperationBlock, OperationCompletion, OperationPart, ReadToolInput, ScheduleWakeupToolInput,
+    ShellCommandInput, ShellMonitorInput, ShellMonitorPatternKind, ShellToolInput, TaskAccess,
+    TaskToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };

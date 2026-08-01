@@ -32,7 +32,7 @@ pub use self::transcript_text::*;
 pub use self::transcript_tool_summary::*;
 pub(super) use crate::{
     TableColumnAlignment, fit_table_column_widths, is_markdown_table_header,
-    markdown_fence_delimiter, push_markdown, push_multiline, push_table_border, push_wrapped_line,
+    markdown_fence_delimiter, push_multiline, push_table_border, push_wrapped_line,
     push_wrapped_rich_line, sanitize_terminal_text, strip_terminal_ansi_sequences,
     truncate_display_width, wrap_rich_line,
 };
@@ -266,8 +266,8 @@ mod tests {
     use super::{
         I18n, Line, MessageStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults,
         TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
-        activity_status_icon, markdown_blocks, refresh_spinner_line, render_entry_detailed,
-        render_entry_export, render_markdown_block, render_tool_execution,
+        activity_status_icon, bounded_title_summary, markdown_blocks, refresh_spinner_line,
+        render_entry_detailed, render_entry_export, render_markdown_block, render_tool_execution,
         render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
         transcript_spinner_placeholder,
@@ -1076,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn folded_apply_patch_reports_paths_and_line_delta() {
+    fn folded_operation_uses_the_tool_provided_title_and_summary() {
         let input = agena_api::message_part::StructuredObjectResource {
             fields: vec![
                 agena_api::message_part::StructuredFieldResource {
@@ -1105,14 +1105,39 @@ mod tests {
                 input,
                 ..Default::default()
             },
-            title: "Tool tools.call".to_owned(),
+            title: "Apply patch".to_owned(),
+            summary: "1 file changed · +1 −1".to_owned(),
             ..Default::default()
         };
 
         assert_eq!(
-            tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool,),
-            "● fs.apply_patch · M apps/agena-cli/src/app.rs · +1 −1"
+            tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool, 80),
+            "● Apply patch · 1 file changed · +1 −1"
         );
+    }
+
+    #[test]
+    fn folded_headline_preserves_title_and_spends_only_remaining_width_on_summary() {
+        assert_eq!(
+            bounded_title_summary("Read README.md", "86 lines", 40),
+            "Read README.md · 86 lines"
+        );
+
+        let bounded = bounded_title_summary(
+            "Process run Create a tiny test PNG",
+            "Exit 0 · generated pixel.png with a transparent background",
+            52,
+        );
+        assert!(bounded.starts_with("Process run Create a tiny test PNG · "));
+        assert!(bounded.ends_with('…'));
+        assert!(UnicodeWidthStr::width(bounded.as_str()) <= 52);
+
+        let long_title = "Inspect a genuinely long tool subject that consumes the whole viewport";
+        let bounded =
+            bounded_title_summary(long_title, "This summary must not displace the title", 32);
+        assert!(bounded.ends_with('…'));
+        assert!(!bounded.contains("summary"));
+        assert!(UnicodeWidthStr::width(bounded.as_str()) <= 32);
     }
 
     #[test]
@@ -1159,7 +1184,8 @@ mod tests {
                 input,
                 ..Default::default()
             },
-            title: "Tool tools.call".to_owned(),
+            title: "Grep TODO".to_owned(),
+            summary: "36 matches in crates".to_owned(),
             details: agena_api::message_part::ToolOutputResource {
                 payload: agena_api::message_part::StructuredObjectResource {
                     fields: vec![agena_api::message_part::StructuredFieldResource {
@@ -1175,8 +1201,8 @@ mod tests {
         };
 
         assert_eq!(
-            tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool,),
-            "● fs.grep · /TODO/ in crates · *.rs · 36 matches"
+            tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool, 80),
+            "● Grep TODO · 36 matches in crates"
         );
     }
 
@@ -1197,7 +1223,8 @@ mod tests {
                 input,
                 ..Default::default()
             },
-            title: "Read file".to_owned(),
+            title: "Read secrets.env".to_owned(),
+            summary: "permission denied by workspace policy".to_owned(),
             error: Some(agena_api::message_part::OperationErrorResource {
                 failure: agena_failure::Failure::new(
                     agena_failure::FailureCode::new("tool.permission_denied"),
@@ -1217,8 +1244,8 @@ mod tests {
         };
 
         assert_eq!(
-            tool_execution_compact_summary(PartExecutionStatusResource::Failed, &tool,),
-            "× fs.read · secrets.env · permission denied by workspace policy"
+            tool_execution_compact_summary(PartExecutionStatusResource::Failed, &tool, 80),
+            "× Read secrets.env · permission denied by workspace policy"
         );
     }
 
@@ -1230,13 +1257,14 @@ mod tests {
                 name: "agena.lsp.servers".to_owned(),
                 ..Default::default()
             },
-            title: "Awaiting permission: tool 'agena.lsp.servers' requires confirmation".to_owned(),
+            title: "Language servers".to_owned(),
+            summary: "Awaiting approval".to_owned(),
             ..Default::default()
         };
 
         assert_eq!(
-            tool_execution_compact_summary(PartExecutionStatusResource::Pending, &tool,),
-            "○ lsp.servers · awaiting approval"
+            tool_execution_compact_summary(PartExecutionStatusResource::Pending, &tool, 80),
+            "○ Language servers · Awaiting approval"
         );
     }
 
@@ -1487,4 +1515,4 @@ mod tests {
         assert_eq!(blocks[3].kind, TranscriptNodeKind::MarkdownParagraph);
     }
 }
-use self::{activity_status_icon, should_suppress_markdown_block, tool_invocation_label};
+use self::{should_suppress_markdown_block, tool_invocation_label};

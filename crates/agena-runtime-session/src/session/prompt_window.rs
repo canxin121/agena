@@ -969,10 +969,14 @@ fn synthetic_tool_result_message(
         vec![PartContent::operation(OperationPart::completed(
             call_id,
             invocation,
-            output_text,
-            Vec::new(),
-            Vec::new(),
-            details,
+            crate::message::OperationCompletion::new(
+                "Provider tool result",
+                "Result available",
+                output_text,
+                Vec::new(),
+                Vec::new(),
+                details,
+            ),
             agena_domain::TimeRange::default(),
         ))],
     );

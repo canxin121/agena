@@ -831,6 +831,7 @@ impl SettingsPlugin {
         Ok(ToolInvokeOutput::from_parts(
             title,
             text,
+            text,
             Some(payload),
             std::collections::BTreeMap::from([("agena.effect".to_string(), "config".to_string())]),
             Vec::new(),
@@ -956,6 +957,7 @@ fn output_with_layer<T>(
 where
     T: Serialize,
 {
+    let text = text.into();
     let mut payload =
         serde_json::to_value(payload).map_err(|err| PluginError::internal(err.to_string()))?;
     if let Some(layer) = layer {
@@ -964,6 +966,7 @@ where
     redact_settings_payload(&mut payload);
     Ok(ToolInvokeOutput::from_parts(
         title,
+        text.clone(),
         text,
         Some(payload),
         std::collections::BTreeMap::from([("agena.effect".to_string(), "settings".to_string())]),

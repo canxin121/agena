@@ -38,7 +38,10 @@ pub(super) fn execute_create(
     super::mcp::block_on(async move { scheduler.add(job).await });
 
     let view = ToolExecutionView::simple(
-        format!("cron_create {id}"),
+        "Create schedule",
+        next.as_deref()
+            .map(|next| format!("Next run {next}"))
+            .unwrap_or_else(|| "Created · no next run".to_string()),
         format!(
             "scheduled cron `{}` -> {:?}",
             input.expression,
@@ -76,7 +79,11 @@ pub(super) fn execute_list(
         }
         s
     };
-    let view = ToolExecutionView::simple("cron_list", summary_text);
+    let view = ToolExecutionView::simple(
+        "List schedules",
+        format!("{} schedules", summaries.len()),
+        summary_text,
+    );
     Ok(ToolPayloadExecution::new(
         ToolPayloadOutput::CronList { jobs: summaries },
         view,
@@ -92,8 +99,11 @@ pub(super) fn execute_delete(
         .map_err(|e| ToolError::plugin(format!("cron_delete: invalid id: {e}")))?;
     let scheduler_for_remove = scheduler.clone();
     let removed = super::mcp::block_on(async move { scheduler_for_remove.remove(id).await });
-    let view =
-        ToolExecutionView::simple(format!("cron_delete {id}"), format!("removed: {removed}"));
+    let view = ToolExecutionView::simple(
+        "Delete schedule",
+        if removed { "Removed" } else { "Not found" },
+        format!("removed: {removed}"),
+    );
     Ok(ToolPayloadExecution::new(
         ToolPayloadOutput::CronDelete {
             id: id.to_string(),
@@ -141,7 +151,12 @@ pub(super) fn execute_update(
     .ok_or_else(|| ToolError::plugin(format!("cron_update: job {id} was not found")))?;
     let summary = summarize(updated);
     let view = ToolExecutionView::simple(
-        format!("cron_update {id}"),
+        "Update schedule",
+        summary
+            .next_fire_at
+            .as_deref()
+            .map(|next| format!("Updated · next run {next}"))
+            .unwrap_or_else(|| "Updated · no next run".to_string()),
         format!("updated job {id}; next={:?}", summary.next_fire_at),
     );
     Ok(ToolPayloadExecution::new(
@@ -161,7 +176,12 @@ pub(super) fn execute_pause(
         .ok_or_else(|| ToolError::plugin(format!("cron_pause: job {id} was not found")))?;
     let summary = summarize(job);
     let view = ToolExecutionView::simple(
-        format!("cron_pause {id}"),
+        "Pause schedule",
+        if summary.paused {
+            "Paused"
+        } else {
+            "Not paused"
+        },
         format!("paused job {id}: {}", summary.paused),
     );
     Ok(ToolPayloadExecution::new(
@@ -181,7 +201,16 @@ pub(super) fn execute_resume(
         .ok_or_else(|| ToolError::plugin(format!("cron_resume: job {id} was not found")))?;
     let summary = summarize(job);
     let view = ToolExecutionView::simple(
-        format!("cron_resume {id}"),
+        "Resume schedule",
+        if summary.completed {
+            "Already completed".to_string()
+        } else {
+            summary
+                .next_fire_at
+                .as_deref()
+                .map(|next| format!("Resumed · next run {next}"))
+                .unwrap_or_else(|| "Resumed · no next run".to_string())
+        },
         if summary.completed {
             format!("job {id} is terminal and cannot resume")
         } else {
@@ -228,7 +257,8 @@ pub(super) fn execute_history(
     // the JSON payload that callers can export without choosing a host path.
     entries.sort_by(|left, right| right.finished_at.cmp(&left.finished_at));
     let view = ToolExecutionView::simple(
-        "cron_history",
+        "Schedule history",
+        format!("{} runs", entries.len()),
         if entries.is_empty() {
             "no scheduler history".to_string()
         } else {
@@ -257,7 +287,8 @@ pub(super) fn execute_wakeup(
     super::mcp::block_on(async move { scheduler.add(job).await });
 
     let view = ToolExecutionView::simple(
-        format!("schedule_wakeup {id}"),
+        "Schedule wake-up",
+        format!("Scheduled for {next}"),
         format!(
             "wake-up scheduled at {next}{}",
             input

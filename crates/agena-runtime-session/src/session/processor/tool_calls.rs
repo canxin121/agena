@@ -321,6 +321,7 @@ impl SessionProcessor {
         id: Option<String>,
         invocation: ToolInvocation,
         title: String,
+        summary: String,
         output_text: String,
         blocks: Vec<crate::message::OperationBlock>,
         details: agena_domain::ToolOutput,
@@ -359,10 +360,14 @@ impl SessionProcessor {
         let mut operation = OperationPart::completed(
             pending.call_id.unwrap_or_default(),
             invocation.clone(),
-            output_text,
-            blocks,
-            Vec::new(),
-            details,
+            crate::message::OperationCompletion::new(
+                title,
+                summary,
+                output_text,
+                blocks,
+                Vec::new(),
+                details,
+            ),
             TimeRange {
                 start_ms: pending
                     .started_at_ms
@@ -370,9 +375,6 @@ impl SessionProcessor {
                 end_ms: Some(Utc::now().timestamp_millis()),
             },
         );
-        if !title.trim().is_empty() {
-            operation.set_title(title);
-        }
         operation.set_provider_only(true);
         operation.raw = raw.clone();
         operation.result.raw = raw;

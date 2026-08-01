@@ -1,11 +1,10 @@
 use super::super::transcript_ast::render_attachment_image;
 use super::super::{
     I18n, Modifier, RenderedLine, Style, apply_patch_details, compact_tool_identity, diff_stats,
-    push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
+    push_activity_headline, push_collapsible_text, push_expanded_diff_text, push_expanded_markdown,
     push_expanded_tool_text, push_label_value, push_multiline, push_section_heading,
     push_single_line, render_expanded_tool_text_block, should_render_tool_model_output,
-    tool_display_label, tool_execution_collapsed_summary, tool_execution_status_summary,
-    tool_status_color,
+    tool_display_label,
 };
 use super::request_render::{render_checklist, render_file_changes};
 use crate::ui_text;
@@ -26,22 +25,25 @@ pub(crate) fn render_tool_execution(
         return;
     }
     let label = tool_display_label(tool);
-    let color = tool_status_color(part.status);
     if !expanded {
-        push_single_line(
+        push_activity_headline(
             out,
-            "  ▸ ",
-            tool_execution_collapsed_summary(part, tool, i18n).as_str(),
-            Style::default().fg(color),
+            part.status,
+            false,
+            true,
+            label.as_str(),
+            tool.summary.as_str(),
             width,
         );
         return;
     }
-    push_multiline(
+    push_activity_headline(
         out,
-        "  ▾ ",
-        tool_execution_status_summary(part, label.as_str()).as_str(),
-        Style::default().fg(color),
+        part.status,
+        true,
+        true,
+        label.as_str(),
+        tool.summary.as_str(),
         width,
     );
 
@@ -54,22 +56,37 @@ pub(crate) fn render_tool_execution(
     };
 
     if let Some(error_message) = failure_text {
-        push_multiline(
+        push_section_heading(
             out,
-            "    ",
-            error_message,
-            Style::default().fg(agena_tui_components::theme::danger_color()),
+            "    › Error",
+            Style::default()
+                .fg(agena_tui_components::theme::danger_color())
+                .add_modifier(Modifier::BOLD),
             width,
+        );
+        let error_start = out.len();
+        render_expanded_tool_text_block(out, "      ", error_message, width);
+        patch_rendered_lines_style(
+            &mut out[error_start..],
+            Style::default().fg(agena_tui_components::theme::danger_color()),
         );
     }
 
     if should_render_tool_model_output(tool, failure_text) {
+        push_section_heading(
+            out,
+            "    › Result",
+            Style::default()
+                .fg(agena_tui_components::theme::special_color())
+                .add_modifier(Modifier::BOLD),
+            width,
+        );
         if expanded {
-            render_expanded_tool_text_block(out, "    ", tool.model_output.text.as_str(), width);
+            render_expanded_tool_text_block(out, "      ", tool.model_output.text.as_str(), width);
         } else {
             push_collapsible_text(
                 out,
-                "    ",
+                "      ",
                 tool.model_output.text.as_str(),
                 Style::default(),
                 width,
@@ -132,6 +149,15 @@ pub(crate) fn render_tool_execution(
     );
 }
 
+fn patch_rendered_lines_style(lines: &mut [RenderedLine], style: Style) {
+    for line in lines {
+        line.style = line.style.patch(style);
+        if let Some(rich_line) = line.rich_line.take() {
+            line.rich_line = Some(rich_line.patch_style(style));
+        }
+    }
+}
+
 fn render_presentation_sections(
     tool: &OperationPartResource,
     out: &mut Vec<RenderedLine>,
@@ -153,7 +179,7 @@ fn render_presentation_sections(
         rendered.push(key);
         push_section_heading(
             out,
-            format!("    {title}").as_str(),
+            format!("    › {title}").as_str(),
             Style::default()
                 .fg(agena_tui_components::theme::special_color())
                 .add_modifier(Modifier::BOLD),

@@ -201,10 +201,9 @@ impl LspPlugin {
         };
         let body = serde_json::to_string_pretty(&summary)
             .map_err(|err| PluginError::internal(err.to_string()))?;
-        let title = format!("lsp_servers: {} configured", summary.servers.len());
         Ok(ToolInvokeOutput {
-            title,
-            summary: String::new(),
+            title: "Language servers".to_string(),
+            summary: format!("{} configured servers", summary.servers.len()),
             output_text: body,
             sections: Vec::new(),
             payload: serde_json::to_value(&summary).ok(),

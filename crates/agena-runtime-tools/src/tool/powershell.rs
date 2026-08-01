@@ -85,7 +85,16 @@ pub(super) fn execute(
         dropped_lines: 0,
         exit_code: Some(execution.exit_code),
     };
-    let mut view = ToolExecutionView::simple("PowerShell".to_string(), display_output);
+    let run_summary = if execution.timed_out {
+        format!("Timed out · {} ms", execution.duration.as_millis())
+    } else {
+        format!(
+            "Exit {} · {} ms",
+            execution.exit_code,
+            execution.duration.as_millis()
+        )
+    };
+    let mut view = ToolExecutionView::simple("PowerShell", run_summary, display_output);
     view.metadata
         .insert("exit_code".to_string(), execution.exit_code.to_string());
     view.metadata

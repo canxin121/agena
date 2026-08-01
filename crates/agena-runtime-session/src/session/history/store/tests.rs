@@ -1010,23 +1010,25 @@ mod tests {
 
         let mut completed_part = operation_part.clone();
         completed_part.status = ExecutionStatus::Completed;
-        let mut completed_operation = crate::message::OperationPart::completed(
+        let completed_operation = crate::message::OperationPart::completed(
             1,
             agena_domain::ToolInvocation::new(
                 "tools_list",
                 agena_domain::StructuredObject::default(),
             ),
-            "Available tools: returned 1 of 1 starting at offset 0.\n- fs.read [read_only]: Read a file\nMore available: no.",
-            Vec::new(),
-            Vec::new(),
-            agena_domain::ToolOutput::default(),
+            crate::message::OperationCompletion::new(
+                "List tools · 1/1",
+                "Returned 1 of 1 tools; no more results.",
+                "Available tools: returned 1 of 1 starting at offset 0.\n- fs.read [read_only]: Read a file\nMore available: no.",
+                Vec::new(),
+                Vec::new(),
+                agena_domain::ToolOutput::default(),
+            ),
             agena_domain::TimeRange {
                 start_ms: created_at.timestamp_millis(),
                 end_ms: Some(Utc::now().timestamp_millis()),
             },
         );
-        completed_operation.set_title("List tools · 1/1");
-        completed_operation.set_summary("Returned 1 of 1 tools; no more results.");
         completed_part.set_content(crate::message::PartContent::operation(completed_operation));
         update_tool_result_projection(
             &db,

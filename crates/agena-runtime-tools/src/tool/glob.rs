@@ -83,7 +83,13 @@ pub(super) fn execute(
         truncated,
     };
 
-    let mut view = ToolExecutionView::simple(format!("Glob {}", input.pattern), output_text);
+    let summary = if truncated {
+        format!("{} paths · more available", matches.len())
+    } else {
+        format!("{} paths", matches.len())
+    };
+    let mut view =
+        ToolExecutionView::simple(format!("Glob {}", input.pattern), summary, output_text);
     view.metadata
         .insert("pattern".to_string(), input.pattern.clone());
     view.metadata

@@ -29,18 +29,21 @@ function readFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-function activitySummary(activity: TranscriptActivity): string {
+function activityTitle(activity: TranscriptActivity): string {
   const payload = activity.payload
-  const problemUser = asRecord(asRecord(payload.problem)?.user)
   return (
-    readString(payload.summary) ||
     readString(payload.title) ||
     readString(payload.name) ||
     readString(payload.skill_name) ||
     readString(payload.query) ||
-    readString(problemUser?.fallback) ||
     payload.activity_type
   )
+}
+
+function activitySummary(activity: TranscriptActivity): string {
+  const payload = activity.payload
+  const problemUser = asRecord(asRecord(payload.problem)?.user)
+  return readString(payload.summary) || readString(problemUser?.fallback) || ''
 }
 
 function canonicalPart(
@@ -101,7 +104,7 @@ function canonicalPart(
     part_index: partIndex,
     status: activity.state,
     kind: activityType,
-    name: activitySummary(activity),
+    name: activityTitle(activity),
     summary: activitySummary(activity),
     has_detail: true,
     operation_id: activityType === 'operation' ? String(activity.payload.call_id || activity.id) : null,

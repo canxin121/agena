@@ -812,7 +812,7 @@ impl SessionManager {
                 PermissionReplyKind::DenyOnce => "Permission denied once",
                 PermissionReplyKind::DenyAlways => "Permission denied always",
             };
-            operation.summary = request
+            let summary = request
                 .request
                 .reply
                 .reason
@@ -820,7 +820,7 @@ impl SessionManager {
                 .filter(|reason| !reason.trim().is_empty())
                 .map(|reason| format!("{decision} · {reason}"))
                 .unwrap_or_else(|| decision.to_owned());
-            operation.result.display.summary = operation.summary.clone();
+            operation.set_summary(summary);
             tool_part.summary = Some(operation.summary.clone());
         }
         let replied_assistant_message = assistant_message_for_part(&session, &pending.tool.part)?;

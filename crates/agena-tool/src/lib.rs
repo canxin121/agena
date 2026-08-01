@@ -10,6 +10,98 @@ pub use agena_domain::ToolPresentationSection;
 use agena_domain::{PermissionAction, PermissionDecision, ToolInvocation};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
+
+/// Durable Operation titles are compact scan labels, not result previews.
+/// Detailed output belongs in `summary`, sections, and the expanded Activity.
+pub const TOOL_TITLE_MAX_DISPLAY_WIDTH: usize = 96;
+
+/// Durable Operation summaries are compact result statements. They are
+/// intentionally much smaller than model-visible output so transcript clients
+/// can render them without loading or inspecting the full result.
+pub const TOOL_SUMMARY_MAX_DISPLAY_WIDTH: usize = 120;
+
+/// Normalize a tool-provided title at the shared runtime boundary.
+///
+/// Whitespace is collapsed so streamed or plugin titles cannot accidentally
+/// become multi-line transcript content. Titles that are genuinely long are
+/// bounded by terminal display width and retain an ellipsis; ordinary titles
+/// remain readable without a fixed, prematurely small UI cutoff.
+pub fn normalize_tool_title(title: impl AsRef<str>) -> String {
+    normalize_tool_presentation_line(title, TOOL_TITLE_MAX_DISPLAY_WIDTH)
+}
+
+/// Normalize a tool-provided result summary at the shared runtime boundary.
+///
+/// Tools remain responsible for the summary's meaning. This function only
+/// enforces the one-line, bounded storage contract; it never derives a summary
+/// from `output_text`.
+pub fn normalize_tool_summary(summary: impl AsRef<str>) -> String {
+    normalize_tool_presentation_line(summary, TOOL_SUMMARY_MAX_DISPLAY_WIDTH)
+}
+
+fn normalize_tool_presentation_line(value: impl AsRef<str>, max_width: usize) -> String {
+    let normalized = value
+        .as_ref()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if UnicodeWidthStr::width(normalized.as_str()) <= max_width {
+        return normalized;
+    }
+
+    let content_width = max_width.saturating_sub(1);
+    let mut width = 0_usize;
+    let mut bounded = String::new();
+    for grapheme in normalized.graphemes(true) {
+        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        if width.saturating_add(grapheme_width) > content_width {
+            break;
+        }
+        bounded.push_str(grapheme);
+        width = width.saturating_add(grapheme_width);
+    }
+    bounded = bounded.trim_end().to_owned();
+    bounded.push('…');
+    bounded
+}
+
+#[cfg(test)]
+mod tool_title_tests {
+    use super::{
+        TOOL_SUMMARY_MAX_DISPLAY_WIDTH, TOOL_TITLE_MAX_DISPLAY_WIDTH, normalize_tool_summary,
+        normalize_tool_title,
+    };
+    use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn normal_titles_are_preserved_and_whitespace_is_collapsed() {
+        assert_eq!(
+            normalize_tool_title("  Read   crates/agena-domain/src/activity.rs  "),
+            "Read crates/agena-domain/src/activity.rs"
+        );
+    }
+
+    #[test]
+    fn genuinely_long_titles_are_width_bounded_with_an_ellipsis() {
+        let title = format!("Inspect {}", "很长的标题".repeat(20));
+        let bounded = normalize_tool_title(title);
+
+        assert!(bounded.ends_with('…'));
+        assert!(UnicodeWidthStr::width(bounded.as_str()) <= TOOL_TITLE_MAX_DISPLAY_WIDTH);
+    }
+
+    #[test]
+    fn summaries_are_single_line_and_defensively_bounded() {
+        let summary = format!("  42 matches\n{}  ", "in many files ".repeat(20));
+        let bounded = normalize_tool_summary(summary);
+
+        assert!(bounded.starts_with("42 matches in many files"));
+        assert!(bounded.ends_with('…'));
+        assert!(UnicodeWidthStr::width(bounded.as_str()) <= TOOL_SUMMARY_MAX_DISPLAY_WIDTH);
+    }
+}
 
 pub mod code_search;
 pub mod shell;
@@ -162,7 +254,6 @@ pub struct ToolAvailability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ToolExecutionSummary {
     pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
     pub output_text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -390,13 +481,13 @@ mod tests {
     }
 
     #[test]
-    fn execution_summary_accepts_legacy_payload_without_attachments() {
-        let decoded: ToolExecutionSummary = serde_json::from_value(serde_json::json!({
+    fn execution_summary_requires_the_result_summary_contract() {
+        let error = serde_json::from_value::<ToolExecutionSummary>(serde_json::json!({
             "title": "legacy",
             "output_text": "output"
         }))
-        .expect("decode summary without optional attachment metadata");
-        assert!(decoded.attachments.is_empty());
+        .expect_err("summary is a required execution-result field");
+        assert!(error.to_string().contains("summary"));
     }
 
     #[test]

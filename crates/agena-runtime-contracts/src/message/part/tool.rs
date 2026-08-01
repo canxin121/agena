@@ -10,7 +10,7 @@ use agena_domain::{
     ToolInvocation, ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay,
     ToolResultState, UserInputQuestion,
 };
-use agena_tool::{ReadMode, TaskModelSelection};
+use agena_tool::{ReadMode, TaskModelSelection, normalize_tool_summary, normalize_tool_title};
 
 use super::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_domain::{StructuredValue, TimeRange};
@@ -882,6 +882,8 @@ impl ToolResultEnvelope {
     }
 
     pub fn completed(
+        title: String,
+        summary: String,
         output_text: String,
         blocks: Vec<OperationBlock>,
         attachments: Vec<AttachmentItem>,
@@ -899,8 +901,8 @@ impl ToolResultEnvelope {
             },
             managed_outputs: details.managed_outputs.clone(),
             display: ToolResultDisplay {
-                title: String::new(),
-                summary: output_text,
+                title,
+                summary,
                 sections: Vec::new(),
             },
             attachments,
@@ -931,7 +933,7 @@ impl ToolResultEnvelope {
             managed_outputs: details.managed_outputs.clone(),
             display: ToolResultDisplay {
                 title: String::new(),
-                summary: user_summary,
+                summary: normalize_tool_summary(user_summary),
                 sections: Vec::new(),
             },
             attachments,
@@ -966,7 +968,7 @@ impl ToolResultEnvelope {
             managed_outputs: Vec::new(),
             display: ToolResultDisplay {
                 title: String::new(),
-                summary: output_text,
+                summary: normalize_tool_summary(output_text),
                 sections: Vec::new(),
             },
             attachments: Vec::new(),
@@ -1011,6 +1013,40 @@ pub struct OperationPart {
     pub lifecycle: TimeRange,
 }
 
+/// Complete, producer-owned presentation and result data for one Operation.
+///
+/// Keeping these fields together prevents callers from creating a completed
+/// Operation with detailed output but no concise title/summary contract.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OperationCompletion {
+    pub title: String,
+    pub summary: String,
+    pub output_text: String,
+    pub blocks: Vec<OperationBlock>,
+    pub attachments: Vec<AttachmentItem>,
+    pub details: ToolOutput,
+}
+
+impl OperationCompletion {
+    pub fn new(
+        title: impl Into<String>,
+        summary: impl Into<String>,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        attachments: Vec<AttachmentItem>,
+        details: ToolOutput,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            summary: summary.into(),
+            output_text: output_text.into(),
+            blocks,
+            attachments,
+            details,
+        }
+    }
+}
+
 const PROVIDER_ONLY_METADATA_KEY: &str = "provider_only";
 const LEGACY_PROVIDER_NATIVE_ONLY_METADATA_KEY: &str = "provider_native_only";
 const ADVERTISED_TOOL_IDENTITY_METADATA_KEY: &str = "advertised_tool_identity";
@@ -1026,7 +1062,7 @@ impl OperationPart {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
-            title: title.into(),
+            title: normalize_tool_title(title.into()),
             summary: String::new(),
             model_output: ModelVisibleOutput::default(),
             blocks: Vec::new(),
@@ -1045,16 +1081,24 @@ impl OperationPart {
     pub fn completed(
         call_id: i64,
         invocation: ToolInvocation,
-        output_text: impl Into<String>,
-        blocks: Vec<OperationBlock>,
-        attachments: Vec<AttachmentItem>,
-        details: ToolOutput,
+        completion: OperationCompletion,
         lifecycle: TimeRange,
     ) -> Self {
-        let output_text = output_text.into();
+        let OperationCompletion {
+            title,
+            summary,
+            output_text,
+            blocks,
+            attachments,
+            details,
+        } = completion;
+        let title = normalize_tool_title(title);
+        let summary = normalize_tool_summary(summary);
         let structured = details.to_json_payload();
         let truncated = details.is_model_truncated();
         let result = ToolResultEnvelope::completed(
+            title.clone(),
+            summary.clone(),
             output_text.clone(),
             blocks.clone(),
             attachments.clone(),
@@ -1064,8 +1108,8 @@ impl OperationPart {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
-            title: String::new(),
-            summary: output_text.clone(),
+            title,
+            summary,
             model_output: ModelVisibleOutput {
                 text: output_text,
                 attachments: attachments.clone(),
@@ -1101,7 +1145,7 @@ impl OperationPart {
             attachments.clone(),
             &details,
         );
-        let user_summary = failure.user.fallback.clone();
+        let user_summary = normalize_tool_summary(&failure.user.fallback);
         let model_output = model_visible_failure_text(&failure);
         Self {
             call_id,
@@ -1220,7 +1264,7 @@ impl OperationPart {
             invocation,
             authorization: OperationAuthorization::default(),
             title: String::new(),
-            summary: output_text.clone(),
+            summary: normalize_tool_summary(&output_text),
             model_output: ModelVisibleOutput {
                 text: output_text,
                 attachments: Vec::new(),
@@ -1240,12 +1284,12 @@ impl OperationPart {
     }
 
     pub fn set_title(&mut self, title: impl Into<String>) {
-        self.title = title.into();
+        self.title = normalize_tool_title(title.into());
         self.result.display.title = self.title.clone();
     }
 
     pub fn set_summary(&mut self, summary: impl Into<String>) {
-        self.summary = summary.into();
+        self.summary = agena_tool::normalize_tool_summary(summary.into());
         self.result.display.summary = self.summary.clone();
     }
 
@@ -1352,12 +1396,6 @@ impl OperationPart {
         self.model_output.text.push_str(delta);
         self.result.state = ToolResultState::Running;
         self.result.model_preview.text.push_str(delta);
-        if self.summary.is_empty() {
-            self.summary.push_str(delta);
-        }
-        if self.result.display.summary.is_empty() {
-            self.result.display.summary.push_str(delta);
-        }
         if let Some(OperationBlock::Text { text }) = self.blocks.last_mut() {
             text.push_str(delta);
         } else {

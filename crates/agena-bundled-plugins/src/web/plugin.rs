@@ -967,6 +967,12 @@ impl WebPlugin {
         let text = format_fetched_page(&page, input.prompt.as_deref());
         Ok(ToolInvokeOutput::from_parts(
             format!("web fetch {}", url),
+            format!(
+                "{} · HTTP {}{}",
+                page.title,
+                page.status,
+                if page.truncated { " · truncated" } else { "" }
+            ),
             text,
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -1018,10 +1024,15 @@ impl WebPlugin {
             .await
             .map_err(crawl_error_to_plugin)?;
         let text = format_crawl_run(&report);
+        let summary = format!(
+            "{} indexed · {} cached · {} failures",
+            report.stored_count, report.cached_count, report.failure_count
+        );
         let payload =
             serde_json::to_value(report).map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             format!("web crawl {}", start_url),
+            summary,
             text,
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -1091,10 +1102,12 @@ impl WebPlugin {
             results,
         };
         let text = format_web_search(&output);
+        let summary = format!("{} results · {}", output.results.len(), output.engine);
         let payload =
             serde_json::to_value(output).map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             format!("web search {query}"),
+            summary,
             text,
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -1155,8 +1168,14 @@ impl WebPlugin {
         self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
             .await?;
         let snapshot = self.ensure_browser_final_url(target_id.as_str()).await?;
+        let mut title_target = url.host_str().unwrap_or(url.as_str()).to_owned();
+        let path = url.path().trim_end_matches('/');
+        if !path.is_empty() {
+            title_target.push_str(path);
+        }
         Ok(ToolInvokeOutput::from_parts(
-            format!("browser open {}", url),
+            format!("Open browser · {title_target}"),
+            browser_snapshot_summary(&snapshot),
             format!("Opened {} in browser session {}.", url, target_id),
             Some(serde_json::json!({
                 "session_id": target_id,
@@ -1204,6 +1223,7 @@ impl WebPlugin {
             .unwrap_or_default();
         Ok(ToolInvokeOutput::from_parts(
             "browser list",
+            format!("{} open pages", sessions.len()),
             format!("{} managed browser page target(s).", sessions.len()),
             Some(serde_json::json!({ "sessions": sessions })),
             std::collections::BTreeMap::new(),
@@ -1234,7 +1254,8 @@ impl WebPlugin {
         }
         self.forget_browser_client(input.session_id.as_str()).await;
         Ok(ToolInvokeOutput::from_parts(
-            format!("browser close {}", input.session_id),
+            "Close browser",
+            "Closed",
             format!("Closed browser session {}.", input.session_id),
             Some(serde_json::json!({ "session_id": input.session_id, "closed": true })),
             std::collections::BTreeMap::new(),
@@ -1255,7 +1276,8 @@ impl WebPlugin {
             .await?;
         let text = format_browser_snapshot(&snapshot);
         Ok(ToolInvokeOutput::from_parts(
-            format!("browser snapshot {}", input.session_id),
+            "Browser snapshot",
+            browser_snapshot_summary(&snapshot),
             text,
             Some(serde_json::json!({
                 "session_id": input.session_id,
@@ -1416,6 +1438,7 @@ impl WebPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             "browser screenshot",
+            format!("image/png · {} bytes", bytes.len()),
             format!("Saved browser screenshot to '{}'.", path.display()),
             Some(serde_json::json!({
                 "session_id": input.session_id,
@@ -1538,6 +1561,7 @@ impl WebPlugin {
                     };
                     return Ok(ToolInvokeOutput::from_parts(
                         "browser download",
+                        format!("{} bytes", size),
                         format!("Saved browser download to '{}'.", path.display()),
                         Some(serde_json::json!({
                             "session_id": input.session_id,
@@ -2288,8 +2312,13 @@ fn browser_action_output(
     session_id: &str,
     result: serde_json::Value,
 ) -> ToolInvokeOutput {
+    let summary = result
+        .get("snapshot")
+        .map(browser_snapshot_summary)
+        .unwrap_or_else(|| "Completed".to_string());
     ToolInvokeOutput::from_parts(
         title,
+        summary,
         format!("Completed {title} in browser session {session_id}."),
         Some(serde_json::json!({
             "session_id": session_id,
@@ -2298,6 +2327,20 @@ fn browser_action_output(
         std::collections::BTreeMap::new(),
         Vec::new(),
     )
+}
+
+fn browser_snapshot_summary(snapshot: &serde_json::Value) -> String {
+    let title = snapshot
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .unwrap_or("Untitled page");
+    let element_count = snapshot
+        .get("elements")
+        .and_then(serde_json::Value::as_array)
+        .map_or(0, Vec::len);
+    format!("{title} · {element_count} interactive elements")
 }
 
 fn format_browser_snapshot(snapshot: &serde_json::Value) -> String {

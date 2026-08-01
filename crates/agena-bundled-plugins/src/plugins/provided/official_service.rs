@@ -258,8 +258,20 @@ pub(crate) async fn provider_output(
     let usage_metadata = serde_json::to_string(&attributed).map_err(|error| {
         PluginError::internal(format!("cannot serialize provider tool usage: {error}"))
     })?;
+    let result_summary = if continuation_required {
+        format!("{} tool calls pending", pending_calls.len())
+    } else if !attachments.is_empty() || !sources.is_empty() {
+        format!(
+            "{} sources · {} attachments",
+            sources.len(),
+            attachments.len()
+        )
+    } else {
+        "Response received".to_string()
+    };
     Ok(ToolInvokeOutput::from_parts(
         title,
+        result_summary,
         truncate_text(output_text.as_str(), MAX_TEXT_BYTES),
         Some(payload),
         BTreeMap::from([

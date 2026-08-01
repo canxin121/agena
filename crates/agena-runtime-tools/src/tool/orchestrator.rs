@@ -105,14 +105,21 @@ pub(crate) fn execute_tool(
             };
 
             let output_text = apply_patch_output_text(&result);
-            let mut view = ToolExecutionView::simple(
-                format!("Apply patch ({})", result.operation_id),
-                output_text,
-            );
+            let changed_files = result.files.len();
+            let (additions, deletions) = patch_line_delta(result.diff.as_str());
+            let mut summary_parts = vec![format!("{changed_files} files changed")];
+            if additions > 0 {
+                summary_parts.push(format!("+{additions}"));
+            }
+            if deletions > 0 {
+                summary_parts.push(format!("−{deletions}"));
+            }
+            let mut view =
+                ToolExecutionView::simple("Apply patch", summary_parts.join(" · "), output_text);
             view.metadata
                 .insert("operation_id".to_string(), result.operation_id.clone());
             view.metadata
-                .insert("changed_files".to_string(), result.files.len().to_string());
+                .insert("changed_files".to_string(), changed_files.to_string());
 
             Ok(ToolPayloadExecution {
                 output,
@@ -154,6 +161,18 @@ pub(crate) fn execute_tool(
             Err(unknown_tool_hint(other, suggestions))
         }
     }
+}
+
+fn patch_line_delta(diff: &str) -> (usize, usize) {
+    diff.lines().fold((0, 0), |(additions, deletions), line| {
+        if line.starts_with('+') && !line.starts_with("+++") {
+            (additions + 1, deletions)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            (additions, deletions + 1)
+        } else {
+            (additions, deletions)
+        }
+    })
 }
 
 fn parse_shape_input<T: ToolInput>(input: JsonValue) -> Result<T, ToolError> {

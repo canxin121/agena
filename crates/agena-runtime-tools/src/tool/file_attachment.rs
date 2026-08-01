@@ -57,8 +57,11 @@ pub(super) fn execute_for_read_attachment(
         loaded_paths: vec![prepared.path.clone()],
         attachment: Some(prepared.read_attachment_output()),
     };
-    let mut view =
-        ToolExecutionView::simple(format!("Read {}", prepared.path), prepared.summary.clone());
+    let mut view = ToolExecutionView::simple(
+        format!("Read {}", prepared.path),
+        format!("{} · {} bytes", prepared.mime, prepared.size_bytes),
+        prepared.summary.clone(),
+    );
     populate_view_metadata(&mut view, &prepared);
     view.attachments.push(prepared.into_attachment());
     Ok(ToolPayloadExecution::new(output, view))

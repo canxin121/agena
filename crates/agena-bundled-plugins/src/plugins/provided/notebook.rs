@@ -179,6 +179,10 @@ impl NotebookPlugin {
         Ok(ToolInvokeOutput::from_parts(
             format!("edited notebook {}", input.path),
             format!(
+                "{:?} cell {} · {cell_count} cells",
+                input.action, input.cell_index
+            ),
+            format!(
                 "Applied {:?} at cell {} in '{}' ({} cells, sha256 {} -> {}).",
                 input.action, input.cell_index, input.path, cell_count, before_sha256, after_sha256
             ),

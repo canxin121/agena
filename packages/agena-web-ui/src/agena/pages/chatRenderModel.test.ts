@@ -201,6 +201,8 @@ describe('canonical transcript projection', () => {
 
     expect(operationParts.length).toBe(1)
     expect(operationParts[0]?.kind).toBe('operation')
+    expect(operationParts[0]?.name).toBe('fs.write')
+    expect(operationParts[0]?.summary).toBe('Awaiting user approval')
     expect(operationParts[0]?.content?.type).toBe('operation')
     expect(operationParts[0]?.content?.authorization).toEqual({
       permissions: [

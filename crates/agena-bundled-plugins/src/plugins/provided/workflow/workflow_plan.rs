@@ -308,6 +308,10 @@ impl WorkflowPlugin {
         Ok(ToolInvokeOutput::from_parts(
             "session",
             format!(
+                "Session #{} · {}",
+                response.session.id, response.session.title
+            ),
+            format!(
                 "{}\n\n{}",
                 Self::session_summary(&response.session),
                 Self::pretty_json_text(&payload)
@@ -332,6 +336,10 @@ impl WorkflowPlugin {
         let payload = Self::session_tool_payload(response.session.clone())?;
         Ok(ToolInvokeOutput::from_parts(
             "session",
+            format!(
+                "Renamed #{} · {}",
+                response.session.id, response.session.title
+            ),
             format!(
                 "Renamed session #{} to {}.\n\n{}",
                 response.session.id,
@@ -1433,6 +1441,7 @@ impl WorkflowPlugin {
         });
         Ok(ToolInvokeOutput::from_parts(
             "plan review",
+            format!("{decision} · {:?}", plan.phase),
             output_text,
             Some(payload),
             std::collections::BTreeMap::new(),

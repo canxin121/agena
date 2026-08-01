@@ -100,11 +100,7 @@ fn execute_foreground_run(
             )));
         }
     };
-    view.title = if command.description.trim().is_empty() {
-        format!("Process run {}", command.command)
-    } else {
-        format!("Process run {}", command.description)
-    };
+    view.set_title(process_run_title(command));
     view.metadata.insert("shell".to_string(), shell.to_string());
     view.metadata
         .insert("background".to_string(), "false".to_string());
@@ -236,6 +232,15 @@ fn into_tool_error(err: MonitorError) -> ToolError {
     }
 }
 
+fn process_run_title(command: &crate::message::ShellCommandInput) -> String {
+    let subject = if command.description.trim().is_empty() {
+        command.command.trim()
+    } else {
+        command.description.trim()
+    };
+    format!("Run process · {subject}")
+}
+
 fn render_run(
     started: MonitorStart,
     shell: ProcessShell,
@@ -243,18 +248,22 @@ fn render_run(
     monitored: bool,
 ) -> ToolPayloadExecution {
     let summary = started.summary;
-    let title = if command.description.trim().is_empty() {
-        format!("Process run {}", command.command)
-    } else {
-        format!("Process run {}", command.description)
-    };
+    let title = process_run_title(command);
     let body = format!(
         "Started {} process {} (status={}). Use shell.logs to read output and shell.stop to terminate it.",
         if monitored { "monitored" } else { "background" },
         summary.process_id,
         summary.status
     );
-    let mut view = ToolExecutionView::simple(title, body);
+    let mut view = ToolExecutionView::simple(
+        title,
+        format!(
+            "{} · {}",
+            if monitored { "Monitored" } else { "Background" },
+            summary.status
+        ),
+        body,
+    );
     insert_summary_metadata(&mut view, &summary);
     view.metadata.insert("shell".to_string(), shell.to_string());
     view.metadata
@@ -307,7 +316,11 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
         lines.join("\n")
     };
 
-    let mut view = ToolExecutionView::simple("Process list", body);
+    let mut view = ToolExecutionView::simple(
+        "List processes",
+        format!("{} processes", processes.len()),
+        body,
+    );
     view.metadata
         .insert("count".to_string(), processes.len().to_string());
 
@@ -343,7 +356,12 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
         read.exit_code,
         read.completion_reason.as_deref(),
     );
-    let mut view = ToolExecutionView::simple(format!("Process logs {process_id}"), body);
+    let log_summary = if read.has_more {
+        format!("{} events · {} · more available", events.len(), status)
+    } else {
+        format!("{} events · {}", events.len(), status)
+    };
+    let mut view = ToolExecutionView::simple("Process logs", log_summary, body);
     view.metadata
         .insert("process_id".to_string(), process_id.clone());
     view.metadata
@@ -385,7 +403,7 @@ fn render_logs(read: MonitorRead) -> ToolPayloadExecution {
 
 fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
     let summary = stop.summary;
-    let title = format!("Process stop {}", summary.process_id);
+    let title = "Stop process";
     let body = format!(
         "Stopped managed process {} (status={}{}{}).",
         summary.process_id,
@@ -400,7 +418,11 @@ fn render_stop(stop: MonitorStopOutcome) -> ToolPayloadExecution {
             .map(|reason| format!(", reason={reason}"))
             .unwrap_or_default(),
     );
-    let mut view = ToolExecutionView::simple(title, body);
+    let stop_summary = summary
+        .exit_code
+        .map(|code| format!("{} · exit {code}", summary.status))
+        .unwrap_or_else(|| summary.status.to_string());
+    let mut view = ToolExecutionView::simple(title, stop_summary, body);
     insert_summary_metadata(&mut view, &summary);
 
     let output = ToolPayloadOutput::Shell {

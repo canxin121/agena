@@ -18,10 +18,14 @@ pub struct ToolExecutionView {
 }
 
 impl ToolExecutionView {
-    pub fn simple(title: impl Into<String>, output_text: impl Into<String>) -> Self {
+    pub fn simple(
+        title: impl Into<String>,
+        summary: impl Into<String>,
+        output_text: impl Into<String>,
+    ) -> Self {
         Self {
-            title: title.into(),
-            summary: String::new(),
+            title: agena_tool::normalize_tool_title(title.into()),
+            summary: agena_tool::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
             sections: Vec::new(),
             metadata: BTreeMap::new(),
@@ -62,14 +66,23 @@ impl ToolExecutionView {
         output_text: String,
         metadata: impl IntoIterator<Item = (String, String)>,
     ) {
-        self.title = title;
-        self.summary = summary;
+        self.title = agena_tool::normalize_tool_title(title);
+        self.summary = agena_tool::normalize_tool_summary(summary);
         self.output_text = output_text;
         self.metadata.extend(metadata);
     }
 
     pub fn set_neutral_output(&mut self, output_text: String) {
         self.output_text = output_text;
+    }
+
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = agena_tool::normalize_tool_title(title.into());
+    }
+
+    pub fn normalize_presentation(&mut self) {
+        self.title = agena_tool::normalize_tool_title(&self.title);
+        self.summary = agena_tool::normalize_tool_summary(&self.summary);
     }
 
     pub fn insert_neutral_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -144,8 +157,7 @@ mod tests {
 
     #[test]
     fn view_projects_stable_fields_into_tool_contract() {
-        let mut view = ToolExecutionView::simple("title", "output");
-        view.summary = "one-line summary".to_owned();
+        let mut view = ToolExecutionView::simple("title", "one-line summary", "output");
         view.sections.push(ToolPresentationSection {
             title: "Files".to_owned(),
             text: "README.md".to_owned(),
@@ -162,7 +174,7 @@ mod tests {
 
     #[test]
     fn view_applies_neutral_fields_without_replacing_core_attachments() {
-        let mut view = ToolExecutionView::simple("old", "old output");
+        let mut view = ToolExecutionView::simple("old", "old summary", "old output");
         view.metadata
             .insert("existing".to_owned(), "yes".to_owned());
         view.apply_neutral_fields(
@@ -181,7 +193,7 @@ mod tests {
 
     #[test]
     fn execution_results_expose_the_same_neutral_summary() {
-        let view = ToolExecutionView::simple("title", "output");
+        let view = ToolExecutionView::simple("title", "summary", "output");
         let payload = super::ToolPayloadExecution {
             output: super::ToolPayloadOutput::Read {
                 preview: None,
@@ -219,7 +231,7 @@ mod tests {
                 duration_ms: None,
                 page_count: None,
             }],
-            ..ToolExecutionView::simple("title", "output")
+            ..ToolExecutionView::simple("title", "summary", "output")
         };
         let attachment = &view.summary().attachments[0];
         assert_eq!(attachment.kind, "file");

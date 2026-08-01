@@ -363,7 +363,12 @@ impl McpPlugin {
             .collect::<Vec<_>>();
         let fingerprint = mcp_tool_index_fingerprint(&results);
         Ok(ToolInvokeOutput::from_parts(
-            "MCP tool search",
+            if input.query.trim().is_empty() {
+                "Search MCP tools".to_string()
+            } else {
+                format!("Search MCP tools · {}", input.query.trim())
+            },
+            format!("{} tools matched", results.len()),
             if results.is_empty() {
                 format!("No MCP tools matched {:?}.", input.query)
             } else {
@@ -437,6 +442,15 @@ impl McpPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             "MCP server status",
+            format!(
+                "{} of {} connected · {} tools",
+                statuses.iter().filter(|status| status.connected).count(),
+                statuses.len(),
+                statuses
+                    .iter()
+                    .map(|status| status.tool_count)
+                    .sum::<usize>()
+            ),
             text,
             Some(
                 serde_json::json!({ "servers": statuses.iter().map(|status| serde_json::json!({
@@ -494,6 +508,20 @@ impl McpPlugin {
             .find(|status| status.name == input.server);
         Ok(ToolInvokeOutput::from_parts(
             format!("MCP reconnect {}", input.server),
+            status.as_ref().map_or_else(
+                || "Reconnected · status unavailable".to_string(),
+                |status| {
+                    format!(
+                        "{} · {} tools",
+                        if status.connected {
+                            "Connected"
+                        } else {
+                            "Disconnected"
+                        },
+                        status.tool_count
+                    )
+                },
+            ),
             format!("Reconnected MCP server '{}'.", input.server),
             Some(serde_json::json!({
                 "server": input.server,
@@ -786,10 +814,10 @@ fn invoke_tool_output(
         "mcp_meta": result.meta,
     });
 
-    Ok(ToolInvokeOutput {
-        title: format!("MCP {server}/{tool}"),
-        summary: String::new(),
-        output_text: if output_text.is_empty() {
+    Ok(ToolInvokeOutput::from_parts(
+        format!("MCP {server}/{tool}"),
+        format!("{} content blocks", result.content.len()),
+        if output_text.is_empty() {
             format!(
                 "(mcp:{server}:tool:{tool} returned {} content block(s))",
                 result.content.len()
@@ -797,11 +825,10 @@ fn invoke_tool_output(
         } else {
             output_text
         },
-        sections: Vec::new(),
-        payload: Some(payload),
-        metadata: Default::default(),
+        Some(payload),
+        Default::default(),
         attachments,
-    })
+    ))
 }
 
 fn list_resources_output(server: &str, result: ListResourcesResult) -> SdkResult<ToolInvokeOutput> {
@@ -829,15 +856,14 @@ fn list_resources_output(server: &str, result: ListResourcesResult) -> SdkResult
         "resources": result.resources,
         "next_cursor": result.next_cursor,
     });
-    Ok(ToolInvokeOutput {
-        title: format!("MCP {server}/resources"),
-        summary: String::new(),
+    Ok(ToolInvokeOutput::from_parts(
+        format!("MCP {server}/resources"),
+        format!("{} resources", result.resources.len()),
         output_text,
-        sections: Vec::new(),
-        payload: Some(payload),
-        metadata: Default::default(),
-        attachments: Vec::new(),
-    })
+        Some(payload),
+        Default::default(),
+        Vec::new(),
+    ))
 }
 
 fn list_resource_templates_output(
@@ -865,19 +891,18 @@ fn list_resource_templates_output(
             .collect::<Vec<_>>()
             .join("\n")
     };
-    Ok(ToolInvokeOutput {
-        title: format!("MCP {server}/resource templates"),
-        summary: String::new(),
+    Ok(ToolInvokeOutput::from_parts(
+        format!("MCP {server}/resource templates"),
+        format!("{} templates", result.resource_templates.len()),
         output_text,
-        sections: Vec::new(),
-        payload: Some(serde_json::json!({
+        Some(serde_json::json!({
             "server": server,
             "resource_templates": result.resource_templates,
             "next_cursor": result.next_cursor,
         })),
-        metadata: Default::default(),
-        attachments: Vec::new(),
-    })
+        Default::default(),
+        Vec::new(),
+    ))
 }
 
 fn read_resource_output(
@@ -912,19 +937,18 @@ fn read_resource_output(
         "uri": uri,
         "contents": result.contents,
     });
-    Ok(ToolInvokeOutput {
-        title: format!("MCP {server}/resource"),
-        summary: String::new(),
-        output_text: if output_text.is_empty() {
+    Ok(ToolInvokeOutput::from_parts(
+        format!("MCP {server}/resource"),
+        format!("{} content blocks", result.contents.len()),
+        if output_text.is_empty() {
             format!("MCP server '{server}' returned no content for resource '{uri}'.")
         } else {
             output_text
         },
-        sections: Vec::new(),
-        payload: Some(payload),
-        metadata: Default::default(),
+        Some(payload),
+        Default::default(),
         attachments,
-    })
+    ))
 }
 
 fn list_prompts_output(server: &str, result: ListPromptsResult) -> SdkResult<ToolInvokeOutput> {
@@ -963,15 +987,14 @@ fn list_prompts_output(server: &str, result: ListPromptsResult) -> SdkResult<Too
         "prompts": result.prompts,
         "next_cursor": result.next_cursor,
     });
-    Ok(ToolInvokeOutput {
-        title: format!("MCP {server}/prompts"),
-        summary: String::new(),
+    Ok(ToolInvokeOutput::from_parts(
+        format!("MCP {server}/prompts"),
+        format!("{} prompts", result.prompts.len()),
         output_text,
-        sections: Vec::new(),
-        payload: Some(payload),
-        metadata: Default::default(),
-        attachments: Vec::new(),
-    })
+        Some(payload),
+        Default::default(),
+        Vec::new(),
+    ))
 }
 
 fn get_prompt_output(
@@ -997,19 +1020,18 @@ fn get_prompt_output(
         "description": result.description,
         "messages": result.messages,
     });
-    Ok(ToolInvokeOutput {
-        title: format!("MCP {server}/prompt {name}"),
-        summary: String::new(),
-        output_text: if output_text.is_empty() {
+    Ok(ToolInvokeOutput::from_parts(
+        format!("MCP {server}/prompt {name}"),
+        format!("{} messages", result.messages.len()),
+        if output_text.is_empty() {
             format!("MCP server '{server}' returned no messages for prompt '{name}'.")
         } else {
             output_text
         },
-        sections: Vec::new(),
-        payload: Some(payload),
-        metadata: Default::default(),
-        attachments: Vec::new(),
-    })
+        Some(payload),
+        Default::default(),
+        Vec::new(),
+    ))
 }
 
 fn content_block_to_result_block(block: &ContentBlock) -> Option<OperationBlock> {

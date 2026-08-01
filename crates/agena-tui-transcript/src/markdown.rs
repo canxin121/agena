@@ -255,6 +255,52 @@ pub fn owned_line(line: &Line<'_>) -> Line<'static> {
     }
 }
 
+/// Bound a rich inline line without discarding per-span Markdown styling.
+/// This is the rich equivalent of `truncate_display_width` and is primarily
+/// used by one-line Activity headlines.
+pub fn truncate_rich_line(mut line: Line<'static>, max_width: usize) -> Line<'static> {
+    let visible_width = line
+        .spans
+        .iter()
+        .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+        .sum::<usize>();
+    if visible_width <= max_width {
+        return line;
+    }
+    if max_width == 0 {
+        line.spans.clear();
+        return line;
+    }
+
+    let content_width = max_width.saturating_sub(1);
+    let mut used_width = 0_usize;
+    let mut tokens = Vec::new();
+    'spans: for span in &line.spans {
+        for grapheme in span.content.as_ref().graphemes(true) {
+            let width = UnicodeWidthStr::width(grapheme);
+            if used_width.saturating_add(width) > content_width {
+                break 'spans;
+            }
+            tokens.push(StyledGrapheme {
+                text: grapheme.to_owned(),
+                style: span.style,
+                width,
+                whitespace: grapheme.chars().all(char::is_whitespace),
+            });
+            used_width = used_width.saturating_add(width);
+        }
+    }
+    while tokens.last().is_some_and(|token| token.whitespace) {
+        tokens.pop();
+    }
+    let ellipsis_style = tokens.last().map_or(line.style, |token| token.style);
+    let mut truncated = styled_tokens_to_line(tokens);
+    truncated.spans.push(Span::styled("…", ellipsis_style));
+    truncated.style = line.style;
+    truncated.alignment = line.alignment;
+    truncated
+}
+
 pub fn flush_markdown_chunk(
     out: &mut Vec<RenderedLine>,
     prefix: &str,

@@ -1,10 +1,13 @@
 use agena_domain::{
     ActivityId, ExecutionStatus, ExecutionStatusTransitionError, PartKind, TextSegmentId,
-    ToolApiFunction, ToolInvocation,
 };
+#[cfg(test)]
+use agena_domain::{ToolApiFunction, ToolInvocation};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+use super::OperationCompletion;
 use super::{AttachmentPart, PartContent, RequestPart, RuntimeActivity};
 
 fn is_false(value: &bool) -> bool {
@@ -225,22 +228,11 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
         PartContent::Activity(RuntimeActivity::Reasoning(reasoning)) => {
             truncate_summary(&reasoning.preferred_text())
         }
-        PartContent::Activity(RuntimeActivity::Operation(operation)) => {
-            let input = operation_input_summary(operation.invocation());
-            let output = operation
-                .error_message()
-                .or_else(|| operation.output_text())
-                .or_else(|| (!operation.summary.is_empty()).then_some(operation.summary.as_str()))
-                .and_then(truncate_summary);
-            match (input, output) {
-                (Some(input), Some(output)) => {
-                    truncate_summary(format!("{input} → {output}").as_str())
-                }
-                (Some(input), None) => truncate_summary(input.as_str()),
-                (None, Some(output)) => Some(output),
-                (None, None) => truncate_summary(operation_header_title(operation).as_str()),
-            }
-        }
+        PartContent::Activity(RuntimeActivity::Operation(operation)) => operation
+            .error_message()
+            .or_else(|| (!operation.summary.is_empty()).then_some(operation.summary.as_str()))
+            .and_then(truncate_summary)
+            .or_else(|| truncate_summary(operation_header_title(operation).as_str())),
         PartContent::Activity(RuntimeActivity::Error(error)) => {
             truncate_summary(error.problem.user.fallback.as_str())
         }
@@ -279,117 +271,16 @@ fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
 /// in `agena_model_message_parts`, so collapsed transcript queries need not load
 /// the operation payload merely to explain the action.
 fn operation_header_title(operation: &super::OperationPart) -> String {
-    let invocation = operation.invocation();
-    match invocation.tool_api_call.as_ref().map(|call| call.function) {
-        Some(ToolApiFunction::List) => tool_api_header_title(operation, "List tools".to_owned()),
-        Some(ToolApiFunction::Search) => tool_api_header_title(
-            operation,
-            invocation
-                .input
-                .get("query")
-                .and_then(agena_domain::StructuredValue::as_text)
-                .filter(|query| !query.trim().is_empty())
-                .map(|query| format!("Search tools · {query}"))
-                .unwrap_or_else(|| "Search tools".to_owned()),
-        ),
-        Some(ToolApiFunction::Help) => tool_api_header_title(
-            operation,
-            invocation
-                .input
-                .get("tool")
-                .and_then(agena_domain::StructuredValue::as_text)
-                .filter(|tool| !tool.trim().is_empty())
-                .map(|tool| format!("Inspect {tool}"))
-                .unwrap_or_else(|| "Inspect tool".to_owned()),
-        ),
-        Some(ToolApiFunction::Tags) => {
-            tool_api_header_title(operation, "List tool tags".to_owned())
-        }
-        Some(ToolApiFunction::Call) => {
-            let configured = operation_presentation_title(operation);
-            if !configured.is_empty()
-                && configured != invocation.name
-                && configured != format!("Tool {}", invocation.name)
-                && configured != format!("Run {}", invocation.name)
-            {
-                format!("{} · {configured}", invocation.name)
-            } else {
-                invocation.name.clone()
-            }
-        }
-        None => {
-            let configured = operation_presentation_title(operation);
-            if configured.is_empty()
-                || configured == invocation.name
-                || configured == format!("Tool {}", invocation.name)
-                || configured == format!("Run {}", invocation.name)
-            {
-                invocation.name.clone()
-            } else {
-                configured.to_owned()
-            }
-        }
+    let title = operation.title.trim();
+    if !title.is_empty() {
+        return title.to_owned();
     }
+    let display_title = operation.result.display.title.trim();
+    if !display_title.is_empty() {
+        return display_title.to_owned();
+    }
+    operation.invocation.name.clone()
 }
-
-fn tool_api_header_title(operation: &super::OperationPart, fallback: String) -> String {
-    let configured = operation_presentation_title(operation);
-    if configured == fallback
-        || configured
-            .strip_prefix(fallback.as_str())
-            .is_some_and(|suffix| suffix.starts_with(" · "))
-    {
-        configured.to_owned()
-    } else {
-        fallback
-    }
-}
-
-/// The header is persisted independently from the operation payload. Prefer a
-/// tool-provided title, then its compact completion summary, so even a raw
-/// completed activity has a useful O(1) collapsed label.
-fn operation_presentation_title(operation: &super::OperationPart) -> &str {
-    let configured = operation.title.trim();
-    if !configured.is_empty() {
-        return configured;
-    }
-    let display = operation.result.display.title.trim();
-    if !display.is_empty() {
-        return display;
-    }
-    operation.summary.trim()
-}
-
-fn operation_input_summary(invocation: &ToolInvocation) -> Option<String> {
-    let function = invocation.tool_api_call.as_ref().map(|call| call.function);
-    match function {
-        Some(ToolApiFunction::Help) => invocation
-            .input
-            .get("tool")
-            .and_then(agena_domain::StructuredValue::as_text)
-            .map(ToOwned::to_owned),
-        Some(ToolApiFunction::Search) => invocation
-            .input
-            .get("query")
-            .and_then(agena_domain::StructuredValue::as_text)
-            .map(ToOwned::to_owned),
-        _ if invocation.input.is_empty() => None,
-        _ => Some(
-            invocation
-                .input
-                .fields
-                .iter()
-                .take(3)
-                .map(|field| {
-                    let value: serde_json::Value = field.value.clone().into();
-                    format!("{}={value}", field.name)
-                })
-                .collect::<Vec<_>>()
-                .join(", "),
-        ),
-    }
-}
-
 fn truncate_summary(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -440,10 +331,14 @@ mod tests {
         let operation = OperationPart::completed(
             1,
             invocation,
-            "Read README.md (42 lines)",
-            Vec::new(),
-            Vec::new(),
-            ToolOutput::default(),
+            OperationCompletion::new(
+                "Read README.md",
+                "42 lines",
+                "Read README.md (42 lines)",
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+            ),
             TimeRange::default(),
         );
         let part = MessagePart::from_content(
@@ -454,14 +349,8 @@ mod tests {
             PartContent::operation(operation),
         );
 
-        assert_eq!(
-            part.name.as_deref(),
-            Some("fs.read · Read README.md (42 lines)")
-        );
-        assert_eq!(
-            part.summary.as_deref(),
-            Some("path=\"README.md\" → Read README.md (42 lines)")
-        );
+        assert_eq!(part.name.as_deref(), Some("Read README.md"));
+        assert_eq!(part.summary.as_deref(), Some("42 lines"));
         assert!(part.has_detail);
     }
 
@@ -478,17 +367,19 @@ mod tests {
             plugin_name: None,
             input: arguments,
         };
-        let mut operation = OperationPart::completed(
+        let operation = OperationPart::completed(
             1,
             invocation,
-            "Available tools: returned 20 of 133 starting at offset 20.",
-            Vec::new(),
-            Vec::new(),
-            ToolOutput::default(),
+            OperationCompletion::new(
+                "List tools · 20/133",
+                "Returned 20 of 133 tools; continue at offset 40.",
+                "Available tools: returned 20 of 133 starting at offset 20.",
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+            ),
             TimeRange::default(),
         );
-        operation.set_title("List tools · 20/133");
-        operation.set_summary("Returned 20 of 133 tools; continue at offset 40.");
         let part = MessagePart::from_content(
             1,
             1,

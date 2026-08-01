@@ -341,11 +341,7 @@ pub(crate) fn activity_presentation(
         ActivityPayload::Operation(operation) => (
             "operation".to_owned(),
             operation_activity_title(operation),
-            if operation.summary.trim().is_empty() {
-                operation.model_output_text.clone()
-            } else {
-                operation.summary.clone()
-            },
+            operation.summary.clone(),
             operation.error.as_ref().map(|error| error.problem.clone()),
         ),
         ActivityPayload::Interaction(interaction) => match interaction {
@@ -432,83 +428,13 @@ pub(crate) fn activity_presentation(
 }
 
 fn operation_activity_title(operation: &agena_domain::OperationActivity) -> String {
-    use agena_domain::ToolApiFunction;
-
-    let function = operation
-        .invocation
-        .tool_api_call
-        .as_ref()
-        .map(|call| call.function);
-    let input = serde_json::Value::from(operation.invocation.input.clone());
-    let input_text = |name: &str| {
-        input
-            .get(name)
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    };
-    let persisted_tool_api_title = |fallback: String| {
-        let configured = operation_presentation_title(operation);
-        if configured == fallback
-            || configured
-                .strip_prefix(fallback.as_str())
-                .is_some_and(|suffix| suffix.starts_with(" · "))
-        {
-            configured.to_owned()
-        } else {
-            fallback
-        }
-    };
-
-    match function {
-        Some(ToolApiFunction::List) => persisted_tool_api_title("List tools".to_owned()),
-        Some(ToolApiFunction::Search) => {
-            let label = input_text("query")
-                .map(|query| format!("Search tools · {query}"))
-                .unwrap_or_else(|| "Search tools".to_owned());
-            persisted_tool_api_title(label)
-        }
-        Some(ToolApiFunction::Help) => persisted_tool_api_title(
-            input_text("tool")
-                .map(|tool| format!("Inspect {tool}"))
-                .unwrap_or_else(|| "Inspect tool".to_owned()),
-        ),
-        Some(ToolApiFunction::Tags) => persisted_tool_api_title("List tool tags".to_owned()),
-        Some(ToolApiFunction::Call) => {
-            let configured = operation_presentation_title(operation);
-            if !configured.is_empty()
-                && configured != operation.invocation.name
-                && configured != format!("Tool {}", operation.invocation.name)
-                && configured != format!("Run {}", operation.invocation.name)
-            {
-                format!("{} · {configured}", operation.invocation.name)
-            } else {
-                operation.invocation.name.clone()
-            }
-        }
-        None => {
-            let configured = operation_presentation_title(operation);
-            if configured.is_empty()
-                || configured == operation.invocation.name
-                || configured == format!("Tool {}", operation.invocation.name)
-                || configured == format!("Run {}", operation.invocation.name)
-            {
-                operation.invocation.name.clone()
-            } else {
-                configured.to_owned()
-            }
-        }
-    }
-}
-
-fn operation_presentation_title(operation: &agena_domain::OperationActivity) -> &str {
     let title = operation.title.trim();
-    if !title.is_empty() {
-        return title;
+    if title.is_empty() {
+        operation.invocation.name.clone()
+    } else {
+        title.to_owned()
     }
-    operation.summary.trim()
 }
-
 fn timestamp(value: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(value).unwrap_or(DateTime::UNIX_EPOCH)
 }
@@ -547,13 +473,31 @@ const fn assistant_reply_status(status: AssistantReplyStatus) -> MessageStatus {
 mod tests {
     use agena_domain::{
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
-        CustomActivity, OperationActivity, OperationAuthorization, OperationPermission,
-        PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
-        PermissionRiskLevel, ResourceActivity, SkillReferenceActivity, StructuredObject,
-        ToolCallId, ToolInvocation, ToolOutput,
+        CustomActivity, OperationActivity, OperationActivityError, OperationAuthorization,
+        OperationPermission, PermissionAction, PermissionReply, PermissionReplyKind,
+        PermissionRequest, PermissionRiskLevel, ResourceActivity, SkillReferenceActivity,
+        StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
+    };
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+        RecoveryDirective, RetryDirective, UserPresentation,
     };
 
     use super::*;
+
+    fn invalid_tool_input_error(message: &str) -> OperationActivityError {
+        OperationActivityError {
+            problem: agena_failure::UserProblem::from(Failure::new(
+                FailureCode::new("tool.invalid_input"),
+                FailureCategory::InvalidInput,
+                FailureResponsibility::Caller,
+                RetryDirective::CorrectInput,
+                RecoveryDirective::None,
+                FailureImpact::RequestRejected,
+                UserPresentation::validated("tool-invalid-input", message),
+            )),
+        }
+    }
 
     #[test]
     fn empty_running_reply_projects_lifecycle_as_activity_not_empty_message() {
@@ -867,6 +811,11 @@ mod tests {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
         };
+        let input_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Input,
+        };
 
         let collapsed = crate::render_entry_detailed(
             &entry,
@@ -912,6 +861,7 @@ mod tests {
             .find(|node| node.key == key)
             .expect("expanded tools_list Activity node");
         assert!(node.expanded);
+        assert_eq!(node.end_line.saturating_sub(node.start_line), 1);
         let expanded_text = expanded
             .lines
             .iter()
@@ -919,8 +869,11 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(expanded_text.contains("Result\n"), "{expanded_text}");
-        assert!(expanded_text.contains("Input\n"), "{expanded_text}");
-        assert!(expanded_text.contains("\"limit\": 33"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("▸ Input · 2 fields"),
+            "{expanded_text}"
+        );
+        assert!(!expanded_text.contains("\"limit\": 33"), "{expanded_text}");
         assert!(
             !expanded_text.contains("Structured result"),
             "{expanded_text}"
@@ -933,6 +886,448 @@ mod tests {
         );
         assert!(node.copy_text.contains("fs.read"));
         assert!(!node.copy_text.contains("Structured result"));
+        let input_node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == input_key)
+            .expect("collapsed nested Input node");
+        assert!(input_node.toggleable);
+        assert!(!input_node.expanded);
+        assert!(input_node.copy_text.contains("\"limit\": 33"));
+
+        let input_expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key, true), (input_key.clone(), true)]),
+        );
+        let input_expanded_text = input_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            input_expanded_text.contains("▾ Input · 2 fields")
+                || input_expanded_text.contains("▾ Input"),
+            "{input_expanded_text}"
+        );
+        assert!(
+            input_expanded_text.contains("\"limit\": 33"),
+            "{input_expanded_text}"
+        );
+        let input_node = input_expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == input_key)
+            .expect("expanded nested Input node");
+        assert!(input_node.expanded);
+    }
+
+    #[test]
+    fn canonical_operation_uses_rich_markdown_for_folded_and_expanded_activity_content() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let markdown_result = concat!(
+            "## Checks\n\n",
+            "- **Passed**: `cargo test`\n",
+            "- [x] Snapshots\n\n",
+            "| Metric | Value |\n",
+            "| --- | ---: |\n",
+            "| Passed | 94 |\n\n",
+            "```rust\n",
+            "fn main() {}\n",
+            "```",
+        );
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Tool,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new("call-markdown"),
+                invocation: ToolInvocation::new(
+                    "shell.run",
+                    StructuredObject::try_from(serde_json::json!({
+                        "command": "cargo test -p agena-tui-transcript"
+                    }))
+                    .expect("structured Markdown test input"),
+                ),
+                title: "Inspect `shell.run`".to_owned(),
+                summary: "Found **3** checks".to_owned(),
+                sections: Vec::new(),
+                model_output_text: markdown_result.to_owned(),
+                details: ToolOutput::default(),
+                resource_activity_ids: Vec::new(),
+                authorization: Default::default(),
+                error: None,
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry =
+            assistant_reply_document_entry(response_id, MessageStatus::Completed, 1, &document);
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let input_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Input,
+        };
+
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let collapsed_text = collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            collapsed_text.contains("Inspect shell.run"),
+            "{collapsed_text}"
+        );
+        assert!(
+            collapsed_text.contains("Found 3 checks"),
+            "{collapsed_text}"
+        );
+        assert!(!collapsed_text.contains('`'), "{collapsed_text}");
+        assert!(!collapsed_text.contains("**"), "{collapsed_text}");
+        assert!(collapsed.lines.iter().any(|line| {
+            line.text.contains("Inspect shell.run")
+                && line
+                    .rich_line
+                    .as_ref()
+                    .is_some_and(|line| line.spans.len() >= 7)
+        }));
+
+        let expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("Markdown Operation Activity node");
+        assert!(
+            expanded_text.contains("▸ Input · 1 field"),
+            "{expanded_text}"
+        );
+        assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
+        assert!(expanded_text.contains("› Result"), "{expanded_text}");
+        assert!(expanded_text.contains("── Checks"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("Passed: cargo test"),
+            "{expanded_text}"
+        );
+        assert!(expanded_text.contains("┌─ rust"), "{expanded_text}");
+        assert!(expanded_text.contains("│ Metric"), "{expanded_text}");
+        assert!(!expanded_text.contains("**Passed**"), "{expanded_text}");
+        assert!(!expanded_text.contains("```"), "{expanded_text}");
+        assert!(node.copy_text.contains(markdown_result));
+
+        let input_expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key, true), (input_key, true)]),
+        );
+        let input_expanded_text = input_expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            input_expanded_text.contains("▾ Input"),
+            "{input_expanded_text}"
+        );
+        assert!(
+            input_expanded_text.contains("┌─ json"),
+            "{input_expanded_text}"
+        );
+        assert!(
+            input_expanded_text.contains("cargo test -p agena-tui-transcript"),
+            "{input_expanded_text}"
+        );
+    }
+
+    #[test]
+    fn failed_canonical_operation_renders_the_real_error_once_without_a_fake_result() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let full_error = "shell.run filesystem_effects must declare every accessed path because the command appears to touch the filesystem: invokes 'python3' which may read or write local files";
+        let truncated_summary = agena_tool::normalize_tool_summary(full_error);
+        assert!(truncated_summary.ends_with('…'));
+        assert_ne!(truncated_summary, full_error);
+
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Tool,
+            state: ActivityState::Failed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new("call-shell-run"),
+                invocation: ToolInvocation::new(
+                    "shell.run",
+                    StructuredObject::try_from(serde_json::json!({
+                        "command": "python3 - <<'EOF'\nprint('pi')\nEOF",
+                        "description": "Compute pi with Python",
+                        "filesystem_effects": [],
+                        "network_effects": [],
+                        "shell": "bash",
+                        "timeout_ms": 60_000
+                    }))
+                    .expect("structured shell.run input"),
+                ),
+                title: "shell.run".to_owned(),
+                summary: truncated_summary.clone(),
+                sections: Vec::new(),
+                model_output_text: full_error.to_owned(),
+                details: ToolOutput::default(),
+                resource_activity_ids: Vec::new(),
+                authorization: Default::default(),
+                error: Some(invalid_tool_input_error(full_error)),
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry =
+            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document);
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            400,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let expanded_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let node = rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("failed shell.run Activity node");
+
+        assert!(
+            expanded_text.contains("▸ Input · 6 fields"),
+            "{expanded_text}"
+        );
+        assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
+        assert!(expanded_text.contains("Error\n"), "{expanded_text}");
+        assert!(!expanded_text.contains("Result\n"), "{expanded_text}");
+        assert_eq!(
+            expanded_text
+                .matches("shell.run filesystem_effects must declare every accessed path")
+                .count(),
+            1,
+            "{expanded_text}"
+        );
+        assert_eq!(
+            expanded_text
+                .matches("which may read or write local files")
+                .count(),
+            1,
+            "{expanded_text}"
+        );
+        assert_eq!(
+            node.copy_text.matches(full_error).count(),
+            1,
+            "{}",
+            node.copy_text
+        );
+        assert!(
+            !node.copy_text.lines().any(|line| line == truncated_summary),
+            "{}",
+            node.copy_text
+        );
+    }
+
+    #[test]
+    fn failed_canonical_operation_keeps_distinct_partial_output_before_the_error() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let partial_output = "Compiled 18 modules before the linker stopped.";
+        let full_error = "The linker could not resolve symbol `agena_runtime_start`.";
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Tool,
+            state: ActivityState::Failed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new("call-build"),
+                invocation: ToolInvocation::new(
+                    "shell.run",
+                    StructuredObject::try_from(serde_json::json!({
+                        "command": "cargo build"
+                    }))
+                    .expect("structured build input"),
+                ),
+                title: "Build workspace".to_owned(),
+                summary: agena_tool::normalize_tool_summary(full_error),
+                sections: Vec::new(),
+                model_output_text: partial_output.to_owned(),
+                details: ToolOutput::default(),
+                resource_activity_ids: Vec::new(),
+                authorization: Default::default(),
+                error: Some(invalid_tool_input_error(full_error)),
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry =
+            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document);
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            200,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let expanded_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let node = rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("partially completed shell.run Activity node");
+
+        assert!(expanded_text.contains("Result\n"), "{expanded_text}");
+        assert!(expanded_text.contains("Error\n"), "{expanded_text}");
+        assert_eq!(
+            expanded_text.matches(partial_output).count(),
+            1,
+            "{expanded_text}"
+        );
+        assert_eq!(
+            expanded_text
+                .matches("The linker could not resolve symbol")
+                .count(),
+            1,
+            "{expanded_text}"
+        );
+        assert_eq!(
+            expanded_text.matches("agena_runtime_start").count(),
+            1,
+            "{expanded_text}"
+        );
+        assert_eq!(node.copy_text.matches(partial_output).count(), 1);
+        assert_eq!(node.copy_text.matches(full_error).count(), 1);
+    }
+
+    #[test]
+    fn canonical_error_activity_renders_its_problem_once_in_the_error_section() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let full_error = "The provider response ended before the requested item was complete.";
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Runtime,
+            state: ActivityState::Failed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Error(agena_domain::ErrorActivity {
+                problem: invalid_tool_input_error(full_error).problem,
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry =
+            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document);
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            160,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let expanded_text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let node = rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("canonical Error Activity node");
+
+        assert!(expanded_text.contains("Error\n"), "{expanded_text}");
+        assert_eq!(
+            expanded_text.matches(full_error).count(),
+            1,
+            "{expanded_text}"
+        );
+        assert_eq!(node.copy_text.matches(full_error).count(), 1);
     }
 
     #[test]
@@ -995,7 +1390,8 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(collapsed_text.contains("Search repository · 2 matches"));
+        assert!(collapsed_text.contains("Search repository"));
+        assert!(collapsed_text.contains("2 matches"));
         assert!(!collapsed_text.contains("src/activity.rs"));
 
         let expanded = crate::render_entry_detailed(
@@ -1024,10 +1420,92 @@ mod tests {
             !expanded_text.contains("Structured result"),
             "{expanded_text}"
         );
+        assert!(expanded_text.contains("2 matches"), "{expanded_text}");
     }
 
     #[test]
-    fn operation_activity_titles_describe_the_action_instead_of_the_gateway_function() {
+    fn canonical_activity_headlines_keep_titles_and_use_remaining_width_for_summaries() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let operation_document = |title: &str, summary: &str| {
+            ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+                id: agena_domain::ActivityId::new(),
+                owner: ActivityOwner::AssistantReply {
+                    reply_id: response_id,
+                },
+                actor: ActivityActor::Tool,
+                state: ActivityState::Completed,
+                position: ContentPosition { index: 0 },
+                revision_seq: 1,
+                lifecycle: ActivityLifecycle::default(),
+                payload: ActivityPayload::Operation(OperationActivity {
+                    call_id: ToolCallId::new("call-title"),
+                    invocation: ToolInvocation::new("shell.run", StructuredObject::default()),
+                    title: title.to_owned(),
+                    summary: summary.to_owned(),
+                    sections: Vec::new(),
+                    model_output_text: summary.to_owned(),
+                    details: ToolOutput::default(),
+                    resource_activity_ids: Vec::new(),
+                    authorization: Default::default(),
+                    error: None,
+                }),
+                provenance: ActivityProvenance::default(),
+            })])
+        };
+
+        let ordinary_title = "Process run Create a tiny test PNG with pure python";
+        let ordinary = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &operation_document(ordinary_title, &"PNG result details ".repeat(30)),
+        );
+        let ordinary_rendered = crate::render_entry_detailed(
+            &ordinary,
+            80,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let ordinary_headline = ordinary_rendered
+            .lines
+            .iter()
+            .find(|line| line.text.contains("Process run"))
+            .expect("ordinary Operation headline");
+        assert!(ordinary_headline.text.contains(ordinary_title));
+        assert!(ordinary_headline.text.contains("PNG result details"));
+        assert!(ordinary_headline.text.ends_with('…'));
+        assert!(unicode_width::UnicodeWidthStr::width(ordinary_headline.text.as_str()) <= 80);
+
+        let long_title = format!("Inspect {}", "very-long-component-".repeat(8));
+        let long = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &operation_document(long_title.as_str(), "complete"),
+        );
+        let long_rendered = crate::render_entry_detailed(
+            &long,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let long_headline = long_rendered
+            .lines
+            .iter()
+            .find(|line| line.text.contains("Inspect"))
+            .expect("long Operation headline");
+        assert!(long_headline.text.ends_with('…'));
+        assert!(unicode_width::UnicodeWidthStr::width(long_headline.text.as_str()) <= 120);
+    }
+
+    #[test]
+    fn operation_activity_titles_use_the_producer_contract_without_ui_inference() {
         let operation = |name: &str, input: serde_json::Value, title: &str| {
             let provider_arguments =
                 StructuredObject::try_from(input).expect("structured tool input");
@@ -1083,7 +1561,7 @@ mod tests {
             operation_activity_title(&operation(
                 "tools_list",
                 serde_json::json!({}),
-                "tools_list"
+                "List tools"
             )),
             "List tools"
         );
@@ -1099,7 +1577,7 @@ mod tests {
             operation_activity_title(&operation(
                 "tools_search",
                 serde_json::json!({"query": "filesystem"}),
-                "Tool tools_search",
+                "Search tools · filesystem",
             )),
             "Search tools · filesystem"
         );
@@ -1115,7 +1593,7 @@ mod tests {
             operation_activity_title(&operation(
                 "tools_help",
                 serde_json::json!({"tool": "fs.read"}),
-                "Tool tools_help",
+                "Inspect fs.read",
             )),
             "Inspect fs.read"
         );
@@ -1123,7 +1601,7 @@ mod tests {
             operation_activity_title(&operation(
                 "tools_call",
                 serde_json::json!({"tool": "fs.read", "input": {"path": "README.md"}}),
-                "fs.read",
+                "",
             )),
             "fs.read"
         );
@@ -1133,15 +1611,15 @@ mod tests {
                 serde_json::json!({"tool": "fs.read", "input": {"path": "README.md"}}),
                 "Read README.md",
             )),
-            "fs.read · Read README.md"
+            "Read README.md"
         );
         assert_eq!(
             operation_activity_title(&operation(
                 "agena.repo.status",
                 serde_json::json!({}),
-                "Tool agena.repo.status",
+                "Repository status",
             )),
-            "agena.repo.status"
+            "Repository status"
         );
     }
 

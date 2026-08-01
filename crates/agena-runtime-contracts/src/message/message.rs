@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 use crate::message::metadata::{MessageMetadata, MessageProviderState};
 use agena_domain::ExecutionStatus;
 
-use crate::message::part::{MessagePart, OperationPart, PartContent, RuntimeActivity};
+use crate::message::part::{
+    MessagePart, OperationCompletion, OperationPart, PartContent, RuntimeActivity,
+};
 use agena_domain::ExecutionStatusTransitionError;
 use agena_domain::Role;
 use agena_provider::CompletionUsage;
@@ -71,10 +73,14 @@ impl Message {
                         plugin_name: None,
                         input: agena_domain::StructuredObject::default(),
                     },
-                    output.into(),
-                    Vec::new(),
-                    Vec::new(),
-                    agena_domain::ToolOutput::default(),
+                    OperationCompletion::new(
+                        "Tool result",
+                        "Result available",
+                        output.into(),
+                        Vec::new(),
+                        Vec::new(),
+                        agena_domain::ToolOutput::default(),
+                    ),
                     agena_domain::TimeRange::default(),
                 ),
             ))],

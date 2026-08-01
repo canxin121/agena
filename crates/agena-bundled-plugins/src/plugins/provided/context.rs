@@ -92,6 +92,10 @@ impl ContextPlugin {
         });
         Ok(ToolInvokeOutput::from_parts(
             "context status",
+            status.remaining_tokens.map_or_else(
+                || format!("{} tokens used", status.current_tokens),
+                |remaining| format!("{} used · {remaining} remaining", status.current_tokens),
+            ),
             text,
             Some(payload),
             std::collections::BTreeMap::from([

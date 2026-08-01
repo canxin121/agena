@@ -69,6 +69,7 @@ impl InteractionPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             title.clone(),
+            format!("{level} notification"),
             input.body_markdown.clone(),
             Some(serde_json::json!({
                 "title": title,

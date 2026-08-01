@@ -37,6 +37,21 @@ pub enum TranscriptNodeKey {
         entry_id: crate::TranscriptEntryId,
         content_id: crate::TranscriptContentId,
     },
+    /// One independently navigable section inside an expanded Activity.
+    /// `Input` has its own stable key because its expansion state must survive
+    /// outer Activity toggles and streamed Activity revisions.
+    ActivitySection {
+        entry_id: crate::TranscriptEntryId,
+        content_id: crate::TranscriptContentId,
+        section: TranscriptActivitySection,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TranscriptActivitySection {
+    Input,
+    Detail(usize),
+    Error,
 }
 
 impl TranscriptNodeKey {
@@ -46,7 +61,8 @@ impl TranscriptNodeKey {
             | Self::Content { entry_id, .. }
             | Self::MarkdownBlock { entry_id, .. }
             | Self::ActivitySummary { entry_id, .. }
-            | Self::Activity { entry_id, .. } => *entry_id,
+            | Self::Activity { entry_id, .. }
+            | Self::ActivitySection { entry_id, .. } => *entry_id,
         }
     }
 
@@ -122,6 +138,7 @@ impl RenderedTranscriptNode {
     pub fn contributes_to_aggregate_copy(&self) -> bool {
         !self.key.is_entry_container()
             && !(matches!(&self.key, TranscriptNodeKey::ActivitySummary { .. }) && self.expanded)
+            && !matches!(&self.key, TranscriptNodeKey::ActivitySection { .. })
             && !self.copy_text.trim().is_empty()
     }
 }

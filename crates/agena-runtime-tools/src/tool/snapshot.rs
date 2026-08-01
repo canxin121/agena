@@ -77,7 +77,8 @@ pub(super) fn execute_enter(
         .map(|note| format!("  note:    {note}\n"))
         .unwrap_or_default();
     let view = ToolExecutionView::simple(
-        format!("Snapshot → {}", session.path.display()),
+        "Enter snapshot",
+        format!("{} · {}", session.backend, session.branch),
         format!(
             "Switched to managed snapshot:\n  backend: {}\n  path:    {}\n  branch:  {}\n{}",
             session.backend,
@@ -121,7 +122,8 @@ pub(super) fn execute_exit(
         return Err(error);
     }
     let view = ToolExecutionView::simple(
-        format!("Snapshot exited ({action})"),
+        format!("Exit snapshot · {action}"),
+        format!("{} · {}", session.backend, session.branch),
         format!(
             "Snapshot at {} (backend {}, branch {}) — action: {action}",
             session.path.display(),

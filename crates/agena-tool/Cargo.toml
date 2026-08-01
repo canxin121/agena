@@ -19,6 +19,8 @@ thiserror.workspace = true
 tantivy.workspace = true
 tracing.workspace = true
 tree-sitter = { workspace = true }
+unicode-segmentation = { workspace = true }
+unicode-width = { workspace = true }
 walkdir = { workspace = true }
 
 [lints]

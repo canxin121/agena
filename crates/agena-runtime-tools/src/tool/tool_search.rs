@@ -100,7 +100,16 @@ pub(crate) fn execute_with_tools(
     };
 
     let output_text = lines.join("\n");
-    let mut view = ToolExecutionView::simple("Tool search", output_text);
+    let title = if input.query.trim().is_empty() {
+        "Search tools".to_string()
+    } else {
+        format!("Search tools · {}", input.query.trim())
+    };
+    let mut view = ToolExecutionView::simple(
+        title,
+        format!("{} tools matched", results.len()),
+        output_text,
+    );
     view.metadata
         .insert("matched_tools".to_string(), results.len().to_string());
     if !input.query.trim().is_empty() {

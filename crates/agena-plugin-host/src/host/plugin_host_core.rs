@@ -312,6 +312,9 @@ impl PluginHost {
                         if let Some(t) = patch.title {
                             inp.title = t;
                         }
+                        if let Some(summary) = patch.summary {
+                            inp.summary = summary;
+                        }
                         if let Some(o) = patch.output_text {
                             inp.output_text = o;
                         }

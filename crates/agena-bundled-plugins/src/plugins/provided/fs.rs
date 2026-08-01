@@ -243,6 +243,11 @@ impl FsPlugin {
                 input.path
             ),
             format!(
+                "{} · {} bytes",
+                if existed { "Updated" } else { "Created" },
+                input.content.len()
+            ),
+            format!(
                 "{} '{}' ({} bytes, sha256={hash}).",
                 if existed { "Updated" } else { "Created" },
                 input.path,
@@ -305,6 +310,10 @@ impl FsPlugin {
         let after_sha256 = sha256_bytes(updated.as_bytes());
         Ok(ToolInvokeOutput::from_parts(
             format!("replaced text in {}", input.path),
+            format!(
+                "{} replacements",
+                if input.replace_all { occurrences } else { 1 }
+            ),
             format!(
                 "Replaced {} occurrence(s) in '{}' (sha256 {before_sha256} -> {after_sha256}).",
                 if input.replace_all { occurrences } else { 1 },
@@ -374,6 +383,11 @@ impl FsPlugin {
         }
         Ok(ToolInvokeOutput::from_parts(
             format!("read {} files", entries.len()),
+            if truncated {
+                format!("{} files · truncated", entries.len())
+            } else {
+                format!("{} files", entries.len())
+            },
             sections.join("\n\n"),
             Some(serde_json::json!({
                 "files": entries,
@@ -440,6 +454,7 @@ impl FsPlugin {
         });
         Ok(ToolInvokeOutput::from_parts(
             format!("stat {}", input.path),
+            format!("{file_type} · {} bytes", metadata.len()),
             serde_json::to_string_pretty(&payload)
                 .map_err(|error| PluginError::internal(error.to_string()))?,
             Some(payload),
@@ -507,6 +522,7 @@ impl FsPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             format!("view image {}", input.path),
+            format!("{mime} · {} bytes · {detail}", metadata.len()),
             format!(
                 "Attached '{}' for visual inspection (detail={detail}, {} bytes).",
                 input.path,

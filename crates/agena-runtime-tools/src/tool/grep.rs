@@ -116,7 +116,13 @@ pub(super) fn execute(
         truncated,
     };
 
-    let mut view = ToolExecutionView::simple(format!("Grep {}", input.pattern), output_text);
+    let summary = if truncated {
+        format!("{} matches · truncated", matches.len())
+    } else {
+        format!("{} matches", matches.len())
+    };
+    let mut view =
+        ToolExecutionView::simple(format!("Grep {}", input.pattern), summary, output_text);
     view.metadata
         .insert("pattern".to_string(), input.pattern.clone());
     if let Some(include) = &input.include {

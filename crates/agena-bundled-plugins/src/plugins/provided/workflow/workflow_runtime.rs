@@ -156,6 +156,7 @@ impl WorkflowPlugin {
             });
             return Ok(ToolInvokeOutput::from_parts(
                 "plan",
+                "No active plan",
                 "No plan.",
                 Some(payload),
                 std::collections::BTreeMap::new(),
@@ -165,6 +166,7 @@ impl WorkflowPlugin {
         let payload = Self::plan_get_payload(&plan, view);
         Ok(ToolInvokeOutput::from_parts(
             "plan",
+            format!("{:?} · {} steps", plan.phase, plan.steps.len()),
             Self::plan_get_text(&plan, view),
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -189,6 +191,7 @@ impl WorkflowPlugin {
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::from_parts(
             "plan",
+            format!("Saved · {:?} · {} steps", plan.phase, plan.steps.len()),
             Self::plan_output_text("Saved the plan.", &plan),
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -320,6 +323,7 @@ impl WorkflowPlugin {
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::from_parts(
             "plan",
+            format!("{} · {:?}", message.trim_end_matches('.'), plan.phase),
             Self::plan_output_text(message.as_str(), &plan),
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -340,6 +344,7 @@ impl WorkflowPlugin {
         };
         Ok(ToolInvokeOutput::from_parts(
             "plan",
+            text,
             text,
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -499,7 +504,7 @@ impl WorkflowPlugin {
             TaskAccess::ReadOnly => "read_only",
         };
         let mut view =
-            ToolExecutionView::simple(format!("Task {}", input.description), output_text);
+            ToolExecutionView::simple(format!("Task {}", input.description), status, output_text);
         view.metadata
             .insert("description".to_string(), input.description.clone());
         view.metadata
@@ -920,6 +925,12 @@ pub(super) fn discovery_text_output(
     summary: impl Into<String>,
     output_text: impl Into<String>,
 ) -> ToolInvokeOutput {
-    ToolInvokeOutput::from_parts(title, output_text, None, BTreeMap::new(), Vec::new())
-        .with_summary(summary)
+    ToolInvokeOutput::from_parts(
+        title,
+        summary,
+        output_text,
+        None,
+        BTreeMap::new(),
+        Vec::new(),
+    )
 }

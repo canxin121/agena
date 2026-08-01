@@ -482,8 +482,12 @@ pub(super) fn user_input_execution(
         }
     }
 
-    let mut view = crate::tool::ToolExecutionView::simple("Ask user", lines.join("\n"));
     let selection_count: usize = answers.values().map(Vec::len).sum();
+    let mut view = crate::tool::ToolExecutionView::simple(
+        "Ask user",
+        format!("{selection_count} answers"),
+        lines.join("\n"),
+    );
     view.metadata
         .insert("answer_count".to_string(), selection_count.to_string());
     view.metadata.insert(

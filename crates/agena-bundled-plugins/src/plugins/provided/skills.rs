@@ -746,6 +746,7 @@ fn skill_write_output(
     let operation = result.operation;
     ToolInvokeOutput::from_parts(
         format!("Skill {operation}: {}", result.name),
+        format!("{operation} · catalog generation {generation}"),
         format!(
             "Skill '{}' was {operation} at {path}. Skill catalog generation {generation}.",
             result.name
@@ -1581,6 +1582,11 @@ impl SkillsPlugin {
         });
         Ok(ToolInvokeOutput::from_parts(
             "skills list",
+            if offset.saturating_add(entries.len()) < total {
+                format!("{} of {total} tools · more available", entries.len())
+            } else {
+                format!("{} of {total} tools", entries.len())
+            },
             lines.join("\n"),
             Some(payload),
             std::collections::BTreeMap::from([
@@ -1628,6 +1634,7 @@ impl SkillsPlugin {
         });
         Ok(ToolInvokeOutput::from_parts(
             format!("skills get {name}"),
+            format!("{} · {summary}", discovered_tool.kind),
             text,
             Some(payload),
             std::collections::BTreeMap::from([
@@ -1715,6 +1722,7 @@ impl SkillsPlugin {
             .map_err(|error| PluginError::invalid_params(error.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
             format!("skill resource {name}/{}", input.path),
+            format!("{} bytes", content.len()),
             content.clone(),
             Some(serde_json::json!({
                 "name": name,
@@ -1777,6 +1785,14 @@ impl SkillsPlugin {
         }
         Ok(ToolInvokeOutput::from_parts(
             "skills refresh",
+            format!(
+                "{} · {skill_count} skills · {command_count} commands",
+                if refresh.changed {
+                    "Changed"
+                } else {
+                    "Unchanged"
+                }
+            ),
             lines.join("\n"),
             Some(serde_json::json!({
                 "changed": refresh.changed,

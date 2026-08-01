@@ -660,7 +660,7 @@ mod transcript_character_cursor_tests {
         assert!(lines.iter().any(|line| line.starts_with("assistant –")));
         assert!(lines.iter().all(|line| !line.starts_with("system –")));
         assert_eq!(
-            lines[cancelled], "  ▸ Response cancelled",
+            lines[cancelled], "  ▸ – Response cancelled",
             "a response outcome must use the visible Activity headline contract"
         );
         assert!(transcript.rendered(80).nodes.iter().any(|node| {
@@ -1525,6 +1525,7 @@ mod transcript_expansion_tests {
         TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
         transcript_text_selection_text,
     };
+    use agena_tui_transcript::TranscriptActivitySection;
 
     #[test]
     fn canonical_tools_list_activity_stays_open_when_new_reply_content_arrives() {
@@ -1547,7 +1548,11 @@ mod transcript_expansion_tests {
             lifecycle: ActivityLifecycle::default(),
             payload: ActivityPayload::Operation(OperationActivity {
                 call_id: ToolCallId::new("call-tools-list"),
-                invocation: ToolInvocation::new("tools_list", StructuredObject::default()),
+                invocation: ToolInvocation::new(
+                    "tools_list",
+                    StructuredObject::try_from(serde_json::json!({"limit": 2}))
+                        .expect("structured tools_list input"),
+                ),
                 title: "tools_list".to_owned(),
                 summary: String::new(),
                 sections: Vec::new(),
@@ -1593,6 +1598,11 @@ mod transcript_expansion_tests {
             entry_id: agena_tui_transcript::TranscriptEntryId::AssistantReply(response_id),
             content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
         };
+        let input_key = TranscriptNodeKey::ActivitySection {
+            entry_id: agena_tui_transcript::TranscriptEntryId::AssistantReply(response_id),
+            content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
+            section: TranscriptActivitySection::Input,
+        };
         let collapsed = transcript
             .rendered(100)
             .nodes
@@ -1629,6 +1639,90 @@ mod transcript_expansion_tests {
                 .iter()
                 .any(|line| line.text.contains("repo.status"))
         );
+        let collapsed_input = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == input_key)
+            .cloned()
+            .expect("nested Input section");
+        assert!(collapsed_input.toggleable);
+        assert!(!collapsed_input.expanded);
+        assert!(
+            transcript
+                .rendered(100)
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("\"limit\": 2"))
+        );
+
+        transcript.set_cursor_line(100, 20, collapsed_input.start_line);
+        assert_eq!(
+            transcript.toggle_cursor_node_expansion(100, 20),
+            Some((TranscriptNodeKind::Activity, true))
+        );
+        assert!(
+            transcript
+                .rendered(100)
+                .lines
+                .iter()
+                .any(|line| line.text.contains("\"limit\": 2"))
+        );
+
+        let outer = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .cloned()
+            .expect("expanded outer Activity");
+        transcript.set_cursor_line(100, 20, outer.start_line);
+        assert_eq!(
+            transcript.toggle_cursor_node_expansion(100, 20),
+            Some((TranscriptNodeKind::Activity, false))
+        );
+        assert!(
+            transcript
+                .rendered(100)
+                .nodes
+                .iter()
+                .all(|node| node.key != input_key)
+        );
+        let outer = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .cloned()
+            .expect("collapsed outer Activity");
+        transcript.set_cursor_line(100, 20, outer.start_line);
+        assert_eq!(
+            transcript.toggle_cursor_node_expansion(100, 20),
+            Some((TranscriptNodeKind::Activity, true))
+        );
+        assert!(
+            transcript
+                .rendered(100)
+                .nodes
+                .iter()
+                .find(|node| node.key == input_key)
+                .is_some_and(|node| node.expanded),
+            "nested Input state must survive closing and reopening its Activity"
+        );
+        let entry_key = TranscriptNodeKey::Entry {
+            entry_id: agena_tui_transcript::TranscriptEntryId::AssistantReply(response_id),
+        };
+        let entry = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == entry_key)
+            .expect("assistant reply container");
+        assert_eq!(
+            entry.copy_text.matches("\"limit\": 2").count(),
+            1,
+            "nested section copy text must not duplicate the parent Activity projection"
+        );
 
         let mut incoming = transcript.snapshot.clone();
         incoming.seq_session = 2;
@@ -1658,6 +1752,15 @@ mod transcript_expansion_tests {
             .find(|node| node.key == key)
             .expect("expanded Activity remains rendered after new AI content");
         assert!(expanded_after_new_content.expanded);
+        assert!(
+            transcript
+                .rendered(100)
+                .nodes
+                .iter()
+                .find(|node| node.key == input_key)
+                .is_some_and(|node| node.expanded),
+            "nested Input expansion must survive streamed Activity revisions"
+        );
         assert!(
             transcript.rendered(100).nodes.iter().any(|node| {
                 matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) && !node.expanded

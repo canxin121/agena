@@ -1,4 +1,6 @@
-use super::transcript_ast::{parse_markdown_document, render_parsed_markdown_block};
+use super::transcript_ast::{
+    markdown_inline_line, parse_markdown_document, render_parsed_markdown_block,
+};
 use super::{
     I18n, Line, MarkdownBlock, Modifier, RenderedLine, Span, Style, TranscriptEntry,
     UnicodeWidthStr, file_change_list_item_text, is_markdown_table_header,
@@ -137,6 +139,9 @@ pub(crate) fn should_render_tool_model_output(
     if tool_label == model_output {
         return false;
     }
+    if normalized_tool_text(tool.summary.as_str()) == model_output {
+        return false;
+    }
     if let Some(prefix) = tool_label.strip_suffix(model_output.as_str())
         && prefix.chars().last().is_some_and(|ch| ch.is_whitespace())
         && !prefix.trim().is_empty()
@@ -194,18 +199,34 @@ pub(crate) fn tool_text_looks_like_markdown(text: &str) -> bool {
         .iter()
         .filter(|line| is_markdown_ordered_list_item(line))
         .count();
+    let has_inline_markdown = lines.iter().any(|line| {
+        let source = line.trim();
+        if source.is_empty() {
+            return false;
+        }
+        markdown_inline_line(source, Style::default()).is_some_and(|rendered| {
+            rendered
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+                != source
+        })
+    });
 
-    lines.iter().any(|line| {
-        let trimmed = line.trim_start();
-        markdown_fence_delimiter(trimmed).is_some()
-            || trimmed.starts_with("#")
-            || trimmed.starts_with("> ")
-            || trimmed.starts_with("- [")
-            || trimmed.starts_with("* [")
-            || trimmed.starts_with("+ [")
-    }) || lines
-        .windows(2)
-        .any(|window| is_markdown_table_header(window[0], window[1]))
+    has_inline_markdown
+        || lines.iter().any(|line| {
+            let trimmed = line.trim_start();
+            markdown_fence_delimiter(trimmed).is_some()
+                || trimmed.starts_with("#")
+                || trimmed.starts_with("> ")
+                || trimmed.starts_with("- [")
+                || trimmed.starts_with("* [")
+                || trimmed.starts_with("+ [")
+        })
+        || lines
+            .windows(2)
+            .any(|window| is_markdown_table_header(window[0], window[1]))
         || unordered_item_count >= 2
         || ordered_item_count >= 2
 }
@@ -234,6 +255,33 @@ pub(crate) fn is_markdown_ordered_list_item(line: &str) -> bool {
 /// Parses a Markdown text part into independently navigable transcript blocks.
 pub fn markdown_blocks(text: &str) -> Vec<MarkdownBlock> {
     parse_markdown_document(text)
+}
+
+/// Render a complete Markdown document inside an existing transcript node.
+///
+/// Assistant prose creates one navigation node per Markdown block. Activity
+/// details remain one atomic Activity node, but must use the exact same AST
+/// parser and block renderer so lists, tables, code, quotes, links, math, and
+/// inline emphasis do not regress to a second plain-text presentation stack.
+pub(crate) fn push_markdown_document(
+    out: &mut Vec<RenderedLine>,
+    prefix: &str,
+    text: &str,
+    width: u16,
+) {
+    let blocks = markdown_blocks(text);
+    for (index, block) in blocks.iter().enumerate() {
+        if should_suppress_markdown_block(blocks.as_slice(), index) {
+            continue;
+        }
+        if block.leading_blank_line && !out.is_empty() {
+            out.push(
+                RenderedLine::plain(prefix.to_owned(), Style::default())
+                    .with_copy_projection(String::new(), UnicodeWidthStr::width(prefix)),
+            );
+        }
+        render_markdown_block(out, prefix, block, width);
+    }
 }
 
 pub(crate) fn markdown_heading(line: &str) -> Option<(usize, &str)> {

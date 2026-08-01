@@ -46,6 +46,7 @@ pub(super) fn execute_definition(
             input.position.line + 1,
             input.position.character + 1
         ),
+        format!("{} definitions", locations.len()),
         if locations.is_empty() {
             "no definition found".to_string()
         } else {
@@ -88,6 +89,7 @@ pub(super) fn execute_references(
             input.position.line + 1,
             input.position.character + 1
         ),
+        format!("{} references", locations.len()),
         if locations.is_empty() {
             "no references found".to_string()
         } else {
@@ -125,6 +127,11 @@ pub(super) fn execute_hover(
             input.position.line + 1,
             input.position.character + 1
         ),
+        if contents.is_some() {
+            "Hover information returned"
+        } else {
+            "No hover information"
+        },
         contents
             .clone()
             .unwrap_or_else(|| "no hover info".to_string()),
@@ -162,6 +169,7 @@ pub(super) fn execute_diagnostics(
 
     let view = ToolExecutionView::simple(
         format!("lsp_diagnostics {}", display_path(&path, executor)),
+        format!("{} diagnostics", formatted.len()),
         if formatted.is_empty() {
             "no diagnostics".to_string()
         } else {

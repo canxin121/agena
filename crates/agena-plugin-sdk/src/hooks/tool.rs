@@ -61,6 +61,7 @@ pub struct ToolAfterInput {
     pub call_id: i64,
     pub workspace_root: String,
     pub title: String,
+    pub summary: String,
     pub output_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
@@ -82,6 +83,8 @@ impl ToolAfterInput {
 pub struct ToolAfterPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,7 +202,6 @@ pub struct ToolPermissionNetworksInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvokeOutput {
     pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
     pub output_text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -217,7 +219,7 @@ impl ToolInvokeOutput {
         let s = s.into();
         Self {
             title: String::new(),
-            summary: String::new(),
+            summary: agena_tool::normalize_tool_summary(&s),
             output_text: s,
             sections: Vec::new(),
             payload: None,
@@ -228,25 +230,21 @@ impl ToolInvokeOutput {
 
     pub fn from_parts(
         title: impl Into<String>,
+        summary: impl Into<String>,
         output_text: impl Into<String>,
         payload: Option<serde_json::Value>,
         metadata: BTreeMap<String, String>,
         attachments: Vec<AttachmentItem>,
     ) -> Self {
         Self {
-            title: title.into(),
-            summary: String::new(),
+            title: agena_tool::normalize_tool_title(title.into()),
+            summary: agena_tool::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
             sections: Vec::new(),
             payload,
             metadata,
             attachments,
         }
-    }
-
-    pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
-        self.summary = summary.into();
-        self
     }
 
     pub fn with_section(mut self, title: impl Into<String>, text: impl Into<String>) -> Self {
@@ -289,6 +287,7 @@ impl IntoToolInvokeOutput for serde_json::Value {
         };
         Ok(ToolInvokeOutput::from_parts(
             String::new(),
+            crate::macro_support::typed_tool_summary(&self),
             output_text,
             Some(self),
             BTreeMap::new(),
@@ -343,7 +342,6 @@ pub struct ToolStreamChunk {
 pub struct ToolStreamEnd {
     pub stream_id: String,
     pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
     pub output_text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -358,11 +356,12 @@ pub struct ToolStreamEnd {
 
 impl ToolStreamEnd {
     pub fn text(stream_id: impl Into<String>, output_text: impl Into<String>) -> Self {
+        let output_text = output_text.into();
         Self {
             stream_id: stream_id.into(),
             title: String::new(),
-            summary: String::new(),
-            output_text: output_text.into(),
+            summary: agena_tool::normalize_tool_summary(&output_text),
+            output_text,
             sections: Vec::new(),
             payload: None,
             metadata: BTreeMap::new(),
@@ -386,6 +385,7 @@ impl ToolStreamEnd {
     pub fn from_parts(
         stream_id: impl Into<String>,
         title: impl Into<String>,
+        summary: impl Into<String>,
         output_text: impl Into<String>,
         payload: Option<serde_json::Value>,
         metadata: BTreeMap<String, String>,
@@ -393,8 +393,8 @@ impl ToolStreamEnd {
     ) -> Self {
         Self {
             stream_id: stream_id.into(),
-            title: title.into(),
-            summary: String::new(),
+            title: agena_tool::normalize_tool_title(title.into()),
+            summary: agena_tool::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
             sections: Vec::new(),
             payload,

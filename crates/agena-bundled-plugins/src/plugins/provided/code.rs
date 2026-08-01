@@ -86,6 +86,7 @@ impl CodePlugin {
         workspace_root: &str,
         input: CodeSearchAstInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        let title = format!("Search AST · {}", input.pattern);
         let result = search_ast(
             Path::new(workspace_root),
             StructuralSearchRequest {
@@ -97,10 +98,16 @@ impl CodePlugin {
         )
         .map_err(code_search_error_to_plugin)?;
         let output = format_search_output(&result);
+        let summary = format!(
+            "{} matches in {} files",
+            result.matches.len(),
+            result.scanned_files
+        );
         let payload =
             serde_json::to_value(result).map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
-            "code search_ast",
+            title,
+            summary,
             output,
             Some(payload),
             std::collections::BTreeMap::new(),
@@ -113,6 +120,7 @@ impl CodePlugin {
         workspace_root: &str,
         input: CodeSyntaxTreeInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        let title = format!("Syntax tree · {}", input.path);
         let result = syntax_tree(
             Path::new(workspace_root),
             SyntaxTreeRequest {
@@ -122,12 +130,23 @@ impl CodePlugin {
             },
         )
         .map_err(code_search_error_to_plugin)?;
+        let summary = format!(
+            "{} · root {}{}",
+            result.language,
+            result.root_kind,
+            if result.has_error {
+                " · parse errors"
+            } else {
+                ""
+            }
+        );
         let payload =
             serde_json::to_value(result).map_err(|err| PluginError::internal(err.to_string()))?;
         let output = serde_json::to_string_pretty(&payload)
             .map_err(|err| PluginError::internal(err.to_string()))?;
         Ok(ToolInvokeOutput::from_parts(
-            "code syntax_tree",
+            title,
+            summary,
             output,
             Some(payload),
             std::collections::BTreeMap::new(),

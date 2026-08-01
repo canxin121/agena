@@ -4,7 +4,7 @@ use super::{
     resolve_pending_tool, text_result_blocks, tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
-use agena_domain::ToolOutput;
+use agena_domain::{ToolApiFunction, ToolInvocation, ToolOutput};
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
     RecoveryDirective, RetryDirective, UserPresentation,
@@ -18,9 +18,24 @@ fn internal_tool_failure() -> Failure {
         RetryDirective::UseAlternative,
         RecoveryDirective::ChooseAlternative,
         FailureImpact::OperationFailed,
-        UserPresentation::new("tool-internal-failure", "The tool failed unexpectedly."),
+        UserPresentation::new(
+            "tool-internal-failure",
+            "Tool execution failed without diagnostic details.",
+        ),
     )
     .with_model_feedback(ModelFeedback::internal_tool_failure())
+}
+
+fn actionable_tool_presentation(
+    error: &ToolError,
+    key: &'static str,
+    fallback: &'static str,
+) -> UserPresentation {
+    error
+        .actionable_message()
+        .filter(|message| !message.trim().is_empty())
+        .map(|message| UserPresentation::validated(key, message))
+        .unwrap_or_else(|| UserPresentation::new(key, fallback))
 }
 
 fn tool_error_failure(error: &ToolError) -> Failure {
@@ -40,7 +55,11 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             FailureResponsibility::Caller,
             RetryDirective::CorrectInput,
             RecoveryDirective::None,
-            UserPresentation::new("tool-invalid-input", "The tool input is invalid."),
+            actionable_tool_presentation(
+                error,
+                "tool-invalid-input-detail",
+                "The tool input is invalid.",
+            ),
             ModelFeedback::invalid_input(),
         ),
         ToolError::InvalidInput { fields, .. } => (
@@ -49,7 +68,11 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             FailureResponsibility::Caller,
             RetryDirective::CorrectInput,
             RecoveryDirective::None,
-            UserPresentation::new("tool-invalid-input", "The tool input is invalid."),
+            actionable_tool_presentation(
+                error,
+                "tool-invalid-input-detail",
+                "The tool input is invalid.",
+            ),
             ModelFeedback::invalid_input_with_fields(fields.iter().cloned()),
         ),
         ToolError::InvalidGlobPattern(_) => (
@@ -58,7 +81,11 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             FailureResponsibility::Caller,
             RetryDirective::CorrectInput,
             RecoveryDirective::None,
-            UserPresentation::new("tool-invalid-pattern", "The search pattern is invalid."),
+            actionable_tool_presentation(
+                error,
+                "tool-invalid-pattern-detail",
+                "The search pattern is invalid.",
+            ),
             ModelFeedback::invalid_pattern(),
         ),
         ToolError::InvalidRegexPattern(_) => (
@@ -67,17 +94,12 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             FailureResponsibility::Caller,
             RetryDirective::CorrectInput,
             RecoveryDirective::None,
-            UserPresentation::new("tool-invalid-pattern", "The search pattern is invalid."),
+            actionable_tool_presentation(
+                error,
+                "tool-invalid-pattern-detail",
+                "The search pattern is invalid.",
+            ),
             ModelFeedback::invalid_pattern(),
-        ),
-        ToolError::ToolUnavailable(_) => (
-            "tool.not_found",
-            FailureCategory::NotFound,
-            FailureResponsibility::Caller,
-            RetryDirective::UseAlternative,
-            RecoveryDirective::ChooseAlternative,
-            UserPresentation::new("tool-not-found", "The requested tool is unavailable."),
-            ModelFeedback::tool_unavailable(),
         ),
         ToolError::ToolUnavailable(_) => (
             "tool.not_found",
@@ -97,15 +119,6 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             UserPresentation::new("tool-user-declined", "The user declined the tool."),
             ModelFeedback::permission_denied(),
         ),
-        ToolError::InvalidExecutionGrant(_) => (
-            "tool.invalid_grant",
-            FailureCategory::Conflict,
-            FailureResponsibility::Caller,
-            RetryDirective::AfterRefresh,
-            RecoveryDirective::Refresh,
-            UserPresentation::new("tool-invalid-grant", "The execution grant is invalid or stale."),
-            ModelFeedback::stale_tool_call(),
-        ),
         ToolError::StaleToolCall { .. } => (
             "tool.stale_call",
             FailureCategory::Conflict,
@@ -122,7 +135,10 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             FailureResponsibility::Caller,
             RetryDirective::UseAlternative,
             RecoveryDirective::ChooseAlternative,
-            UserPresentation::new("tool-capability-unavailable", "The tool capability is unavailable."),
+            UserPresentation::new(
+                "tool-capability-unavailable",
+                "The tool capability is unavailable.",
+            ),
             ModelFeedback::tool_unavailable(),
         ),
         ToolError::UserInputRequired(_) => (
@@ -137,21 +153,21 @@ fn tool_error_failure(error: &ToolError) -> Failure {
             ),
             ModelFeedback::user_input_required(),
         ),
-        ToolError::Plugin(plugin_str) => {
-            return Failure::new(
-                FailureCode::new("tool.plugin"),
-                FailureCategory::ProtocolFailure,
-                FailureResponsibility::System,
-                RetryDirective::UseAlternative,
-                RecoveryDirective::ChooseAlternative,
-                FailureImpact::OperationFailed,
-                UserPresentation::new(plugin_str.clone(), "The plugin reported an error."),
-            )
-            .with_model_feedback(ModelFeedback::plugin_failure());
-        }
-        ToolError::Shell(_) | ToolError::Io(_) | ToolError::Cancelled => {
-            return internal_tool_failure();
-        }
+        ToolError::Plugin(problem) => return problem.public.clone(),
+        ToolError::Shell(_) | ToolError::Io(_) => (
+            "tool.execution_failed",
+            FailureCategory::Internal,
+            FailureResponsibility::System,
+            RetryDirective::UseAlternative,
+            RecoveryDirective::ChooseAlternative,
+            actionable_tool_presentation(
+                error,
+                "tool-execution-failed-detail",
+                "The tool could not complete the operation.",
+            ),
+            ModelFeedback::internal_tool_failure(),
+        ),
+        ToolError::Cancelled => return internal_tool_failure(),
     };
     Failure::new(
         FailureCode::new(code),
@@ -165,15 +181,35 @@ fn tool_error_failure(error: &ToolError) -> Failure {
     .with_model_feedback(model)
 }
 
+/// Resolve the actual operation identity once for every terminal path. A Tool
+/// API gateway is protocol plumbing; a user should see the execution tool it
+/// attempted to run, whether that attempt succeeds or fails.
+fn operation_title(invocation: &ToolInvocation) -> String {
+    let function = invocation
+        .tool_api_call
+        .as_ref()
+        .map(|call| call.function)
+        .or_else(|| ToolApiFunction::from_function_name(invocation.name.as_str()));
+    match function {
+        Some(ToolApiFunction::Call) => format!("Run {}", invocation.name),
+        Some(ToolApiFunction::List) => "List tools".to_owned(),
+        Some(ToolApiFunction::Search) => "Search tools".to_owned(),
+        Some(ToolApiFunction::Help) => "Inspect tool".to_owned(),
+        Some(ToolApiFunction::Tags) => "List tool tags".to_owned(),
+        None => format!("Run {}", tool_name(invocation)),
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::tool_error_failure;
+    use super::{operation_title, tool_error_failure};
     use crate::tool::ToolError;
+    use agena_domain::{StructuredObject, ToolInvocation};
     use agena_failure::{FailureCategory, RetryDirective};
 
     #[test]
-    fn plugin_diagnostics_never_enter_user_or_model_channels() {
+    fn sensitive_plugin_diagnostics_are_redacted_from_user_and_model_channels() {
         let diagnostic = "database error: token=secret response 123 is missing or already terminal";
         let failure = tool_error_failure(&ToolError::plugin(diagnostic));
         let encoded = serde_json::to_string(&failure).expect("serialize safe failure");
@@ -181,8 +217,25 @@ mod tests {
         assert_eq!(failure.category, FailureCategory::Internal);
         assert_eq!(failure.retry, RetryDirective::UseAlternative);
         assert!(failure.model.is_some());
+        assert_eq!(
+            failure.user.fallback,
+            "The request is invalid. Review the input and try again."
+        );
+        assert!(!failure.user.fallback.contains("failed unexpectedly"));
         assert!(!encoded.contains(diagnostic));
         assert!(!encoded.contains("token=secret"));
+    }
+
+    #[test]
+    fn actionable_plugin_error_is_preserved_verbatim() {
+        let failure = tool_error_failure(&ToolError::plugin(
+            "connection closed before the response body completed",
+        ));
+        assert_eq!(
+            failure.user.fallback,
+            "connection closed before the response body completed"
+        );
+        assert!(!failure.user.fallback.contains("failed unexpectedly"));
     }
 
     #[test]
@@ -210,6 +263,28 @@ mod tests {
         assert!(model_message.contains("offset (out of range)"));
         assert!(!model_message.contains("/private/project"));
         assert!(!encoded.contains("token=secret"));
+    }
+
+    #[test]
+    fn failed_tools_call_uses_the_execution_tool_as_its_title() {
+        let arguments = StructuredObject::try_from(serde_json::json!({
+            "tool": "shell.run",
+            "input": {"command": "python3 calc_pi.py"}
+        }))
+        .expect("valid tools_call input");
+        let invocation = ToolInvocation {
+            tool_api_call: Some(agena_domain::ToolApiCall {
+                function: agena_domain::ToolApiFunction::Call,
+                arguments,
+            }),
+            name: "shell.run".to_owned(),
+            plugin_name: None,
+            input: StructuredObject::try_from(serde_json::json!({
+                "command": "python3 calc_pi.py"
+            }))
+            .expect("valid target input"),
+        };
+        assert_eq!(operation_title(&invocation), "Run shell.run");
     }
 }
 
@@ -276,35 +351,6 @@ impl SessionManager {
         .await
     }
 
-    pub(in crate::session::manager) async fn apply_permission_denied(
-        &self,
-        session: Session,
-        pending_tool: &SessionPendingTool,
-        diagnostic: String,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let (code, category, responsibility, retry, recovery, user, model) =
-            permission_denied_failure();
-        let failure = Failure::new(
-            FailureCode::new(code),
-            category,
-            responsibility,
-            retry,
-            recovery,
-            FailureImpact::OperationFailed,
-            user,
-        )
-        .with_model_feedback(model);
-        tracing::info!(
-            failure_id = %failure.id,
-            session_id = session.id,
-            diagnostic = %diagnostic,
-            "tool access denied"
-        );
-        self.persist_tool_failure(session, pending_tool, failure, Vec::new(), state)
-            .await
-    }
-
     pub(in crate::session::manager) async fn apply_user_declined(
         &self,
         session: Session,
@@ -344,7 +390,8 @@ impl SessionManager {
                 _ => None,
             })
             .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)));
+            .filter(|title| title != &format!("Tool {}", tool_name(&resolved.invocation)))
+            .unwrap_or_else(|| operation_title(&resolved.invocation));
 
         // Notify plugins about the tool failure (fire-and-forget).
         state.tool_executor.broadcast_tool_failure(

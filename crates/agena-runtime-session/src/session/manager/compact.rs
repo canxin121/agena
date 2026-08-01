@@ -1,7 +1,7 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, Message,
-    MessageSource, PromptCompactionRuntime, Role, SessionExecutionRequest, SessionManager,
-    SessionManagerState, SessionRunOptions, Utc,
+    AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
+    ExecutionStatus, Message, MessageSource, PromptCompactionRuntime, Role,
+    SessionExecutionRequest, SessionManager, SessionManagerState, SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
@@ -53,6 +53,7 @@ impl SessionManager {
         self.execute_registered(
             session_id,
             ExecutionSource::Compaction,
+            ExecutionConversationTarget::LatestReply,
             "compaction execution",
             move |manager, control, _steer_rx| async move {
                 manager.compact_session_inner(request, control).await
@@ -69,6 +70,7 @@ impl SessionManager {
         self.start_registered(
             session_id,
             ExecutionSource::Compaction,
+            ExecutionConversationTarget::LatestReply,
             "compaction execution",
             move |manager, control, _steer_rx| async move {
                 manager.compact_session_inner(request, control).await

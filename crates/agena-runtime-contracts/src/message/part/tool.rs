@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use agena_domain::{
     ArtifactRef, ExecutionStatus, FilesystemEffect, InteractionNotificationLevel, NetworkEffect,
     OperationError, ProcessShell, SearchResultItem, TableColumn, TodoItem, ToolInvocation,
-    ToolManagedOutput, ToolOutput, ToolResultDisplay, ToolResultState, UserInputQuestion,
+    ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState,
+    UserInputQuestion,
 };
 use agena_tool::{ReadMode, TaskModelSelection};
 
@@ -900,6 +901,7 @@ impl ToolResultEnvelope {
             display: ToolResultDisplay {
                 title: String::new(),
                 summary: output_text,
+                sections: Vec::new(),
             },
             attachments,
             error: None,
@@ -916,14 +918,7 @@ impl ToolResultEnvelope {
     ) -> Self {
         let truncated = details.is_model_truncated();
         let user_summary = failure.user.fallback.clone();
-        let model_output = failure
-            .model
-            .as_ref()
-            .map(|feedback| feedback.message())
-            .unwrap_or_else(|| {
-                "The tool failed because of an internal system error. Try an alternative approach."
-                    .to_owned()
-            });
+        let model_output = model_visible_failure_text(&failure);
         Self {
             state: ToolResultState::Failed,
             structured: details.to_json_payload(),
@@ -937,6 +932,7 @@ impl ToolResultEnvelope {
             display: ToolResultDisplay {
                 title: String::new(),
                 summary: user_summary,
+                sections: Vec::new(),
             },
             attachments,
             error: Some(OperationError { failure }),
@@ -971,6 +967,7 @@ impl ToolResultEnvelope {
             display: ToolResultDisplay {
                 title: String::new(),
                 summary: output_text,
+                sections: Vec::new(),
             },
             attachments: Vec::new(),
             error: None,
@@ -1101,14 +1098,7 @@ impl OperationPart {
             &details,
         );
         let user_summary = failure.user.fallback.clone();
-        let model_output = failure
-            .model
-            .as_ref()
-            .map(|feedback| feedback.message())
-            .unwrap_or_else(|| {
-                "The tool failed because of an internal system error. Try an alternative approach."
-                    .to_owned()
-            });
+        let model_output = model_visible_failure_text(&failure);
         Self {
             call_id,
             invocation,
@@ -1248,6 +1238,18 @@ impl OperationPart {
         self.result.display.title = self.title.clone();
     }
 
+    pub fn set_summary(&mut self, summary: impl Into<String>) {
+        self.summary = summary.into();
+        self.result.display.summary = self.summary.clone();
+    }
+
+    /// Set canonical named result sections. These are intentionally kept out
+    /// of `blocks`: blocks are a rendering compatibility projection, while
+    /// sections are the durable presentation contract for Activity clients.
+    pub fn set_presentation_sections(&mut self, sections: Vec<ToolPresentationSection>) {
+        self.result.display.sections = sections;
+    }
+
     pub fn set_provider_only(&mut self, value: bool) {
         if value {
             self.metadata.insert(
@@ -1368,6 +1370,22 @@ impl OperationPart {
     }
 }
 
+/// The same bounded, sanitized failure detail shown to the user is the tool's
+/// model-visible result. Closed category prose such as "the plugin failed"
+/// discards the only actionable information and causes the model to diagnose
+/// a provider outage instead of reacting to the real tool result.
+fn model_visible_failure_text(failure: &agena_failure::Failure) -> String {
+    let detail = failure.user.fallback.trim();
+    if !detail.is_empty() {
+        return detail.to_owned();
+    }
+    failure
+        .model
+        .as_ref()
+        .map(agena_failure::ModelFeedback::message)
+        .unwrap_or_else(|| "Tool execution failed without diagnostic details.".to_owned())
+}
+
 fn non_empty(value: &str) -> Option<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -1418,4 +1436,36 @@ fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
     Some(AttachmentSource::Url {
         url: trimmed.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod failure_projection_tests {
+    use super::{ToolResultEnvelope, model_visible_failure_text};
+    use agena_domain::ToolOutput;
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
+        RecoveryDirective, RetryDirective, UserPresentation,
+    };
+
+    #[test]
+    fn failed_tool_model_output_uses_the_sanitized_real_result() {
+        let detail = "field `questions` requires at least 1 item";
+        let failure = Failure::new(
+            FailureCode::new("plugin.invalid_input"),
+            FailureCategory::InvalidInput,
+            FailureResponsibility::Caller,
+            RetryDirective::CorrectInput,
+            RecoveryDirective::None,
+            FailureImpact::OperationFailed,
+            UserPresentation::validated("plugin-invalid-input", detail),
+        )
+        .with_model_feedback(ModelFeedback::plugin_failure());
+
+        assert_eq!(model_visible_failure_text(&failure), detail);
+        let result =
+            ToolResultEnvelope::failed(failure, Vec::new(), Vec::new(), &ToolOutput::default());
+        assert_eq!(result.display.summary, detail);
+        assert_eq!(result.model_preview.text, detail);
+        assert!(!result.model_preview.text.contains("The plugin failed"));
+    }
 }

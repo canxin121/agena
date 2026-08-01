@@ -26,7 +26,7 @@ pub enum ExecutionControlError {
 pub struct ExecutionControl<T> {
     execution_id: ExecutionId,
     turn_id: agena_domain::TurnId,
-    response_id: agena_domain::ResponseId,
+    reply_id: agena_domain::AssistantReplyId,
     pub cancel: CancellationToken,
     pub steer_tx: mpsc::UnboundedSender<Vec<T>>,
     lifecycle: Mutex<ExecutionLifecycle>,
@@ -36,12 +36,16 @@ pub struct ExecutionControl<T> {
 const OPERATION_CANCELLATION_GRACE: Duration = Duration::from_millis(500);
 
 impl<T> ExecutionControl<T> {
-    fn new(steer_tx: mpsc::UnboundedSender<Vec<T>>) -> Self {
+    fn new(
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
+        steer_tx: mpsc::UnboundedSender<Vec<T>>,
+    ) -> Self {
         let execution_id = ExecutionId::new();
         Self {
             execution_id,
-            turn_id: agena_domain::TurnId::new(),
-            response_id: agena_domain::ResponseId::new(),
+            turn_id,
+            reply_id,
             cancel: CancellationToken::new(),
             steer_tx,
             lifecycle: Mutex::new(ExecutionLifecycle::start(execution_id)),
@@ -57,8 +61,8 @@ impl<T> ExecutionControl<T> {
         self.turn_id
     }
 
-    pub fn response_id(&self) -> agena_domain::ResponseId {
-        self.response_id
+    pub fn reply_id(&self) -> agena_domain::AssistantReplyId {
+        self.reply_id
     }
 
     pub async fn transition(&self, phase: ExecutionPhase) -> Result<(), ExecutionControlError> {
@@ -117,10 +121,12 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
     pub async fn register(
         &self,
         session_id: i64,
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
     ) -> Result<(Arc<ExecutionControl<T>>, mpsc::UnboundedReceiver<Vec<T>>), ExecutionControlError>
     {
         let (tx, rx) = mpsc::unbounded_channel();
-        let control = Arc::new(ExecutionControl::new(tx));
+        let control = Arc::new(ExecutionControl::new(turn_id, reply_id, tx));
         let mut guard = self.inner.lock().await;
         if guard.contains_key(&session_id) {
             return Err(ExecutionControlError::AlreadyActive(session_id));
@@ -230,19 +236,48 @@ mod tests {
     #[tokio::test]
     async fn a_owner_has_exactly_one_execution_writer() {
         let registry = ExecutionRegistry::<()>::new();
-        let (first, _) = registry.register(7).await.expect("first execution");
+        let (first, _) = registry
+            .register(
+                7,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
+            .await
+            .expect("first execution");
         assert!(matches!(
-            registry.register(7).await,
+            registry
+                .register(
+                    7,
+                    agena_domain::TurnId::new(),
+                    agena_domain::AssistantReplyId::new()
+                )
+                .await,
             Err(ExecutionControlError::AlreadyActive(7))
         ));
         registry.unregister_if_matches(7, &first).await;
-        assert!(registry.register(7).await.is_ok());
+        assert!(
+            registry
+                .register(
+                    7,
+                    agena_domain::TurnId::new(),
+                    agena_domain::AssistantReplyId::new()
+                )
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
     async fn cancellation_moves_to_cancelling_before_signalling_worker() {
         let registry = ExecutionRegistry::<()>::new();
-        let (control, _) = registry.register(9).await.expect("execution");
+        let (control, _) = registry
+            .register(
+                9,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
+            .await
+            .expect("execution");
         registry.cancel_current(9).await.expect("cancel");
         assert!(control.cancel.is_cancelled());
         assert!(matches!(
@@ -257,11 +292,19 @@ mod tests {
     #[tokio::test]
     async fn delayed_cancel_cannot_cancel_a_newer_execution() {
         let registry = ExecutionRegistry::<()>::new();
-        let (first, _) = registry.register(12).await.expect("first execution");
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let (first, _) = registry
+            .register(12, turn_id, reply_id)
+            .await
+            .expect("first execution");
         let old_id = first.execution_id();
         registry.unregister_if_matches(12, &first).await;
 
-        let (second, _) = registry.register(12).await.expect("second execution");
+        let (second, _) = registry
+            .register(12, turn_id, reply_id)
+            .await
+            .expect("second execution");
         assert_eq!(
             registry
                 .cancel_exact(12, old_id)
@@ -283,8 +326,19 @@ mod tests {
     #[tokio::test]
     async fn unregister_never_removes_a_different_execution() {
         let registry = ExecutionRegistry::<()>::new();
-        let (control, _) = registry.register(11).await.expect("execution");
-        let unrelated = Arc::new(ExecutionControl::new(mpsc::unbounded_channel().0));
+        let (control, _) = registry
+            .register(
+                11,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
+            .await
+            .expect("execution");
+        let unrelated = Arc::new(ExecutionControl::new(
+            agena_domain::TurnId::new(),
+            agena_domain::AssistantReplyId::new(),
+            mpsc::unbounded_channel().0,
+        ));
         registry.unregister_if_matches(11, &unrelated).await;
         assert!(registry.is_active(11).await);
         registry.unregister_if_matches(11, &control).await;

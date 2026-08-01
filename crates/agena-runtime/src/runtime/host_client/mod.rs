@@ -23,13 +23,11 @@ use agena_plugin_host::sdk::host_api::{
     HostGetSessionResponse, HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation,
     HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPermissionOutcome, HostPluginStatus, HostPluginStatusGetRequest,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRenameSessionRequest,
-    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
     HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
     HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
@@ -41,8 +39,7 @@ use agena_plugin_host::sdk::host_api::{
     current_host_callback_context,
 };
 use agena_plugin_host::{
-    EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
-    PermissionDecision as PluginPermissionDecision, PluginError, ToolInvokeOutput,
+    EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
 };
 
 mod image;
@@ -117,10 +114,9 @@ fn plugin_error_from_app(error: crate::AppError) -> PluginError {
                 agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
                 denial.reason.clone(),
             );
-            error.diagnostic.data =
-                Some(serde_json::json!({ "denial": denial }));
+            error.diagnostic.data = Some(serde_json::json!({ "denial": denial }));
             error
-        },
+        }
         crate::AppError::UserDeclined(decline) => {
             let reason = decline
                 .reason
@@ -130,28 +126,26 @@ fn plugin_error_from_app(error: crate::AppError) -> PluginError {
                 agena_plugin_host::sdk::PluginErrorKind::UserDeclined,
                 reason,
             );
-            error.diagnostic.data =
-                Some(serde_json::json!({ "decline": decline }));
+            error.diagnostic.data = Some(serde_json::json!({ "decline": decline }));
             error
-        },
+        }
         crate::AppError::CapabilityUnavailable(unavailable) => {
             let mut error = PluginError::from_kind(
                 agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable,
                 unavailable.reason.clone(),
             );
-            error.diagnostic.data =
-                Some(serde_json::json!({ "unavailable": unavailable }));
+            error.diagnostic.data = Some(serde_json::json!({ "unavailable": unavailable }));
             error
-        },
+        }
         crate::AppError::ToolUnavailable(unavailable) => {
             let mut error = PluginError::from_kind(
                 agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable,
                 unavailable.reason.clone(),
             );
-            error.diagnostic.data =
-                Some(serde_json::json!({ "unavailable": unavailable }));
+            error.diagnostic.data = Some(serde_json::json!({ "unavailable": unavailable }));
             error
-        },
+        }
+        crate::AppError::Tool(error) => error.into_plugin_error(),
         other => PluginError::internal(other.to_string()),
     }
 }
@@ -326,61 +320,6 @@ impl RuntimeHostClient {
         use_store(store.as_ref(), &plugin_id).map_err(map_storage_error)
     }
 
-    async fn resolve_permission_check(
-        &self,
-        check: agena_tool::ToolPermissionCheck,
-    ) -> Result<HostPermissionCheckResponse, PluginError> {
-        let callback_context = current_host_callback_context();
-        let session_id = callback_context
-            .as_ref()
-            .and_then(|context| context.session_id)
-            .filter(|session_id| *session_id >= 0);
-        let Some(manager) = self.optional_session_manager() else {
-            return Ok(host_permission_check_response_from_decision(check.decision));
-        };
-        if let Some(context) = callback_context
-            && let (Some(session_id), Some(call_id), Some(plugin_id), Some(tool_name)) = (
-                context.session_id.filter(|session_id| *session_id >= 0),
-                context.call_id.filter(|call_id| *call_id >= 0),
-                context.plugin_id.as_deref(),
-                context.tool_name.as_deref(),
-            )
-        {
-            return match manager
-                .authorize_host_action(session_id, call_id, plugin_id, tool_name, check)
-                .await
-                .map_err(plugin_error)?
-            {
-                agena_runtime::HostActionAuthorization::Allowed => {
-                    Ok(HostPermissionCheckResponse::allowed())
-                }
-                agena_runtime::HostActionAuthorization::PolicyDenied(denial) => {
-                    Ok(HostPermissionCheckResponse {
-                        decision: agena_plugin_host::PermissionDecision::Deny,
-                        outcome: HostPermissionOutcome::PolicyDenied,
-                        reason: Some(denial.reason.clone()),
-                        explanation: denial.explanation.clone(),
-                        details: Some(serde_json::json!({ "denial": denial })),
-                    })
-                }
-                agena_runtime::HostActionAuthorization::UserDeclined(decline) => {
-                    Ok(HostPermissionCheckResponse {
-                        decision: agena_plugin_host::PermissionDecision::Deny,
-                        outcome: HostPermissionOutcome::UserDeclined,
-                        reason: decline.reason.clone(),
-                        explanation: "the user declined the permission request".to_string(),
-                        details: Some(serde_json::json!({ "decline": decline })),
-                    })
-                }
-            };
-        }
-        let resolution = manager
-            .resolve_tool_permission_check(session_id, &check)
-            .await
-            .map_err(plugin_error)?;
-        Ok(host_permission_check_response_from_resolution(resolution))
-    }
-
     fn callback_or_requested_session_id(
         &self,
         requested: Option<i64>,
@@ -416,7 +355,6 @@ impl RuntimeHostClient {
             .ok_or_else(|| host_unavailable("workflow tool callback has no call id"))?;
         let structured = StructuredObject::try_from(
             serde_json::to_value(input).map_err(|err| PluginError::internal(err.to_string()))?,
-
         )
         .map_err(PluginError::invalid_params)?;
         let execution = self
@@ -511,37 +449,6 @@ impl HostClient for RuntimeHostClient {
         Ok(EventSubscription { id })
     }
 
-    async fn ask_permission(
-        &self,
-        _req: PermissionAskInput,
-    ) -> Result<PluginPermissionDecision, PluginError> {
-        // The host doesn't surface a unified "ask user" affordance here.
-        // For now, default to Prompt (i.e. "host has no opinion, fall back").
-        Ok(PluginPermissionDecision::Prompt)
-    }
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse, PluginError> {
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        self.resolve_permission_check(
-            executor.requested_path_permission_check(req.path.as_str(), req.kind),
-        )
-        .await
-    }
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse, PluginError> {
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
-        let check = executor
-            .network_permission_check(req.target.as_str())
-            .map_err(|err| PluginError::invalid_params(err.to_string()))?;
-        self.resolve_permission_check(check).await
-    }
-
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value, PluginError> {
         let snapshot = self.runtime.current_snapshot();
         let value = snapshot
@@ -626,9 +533,7 @@ impl HostClient for RuntimeHostClient {
             .session_manager()?
             .execute_host_invoked_tool(session_id, call_id, invocation)
             .await
-
             .map_err(plugin_error_from_app)?;
-
 
         Ok(tool_execution_to_invoke_output(execution))
     }
@@ -985,16 +890,6 @@ impl HostClient for RuntimeHostClient {
             _ => {}
         }
         let (executor, _) = self.callback_scoped_tool_executor().await?;
-        for input in &req.inputs {
-            let Some(path) = local_path_for_host_image_input(input) else {
-                continue;
-            };
-            let check = executor
-                .requested_path_permission_check(path, agena_plugin_host::sdk::PathKind::Read);
-            self.resolve_permission_check(check)
-                .await?
-                .ensure_allowed()?;
-        }
         let inputs =
             prepare_provider_image_inputs(&executor, req.inputs.as_slice(), &capabilities).await?;
         let provider_request = agena_provider::ProviderImageRequest {
@@ -1077,9 +972,6 @@ impl HostClient for RuntimeHostClient {
             .as_deref()
             .map(|path| executor.resolve_target_path(path))
             .unwrap_or_else(|| executor.workspace_root().to_path_buf());
-        executor
-            .ensure_read_permission(&cwd)
-            .map_err(|err| PluginError::internal(err.to_string()))?;
         let command = join_monitor_command(&req.command)?;
         let env = if req.env.is_empty() {
             std::env::vars().collect()

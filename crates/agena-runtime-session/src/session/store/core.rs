@@ -36,7 +36,13 @@ impl SessionStore {
         self.history
             .reconcile_interrupted_lifecycles(session_id)
             .await
-            .map_err(AppError::from)
+            .map_err(AppError::from)?;
+        // Lifecycle reconciliation advances the event-backed model-message
+        // and canonical transcript projections without touching the session
+        // row version. A cached Session therefore cannot use the row version
+        // as an invalidation signal here.
+        access_cache(self.cache.as_ref(), |guard| guard.discard(session_id));
+        Ok(())
     }
 
     pub(crate) async fn reconcile_unmatched_runs(
@@ -63,9 +69,9 @@ impl SessionStore {
         usage_repository: Arc<dyn agena_storage::UsageRepository>,
         session_mutation_repository: Arc<dyn agena_storage::SessionMutationRepository>,
         projection_lookup_repository: Arc<dyn agena_storage::ProjectionLookupRepository>,
-        message_projection_repository: Arc<dyn agena_storage::MessageProjectionRepository>,
+        message_projection_repository: Arc<dyn agena_storage::ModelMessageRepository>,
         message_projection_transaction_writer: Arc<
-            dyn agena_storage::MessageProjectionTransactionWriter<sea_orm::DatabaseTransaction>,
+            dyn agena_storage::ModelMessageTransactionWriter<sea_orm::DatabaseTransaction>,
         >,
         session_summary_repository: Arc<dyn agena_storage::SessionSummaryRepository>,
     ) -> Self {

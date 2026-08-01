@@ -228,14 +228,6 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
-    // -------- permission --------
-    async fn permission_ask(
-        &self,
-        _input: PermissionAskInput,
-    ) -> Result<Option<PermissionAskDecision>> {
-        Ok(None)
-    }
-
     // -------- notification --------
     async fn notification(&self, _input: NotificationInput) -> Result<()> {
         Ok(())

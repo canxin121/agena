@@ -56,7 +56,7 @@ mod tests {
             acquire_projection_fence(&transaction, session_id)
                 .await
                 .expect("second fence");
-            let watermark = transcript_projection_state::Entity::find_by_id(session_id)
+            let watermark = model_projection_state::Entity::find_by_id(session_id)
                 .one(&transaction)
                 .await
                 .expect("read fenced watermark")
@@ -74,7 +74,7 @@ mod tests {
         first
             .execute(Statement::from_sql_and_values(
                 first.get_database_backend(),
-                "UPDATE agena_transcript_projection_states SET last_seq_global = 10 WHERE session_id = ?"
+                "UPDATE agena_model_projection_states SET last_seq_global = 10 WHERE session_id = ?"
                     .to_owned(),
                 [session.id.into()],
             ))
@@ -91,14 +91,14 @@ mod tests {
 
     #[test]
     fn projected_header_decodes_storage_record_and_rejects_inconsistent_turn() {
-        let record = MessageProjectionHeaderRecord {
+        let record = ModelMessageHeaderRecord {
             message_id: 41,
-            turn_id: Some(7),
+            model_turn_id: Some(7),
             role: Role::Assistant,
             state: ExecutionStatus::Completed,
             created_at_ms: 1,
             metadata: serde_json::to_value(crate::message::MessageMetadata {
-                turn_id: Some(7),
+                model_turn_id: Some(7),
                 ..Default::default()
             })
             .expect("serialize metadata"),
@@ -114,12 +114,12 @@ mod tests {
         };
         let header = projected_message_header_from_record(record.clone()).expect("header");
         assert_eq!(header.id, 41);
-        assert_eq!(header.metadata.turn_id, Some(7));
+        assert_eq!(header.metadata.model_turn_id, Some(7));
         assert_eq!(header.usage.expect("usage").output_tokens, 3);
         assert_eq!(header.part_count, 2);
 
         let mut inconsistent = record;
-        inconsistent.turn_id = Some(8);
+        inconsistent.model_turn_id = Some(8);
         assert!(
             projected_message_header_from_record(inconsistent)
                 .expect_err("turn identity mismatch")
@@ -137,15 +137,15 @@ mod tests {
             .await
             .expect("schema");
         let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
-            .ensure_id("/test/response")
+            .ensure_id("/test/reply")
             .await
             .expect("workspace");
-        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "response")
+        let session = crate::db::crud::session::create_session(&db, workspace_id, None, "reply")
             .await
             .expect("session");
         let execution_id = agena_domain::ExecutionId::new();
         let turn_id = agena_domain::TurnId::new();
-        let response_id = agena_domain::ResponseId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
         let writer = RuntimeProjectionPartWriter;
         project_execution_started(
             &db,
@@ -154,17 +154,17 @@ mod tests {
                 session_id: session.id,
                 execution_id,
                 turn_id,
-                response_id,
+                reply_id,
                 source: agena_domain::ExecutionSource::User,
                 ts_ms: 10,
             },
             1,
         )
         .await
-        .expect("started response");
+        .expect("started reply");
 
         assert_eq!(
-            transcript_message::Entity::find()
+            model_message::Entity::find()
                 .count(&db)
                 .await
                 .expect("count transcript messages"),
@@ -174,19 +174,16 @@ mod tests {
         let started = db
             .query_one(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                "SELECT turn_id, execution_id, status, revision_seq, finished_at_ms FROM agena_responses WHERE response_id = ?",
-                [response_id.to_string().into()],
+                "SELECT turn_id, status, revision_seq, finished_at_ms \
+                 FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
             ))
             .await
-            .expect("query response")
-            .expect("started response");
+            .expect("query reply")
+            .expect("started reply");
         assert_eq!(
             started.try_get::<String>("", "turn_id").unwrap(),
             turn_id.to_string()
-        );
-        assert_eq!(
-            started.try_get::<String>("", "execution_id").unwrap(),
-            execution_id.to_string()
         );
         assert_eq!(
             started.try_get::<String>("", "status").unwrap(),
@@ -199,6 +196,23 @@ mod tests {
                 .unwrap(),
             None
         );
+        let started_execution = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT reply_id, source, status FROM agena_reply_executions WHERE execution_id = ?",
+                [execution_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply execution")
+            .expect("started reply execution");
+        assert_eq!(
+            started_execution.try_get::<String>("", "reply_id").unwrap(),
+            reply_id.to_string()
+        );
+        assert_eq!(
+            started_execution.try_get::<String>("", "source").unwrap(),
+            "user"
+        );
 
         project_execution_finished(
             &db,
@@ -206,7 +220,7 @@ mod tests {
             &ExecutionFinishedEvent {
                 session_id: session.id,
                 execution_id,
-                response_id,
+                reply_id,
                 outcome: ExecutionOutcome::Failed {
                     failure: provider_execution_problem(),
                 },
@@ -215,7 +229,7 @@ mod tests {
             2,
         )
         .await
-        .expect("failed response");
+        .expect("failed reply");
 
         project_execution_finished(
             &db,
@@ -223,7 +237,7 @@ mod tests {
             &ExecutionFinishedEvent {
                 session_id: session.id,
                 execution_id,
-                response_id,
+                reply_id,
                 outcome: ExecutionOutcome::Failed {
                     failure: provider_execution_problem(),
                 },
@@ -237,12 +251,13 @@ mod tests {
         let failed = db
             .query_one(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                "SELECT status, revision_seq, finished_at_ms FROM agena_responses WHERE response_id = ?",
-                [response_id.to_string().into()],
+                "SELECT status, revision_seq, finished_at_ms \
+                 FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
             ))
             .await
-            .expect("query failed response")
-            .expect("failed response");
+            .expect("query failed reply")
+            .expect("failed reply");
         assert_eq!(failed.try_get::<String>("", "status").unwrap(), "failed");
         assert_eq!(failed.try_get::<i64>("", "revision_seq").unwrap(), 2);
         assert_eq!(
@@ -250,12 +265,186 @@ mod tests {
             Some(20)
         );
         assert_eq!(
-            transcript_message::Entity::find()
+            model_message::Entity::find()
                 .count(&db)
                 .await
                 .expect("count terminal transcript messages"),
             0,
-            "terminal execution state belongs to the response, not a duplicate system record"
+            "terminal execution state belongs to the reply, not a duplicate system record"
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_continuation_reuses_one_turn_and_one_assistant_reply() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/permission-continuation")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(
+            &db,
+            workspace_id,
+            None,
+            "permission continuation",
+        )
+        .await
+        .expect("session");
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let first_execution_id = agena_domain::ExecutionId::new();
+        let continuation_execution_id = agena_domain::ExecutionId::new();
+        let writer = RuntimeProjectionPartWriter;
+
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id: first_execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+            1,
+        )
+        .await
+        .expect("start user execution");
+        let mut before_permission = MessagePart::from_content_with_index(
+            1,
+            1,
+            0,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::text("before permission"),
+        );
+        before_permission.segment_id = Some(agena_domain::TextSegmentId::new());
+        project_part_content(
+            &db,
+            first_execution_id,
+            Role::Assistant,
+            &before_permission,
+            2,
+        )
+        .await
+        .expect("project pre-permission content");
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id: first_execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Completed,
+                ts_ms: 20,
+            },
+            3,
+        )
+        .await
+        .expect("finish first execution");
+
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id: continuation_execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::PermissionReply,
+                ts_ms: 30,
+            },
+            4,
+        )
+        .await
+        .expect("start permission continuation");
+        let mut after_permission = MessagePart::from_content_with_index(
+            2,
+            2,
+            0,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::text("after permission"),
+        );
+        after_permission.segment_id = Some(agena_domain::TextSegmentId::new());
+        project_part_content(
+            &db,
+            continuation_execution_id,
+            Role::Assistant,
+            &after_permission,
+            5,
+        )
+        .await
+        .expect("project post-permission content");
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id: continuation_execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Completed,
+                ts_ms: 40,
+            },
+            6,
+        )
+        .await
+        .expect("finish permission continuation");
+
+        for (table, expected) in [
+            ("agena_turns", 1_i64),
+            ("agena_assistant_replies", 1_i64),
+            ("agena_reply_executions", 2_i64),
+        ] {
+            let row = db
+                .query_one(Statement::from_string(
+                    db.get_database_backend(),
+                    format!("SELECT COUNT(*) AS count FROM {table}"),
+                ))
+                .await
+                .expect("count canonical rows")
+                .expect("count row");
+            assert_eq!(row.try_get::<i64>("", "count").unwrap(), expected);
+        }
+        let content = db
+            .query_all(Statement::from_string(
+                db.get_database_backend(),
+                "SELECT owner_kind, owner_id, position, text \
+                 FROM agena_text_segments ORDER BY position"
+                    .to_owned(),
+            ))
+            .await
+            .expect("query unified reply content");
+        assert_eq!(content.len(), 2);
+        assert_eq!(
+            content
+                .iter()
+                .map(|row| (
+                    row.try_get::<String>("", "owner_kind").unwrap(),
+                    row.try_get::<String>("", "owner_id").unwrap(),
+                    row.try_get::<i64>("", "position").unwrap(),
+                    row.try_get::<String>("", "text").unwrap(),
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "assistant_reply".to_owned(),
+                    reply_id.to_string(),
+                    0,
+                    "before permission".to_owned(),
+                ),
+                (
+                    "assistant_reply".to_owned(),
+                    reply_id.to_string(),
+                    1,
+                    "after permission".to_owned(),
+                ),
+            ]
         );
     }
 
@@ -277,7 +466,7 @@ mod tests {
                 .expect("session");
         let execution_id = agena_domain::ExecutionId::new();
         let turn_id = agena_domain::TurnId::new();
-        let response_id = agena_domain::ResponseId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
         let writer = RuntimeProjectionPartWriter;
         project_execution_started(
             &db,
@@ -286,14 +475,14 @@ mod tests {
                 session_id: session.id,
                 execution_id,
                 turn_id,
-                response_id,
+                reply_id,
                 source: agena_domain::ExecutionSource::User,
                 ts_ms: 1,
             },
             1,
         )
         .await
-        .expect("response owner");
+        .expect("reply owner");
 
         let now = Utc::now();
         let mut first = MessagePart::from_content_with_index(
@@ -419,7 +608,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compaction_is_one_runtime_activity_in_the_owning_response_document() {
+    async fn compaction_is_one_runtime_activity_in_the_owning_assistant_reply() {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
@@ -434,10 +623,40 @@ mod tests {
             crate::db::crud::session::create_session(&db, workspace_id, None, "compaction")
                 .await
                 .expect("session");
+        let initial_execution_id = agena_domain::ExecutionId::new();
         let execution_id = agena_domain::ExecutionId::new();
         let turn_id = agena_domain::TurnId::new();
-        let response_id = agena_domain::ResponseId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
         let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id: initial_execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+            1,
+        )
+        .await
+        .expect("start user reply");
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id: initial_execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Completed,
+                ts_ms: 11,
+            },
+            2,
+        )
+        .await
+        .expect("finish initial reply execution");
         project_execution_started(
             &db,
             &writer,
@@ -445,14 +664,14 @@ mod tests {
                 session_id: session.id,
                 execution_id,
                 turn_id,
-                response_id,
+                reply_id,
                 source: agena_domain::ExecutionSource::Compaction,
-                ts_ms: 10,
+                ts_ms: 12,
             },
-            1,
+            3,
         )
         .await
-        .expect("start compaction response");
+        .expect("continue same reply for compaction");
 
         let text = MessagePart::from_content_with_index(
             1,
@@ -462,9 +681,9 @@ mod tests {
             ExecutionStatus::Completed,
             PartContent::text("continuation record"),
         );
-        project_part_content(&db, execution_id, Role::Assistant, &text, 2)
+        project_part_content(&db, execution_id, Role::Assistant, &text, 4)
             .await
-            .expect("project response text before compaction activity");
+            .expect("project reply text before compaction activity");
 
         let activity_id = agena_domain::ActivityId::new();
         let event = PromptCompactionCompletedEvent {
@@ -482,12 +701,12 @@ mod tests {
             },
             ts_ms: 20,
         };
-        project_compaction_completed(&db, &writer, &event, 3)
+        project_compaction_completed(&db, &writer, &event, 5)
             .await
             .expect("project compaction activity");
 
         assert_eq!(
-            transcript_message::Entity::find()
+            model_message::Entity::find()
                 .count(&db)
                 .await
                 .expect("count transcript messages"),
@@ -509,15 +728,18 @@ mod tests {
             row.try_get::<String>("", "activity_id").unwrap(),
             activity_id.to_string()
         );
-        assert_eq!(row.try_get::<String>("", "owner_kind").unwrap(), "response");
+        assert_eq!(
+            row.try_get::<String>("", "owner_kind").unwrap(),
+            "assistant_reply"
+        );
         assert_eq!(
             row.try_get::<String>("", "owner_id").unwrap(),
-            response_id.to_string()
+            reply_id.to_string()
         );
         assert_eq!(row.try_get::<String>("", "actor").unwrap(), "runtime");
         assert_eq!(row.try_get::<String>("", "state").unwrap(), "completed");
         assert_eq!(row.try_get::<i64>("", "position").unwrap(), 1);
-        assert_eq!(row.try_get::<i64>("", "revision_seq").unwrap(), 3);
+        assert_eq!(row.try_get::<i64>("", "revision_seq").unwrap(), 5);
         assert_eq!(row.try_get::<i64>("", "started_at_ms").unwrap(), 20);
         assert_eq!(
             row.try_get::<Option<i64>>("", "finished_at_ms").unwrap(),
@@ -545,13 +767,13 @@ mod tests {
             .await
             .expect("session");
         let metadata = crate::message::MessageMetadata {
-            turn_id: Some(7),
+            model_turn_id: Some(7),
             ..Default::default()
         };
-        let row = transcript_message::Model {
+        let row = model_message::Model {
             message_id: 41,
             session_id: session.id,
-            turn_id: Some(7),
+            model_turn_id: Some(7),
             execution_id: Some("execution-1".to_owned()),
             run_id: Some("run-1".to_owned()),
             role: Role::Assistant.into(),
@@ -567,26 +789,26 @@ mod tests {
         upsert_message_projection(&db, row.clone())
             .await
             .expect("project message");
-        let stored = transcript_message::Entity::find_by_id(41)
+        let stored = model_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query message")
             .expect("stored message");
-        assert_eq!(stored.turn_id, Some(7));
-        assert_eq!(stored.metadata.turn_id, Some(7));
+        assert_eq!(stored.model_turn_id, Some(7));
+        assert_eq!(stored.metadata.model_turn_id, Some(7));
         assert_eq!(stored.execution_id.as_deref(), Some("execution-1"));
         assert_eq!(stored.run_id.as_deref(), Some("run-1"));
 
         let mut changed = row.clone();
-        changed.turn_id = Some(8);
-        changed.metadata.turn_id = Some(8);
+        changed.model_turn_id = Some(8);
+        changed.metadata.model_turn_id = Some(8);
         let error = upsert_message_projection(&db, changed)
             .await
             .expect_err("turn identity must be immutable");
         assert!(error.to_string().contains("turn identity is immutable"));
 
         let mut inconsistent = row;
-        inconsistent.turn_id = Some(8);
+        inconsistent.model_turn_id = Some(8);
         let error = upsert_message_projection(&db, inconsistent)
             .await
             .expect_err("column and metadata must agree");
@@ -613,15 +835,15 @@ mod tests {
         let terminal_created_at = Utc::now();
         let checkpoint_created_at_ms = terminal_created_at.timestamp_millis();
         let metadata = crate::message::MessageMetadata {
-            turn_id: Some(41),
+            model_turn_id: Some(41),
             source: MessageSource::Assistant,
             ..Default::default()
         };
 
-        transcript_message::ActiveModel {
+        model_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
-            turn_id: Set(Some(41)),
+            model_turn_id: Set(Some(41)),
             execution_id: Set(Some(execution_id.to_string())),
             run_id: Set(Some(run_id.to_string())),
             role: Set(Role::Assistant.into()),
@@ -671,7 +893,7 @@ mod tests {
         .await
         .expect("project terminal event with stable identity");
 
-        let projected = transcript_message::Entity::find_by_id(41)
+        let projected = model_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query message")
@@ -698,12 +920,32 @@ mod tests {
         let created_at = Utc::now();
         let run_id = RunId::new();
         let call_id = agena_domain::ToolCallId::new("call_1");
+        let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let part_writer = RuntimeProjectionPartWriter;
 
-        transcript_message::ActiveModel {
+        project_execution_started(
+            &db,
+            &part_writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: created_at.timestamp_millis(),
+            },
+            1,
+        )
+        .await
+        .expect("canonical reply owner");
+
+        model_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
-            turn_id: Set(None),
-            execution_id: Set(None),
+            model_turn_id: Set(None),
+            execution_id: Set(Some(execution_id.to_string())),
             run_id: Set(Some(run_id.to_string())),
             role: Set(StoredRole::Assistant),
             state: Set(StoredExecutionStatus::Completed),
@@ -737,8 +979,10 @@ mod tests {
         upsert_part_projection(&db, session.id, &operation_part)
             .await
             .expect("original operation part");
+        project_part_content(&db, execution_id, Role::Assistant, &operation_part, 1)
+            .await
+            .expect("pending canonical activity");
 
-        let part_writer = RuntimeProjectionPartWriter;
         project_tool_call_issued(
             &db,
             &part_writer,
@@ -755,8 +999,8 @@ mod tests {
         .await
         .expect("project issued call");
 
-        let projected = transcript_part::Entity::find()
-            .filter(transcript_part::Column::MessageId.eq(41))
+        let projected = model_message_part::Entity::find()
+            .filter(model_message_part::Column::MessageId.eq(41))
             .all(&db)
             .await
             .expect("projected parts");
@@ -766,6 +1010,24 @@ mod tests {
 
         let mut completed_part = operation_part.clone();
         completed_part.status = ExecutionStatus::Completed;
+        let mut completed_operation = crate::message::OperationPart::completed(
+            1,
+            agena_domain::ToolInvocation::new(
+                "tools_list",
+                agena_domain::StructuredObject::default(),
+            ),
+            "Available tools: returned 1 of 1 starting at offset 0.\n- fs.read [read_only]: Read a file\nMore available: no.",
+            Vec::new(),
+            Vec::new(),
+            agena_domain::ToolOutput::default(),
+            agena_domain::TimeRange {
+                start_ms: created_at.timestamp_millis(),
+                end_ms: Some(Utc::now().timestamp_millis()),
+            },
+        );
+        completed_operation.set_title("List tools · 1/1");
+        completed_operation.set_summary("Returned 1 of 1 tools; no more results.");
+        completed_part.set_content(crate::message::PartContent::operation(completed_operation));
         update_tool_result_projection(
             &db,
             &part_writer,
@@ -778,18 +1040,51 @@ mod tests {
                 part: completed_part,
                 completed_at: Utc::now(),
             },
+            2,
         )
         .await
         .expect("project completed call");
 
-        let projected = transcript_part::Entity::find()
-            .filter(transcript_part::Column::MessageId.eq(41))
+        let projected = model_message_part::Entity::find()
+            .filter(model_message_part::Column::MessageId.eq(41))
             .all(&db)
             .await
             .expect("completed parts");
         assert_eq!(projected.len(), 1);
         assert_eq!(projected[0].part_id, 51);
         assert_eq!(projected[0].status, StoredExecutionStatus::Completed);
+
+        let canonical = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT payload_json, state, revision_seq FROM agena_activities WHERE activity_id = ?",
+                [operation_part
+                    .activity_id
+                    .expect("operation Activity identity")
+                    .to_string()
+                    .into()],
+            ))
+            .await
+            .expect("query canonical Activity")
+            .expect("canonical Activity exists");
+        assert_eq!(
+            canonical.try_get::<String>("", "state").unwrap(),
+            "completed"
+        );
+        assert_eq!(canonical.try_get::<i64>("", "revision_seq").unwrap(), 2);
+        let payload = serde_json::from_value::<agena_domain::ActivityPayload>(
+            canonical
+                .try_get::<serde_json::Value>("", "payload_json")
+                .unwrap(),
+        )
+        .expect("canonical operation payload");
+        let agena_domain::ActivityPayload::Operation(operation) = payload else {
+            panic!("tool completion must remain an Operation Activity");
+        };
+        assert_eq!(operation.title, "List tools · 1/1");
+        assert!(operation.sections.is_empty());
+        assert!(operation.model_output_text.contains("returned 1 of 1"));
+        assert!(operation.details.is_empty());
     }
 
     #[tokio::test]
@@ -809,10 +1104,10 @@ mod tests {
             .expect("session");
         let created_at = Utc::now();
 
-        transcript_message::ActiveModel {
+        model_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
-            turn_id: Set(None),
+            model_turn_id: Set(None),
             execution_id: Set(None),
             run_id: Set(None),
             role: Set(Role::Assistant.into()),
@@ -856,8 +1151,8 @@ mod tests {
         upsert_part_projection(&db, session.id, &conflicting)
             .await
             .expect("a correlation id may be shared by separate activities");
-        let projected = transcript_part::Entity::find()
-            .filter(transcript_part::Column::MessageId.eq(41))
+        let projected = model_message_part::Entity::find()
+            .filter(model_message_part::Column::MessageId.eq(41))
             .all(&db)
             .await
             .expect("projected parts");
@@ -865,6 +1160,262 @@ mod tests {
         assert_eq!(projected[0].part_id, 51);
         assert_eq!(projected[1].part_id, 52);
         assert_ne!(projected[0].activity_id, projected[1].activity_id);
+    }
+
+    #[tokio::test]
+    async fn completed_execution_suspends_reply_until_pending_permission_is_resolved() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test")
+            .await
+            .expect("workspace");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "suspended reply")
+                .await
+                .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let operation_activity_id = agena_domain::ActivityId::new();
+        let permission_activity_id = agena_domain::ActivityId::new();
+        let part_writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &part_writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 1,
+            },
+            1,
+        )
+        .await
+        .expect("start reply execution");
+
+        model_message::ActiveModel {
+            message_id: Set(41),
+            session_id: Set(session.id),
+            model_turn_id: Set(Some(41)),
+            execution_id: Set(Some(execution_id.to_string())),
+            run_id: Set(Some(RunId::new().to_string())),
+            role: Set(Role::Assistant.into()),
+            state: Set(StoredExecutionStatus::Completed),
+            created_at_ms: Set(1),
+            updated_at_ms: Set(1),
+            metadata: Set(Default::default()),
+            provider_state: Set(None),
+            usage: Set(None),
+            part_count: Set(2),
+        }
+        .insert(&db)
+        .await
+        .expect("message");
+        for (part_id, part_index, activity_id, awaits_user_reply) in [
+            (51, 0, operation_activity_id, false),
+            (52, 1, permission_activity_id, true),
+        ] {
+            model_message_part::ActiveModel {
+                part_id: Set(part_id),
+                message_id: Set(41),
+                part_index: Set(part_index),
+                status: Set(StoredExecutionStatus::Pending),
+                kind: Set(StoredPartKind::Activity),
+                name: Set(None),
+                summary: Set(None),
+                has_detail: Set(false),
+                awaits_user_reply: Set(awaits_user_reply),
+                activity_id: Set(Some(activity_id.to_string())),
+                segment_id: Set(None),
+                operation_id: Set(Some("call_waiting".to_owned())),
+                created_at_ms: Set(1),
+                content: Set(None),
+            }
+            .insert(&db)
+            .await
+            .expect("message part");
+        }
+        for (activity_id, position, payload) in [
+            (
+                operation_activity_id,
+                0,
+                serde_json::json!({
+                    "activity_type": "operation",
+                    "call_id": "call_waiting",
+                    "invocation": {"name": "fs.write", "input": {}}
+                }),
+            ),
+            (
+                permission_activity_id,
+                1,
+                serde_json::json!({
+                    "activity_type": "interaction",
+                    "interaction_type": "permission",
+                    "request": {"request_id": "call_waiting"}
+                }),
+            ),
+        ] {
+            db.execute(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "INSERT INTO agena_activities \
+                 (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+                 VALUES (?, 'assistant_reply', ?, 'assistant', ?, 'pending', ?, 1, 1, NULL)",
+                [
+                    activity_id.to_string().into(),
+                    reply_id.to_string().into(),
+                    payload.into(),
+                    position.into(),
+                ],
+            ))
+            .await
+            .expect("canonical activity");
+        }
+
+        apply_projection_events_on_connection(
+            &db,
+            &part_writer,
+            session.id,
+            &[DomainEvent {
+                meta: agena_domain::EventMeta {
+                    id: uuid::Uuid::new_v4(),
+                    seq_global: 1,
+                    seq_session: Some(2),
+                    session_id: Some(session.id),
+                    workspace_id: Some(workspace_id),
+                    created_at: Utc::now(),
+                    causation_id: None,
+                    correlation_id: None,
+                    envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
+                },
+                kind: EventKind::ExecutionFinished(ExecutionFinishedEvent {
+                    session_id: session.id,
+                    execution_id,
+                    reply_id,
+                    outcome: ExecutionOutcome::Completed,
+                    ts_ms: 2,
+                }),
+            }],
+        )
+        .await
+        .expect("suspend completed execution");
+
+        let reply = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, finished_at_ms FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply")
+            .expect("reply");
+        assert_eq!(
+            reply.try_get::<String>("", "status").unwrap(),
+            "in_progress"
+        );
+        assert_eq!(
+            reply.try_get::<Option<i64>>("", "finished_at_ms").unwrap(),
+            None
+        );
+        assert_eq!(
+            model_message_part::Entity::find_by_id(51)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            StoredExecutionStatus::Pending
+        );
+        assert_eq!(
+            model_message_part::Entity::find_by_id(52)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            StoredExecutionStatus::Pending
+        );
+
+        let failed_execution_id = agena_domain::ExecutionId::new();
+        project_execution_started(
+            &db,
+            &part_writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id: failed_execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::PermissionReply,
+                ts_ms: 3,
+            },
+            3,
+        )
+        .await
+        .expect("start failed continuation");
+        apply_projection_events_on_connection(
+            &db,
+            &part_writer,
+            session.id,
+            &[DomainEvent {
+                meta: agena_domain::EventMeta {
+                    id: uuid::Uuid::new_v4(),
+                    seq_global: 2,
+                    seq_session: Some(4),
+                    session_id: Some(session.id),
+                    workspace_id: Some(workspace_id),
+                    created_at: Utc::now(),
+                    causation_id: None,
+                    correlation_id: None,
+                    envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
+                },
+                kind: EventKind::ExecutionFinished(ExecutionFinishedEvent {
+                    session_id: session.id,
+                    execution_id: failed_execution_id,
+                    reply_id,
+                    outcome: ExecutionOutcome::Failed {
+                        failure: provider_execution_problem(),
+                    },
+                    ts_ms: 4,
+                }),
+            }],
+        )
+        .await
+        .expect("terminalize failed continuation");
+
+        let reply = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reply.try_get::<String>("", "status").unwrap(), "failed");
+        assert_eq!(
+            model_message_part::Entity::find_by_id(51)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            StoredExecutionStatus::Failed
+        );
+        assert_eq!(
+            model_message_part::Entity::find_by_id(52)
+                .one(&db)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            StoredExecutionStatus::Cancelled
+        );
     }
 
     #[tokio::test]
@@ -883,17 +1434,17 @@ mod tests {
             .await
             .expect("session");
         let execution_id = agena_domain::ExecutionId::new();
-        let response_id = agena_domain::ResponseId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
         let run_id = RunId::new();
         let metadata = crate::message::MessageMetadata {
-            turn_id: Some(41),
+            model_turn_id: Some(41),
             ..Default::default()
         };
 
-        transcript_message::ActiveModel {
+        model_message::ActiveModel {
             message_id: Set(41),
             session_id: Set(session.id),
-            turn_id: Set(Some(41)),
+            model_turn_id: Set(Some(41)),
             execution_id: Set(Some(execution_id.to_string())),
             run_id: Set(Some(run_id.to_string())),
             role: Set(Role::Assistant.into()),
@@ -908,7 +1459,7 @@ mod tests {
         .insert(&db)
         .await
         .expect("message");
-        transcript_part::ActiveModel {
+        model_message_part::ActiveModel {
             part_id: Set(51),
             message_id: Set(41),
             part_index: Set(0),
@@ -917,6 +1468,7 @@ mod tests {
             name: Set(None),
             summary: Set(None),
             has_detail: Set(false),
+            awaits_user_reply: Set(false),
             activity_id: Set(None),
             segment_id: Set(None),
             operation_id: Set(None),
@@ -935,7 +1487,7 @@ mod tests {
                 session_id: session.id,
                 execution_id,
                 turn_id: agena_domain::TurnId::new(),
-                response_id,
+                reply_id,
                 source: agena_domain::ExecutionSource::User,
                 ts_ms: 1,
             },
@@ -962,7 +1514,7 @@ mod tests {
                 kind: EventKind::ExecutionFinished(ExecutionFinishedEvent {
                     session_id: session.id,
                     execution_id,
-                    response_id,
+                    reply_id,
                     outcome: ExecutionOutcome::Completed,
                     ts_ms: Utc::now().timestamp_millis(),
                 }),
@@ -971,12 +1523,12 @@ mod tests {
         .await
         .expect("terminalize");
 
-        let terminal_message = transcript_message::Entity::find_by_id(41)
+        let terminal_message = model_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query terminal message")
             .expect("message exists");
-        let terminal_part = transcript_part::Entity::find_by_id(51)
+        let terminal_part = model_message_part::Entity::find_by_id(51)
             .one(&db)
             .await
             .expect("query terminal part")
@@ -987,7 +1539,7 @@ mod tests {
         // Model a terminal assistant whose tool part was closed by the
         // execution boundary. Parent state alone must not let a delayed part
         // checkpoint reopen that tool.
-        let mut terminal_message_update: transcript_message::ActiveModel = terminal_message.into();
+        let mut terminal_message_update: model_message::ActiveModel = terminal_message.into();
         terminal_message_update.state = Set(StoredExecutionStatus::Completed);
         terminal_message_update
             .update(&db)
@@ -1002,7 +1554,7 @@ mod tests {
             crate::message::PartContent::text("late checkpoint"),
         );
         late_part.part_index = 0;
-        apply_message_part_update_on_connection(
+        let _ = apply_message_part_update_on_connection(
             &db,
             &part_writer,
             &MessagePartCheckpointedEvent {
@@ -1010,13 +1562,13 @@ mod tests {
                 execution_id: Some(execution_id),
                 run_id: Some(run_id),
                 turn_id: None,
-                response_id: None,
+                reply_id: None,
                 message_id: 41,
                 message_role: Role::Assistant,
                 message_state: ExecutionStatus::Completed,
                 message_created_at: Utc::now(),
                 message_metadata: crate::message::MessageMetadata {
-                    turn_id: Some(41),
+                    model_turn_id: Some(41),
                     ..Default::default()
                 },
                 part: late_part,
@@ -1026,12 +1578,12 @@ mod tests {
         .await
         .expect("ignore stale checkpoint");
 
-        let message = transcript_message::Entity::find_by_id(41)
+        let message = model_message::Entity::find_by_id(41)
             .one(&db)
             .await
             .expect("query message")
             .expect("message exists");
-        let part = transcript_part::Entity::find_by_id(51)
+        let part = model_message_part::Entity::find_by_id(51)
             .one(&db)
             .await
             .expect("query part")

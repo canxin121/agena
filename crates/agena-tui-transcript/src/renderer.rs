@@ -107,16 +107,37 @@ pub fn render_entry_detailed(
                     .iter()
                     .filter(|part| is_activity_node(part))
                     .collect::<Vec<_>>();
-                let hidden_count = activities
+                let collapsed_prefix_len = activities
                     .len()
                     .saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT);
+                let key = TranscriptNodeKey::ActivitySummary {
+                    entry_id: message.id,
+                    first_content_id: activities[0].id,
+                };
+                let expanded = expansions.get(&key).copied().unwrap_or(false);
+                // An Activity the user can currently see as expanded is
+                // pinned within the run. Appending newer Activities may fold
+                // untouched older siblings, but it must never hide that node.
+                let hidden_when_collapsed = activities
+                    .iter()
+                    .enumerate()
+                    .map(|(index, part)| {
+                        let activity_key = TranscriptNodeKey::Activity {
+                            entry_id: message.id,
+                            content_id: part.id,
+                        };
+                        let activity_expanded = expansions
+                            .get(&activity_key)
+                            .copied()
+                            .unwrap_or(defaults.activity_expanded);
+                        index < collapsed_prefix_len && !activity_expanded
+                    })
+                    .collect::<Vec<_>>();
+                let hidden_count = hidden_when_collapsed
+                    .iter()
+                    .filter(|hidden| **hidden)
+                    .count();
                 if hidden_count > 0 {
-                    let key = TranscriptNodeKey::ActivitySummary {
-                        entry_id: message.id,
-                        first_content_id: activities[0].id,
-                        last_content_id: activities.last().expect("non-empty activity run").id,
-                    };
-                    let expanded = expansions.get(&key).copied().unwrap_or(false);
                     // Message headers belong exclusively to the message-level
                     // parent selection. An activity summary must never make
                     // the adjacent `assistant` header look selected.
@@ -143,7 +164,9 @@ pub fn render_entry_detailed(
                         end_line: lines.len(),
                         copy_text: activities
                             .iter()
-                            .take(hidden_count)
+                            .zip(hidden_when_collapsed.iter())
+                            .filter(|(_, hidden)| **hidden)
+                            .map(|(part, _)| *part)
                             .filter_map(|part| activity_copy_text(part, i18n))
                             .collect::<Vec<_>>()
                             .join("\n\n"),
@@ -151,8 +174,10 @@ pub fn render_entry_detailed(
                         toggleable: true,
                         expanded,
                     });
-                    let first_visible = if expanded { 0 } else { hidden_count };
-                    for part in activities.into_iter().skip(first_visible) {
+                    for (part, hidden) in activities.into_iter().zip(hidden_when_collapsed) {
+                        if !expanded && hidden {
+                            continue;
+                        }
                         append_rendered_part_node(
                             message, part, width, &mut lines, &mut nodes, i18n, defaults,
                             expansions,
@@ -441,7 +466,10 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("Error"), "{text}");
-        assert!(text.contains("The provider is temporarily unavailable."), "{text}");
+        assert!(
+            text.contains("The provider is temporarily unavailable."),
+            "{text}"
+        );
         assert!(text.contains("▾ × Error"), "{text}");
         assert!(rendered.nodes.iter().any(|node| {
             matches!(
@@ -537,7 +565,7 @@ mod tests {
             80,
             &I18n::english(),
             TranscriptDetailDefaults {
-                activity_expanded: true,
+                activity_expanded: false,
             },
             &Default::default(),
         );
@@ -573,7 +601,6 @@ mod tests {
             TranscriptNodeKey::ActivitySummary {
                 entry_id: TranscriptEntryId::StoredMessage(7),
                 first_content_id: TranscriptContentId::StoredPart(21),
-                last_content_id: TranscriptContentId::StoredPart(27),
             },
             true,
         )]);
@@ -582,7 +609,7 @@ mod tests {
             80,
             &I18n::english(),
             TranscriptDetailDefaults {
-                activity_expanded: true,
+                activity_expanded: false,
             },
             &expansion,
         );
@@ -595,6 +622,126 @@ mod tests {
         assert!(expanded.nodes.iter().all(|node| {
             !matches!(node.key, TranscriptNodeKey::Activity { .. })
                 || node.kind == TranscriptNodeKind::Activity
+        }));
+    }
+
+    #[test]
+    fn expanded_activity_run_stays_expanded_when_the_assistant_appends_an_activity() {
+        let now = Utc::now();
+        let activity = |part_id: i64| {
+            TranscriptFixture::reasoning_part(
+                part_id,
+                17,
+                now,
+                ExecutionStatus::Completed,
+                agena_domain::ReasoningPart {
+                    summary: vec![format!("activity {part_id}")],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                },
+            )
+        };
+        let mut message = entry(
+            17,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::InProgress,
+            now,
+            (31..37).map(activity).collect(),
+        );
+        let summary_key = TranscriptNodeKey::ActivitySummary {
+            entry_id: TranscriptEntryId::StoredMessage(17),
+            first_content_id: TranscriptContentId::StoredPart(31),
+        };
+        let expansions = std::collections::BTreeMap::from([(summary_key.clone(), true)]);
+        let defaults = TranscriptDetailDefaults {
+            activity_expanded: false,
+        };
+
+        let before = render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions);
+        assert!(
+            before
+                .nodes
+                .iter()
+                .find(|node| node.key == summary_key)
+                .is_some_and(|node| node.expanded)
+        );
+
+        message.parts.push(activity(37));
+        let after = render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions);
+        assert!(
+            after
+                .nodes
+                .iter()
+                .find(|node| node.key == summary_key)
+                .is_some_and(|node| node.expanded),
+            "appending an Activity must not replace the expanded run with a new collapsed node"
+        );
+        assert!(after.nodes.iter().any(|node| {
+            node.key
+                == (TranscriptNodeKey::Activity {
+                    entry_id: TranscriptEntryId::StoredMessage(17),
+                    content_id: TranscriptContentId::StoredPart(31),
+                })
+        }));
+    }
+
+    #[test]
+    fn individually_expanded_activity_is_not_hidden_when_new_activities_extend_the_run() {
+        let now = Utc::now();
+        let activity = |part_id: i64| {
+            TranscriptFixture::reasoning_part(
+                part_id,
+                18,
+                now,
+                ExecutionStatus::Completed,
+                agena_domain::ReasoningPart {
+                    summary: vec![format!("activity {part_id}")],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                },
+            )
+        };
+        let mut message = entry(
+            18,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::InProgress,
+            now,
+            (41..46).map(activity).collect(),
+        );
+        let activity_key = TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::StoredMessage(18),
+            content_id: TranscriptContentId::StoredPart(41),
+        };
+        let expansions = std::collections::BTreeMap::from([(activity_key.clone(), true)]);
+        let defaults = TranscriptDetailDefaults {
+            activity_expanded: false,
+        };
+        assert!(
+            render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions,)
+                .nodes
+                .iter()
+                .find(|node| node.key == activity_key)
+                .is_some_and(|node| node.expanded)
+        );
+
+        message.parts.extend([activity(46), activity(47)]);
+        let after = render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions);
+        assert!(
+            after
+                .nodes
+                .iter()
+                .find(|node| node.key == activity_key)
+                .is_some_and(|node| node.expanded),
+            "an explicitly expanded Activity must remain visible when it moves into the old prefix"
+        );
+        assert!(after.nodes.iter().any(|node| {
+            matches!(
+                node.key,
+                TranscriptNodeKey::ActivitySummary {
+                    entry_id: TranscriptEntryId::StoredMessage(18),
+                    ..
+                }
+            ) && !node.expanded
         }));
     }
 

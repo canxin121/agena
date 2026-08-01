@@ -357,7 +357,7 @@ mod tests {
             .await
             .expect_err("bundled Skill must remain read-only");
         assert!(error.diagnostic_message().contains("does not exist"));
-        assert!(!error.to_string().contains("does not exist"));
+        assert!(error.to_string().contains("does not exist"));
     }
 
     #[tokio::test]

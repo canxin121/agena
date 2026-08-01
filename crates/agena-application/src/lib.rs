@@ -17,4 +17,3 @@ pub mod session;
 pub use application::{Application, AuthLoginKind};
 pub use error::ApplicationError;
 pub use provider_queries::provider_model_resource_from_domain;
-pub use service::message_part_resource_from_runtime;

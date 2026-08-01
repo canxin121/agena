@@ -18,8 +18,8 @@ const props = defineProps<{
   inspectedMessageParts: MessagePart[]
   inspectedPart: MessagePart | null
   refreshConversation: (foreground: boolean) => void | Promise<void>
-  inspectMessage: (messageId: number, partId?: number) => void | Promise<void>
-  rewindToMessage: (messageId: number) => void | Promise<void>
+  inspectMessage: (messageId: number | string, partId?: number | string) => void | Promise<void>
+  rewindToMessage: (messageId: number | string) => void | Promise<void>
   formatMessageTime: (value: string) => string
   messageUsageFacts: (message: MessageResource) => string[]
   messageBlocks: (message: MessageResource) => ChatMessageRenderBlock[]
@@ -55,7 +55,12 @@ const props = defineProps<{
             <button class="button ghost" :disabled="props.loading" @click="props.inspectMessage(message.id)">
               Inspect
             </button>
-            <button class="button ghost" :disabled="props.loading" @click="props.rewindToMessage(message.id)">
+            <button
+              v-if="message.role === 'user'"
+              class="button ghost"
+              :disabled="props.loading"
+              @click="props.rewindToMessage(message.id)"
+            >
               Rewind Here
             </button>
             <div>{{ props.formatMessageTime(message.created_at) }}</div>

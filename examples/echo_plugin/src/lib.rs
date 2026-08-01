@@ -49,7 +49,9 @@ impl EchoPlugin {
 
         Ok(ToolInvokeOutput {
             title: "Echo".to_string(),
+            summary: rendered.clone(),
             output_text: rendered.clone(),
+            sections: Vec::new(),
             payload: Some(json!({ "rendered": rendered })),
             metadata: BTreeMap::from([("plugin".to_string(), "echo".to_string())]),
             attachments: Vec::new(),
@@ -105,11 +107,6 @@ impl EchoPlugin {
 
     #[hook(run.post)]
     async fn post_run(&self, _input: PostRunInput) {}
-
-    #[hook(permission.ask)]
-    async fn permission_ask(&self, _input: PermissionAskInput) -> Option<PermissionAskDecision> {
-        None
-    }
 
     #[hook(session.start)]
     async fn session_start(&self, input: SessionStartInput) -> SessionStartPatch {

@@ -310,11 +310,8 @@ export type PluginUiToolInvokeResponse = {
   tool: string
   status:
     | 'completed'
-    | 'approval_required'
-    | 'policy_denied'
     | 'capability_unavailable'
     | 'tool_unavailable'
-  approval_request_id?: string | null
   title: string
   output_text: string
   payload?: unknown
@@ -874,8 +871,8 @@ export type RewindCheckpointResource = {
 }
 
 export type MessagePart = {
-  id: number
-  message_id: number
+  id: number | string
+  message_id: number | string
   part_index: number
   status:
     | 'pending'
@@ -919,7 +916,7 @@ export type SkillReferenceInput = {
 }
 
 export type MessageResource = {
-  id: number
+  id: number | string
   session_id: number
   role: 'user' | 'assistant' | 'system'
   state: MessagePart['status']
@@ -1025,9 +1022,57 @@ export type SessionUsageResource = {
   model_max_output_tokens?: number | null
 }
 
+export type TranscriptTextSegment = {
+  id: string
+  text: string
+  position: { index: number }
+  revision_seq: number
+}
+
+export type TranscriptActivity = {
+  id: string
+  owner: Record<string, unknown>
+  actor: 'user' | 'assistant' | 'runtime' | 'tool' | 'plugin'
+  payload: Record<string, unknown> & { activity_type: string }
+  state: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
+  position: { index: number }
+  revision_seq: number
+  lifecycle: { started_at_ms: number; finished_at_ms?: number | null }
+  provenance?: Record<string, unknown>
+}
+
+export type TranscriptContentNode =
+  | { type: 'text'; segment: TranscriptTextSegment }
+  | { type: 'activity'; activity: TranscriptActivity }
+
+export type TranscriptTurn = {
+  id: string
+  session_id: number
+  sequence: number
+  input: TranscriptContentNode[]
+  reply: {
+    id: string
+    turn_id: string
+    status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
+    content: TranscriptContentNode[]
+    revision_seq: number
+    created_at_ms: number
+    finished_at_ms?: number | null
+  }
+  created_at_ms: number
+}
+
+export type TranscriptSnapshot = {
+  session_id: number
+  seq_session: number
+  turns: TranscriptTurn[]
+  session_activities?: TranscriptActivity[]
+}
+
 export type SessionExecutionResource = {
   session: SessionResource
-  workflow_state: 'quiescent' | 'ready_for_model' | 'tool_pending' | 'blocked' | string
+  transcript: TranscriptSnapshot
+  workflow_state: 'quiescent' | 'tool_pending' | 'blocked' | string
   active_execution: {
     execution_id: string
     phase: 'starting' | 'preparing_model' | 'streaming_model' | 'executing_tools' | 'cancelling' | string
@@ -2011,18 +2056,6 @@ export async function importSessionJsonl(jsonl: string): Promise<SessionExecutio
   })
 }
 
-export async function listMessages(sessionId: number): Promise<MessageResource[]> {
-  return await collectPagedItems(
-    (cursor) =>
-      apiJson<PaginatedResponse<MessageResource>>(
-        `/api/v1/sessions/${sessionId}/messages?parts=summary&limit=100${
-          cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
-        }`,
-      ),
-    { merge: 'prepend', maxPages: 1000, resourceName: 'session messages' },
-  )
-}
-
 export async function listSessionTimeline(
   sessionId: number,
   options?: {
@@ -2038,18 +2071,6 @@ export async function listSessionTimeline(
     `/api/v1/sessions/${sessionId}/events${query ? `?${query}` : ''}`,
   )
   return response.items ?? []
-}
-
-export async function getMessage(messageId: number, parts: PartLoadMode = 'summary'): Promise<MessageResource> {
-  return await apiJson<MessageResource>(`/api/v1/messages/${messageId}?parts=${encodeURIComponent(parts)}`)
-}
-
-export async function listMessageParts(messageId: number, mode: PartLoadMode = 'summary'): Promise<MessagePart[]> {
-  return await apiJson<MessagePart[]>(`/api/v1/messages/${messageId}/parts?mode=${encodeURIComponent(mode)}`)
-}
-
-export async function getMessagePart(partId: number): Promise<MessagePart> {
-  return await apiJson<MessagePart>(`/api/v1/message-parts/${partId}`)
 }
 
 export async function listGlobalEvents(options?: {
@@ -2615,13 +2636,13 @@ export async function cancelUserInput(input: {
 
 export async function rewindSession(input: {
   sessionId: number
-  messageId: number
+  turnId: string
 }): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/rewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      message_id: input.messageId,
+      turn_id: input.turnId,
     }),
   })
 }

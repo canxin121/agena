@@ -1,4 +1,10 @@
-import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
+import type {
+  MessagePart,
+  MessageResource,
+  TranscriptActivity,
+  TranscriptContentNode,
+  TranscriptSnapshot,
+} from '@/agena/lib/agenaApi'
 
 import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
 
@@ -21,6 +27,156 @@ function readString(value: unknown): string | null {
 
 function readFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function activitySummary(activity: TranscriptActivity): string {
+  const payload = activity.payload
+  const problemUser = asRecord(asRecord(payload.problem)?.user)
+  return (
+    readString(payload.summary) ||
+    readString(payload.title) ||
+    readString(payload.name) ||
+    readString(payload.skill_name) ||
+    readString(payload.query) ||
+    readString(problemUser?.fallback) ||
+    payload.activity_type
+  )
+}
+
+function canonicalPart(
+  node: TranscriptContentNode,
+  messageId: string,
+  partIndex: number,
+  messageStatus: MessageResource['state'],
+  createdAtMs: number,
+): MessagePart {
+  if (node.type === 'text') {
+    return {
+      id: node.segment.id,
+      message_id: messageId,
+      part_index: partIndex,
+      status: messageStatus === 'pending' ? 'in_progress' : messageStatus,
+      kind: 'text',
+      has_detail: true,
+      created_at: new Date(createdAtMs).toISOString(),
+      content: { type: 'text', text: node.segment.text, synthetic: false },
+    }
+  }
+
+  const activity = node.activity
+  const activityType = activity.payload.activity_type
+  const content: Record<string, unknown> = {
+    ...activity.payload,
+    type: activityType === 'interaction' ? 'request' : activityType,
+    actor: activity.actor,
+    state: activity.state,
+    lifecycle: activity.lifecycle,
+    provenance: activity.provenance || {},
+  }
+  if (activityType === 'resource') {
+    content.type = 'attachment'
+    content.attachments = [
+      {
+        kind: activity.payload.kind,
+        title: activity.payload.name,
+        mime: activity.payload.media_type,
+        size_bytes: activity.payload.size_bytes,
+        reference: activity.payload.reference,
+      },
+    ]
+  } else if (activityType === 'operation') {
+    content.model_output = { text: activity.payload.model_output_text || '' }
+    const problem = asRecord(asRecord(activity.payload.error)?.problem)
+    const user = asRecord(problem?.user)
+    if (problem) content.error = { message: readString(user?.fallback) || readString(user?.detail) || 'Tool failed' }
+  } else if (activityType === 'error') {
+    const problem = asRecord(activity.payload.problem)
+    const user = asRecord(problem?.user)
+    content.code = readString(problem?.code) || 'error'
+    content.message = readString(user?.fallback) || readString(user?.detail) || 'The reply failed.'
+  }
+  return {
+    id: activity.id,
+    message_id: messageId,
+    part_index: partIndex,
+    status: activity.state,
+    kind: activityType,
+    name: activitySummary(activity),
+    summary: activitySummary(activity),
+    has_detail: true,
+    operation_id: activityType === 'operation' ? String(activity.payload.call_id || activity.id) : null,
+    created_at: new Date(activity.lifecycle.started_at_ms).toISOString(),
+    content,
+  }
+}
+
+function canonicalMessage(input: {
+  id: string
+  sessionId: number
+  role: 'user' | 'assistant'
+  state: MessageResource['state']
+  createdAtMs: number
+  updatedAtMs: number
+  nodes: TranscriptContentNode[]
+  metadata: Record<string, unknown>
+}): MessageResource {
+  const nodes = [...input.nodes].sort((left, right) => {
+    const leftPosition = left.type === 'text' ? left.segment.position.index : left.activity.position.index
+    const rightPosition = right.type === 'text' ? right.segment.position.index : right.activity.position.index
+    return leftPosition - rightPosition
+  })
+  return {
+    id: input.id,
+    session_id: input.sessionId,
+    role: input.role,
+    state: input.state,
+    created_at: new Date(input.createdAtMs).toISOString(),
+    updated_at: new Date(input.updatedAtMs).toISOString(),
+    metadata: input.metadata,
+    usage: null,
+    part_count: nodes.length,
+    parts: nodes.map((node, index) => canonicalPart(node, input.id, index, input.state, input.createdAtMs)),
+  }
+}
+
+/**
+ * The Web conversation view is a one-to-one adapter over the canonical
+ * Turn/AssistantReply aggregate. It never scans or merges provider model
+ * messages.
+ */
+export function transcriptMessages(transcript: TranscriptSnapshot): MessageResource[] {
+  return [...transcript.turns]
+    .sort((left, right) => left.sequence - right.sequence)
+    .flatMap((turn) => {
+      const userId = `turn:${turn.id}:input`
+      const replyId = `reply:${turn.reply.id}`
+      return [
+        canonicalMessage({
+          id: userId,
+          sessionId: turn.session_id,
+          role: 'user',
+          state: 'completed',
+          createdAtMs: turn.created_at_ms,
+          updatedAtMs: turn.created_at_ms,
+          nodes: turn.input,
+          metadata: { canonical_turn_id: turn.id, turn_sequence: turn.sequence },
+        }),
+        canonicalMessage({
+          id: replyId,
+          sessionId: turn.session_id,
+          role: 'assistant',
+          state: turn.reply.status,
+          createdAtMs: turn.reply.created_at_ms,
+          updatedAtMs: turn.reply.finished_at_ms ?? turn.reply.created_at_ms,
+          nodes: turn.reply.content,
+          metadata: {
+            canonical_turn_id: turn.id,
+            canonical_reply_id: turn.reply.id,
+            turn_sequence: turn.sequence,
+          },
+        }),
+      ]
+    })
 }
 
 export function partBody(part: MessagePart): string {

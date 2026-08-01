@@ -74,13 +74,14 @@ mod user_input;
 pub use access::{AccessKind, AccessSelector};
 pub use activity::{
     ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
-    ActivityProvenance, ActivityState, CancellationResult, ChecklistActivity, ComposerActivity,
-    ComposerDocument, ComposerNode, ContentDocument, ContentNode, ContentPosition, CustomActivity,
-    ErrorActivity, ExecutionTarget, FileChangesActivity, InteractionActivity, MaintenanceActivity,
-    NestedTaskActivity, OperationActivity, OperationActivityError, ProgressActivity,
-    ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference, ResponseSnapshot,
-    ResponseStatus, SearchActivity, SkillExecutionActivity, SkillReferenceActivity,
-    TextArtifactActivity, TextSegment, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
+    ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,
+    CancellationResult, ChecklistActivity, ComposerActivity, ComposerDocument, ComposerNode,
+    ContentDocument, ContentNode, ContentPosition, CustomActivity, ErrorActivity, ExecutionTarget,
+    FileChangesActivity, InteractionActivity, MaintenanceActivity, NestedTaskActivity,
+    OperationActivity, OperationActivityError, ProgressActivity, ReasoningActivity,
+    ResourceActivity, ResourceKind, ResourceReference, SearchActivity, SkillExecutionActivity,
+    SkillReferenceActivity, TextArtifactActivity, TextSegment, TranscriptPatch, TranscriptSnapshot,
+    TurnSnapshot,
 };
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use command_events::{
@@ -103,7 +104,7 @@ pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
 pub use finish_reason::{FinishReason, RunAbortReason};
 pub use ids::{
-    ActivityId, ExecutionId, MessageId, PartId, ResponseId, ResponseSegmentId, RunId, ToolCallId,
+    ActivityId, AssistantReplyId, ExecutionId, MessageId, PartId, RunId, TextSegmentId, ToolCallId,
     TurnId,
 };
 pub use interaction_notification::InteractionNotificationLevel;
@@ -176,11 +177,11 @@ pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 pub use time_range::TimeRange;
 pub use tool_api::ToolApiFunction;
 pub use tool_effects::{FilesystemAccess, FilesystemEffect, NetworkEffect};
-pub use tool_invocation::ToolInvocation;
+pub use tool_invocation::{ToolApiCall, ToolInvocation};
 pub use tool_output::{ToolManagedOutput, ToolOutput};
 pub use tool_permission::ToolPermissionRules;
 pub use tool_permission_config::ToolPermissionConfig;
-pub use tool_result::{ToolResultDisplay, ToolResultState};
+pub use tool_result::{ToolPresentationSection, ToolResultDisplay, ToolResultState};
 pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;
 pub use usage_stats::{

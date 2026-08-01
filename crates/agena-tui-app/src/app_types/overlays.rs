@@ -299,23 +299,13 @@ pub(crate) enum PermissionOverlayChoice {
     Details,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PermissionReplayState {
-    pub(crate) session_id: i64,
-    pub(crate) fingerprint: String,
-    pub(crate) last_request_id: String,
-    pub(crate) kind: PermissionReplyKind,
-    pub(crate) scope: Option<PermissionScope>,
-    pub(crate) label: String,
-}
-
 pub(crate) type ConfirmOverlay = ConfirmDialogState<ConfirmAction>;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmAction {
     Rewind {
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     },

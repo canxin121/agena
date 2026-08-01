@@ -55,42 +55,6 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
-    async fn ask_permission(
-        &self,
-        req: PermissionAskInput,
-    ) -> crate::sdk::Result<PermissionDecision> {
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.ask_permission(req)).await
-    }
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> crate::sdk::Result<HostPermissionCheckResponse> {
-        self.require_capability(
-            method::HOST_PERMISSION_CHECK_PATH,
-            HostCapability::PermissionCheck,
-        )
-        .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.check_path_permission(req))
-            .await
-    }
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> crate::sdk::Result<HostPermissionCheckResponse> {
-        self.require_capability(
-            method::HOST_PERMISSION_CHECK_NETWORK,
-            HostCapability::PermissionCheck,
-        )
-        .await?;
-        let inner = self.handle.inner.read().await.clone();
-        host_api::run_in_host_callback_context(self.context(), inner.check_network_permission(req))
-            .await
-    }
-
     async fn read_config(&self, path: Option<String>) -> crate::sdk::Result<serde_json::Value> {
         self.require_capability(method::HOST_CONFIG_READ, HostCapability::ReadConfig)
             .await?;
@@ -553,8 +517,7 @@ use super::{
     HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
     HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatusGetRequest,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
@@ -566,7 +529,6 @@ use super::{
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    PermissionAskInput, PermissionDecision, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
-    RunSubtaskRequest, RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse,
-    ToolDescriptor, ToolInvokeOutput, host_api, method,
+    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
+    ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput, host_api, method,
 };

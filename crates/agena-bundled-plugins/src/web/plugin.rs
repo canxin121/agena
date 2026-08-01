@@ -21,10 +21,8 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
-use agena_plugin_host::sdk::{HostCapability, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::host_api::HostClient;
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 
 fn json_schema_for_default_with_metadata<T>(
     default: T,
@@ -463,7 +461,6 @@ fn default_web_config() -> WebConfig {
 pub(crate) struct WebPlugin {
     state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,
-    host: OnceLock<Arc<dyn HostClient>>,
     sync_lock: Mutex<()>,
     browser_clients: Mutex<BTreeMap<String, CdpClient>>,
     user_agent: String,
@@ -696,7 +693,6 @@ impl WebPlugin {
         Self {
             state: OnceLock::new(),
             workspace_root: OnceLock::new(),
-            host: OnceLock::new(),
             sync_lock: Mutex::new(()),
             browser_clients: Mutex::new(BTreeMap::new()),
             user_agent: "agena-web".to_owned(),
@@ -707,14 +703,11 @@ impl WebPlugin {
     async fn init(
         &self,
         ctx: agena_plugin_host::sdk::InitContext,
-        host: Arc<dyn HostClient>,
+        _host: Arc<dyn HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.state
             .set(WebPluginState::new(parse_web_config(ctx.config)?))
             .map_err(|_| PluginError::internal("web plugin initialized more than once"))?;
-        self.host
-            .set(host)
-            .map_err(|_| PluginError::internal("web plugin host initialized more than once"))?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("web plugin workspace root initialized more than once")
         })?;
@@ -738,12 +731,6 @@ impl WebPlugin {
             .get()
             .map(PathBuf::as_path)
             .ok_or_else(|| PluginError::internal("web plugin invoked before init"))
-    }
-
-    fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
-        self.host
-            .get()
-            .ok_or_else(|| PluginError::internal("web plugin host not initialized"))
     }
 
     fn store(&self) -> SdkResult<CrawlStore> {
@@ -780,8 +767,8 @@ impl WebPlugin {
         })
     }
 
-    async fn ensure_network_permission(&self, url: &url::Url) -> SdkResult<()> {
-        ensure_network_permission_with_host(self.host()?, url).await
+    async fn validate_network_target(&self, url: &url::Url) -> SdkResult<()> {
+        validate_public_network_target(url).await
     }
 
     /// Resolve ordinary HTTP redirect hops before a managed browser target is
@@ -807,7 +794,7 @@ impl WebPlugin {
         let mut current = initial.clone();
         let mut checked = Vec::new();
         for _ in 0..=MAX_REDIRECTS {
-            self.ensure_network_permission(&current).await?;
+            self.validate_network_target(&current).await?;
             checked.push(current.to_string());
             let response = client.head(current.clone()).send().await.map_err(|error| {
                 PluginError::internal(format!(
@@ -871,9 +858,7 @@ impl WebPlugin {
 
         let endpoint = self.browser_endpoint().await?;
         let client = CdpClient::connect(endpoint.as_str(), Some(target_id)).await?;
-        client
-            .enable_navigation_interception(Arc::clone(self.host()?))
-            .await?;
+        client.enable_navigation_interception().await?;
         clients.insert(target_id.to_string(), client.clone());
         Ok(client)
     }
@@ -922,7 +907,7 @@ impl WebPlugin {
         if let Some(final_url) = snapshot.get("url").and_then(serde_json::Value::as_str)
             && let Ok(final_url) = url::Url::parse(final_url)
         {
-            self.ensure_network_permission(&final_url).await?;
+            self.validate_network_target(&final_url).await?;
         }
         Ok(snapshot)
     }
@@ -942,7 +927,7 @@ impl WebPlugin {
         state
             .fetch_coordinator
             .fetch_or_cached(url, render_js, use_cache, || async {
-                self.ensure_network_permission(url).await?;
+                self.validate_network_target(url).await?;
                 let options = self.spider_fetch_options(render_js)?;
                 let page = fetch_page_with_spider(url, &options)
                     .await
@@ -952,7 +937,7 @@ impl WebPlugin {
                 })?;
                 // Spider follows HTTP redirects internally. Do not return a response
                 // whose final destination would fail the same network policy.
-                self.ensure_network_permission(&final_url).await?;
+                self.validate_network_target(&final_url).await?;
                 Ok(page)
             })
             .await
@@ -965,7 +950,6 @@ impl WebPlugin {
         network,
         internet,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(
             r#"{"url":"https://openai.com"}"#,
             r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
@@ -997,7 +981,6 @@ impl WebPlugin {
         internet,
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         path(write = self.store_write_permission_path()?),
         network(connect = prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?.to_string())
     )]
@@ -1054,7 +1037,6 @@ impl WebPlugin {
         internet,
         discovery,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(
             r#"{"query":"Agena plugin architecture","max_results":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
@@ -1126,12 +1108,11 @@ impl WebPlugin {
         read_only,
         network,
         internet,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_open(&self, input: &BrowserOpenInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
-        self.ensure_network_permission(&url).await?;
+        self.validate_network_target(&url).await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
         let browser = self.browser_client(None).await?;
         let created = browser
@@ -1194,7 +1175,6 @@ impl WebPlugin {
         read_only,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn browser_list(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
@@ -1236,8 +1216,7 @@ impl WebPlugin {
         summary = "Close one page target in the managed interactive browser.",
         mutating,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
         let browser = self.browser_client(None).await?;
@@ -1268,7 +1247,6 @@ impl WebPlugin {
         read_only,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn browser_snapshot(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
@@ -1293,8 +1271,7 @@ impl WebPlugin {
         summary = "Click a browser element selected by CSS or the latest snapshot ref.",
         mutating,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_click(&self, input: &BrowserClickInput) -> SdkResult<ToolInvokeOutput> {
         let target = browser_element_expression(input.selector.as_deref(), input.element_ref)?;
@@ -1319,8 +1296,7 @@ impl WebPlugin {
         summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
         mutating,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_type(&self, input: &BrowserTypeInput) -> SdkResult<ToolInvokeOutput> {
         let expression = browser_type_expression(
@@ -1348,7 +1324,6 @@ impl WebPlugin {
         read_only,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn browser_wait(&self, input: &BrowserWaitInput) -> SdkResult<ToolInvokeOutput> {
@@ -1380,8 +1355,7 @@ impl WebPlugin {
         mutating,
         filesystem_write,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_screenshot(
         &self,
@@ -1414,11 +1388,6 @@ impl WebPlugin {
         } else {
             self.workspace_root()?.join(relative.as_str())
         };
-        self.host()?
-            .ensure_path_permission(HostPathPermissionCheckRequest::write(
-                path.to_string_lossy().to_string(),
-            ))
-            .await?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
                 PluginError::internal(format!("cannot create screenshot directory: {error}"))
@@ -1467,23 +1436,17 @@ impl WebPlugin {
         mutating,
         filesystem_write,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_download(&self, input: &BrowserDownloadInput) -> SdkResult<ToolInvokeOutput> {
         const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
-        self.ensure_network_permission(&url).await?;
+        self.validate_network_target(&url).await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
         let download_dir = self
             .workspace_root()?
             .join(".agena/artifacts/browser/downloads")
             .join(uuid::Uuid::new_v4().simple().to_string());
-        self.host()?
-            .ensure_path_permission(HostPathPermissionCheckRequest::write(
-                download_dir.to_string_lossy().to_string(),
-            ))
-            .await?;
         tokio::fs::create_dir_all(&download_dir)
             .await
             .map_err(|error| {
@@ -1652,7 +1615,7 @@ impl WebPlugin {
             .map_err(|err| PluginError::internal(err.to_string()))?;
         let state = self.state()?;
         state.fetch_coordinator.wait_for_url_host(&engine_url).await;
-        self.ensure_network_permission(&engine_url).await?;
+        self.validate_network_target(&engine_url).await?;
         let config = &state.config;
         let options = WebSearchOptions {
             engine,
@@ -1677,24 +1640,13 @@ impl WebPlugin {
     }
 }
 
-async fn ensure_network_permission_with_host(
-    host_client: &Arc<dyn HostClient>,
-    url: &url::Url,
-) -> SdkResult<()> {
+async fn validate_public_network_target(url: &url::Url) -> SdkResult<()> {
     let host = url
         .host_str()
         .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
     let port = url
         .port_or_known_default()
         .ok_or_else(|| PluginError::invalid_params("web URL has no known port"))?;
-
-    // Check the requested hostname first so explicit host rules remain
-    // usable, then check every resolved address. The latter prevents a
-    // hostname rule from silently becoming a private/loopback connection
-    // through DNS resolution.
-    host_client
-        .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url.as_str()))
-        .await?;
 
     let addresses = tokio::net::lookup_host((host, port))
         .await
@@ -1707,16 +1659,11 @@ async fn ensure_network_permission_with_host(
         )));
     }
     for address in addresses {
-        if is_public_address(address) {
-            continue;
+        if !is_public_address(address) {
+            return Err(PluginError::invalid_params(format!(
+                "web URL host `{host}` resolves to non-public address `{address}`"
+            )));
         }
-        let target = match address {
-            std::net::IpAddr::V4(address) => format!("{address}:{port}"),
-            std::net::IpAddr::V6(address) => format!("[{address}]:{port}"),
-        };
-        host_client
-            .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(target))
-            .await?;
     }
     Ok(())
 }
@@ -1750,7 +1697,7 @@ struct NavigationDecision {
 #[derive(Clone)]
 struct CdpClient {
     commands: mpsc::Sender<CdpCommandRequest>,
-    navigation_policy: Arc<OnceLock<Arc<dyn HostClient>>>,
+    navigation_interception_enabled: Arc<OnceLock<()>>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
 }
 
@@ -1778,26 +1725,25 @@ impl CdpClient {
         };
 
         let (commands, command_receiver) = mpsc::channel(32);
-        let navigation_policy = Arc::new(OnceLock::new());
+        let navigation_interception_enabled = Arc::new(OnceLock::new());
         let navigation_errors = Arc::new(std::sync::Mutex::new(VecDeque::new()));
         tokio::spawn(run_cdp_connection(
             socket,
             session_id,
             next_id,
             command_receiver,
-            Arc::clone(&navigation_policy),
             Arc::clone(&navigation_errors),
         ));
 
         Ok(Self {
             commands,
-            navigation_policy,
+            navigation_interception_enabled,
             navigation_errors,
         })
     }
 
-    async fn enable_navigation_interception(&self, host: Arc<dyn HostClient>) -> SdkResult<()> {
-        if self.navigation_policy.set(host).is_err() {
+    async fn enable_navigation_interception(&self) -> SdkResult<()> {
+        if self.navigation_interception_enabled.set(()).is_err() {
             return Ok(());
         }
         self.command(
@@ -1952,7 +1898,6 @@ async fn run_cdp_connection(
     session_id: Option<String>,
     mut next_id: u64,
     mut commands: mpsc::Receiver<CdpCommandRequest>,
-    navigation_policy: Arc<OnceLock<Arc<dyn HostClient>>>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
 ) {
     let (mut sink, mut source) = socket.split();
@@ -2112,7 +2057,6 @@ async fn run_cdp_connection(
                     .pointer("/params/resourceType")
                     .and_then(serde_json::Value::as_str)
                     == Some("Document");
-                let policy = navigation_policy.get().cloned();
                 let decisions = decisions.clone();
                 let authorization_slot = Arc::clone(&authorization_slots).try_acquire_owned();
                 let Ok(authorization_slot) = authorization_slot else {
@@ -2120,7 +2064,7 @@ async fn run_cdp_connection(
                         request_id,
                         url,
                         result: Err(
-                            "browser document interception exceeded 16 concurrent permission checks"
+                            "browser document interception exceeded 16 concurrent network safety checks"
                                 .to_string(),
                         ),
                     });
@@ -2130,10 +2074,8 @@ async fn run_cdp_connection(
                     let _authorization_slot = authorization_slot;
                     let result = if !is_document {
                         Ok(())
-                    } else if let Some(policy) = policy {
-                        authorize_browser_document_request(&policy, url.as_str()).await
                     } else {
-                        Err("browser document interception has no host permission policy".to_string())
+                        authorize_browser_document_request(url.as_str()).await
                     };
                     let _ = decisions.send(NavigationDecision {
                         request_id,
@@ -2146,10 +2088,7 @@ async fn run_cdp_connection(
     }
 }
 
-async fn authorize_browser_document_request(
-    host: &Arc<dyn HostClient>,
-    raw_url: &str,
-) -> Result<(), String> {
+async fn authorize_browser_document_request(raw_url: &str) -> Result<(), String> {
     let url = url::Url::parse(raw_url).map_err(|error| format!("invalid document URL: {error}"))?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err(format!(
@@ -2157,7 +2096,7 @@ async fn authorize_browser_document_request(
             url.scheme()
         ));
     }
-    ensure_network_permission_with_host(host, &url)
+    validate_public_network_target(&url)
         .await
         .map_err(|error| error.to_string())
 }
@@ -2770,8 +2709,6 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
-    use std::sync::{Arc, Mutex as StdMutex};
-    use std::time::Duration;
 
     use agena_plugin_host::sdk::Plugin;
 
@@ -2779,141 +2716,6 @@ mod tests {
         CdpClient, WebPlugin, browser_element_expression, browser_type_expression,
         is_public_address, resolve_browser_redirect,
     };
-
-    struct BrowserPermissionHost {
-        allow: bool,
-        targets: StdMutex<Vec<String>>,
-    }
-
-    impl BrowserPermissionHost {
-        fn new(allow: bool) -> Self {
-            Self {
-                allow,
-                targets: StdMutex::new(Vec::new()),
-            }
-        }
-
-        fn targets(&self) -> Vec<String> {
-            self.targets
-                .lock()
-                .expect("browser permission targets lock")
-                .clone()
-        }
-    }
-
-    #[async_trait::async_trait]
-    impl agena_plugin_host::sdk::HostClient for BrowserPermissionHost {
-        async fn log(
-            &self,
-            _level: agena_plugin_host::sdk::host_api::LogLevel,
-            _message: String,
-            _fields: serde_json::Value,
-        ) {
-        }
-
-        async fn publish_event(
-            &self,
-            _event: agena_plugin_host::sdk::EventEnvelope,
-        ) -> agena_plugin_host::sdk::Result<()> {
-            Err(agena_plugin_host::PluginError::internal(
-                "unused test host API",
-            ))
-        }
-
-        async fn subscribe_events(
-            &self,
-            _filter: agena_plugin_host::sdk::EventFilter,
-        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::host_api::EventSubscription>
-        {
-            Err(agena_plugin_host::PluginError::internal(
-                "unused test host API",
-            ))
-        }
-
-        async fn ask_permission(
-            &self,
-            _request: agena_plugin_host::sdk::PermissionAskInput,
-        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::PermissionDecision> {
-            Ok(agena_plugin_host::sdk::PermissionDecision::Deny)
-        }
-
-        async fn check_network_permission(
-            &self,
-            request: agena_plugin_host::sdk::host_api::HostNetworkPermissionCheckRequest,
-        ) -> agena_plugin_host::sdk::Result<
-            agena_plugin_host::sdk::host_api::HostPermissionCheckResponse,
-        > {
-            self.targets
-                .lock()
-                .expect("browser permission targets lock")
-                .push(request.target);
-            if self.allow {
-                Ok(agena_plugin_host::sdk::host_api::HostPermissionCheckResponse::allowed())
-            } else {
-                Ok(
-                    agena_plugin_host::sdk::host_api::HostPermissionCheckResponse {
-                        decision: agena_plugin_host::sdk::PermissionDecision::Deny,
-                        outcome:
-                            agena_plugin_host::sdk::host_api::HostPermissionOutcome::PolicyDenied,
-                        reason: Some("test policy denied browser navigation".to_string()),
-                        explanation: String::new(),
-                        details: None,
-                    },
-                )
-            }
-        }
-
-        async fn read_config(
-            &self,
-            _path: Option<String>,
-        ) -> agena_plugin_host::sdk::Result<serde_json::Value> {
-            Ok(serde_json::Value::Null)
-        }
-
-        async fn invoke_tool(
-            &self,
-            _tool: String,
-            _input: serde_json::Value,
-        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
-            Err(agena_plugin_host::PluginError::internal(
-                "unused test host API",
-            ))
-        }
-    }
-
-    async fn one_request_http_fixture() -> (String, tokio::sync::oneshot::Receiver<()>) {
-        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .await
-            .expect("bind browser fixture");
-        let address = listener.local_addr().expect("browser fixture address");
-        let (observed, receiver) = tokio::sync::oneshot::channel();
-        let observed = Arc::new(StdMutex::new(Some(observed)));
-        let app = axum::Router::new().fallback({
-            let observed = Arc::clone(&observed);
-            move || {
-                let observed = Arc::clone(&observed);
-                async move {
-                    if let Some(observed) = observed
-                        .lock()
-                        .expect("browser fixture observation lock")
-                        .take()
-                    {
-                        let _ = observed.send(());
-                    }
-                    axum::response::Html(
-                        "<html><head><title>intercepted fixture</title></head><body>ok</body></html>",
-                    )
-                }
-            }
-        });
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
-        (
-            format!("http://localhost:{}/document", address.port()),
-            receiver,
-        )
-    }
 
     #[test]
     fn public_dns_addresses_do_not_need_a_second_permission_check() {
@@ -3068,112 +2870,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn cdp_fetch_intercepts_document_requests_before_dispatch() {
-        let options = agena_web::LocalBrowserOptions::default();
-        let Ok(endpoint) =
-            tokio::task::spawn_blocking(move || agena_web::local_browser_endpoint(&options))
-                .await
-                .expect("browser launcher task")
-        else {
-            // Chrome is an optional runtime dependency. This fixture exercises
-            // the real Fetch domain whenever a browser binary is available.
-            return;
-        };
-        let root = CdpClient::connect(endpoint.as_str(), None)
-            .await
-            .expect("connect browser");
-
-        let allowed_target = root
-            .command(
-                "Target.createTarget",
-                serde_json::json!({"url": "about:blank"}),
-            )
-            .await
-            .expect("create allowed target")["targetId"]
-            .as_str()
-            .expect("allowed target id")
-            .to_string();
-        let allowed_page = CdpClient::connect(endpoint.as_str(), Some(allowed_target.as_str()))
-            .await
-            .expect("attach allowed target");
-        let allowed_host = Arc::new(BrowserPermissionHost::new(true));
-        allowed_page
-            .enable_navigation_interception(allowed_host.clone())
-            .await
-            .expect("enable Fetch interception");
-        allowed_page
-            .command("Page.enable", serde_json::json!({}))
-            .await
-            .expect("enable page");
-        let (allowed_url, _allowed_observed) = one_request_http_fixture().await;
-        allowed_page
-            .command(
-                "Page.navigate",
-                serde_json::json!({"url": allowed_url.clone()}),
-            )
-            .await
-            .expect("continue allowed document request");
-        assert!(
-            allowed_host
-                .targets()
-                .iter()
-                .any(|target| target == &allowed_url),
-            "the host permission callback must inspect the exact document URL"
-        );
-
-        let denied_target = root
-            .command(
-                "Target.createTarget",
-                serde_json::json!({"url": "about:blank"}),
-            )
-            .await
-            .expect("create denied target")["targetId"]
-            .as_str()
-            .expect("denied target id")
-            .to_string();
-        let denied_page = CdpClient::connect(endpoint.as_str(), Some(denied_target.as_str()))
-            .await
-            .expect("attach denied target");
-        denied_page
-            .enable_navigation_interception(Arc::new(BrowserPermissionHost::new(false)))
-            .await
-            .expect("enable denied Fetch interception");
-        denied_page
-            .command("Page.enable", serde_json::json!({}))
-            .await
-            .expect("enable denied page");
-        let (denied_url, denied_observed) = one_request_http_fixture().await;
-        let error = tokio::time::timeout(
-            Duration::from_secs(5),
-            denied_page.command("Page.navigate", serde_json::json!({"url": denied_url})),
-        )
-        .await
-        .expect("denied navigation must resolve")
-        .expect_err("denied document request must fail");
-        assert!(
-            error
-                .diagnostic_message()
-                .contains("blocked before dispatch")
-        );
-        assert!(!error.to_string().contains("blocked before dispatch"));
-        assert!(
-            tokio::time::timeout(Duration::from_millis(500), denied_observed)
-                .await
-                .is_err(),
-            "a denied document request must not reach the HTTP fixture"
-        );
-
-        for target_id in [allowed_target, denied_target] {
-            let _ = root
-                .command(
-                    "Target.closeTarget",
-                    serde_json::json!({"targetId": target_id}),
-                )
-                .await;
-        }
-    }
-
     #[test]
     fn browser_redirect_resolution_stays_http_and_supports_relative_locations() {
         let base = url::Url::parse("https://example.test/docs/start").expect("base URL");
@@ -3186,6 +2882,6 @@ mod tests {
         let error = resolve_browser_redirect(&base, "file:///private/data")
             .expect_err("file redirect must be rejected");
         assert!(error.diagnostic_message().contains("unsupported scheme"));
-        assert!(!error.to_string().contains("unsupported scheme"));
+        assert!(error.to_string().contains("unsupported scheme"));
     }
 }

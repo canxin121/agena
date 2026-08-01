@@ -72,7 +72,6 @@ const TOOL_MODEL_STRUCTURED_MAX_FIELDS: usize = 32;
 const TOOL_MODEL_STRUCTURED_MAX_ITEMS: usize = 32;
 const TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES: usize = 768;
 use self::output_helpers::*;
-pub(crate) use self::router as in_process_router;
 pub use self::tool_registry::*;
 
 pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStartParams};

@@ -49,7 +49,6 @@ impl HostHandle {
             statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             quotas: Arc::new(crate::quota::QuotaRegistry::default()),
-            permission_handler: tokio::sync::RwLock::new(None),
             plugin_transports: tokio::sync::RwLock::new(HashMap::new()),
         }
     }
@@ -62,8 +61,7 @@ impl HostHandle {
         self.quotas = registry;
     }
 
-    /// Register a plugin transport so the handle can dispatch
-    /// host->plugin calls (currently used by the permission UI handler).
+    /// Register a plugin transport so the handle can route streaming events.
     pub async fn register_plugin_transport(
         &self,
         plugin_id: PluginKey,
@@ -97,11 +95,6 @@ impl HostHandle {
             .ingest_stream_event(method, params)
             .await
             .map_err(transport_to_plugin_error)
-    }
-
-    /// Read-only view of the current permission handler plugin id.
-    pub async fn permission_handler(&self) -> Option<String> {
-        self.permission_handler.read().await.clone()
     }
 
     pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry> {
@@ -248,13 +241,6 @@ impl HostHandle {
         self.tool_capabilities.write().await.remove(plugin_id);
         self.tokens.lock().await.remove(plugin_id);
         self.plugin_transports.write().await.remove(plugin_id);
-        let plugin_id_text = plugin_id.to_string();
-        let mut permission_handler = self.permission_handler.write().await;
-        if permission_handler.as_deref() == Some(plugin_id_text.as_str()) {
-            *permission_handler = None;
-        }
-        drop(permission_handler);
-
         if let Ok(mut indices) = self.plugin_indices.write() {
             indices.remove(plugin_id);
         }
@@ -484,146 +470,6 @@ impl HostHandle {
                         )
                         .await?;
                         Ok(serde_json::Value::Object(Default::default()))
-                    }
-                    method::HOST_PERMISSION_ASK => {
-                        let req: PermissionAskInput = parse(params)?;
-                        // If a permission handler plugin is registered, route
-                        // the permission request through that plugin's
-                        // `permission.ask_permission` hook. Otherwise fall
-                        // back to the regular HostClient method.
-                        let handler_id = self.permission_handler.read().await.clone();
-                        let d = if let Some(handler_id) = handler_id {
-                            let transport = if let Ok(handler_key) = handler_id.parse::<PluginKey>()
-                            {
-                                self.plugin_transports
-                                    .read()
-                                    .await
-                                    .get(&handler_key)
-                                    .cloned()
-                            } else {
-                                None
-                            };
-                            match transport {
-                                Some(transport) => {
-                                    let params = serde_json::to_value(&req)
-                                        .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-                                    let value = dispatch_permission_ask_transport(
-                                        transport,
-                                        scoped_context(plugin_id.clone(), None),
-                                        params,
-                                    )
-                                    .await?;
-                                    // Plugin hook returns Option<PermissionAskDecision>.
-                                    // Map it back to PermissionDecision for the
-                                    // HOST_PERMISSION_ASK contract: Defer / None
-                                    // falls through to the underlying HostClient.
-                                    #[derive(serde::Deserialize)]
-                                    #[serde(
-                                        rename_all = "snake_case",
-                                        tag = "kind",
-                                        content = "value"
-                                    )]
-                                    enum AskKind {
-                                        Decide(PermissionDecision),
-                                        Advise(crate::sdk::PermissionAdvice),
-                                        Defer,
-                                    }
-                                    let parsed: Option<AskKind> = serde_json::from_value(value)
-                                        .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-                                    match parsed {
-                                        Some(AskKind::Decide(decision)) => decision,
-                                        Some(AskKind::Advise(advice)) => advice.decision,
-                                        _ => {
-                                            host_api::run_in_host_callback_context(
-                                                scoped_context(plugin_id, None),
-                                                inner.ask_permission(req),
-                                            )
-                                            .await?
-                                        }
-                                    }
-                                }
-                                None => {
-                                    // Handler is set but transport not registered
-                                    // (e.g. unloaded). Fall back rather than fail
-                                    // the permission flow.
-                                    host_api::run_in_host_callback_context(
-                                        scoped_context(plugin_id, None),
-                                        inner.ask_permission(req),
-                                    )
-                                    .await?
-                                }
-                            }
-                        } else {
-                            host_api::run_in_host_callback_context(
-                                scoped_context(plugin_id, None),
-                                inner.ask_permission(req),
-                            )
-                            .await?
-                        };
-                        serde_json::to_value(d)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_PERMISSION_CHECK_PATH => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::PermissionCheck,
-                        )
-                        .await?;
-                        let p: HostPermissionCheckPathParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.check_path_permission(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_PERMISSION_CHECK_NETWORK => {
-                        self.require_capability(
-                            plugin_id.as_deref(),
-                            method,
-                            HostCapability::PermissionCheck,
-                        )
-                        .await?;
-                        let p: HostPermissionCheckNetworkParams = parse(params)?;
-                        let out = host_api::run_in_host_callback_context(
-                            scoped_context(plugin_id, p.context),
-                            inner.check_network_permission(p.request),
-                        )
-                        .await?;
-                        serde_json::to_value(out)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_UI_PERMISSION_SET_HANDLER => {
-                        let plugin_id = plugin_id.ok_or_else(|| {
-                            host_unavailable("ui.permission.set_handler requires plugin id")
-                        })?;
-                        self.require_capability(
-                            Some(&plugin_id),
-                            method,
-                            HostCapability::PermissionUi,
-                        )
-                        .await?;
-                        *self.permission_handler.write().await = Some(plugin_id.clone());
-                        Ok(serde_json::json!({ "ok": true, "handler": plugin_id }))
-                    }
-                    method::HOST_UI_PERMISSION_CLEAR_HANDLER => {
-                        let plugin_id = plugin_id.ok_or_else(|| {
-                            host_unavailable("ui.permission.clear_handler requires plugin id")
-                        })?;
-                        self.require_capability(
-                            Some(&plugin_id),
-                            method,
-                            HostCapability::PermissionUi,
-                        )
-                        .await?;
-                        let mut guard = self.permission_handler.write().await;
-                        let was = guard.clone();
-                        if was.as_deref() == Some(plugin_id.as_str()) {
-                            *guard = None;
-                        }
-                        Ok(serde_json::json!({ "ok": true, "previous": was }))
                     }
                     method::HOST_CONFIG_READ => {
                         self.require_capability(
@@ -1600,22 +1446,20 @@ use super::{
     HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
     HostMcpListServersParams, HostMcpRemoveServerParams, HostMessageSubtaskParams,
     HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
-    HostPermissionCheckNetworkParams, HostPermissionCheckPathParams, HostPluginStatusGetParams,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostReadSubtaskOutputParams,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
-    HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
-    HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
-    HostSetSessionModelParams, HostSnapshotListParams, HostStatuslineContributeParams,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveParams,
-    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteParams,
-    HostStorageGetParams, HostStorageListParams, HostStorageSetParams, HostSubscribeParams,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
-    HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
-    HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
-    PermissionAskInput, PermissionDecision, PluginError, PluginErrorKind, PluginKey,
-    PluginLogRecord, PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
-    ScopedHostClient, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
-    ToolRegistryEventListener, VecDeque, callback_context_from_params,
-    dispatch_permission_ask_transport, host_api, host_status_from, host_unavailable, method, parse,
+    HostPluginStatusGetParams, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostReadSubtaskOutputParams, HostRegisteredToolDescriptor, HostRegisteredToolListResponse,
+    HostRunSubtaskParams, HostSchedulerCreateParams, HostSchedulerDeleteParams,
+    HostSchedulerListParams, HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams,
+    HostSecretSetParams, HostSetSessionModelParams, HostSnapshotListParams,
+    HostStatuslineContributeParams, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveParams, HostStatuslineRemoveResponse, HostStatuslineSegment,
+    HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams, HostStorageSetParams,
+    HostSubscribeParams, HostThemeListResponse, HostThemePalette, HostThemeRegisterParams,
+    HostThemeRegisterRequest, HostThemeRemoveParams, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams,
+    HostUnsubscribeParams, PluginError, PluginErrorKind, PluginKey, PluginLogRecord,
+    PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient,
+    ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,
+    callback_context_from_params, host_api, host_status_from, host_unavailable, method, parse,
     scoped_context, transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
 };

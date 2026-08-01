@@ -133,12 +133,12 @@ impl SessionProcessor {
 
         let assistant_message_id = run.next_message_id;
         run.next_message_id += 1;
-        let turn_id = run.turn_id.unwrap_or(assistant_message_id);
+        let model_turn_id = run.model_turn_id.unwrap_or(assistant_message_id);
 
         let assistant_metadata = MessageMetadata {
             source: MessageSource::Assistant,
             idempotency_key: None,
-            turn_id: Some(turn_id),
+            model_turn_id: Some(model_turn_id),
             parent_message_id: run.completion_parent_message_id,
             generated_by_call_id: None,
             externally_initiated_tool: false,

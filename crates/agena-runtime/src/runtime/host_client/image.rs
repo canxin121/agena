@@ -41,20 +41,6 @@ pub(super) async fn prepare_provider_image_inputs(
     Ok(prepared)
 }
 
-pub(super) fn local_path_for_host_image_input(input: &HostImageInput) -> Option<&str> {
-    match input {
-        HostImageInput::Path { path } => Some(path.as_str()),
-        HostImageInput::Attachment {
-            attachment:
-                AttachmentItem {
-                    source: AttachmentSource::LocalPath { path },
-                    ..
-                },
-        } => Some(path.as_str()),
-        HostImageInput::Attachment { .. } => None,
-    }
-}
-
 async fn prepare_attachment_image(
     executor: &ToolExecutor,
     attachment: &AttachmentItem,

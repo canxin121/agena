@@ -16,6 +16,7 @@ use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
 };
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessSummary};
+use agena_plugin_host::registry::RegisteredTool;
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -121,6 +122,65 @@ impl ToolPayloadInput {
             .unwrap_or_else(|| canonical_tool_payload_name(invocation.name.as_str()).to_string());
         object.insert("tool".to_string(), serde_json::Value::String(payload_name));
         serde_json::from_value(serde_json::Value::Object(object)).ok()
+    }
+
+    /// Decode the payload for a bundled tool whose registered handler is a
+    /// definition-only adapter around [`crate::tool::orchestrator`].
+    ///
+    /// Dispatch is deliberately keyed by the resolved registry identity, not
+    /// by spelling conventions in `ToolInvocation::name`. The provider uses
+    /// compact names such as `shell.run`, while the registry owns the stable
+    /// identity `agena.shell.run`; guessing from the terminal name (`run`)
+    /// previously sent valid built-ins back into their non-executable plugin
+    /// adapters.
+    pub(crate) fn from_executor_backed_invocation(
+        registered: &RegisteredTool,
+        invocation: &ToolInvocation,
+    ) -> Option<Result<Self, serde_json::Error>> {
+        let (payload_name, action) = match (
+            registered.namespace(),
+            registered.plugin_name(),
+            registered.tool_name(),
+        ) {
+            ("agena", "fs", "read") => ("read", None),
+            ("agena", "fs", "glob") => ("glob", None),
+            ("agena", "fs", "grep") => ("grep", None),
+            ("agena", "fs", "apply_patch") => ("apply_patch", None),
+            ("agena", "shell", action @ ("run" | "list" | "logs" | "stop")) => {
+                ("shell", Some(action))
+            }
+            ("agena", "cron", "create") => ("cron_create", None),
+            ("agena", "cron", "list") => ("cron_list", None),
+            ("agena", "cron", "delete") => ("cron_delete", None),
+            ("agena", "cron", "update") => ("cron_update", None),
+            ("agena", "cron", "pause") => ("cron_pause", None),
+            ("agena", "cron", "resume") => ("cron_resume", None),
+            ("agena", "cron", "history") => ("cron_history", None),
+            ("agena", "cron", "wakeup") => ("schedule_wakeup", None),
+            ("agena", "lsp", "definition") => ("lsp_definition", None),
+            ("agena", "lsp", "references") => ("lsp_references", None),
+            ("agena", "lsp", "hover") => ("lsp_hover", None),
+            ("agena", "lsp", "diagnostics") => ("lsp_diagnostics", None),
+            _ => return None,
+        };
+
+        let value: serde_json::Value = invocation.input.clone().into();
+        let mut object = match value {
+            serde_json::Value::Object(object) => object,
+            serde_json::Value::Null => serde_json::Map::new(),
+            _ => return None,
+        };
+        object.insert(
+            "tool".to_string(),
+            serde_json::Value::String(payload_name.to_string()),
+        );
+        if let Some(action) = action {
+            object.insert(
+                "action".to_string(),
+                serde_json::Value::String(action.to_string()),
+            );
+        }
+        Some(serde_json::from_value(serde_json::Value::Object(object)))
     }
 }
 
@@ -622,6 +682,72 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn registered_tool(plugin: &str, name: &str) -> RegisteredTool {
+        let definition = serde_json::from_value::<agena_plugin_host::sdk::ToolDefinition>(
+            serde_json::json!({"name": name}),
+        )
+        .expect("valid test tool definition");
+        RegisteredTool::new(plugin.parse().expect("valid test plugin key"), definition)
+            .expect("register test tool")
+    }
+
+    #[test]
+    fn executor_backed_dispatch_is_an_explicit_registry_identity_set() {
+        for (plugin, tool) in [
+            ("agena.fs", "read"),
+            ("agena.fs", "glob"),
+            ("agena.fs", "grep"),
+            ("agena.fs", "apply_patch"),
+            ("agena.shell", "run"),
+            ("agena.shell", "list"),
+            ("agena.shell", "logs"),
+            ("agena.shell", "stop"),
+            ("agena.cron", "create"),
+            ("agena.cron", "list"),
+            ("agena.cron", "delete"),
+            ("agena.cron", "update"),
+            ("agena.cron", "pause"),
+            ("agena.cron", "resume"),
+            ("agena.cron", "history"),
+            ("agena.cron", "wakeup"),
+            ("agena.lsp", "definition"),
+            ("agena.lsp", "references"),
+            ("agena.lsp", "hover"),
+            ("agena.lsp", "diagnostics"),
+        ] {
+            let registered = registered_tool(plugin, tool);
+            let compact_name = format!("{}.{}", registered.plugin_name(), tool);
+            assert!(
+                ToolPayloadInput::from_executor_backed_invocation(
+                    &registered,
+                    &ToolInvocation::new(compact_name, StructuredObject::default()),
+                )
+                .is_some(),
+                "{plugin}.{tool} must never fall through to its definition-only adapter"
+            );
+        }
+
+        for (plugin, tool) in [
+            ("agena.fs", "write"),
+            ("agena.tasks", "run"),
+            ("agena.snapshot", "enter"),
+            ("agena.interaction", "notify"),
+        ] {
+            let registered = registered_tool(plugin, tool);
+            assert!(
+                ToolPayloadInput::from_executor_backed_invocation(
+                    &registered,
+                    &ToolInvocation::new(
+                        format!("{}.{}", registered.plugin_name(), tool),
+                        StructuredObject::default(),
+                    ),
+                )
+                .is_none(),
+                "{plugin}.{tool} owns a real plugin handler and must not be bypassed"
+            );
+        }
+    }
 
     #[test]
     fn shell_payloads_emit_shell_invocations() {

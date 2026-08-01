@@ -28,6 +28,9 @@ pub struct PluginDiagnostic {
     pub data: Option<serde_json::Value>,
 }
 
+pub const CONFIGURATION_REQUIRED_MARKER: &str = "configuration_required";
+const PUBLIC_PROBLEM_DATA_KEY: &str = "agena_public_problem";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginErrorKind {
@@ -38,7 +41,6 @@ pub enum PluginErrorKind {
     Disconnected,
     Panicked,
     HostUnavailable,
-    ApprovalRequired,
     PolicyDenied,
     UserDeclined,
     CapabilityUnavailable,
@@ -73,16 +75,62 @@ impl PluginError {
     }
 
     pub fn from_kind(kind: PluginErrorKind, diagnostic: impl std::fmt::Display) -> Self {
+        let diagnostic = diagnostic.to_string();
+        let mut failure = failure_for_kind(kind);
+        if !diagnostic.trim().is_empty() {
+            failure.user = UserPresentation::validated(
+                format!("{}-detail", failure.user.key),
+                diagnostic.as_str(),
+            );
+        }
         Self {
             kind,
-            failure: Box::new(failure_for_kind(kind)),
+            failure: Box::new(failure),
             diagnostic: Box::new(PluginDiagnostic {
-                message: diagnostic.to_string(),
+                message: diagnostic,
                 hook: None,
                 plugin: None,
                 data: None,
             }),
         }
+    }
+
+    /// Report a safe, actionable configuration problem without exposing the
+    /// underlying plugin diagnostic to transcripts or models.
+    pub fn configuration_required(
+        component: impl AsRef<str>,
+        instruction: impl AsRef<str>,
+    ) -> Self {
+        let component = component.as_ref().trim();
+        let instruction = instruction.as_ref().trim();
+        let diagnostic = if instruction.is_empty() {
+            format!("{component} configuration is required")
+        } else {
+            format!("{component} configuration is required: {instruction}")
+        };
+        let mut error = Self::from_kind(PluginErrorKind::InvalidParams, diagnostic);
+        // This marker is an enum-like, safe semantic signal. The runtime
+        // reprojects it into a fixed public Failure and never renders data.
+        error.diagnostic.data = Some(serde_json::json!({
+            PUBLIC_PROBLEM_DATA_KEY: CONFIGURATION_REQUIRED_MARKER,
+        }));
+        error
+    }
+
+    /// Attach a fixed runtime-recognised public-problem marker. The runtime
+    /// maps this to its own static public Failure and never renders the data.
+    pub fn with_public_problem(mut self, marker: &'static str) -> Self {
+        let data = self
+            .diagnostic
+            .data
+            .get_or_insert_with(|| serde_json::json!({}));
+        if let Some(object) = data.as_object_mut() {
+            object.insert(
+                PUBLIC_PROBLEM_DATA_KEY.to_owned(),
+                serde_json::Value::String(marker.to_owned()),
+            );
+        }
+        self
     }
 
     pub fn with_hook(mut self, hook: impl Into<String>) -> Self {
@@ -147,15 +195,6 @@ fn failure_for_kind(kind: PluginErrorKind) -> Failure {
             "The plugin host is unavailable. Restart the runtime and try again.",
             None,
         ),
-        PluginErrorKind::ApprovalRequired => (
-            "plugin.approval_required",
-            FailureCategory::PermissionRequired,
-            FailureResponsibility::Dependency,
-            RetryDirective::AfterUserAction,
-            RecoveryDirective::RequestPermission,
-            "The plugin requires approval.",
-            None,
-        ),
         PluginErrorKind::PolicyDenied => (
             "plugin.policy_denied",
             FailureCategory::PermissionDenied,
@@ -198,7 +237,7 @@ fn failure_for_kind(kind: PluginErrorKind) -> Failure {
             FailureResponsibility::Dependency,
             RetryDirective::UseAlternative,
             RecoveryDirective::RestartPlugin,
-            "The plugin failed unexpectedly.",
+            "Plugin execution failed without diagnostic details.",
             None,
         ),
     };

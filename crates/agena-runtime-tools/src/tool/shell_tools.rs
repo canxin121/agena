@@ -16,7 +16,6 @@ pub(crate) fn resolve_workdir(
     let cwd = workdir
         .map(|value| executor.resolve_target_path(value))
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
-    executor.ensure_read_permission(&cwd)?;
     Ok(cwd)
 }
 

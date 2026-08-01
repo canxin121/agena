@@ -14,10 +14,6 @@ pub(crate) fn execution_model_name_status_label(
     agena_tui_session::session_helpers::execution_model_name_status_label(execution)
 }
 
-pub(crate) fn is_rewind_target_message(message: &MessageResource) -> bool {
-    agena_tui_session::session_helpers::is_rewind_target_message(message)
-}
-
 pub(crate) fn derive_session_title(i18n: &I18n, text: &str) -> String {
     let fallback = ui_text::t(i18n, "composer-session-new");
     let first_line = text
@@ -171,8 +167,8 @@ pub(crate) fn find_placeholder_occurrence(
     None
 }
 use crate::{
-    AttachmentKind, Command, ComposerDraft, ComposerItem, I18n, MessageResource, ModelRef, Path,
-    Range, SessionExecutionContextResource, Stdio, UnicodeWidthChar, UserInputQuestion,
+    AttachmentKind, Command, ComposerDraft, ComposerItem, I18n, ModelRef, Path, Range,
+    SessionExecutionContextResource, Stdio, UnicodeWidthChar, UserInputQuestion,
     sanitize_terminal_text, ui_text,
 };
 use agena_tui::user_input::UserInputAnswerDraft;

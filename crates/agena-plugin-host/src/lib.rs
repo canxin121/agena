@@ -31,26 +31,23 @@ pub use host::{
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
 pub use logs::{PluginLogRecord, PluginLogStore};
 pub use registry::PluginToolRegistry;
-pub use sdk::host_api::{
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostStatuslineSegment, HostThemePalette,
-};
+pub use sdk::host_api::{HostStatuslineSegment, HostThemePalette};
 pub use sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatDirection, ChatHeadersInput,
     ChatHeadersPatch, ChatMessage, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforePatch, CommandBeforeResponse, ConfigInput, ConfigPatch,
-    EventEnvelope, EventFilter, HookSubscription, NotificationInput, PermissionAskDecision,
-    PermissionAskInput, PermissionDecision, PluginCommandDefinition, PluginCommandInvokeInput,
-    PluginCommandOutput, PluginError, PluginKey, PluginKeyParseError, PluginManifest,
-    PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
-    PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
-    PluginUiContributions, PluginUiThemePalette, PostRunInput, PreRunInput, ProviderDescriptor,
-    ProviderKind, ProviderListInput, ProviderListPatch, SessionEndInput, SessionEndReason,
-    SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinition,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolDescriptionMode, ToolFailureInput,
-    ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolKeyParseError, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, UserPromptSubmitInput, UserPromptSubmitPatch,
+    EventEnvelope, EventFilter, HookSubscription, NotificationInput, PluginCommandDefinition,
+    PluginCommandInvokeInput, PluginCommandOutput, PluginError, PluginKey, PluginKeyParseError,
+    PluginManifest, PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions,
+    PluginStudioView, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
+    PluginUiAction, PluginUiContributions, PluginUiThemePalette, PostRunInput, PreRunInput,
+    ProviderDescriptor, ProviderKind, ProviderListInput, ProviderListPatch, SessionEndInput,
+    SessionEndReason, SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput,
+    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinition, ToolDefinitionInput, ToolDefinitionPatch, ToolDescriptionMode,
+    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolKeyParseError,
+    ToolPermissionNetworksInput, ToolPermissionPathsInput, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };

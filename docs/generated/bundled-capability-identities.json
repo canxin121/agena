@@ -2,9 +2,9 @@
   "counts": {
     "bundled_skills": 14,
     "execution_tools": 133,
-    "gateway_tools": 5,
+    "gateway_tools": 4,
     "plugins": 24,
-    "tools": 138
+    "tools": 137
   },
   "plugins": [
     {
@@ -18,9 +18,7 @@
       "tools": [
         {
           "canonical_name": "agena.chatgpt.apply_patch",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "6f3a61cf4981f926414418214536ec7fcf81bd0dc81a0e5c71131dff8afb92e6",
           "gateway": false,
@@ -36,9 +34,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.code_interpreter",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "445a039551f35f1704ea360e7e712b7a9fe6c8f87653c83c0e9e45f8d145561c",
           "gateway": false,
@@ -52,9 +48,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.computer",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "0e6291edec0134aace42999a70553eecd170929ede5621b0330bc485600f733b",
           "gateway": false,
@@ -68,9 +62,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.computer_use_preview",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "9e3c1e975096f9589353190a07a403a0ca19adaf78f509f532ee30924dcd9065",
           "gateway": false,
@@ -84,9 +76,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.custom",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "29ea95d7379b582350a00314c7d82903d428ebc656975a630c42578baefeda2d",
           "gateway": false,
@@ -100,9 +90,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.file_search",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "a8c0753e05e4b6142dee2c3c3f98b07a18fc4aaabcb7281956c5f0b89a0250a1",
           "gateway": false,
@@ -117,9 +105,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.function",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "04f42726d3da758f2b72bf85ddcd016194c25cf51111668fa14d24eb2854089c",
           "gateway": false,
@@ -133,9 +119,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.image_edit",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "592c30bf3632d28e3977bbfd816ffaf529b9488c38246af70183ebe5f6395187",
           "gateway": false,
@@ -151,9 +135,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.image_generation",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "4ea1570dad4cb0a14728aa56d0e003aa5b43ce467eecf78bc3c13b4628842800",
           "gateway": false,
@@ -168,9 +150,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.local_shell",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "2fb06ea178ed0e463a9ea873f9074f96df66f0b3384fa8879f90a77556714e82",
           "gateway": false,
@@ -184,9 +164,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.mcp",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "9edf447fbcdcf3351042d41a05f58436bbb5fd5eeb4a24c8ea2a30543badcbc1",
           "gateway": false,
@@ -200,9 +178,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.namespace",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "d32c52f16ae48ab820972987f34c8b0c97b2e2e5a0d4318c62e1926ebd7b971b",
           "gateway": false,
@@ -216,9 +192,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.programmatic_tool_calling",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "057d8d229b85fa5ce17a3e7e98925870f5d7ef5a2b95cee5022f4189f1a44bec",
           "gateway": false,
@@ -232,9 +206,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.shell",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "00aa33a01db6eb50943c9f46dd965b0607ddb19e75669f688f1d4795e7bbaca5",
           "gateway": false,
@@ -248,9 +220,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.tool_search",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "1291078c66831ae730ba4d4f83d979969568ecb1c320001bcd48c331e7e49153",
           "gateway": false,
@@ -265,9 +235,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.web_search",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "addf424d0b5d0d641299bbb65df555653f35d9d8bc33cf848335d4a50b07b254",
           "gateway": false,
@@ -282,9 +250,7 @@
         },
         {
           "canonical_name": "agena.chatgpt.web_search_preview",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "09cb5e03f16876f66bd9d429aacdee4fed12c1fb62c22151fc87e67a7e46c359",
           "gateway": false,
@@ -311,9 +277,7 @@
       "tools": [
         {
           "canonical_name": "agena.claude.advisor",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "1abc51e92683755e7f5ed67f7ccff16ce9acf5dcb6339aef64fbedbefd362ac1",
           "gateway": false,
@@ -327,9 +291,7 @@
         },
         {
           "canonical_name": "agena.claude.bash",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "844c450864268f25b069a8aeb5aa1faea6795e14a54764084f556dae3a1b9e29",
           "gateway": false,
@@ -343,9 +305,7 @@
         },
         {
           "canonical_name": "agena.claude.code_execution",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "3ff370035511b0f665055bea022b1f5f9edb5f5e54c1fb1d9ea0bf893ddc165d",
           "gateway": false,
@@ -359,9 +319,7 @@
         },
         {
           "canonical_name": "agena.claude.computer",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "874684570c9e6bdf4dc4a1142658add33cee3e30b6f0a55b833ae3c492e8fdc0",
           "gateway": false,
@@ -375,9 +333,7 @@
         },
         {
           "canonical_name": "agena.claude.mcp_toolset",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "457e4187a415a95790708ea17f3fd65492e3dc42e2a4965c66014765e4f98890",
           "gateway": false,
@@ -391,9 +347,7 @@
         },
         {
           "canonical_name": "agena.claude.memory",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "b87b4e276123b150224a71b05aa9b2b8b64a20f9d86cfd7d811550446d01f9b6",
           "gateway": false,
@@ -407,9 +361,7 @@
         },
         {
           "canonical_name": "agena.claude.text_editor",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "0b011daf9a1364ef699159e58b22208bb5c702c352401526889ac7827d7fb0fe",
           "gateway": false,
@@ -425,9 +377,7 @@
         },
         {
           "canonical_name": "agena.claude.tool_search_bm25",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "d0e687beec15fbabbc99361d041083fbe19f499adbb863ef06ed276d176c962e",
           "gateway": false,
@@ -442,9 +392,7 @@
         },
         {
           "canonical_name": "agena.claude.tool_search_regex",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "3fdfb956c5a39aea8e6cddd6f0a456d42df8c4ca821b6659f3fe31a63ffe4ef8",
           "gateway": false,
@@ -459,9 +407,7 @@
         },
         {
           "canonical_name": "agena.claude.web_fetch",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "83a2b0ad210bb027a55a13f38f5d297da1afed921fb2e0c37c989a4ed299ac25",
           "gateway": false,
@@ -476,9 +422,7 @@
         },
         {
           "canonical_name": "agena.claude.web_search",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "2a90d74b9bd8a9e56094b89a523b57ab43e4c45a25d7864b7569c7125ece4276",
           "gateway": false,
@@ -702,9 +646,7 @@
       "tools": [
         {
           "canonical_name": "agena.environment.wait",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "59442cc19d4cb014c37546a93887cb12519a141874e3a086782c17da033ca7ae",
           "gateway": false,
@@ -861,9 +803,7 @@
       "tools": [
         {
           "canonical_name": "agena.gemini.code_execution",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "8c69012a970f557e615456f081d8b4b33c7370e80c5f0f042dea0fe211c38d6b",
           "gateway": false,
@@ -877,9 +817,7 @@
         },
         {
           "canonical_name": "agena.gemini.computer_use",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "21f33ac8604f8ad69c09775ebcfd343c02b3c2db9bd2f727836bd23d72a27a66",
           "gateway": false,
@@ -893,9 +831,7 @@
         },
         {
           "canonical_name": "agena.gemini.file_search",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "8f081b6f22b2891b198db8d1ffbda57b0af7715f748043fbd63b7c074ed2ecea",
           "gateway": false,
@@ -910,9 +846,7 @@
         },
         {
           "canonical_name": "agena.gemini.function",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "77f96b326397bf04fac743d5d51a8dcc3b2222d306176352b3889ae2b6efa8fa",
           "gateway": false,
@@ -926,9 +860,7 @@
         },
         {
           "canonical_name": "agena.gemini.google_maps",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "dec6b89abad5f3759eb2eec43e6edd69312c0ab01f50993b07662dc98fea612c",
           "gateway": false,
@@ -943,9 +875,7 @@
         },
         {
           "canonical_name": "agena.gemini.google_search",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "f04c3b8448d818af9966ce0c59182a38ed0e4951d97931a891c94eef88589a86",
           "gateway": false,
@@ -960,9 +890,7 @@
         },
         {
           "canonical_name": "agena.gemini.image_edit",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "17ffa54e9e4e74ebaaf5ab88d6f4e2bc37066c4d1c532dba6f81457a0819c018",
           "gateway": false,
@@ -978,9 +906,7 @@
         },
         {
           "canonical_name": "agena.gemini.image_generation",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "2d5010a8298783aefb4788256007c425033524802013f5f701a0e6097a2485fc",
           "gateway": false,
@@ -995,9 +921,7 @@
         },
         {
           "canonical_name": "agena.gemini.mcp_server",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "f66a220c71e3c956b8eff47261e39464c88a0a276cfa119846169841d18f0a18",
           "gateway": false,
@@ -1011,9 +935,7 @@
         },
         {
           "canonical_name": "agena.gemini.retrieval",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "ed36385a9a17bddd1ea4b3e7f8daef88358aa38d7ab19e5ed7a56fee05921309",
           "gateway": false,
@@ -1028,9 +950,7 @@
         },
         {
           "canonical_name": "agena.gemini.url_context",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "4707f3fb2ddbee5cb875e34f2e5817e202d61728cacf6bdefc63a000c2252932",
           "gateway": false,
@@ -2131,21 +2051,6 @@
       "id": "agena.tools",
       "tools": [
         {
-          "canonical_name": "agena.tools.call",
-          "capabilities": [
-            "list_tools",
-            "invoke_tool"
-          ],
-          "conditional": null,
-          "definition_identity": "83fb08479221efd51920808c432e6fbddbedb2cf0e4cf1875a9d6383bb609a38",
-          "gateway": true,
-          "input_schema_sha256": "15bb4c8cc19478c889e999eb53ab5309735fe67450e9ca5c93603d466f504e48",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "discovery"
-          ]
-        },
-        {
           "canonical_name": "agena.tools.help",
           "capabilities": [
             "list_tools",
@@ -2223,9 +2128,7 @@
       "tools": [
         {
           "canonical_name": "agena.web.browser_click",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "843694472688b0eae17d0073b0a7230482d98a159b907bf59bc851c4a7b7fbab",
           "gateway": false,
@@ -2238,9 +2141,7 @@
         },
         {
           "canonical_name": "agena.web.browser_close",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "9fc4927b0c497fb31481b3f34a79ae24e0e19370d2ebff56cef7dc7431ccf2e0",
           "gateway": false,
@@ -2253,9 +2154,7 @@
         },
         {
           "canonical_name": "agena.web.browser_download",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "5d7ae053bb4bdbbae40c304324bef9bcd9ed3a94ca4cf80f599730aa24d4d3ee",
           "gateway": false,
@@ -2269,9 +2168,7 @@
         },
         {
           "canonical_name": "agena.web.browser_list",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "a8de6a1d225262a309f67ffc318992fbcc760823a466b1db4c32bc3ab097d251",
           "gateway": false,
@@ -2284,9 +2181,7 @@
         },
         {
           "canonical_name": "agena.web.browser_open",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "ac271ae28327e840a891146db9eb42d662bd5a9944a5a11eed1db5b066576419",
           "gateway": false,
@@ -2300,9 +2195,7 @@
         },
         {
           "canonical_name": "agena.web.browser_screenshot",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "16938a88fe1bfdea5a58bd559698454dcc704c7849abafa2df352551b2a7815f",
           "gateway": false,
@@ -2316,9 +2209,7 @@
         },
         {
           "canonical_name": "agena.web.browser_snapshot",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "719570d0ed2e01b458bbcaade6cea105e711e8a99e67cb2ed27e2e32eae1432c",
           "gateway": false,
@@ -2331,9 +2222,7 @@
         },
         {
           "canonical_name": "agena.web.browser_type",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "65e18b998bc6f3239c96eb0157f80f4b73ce9ac7f627270ef03b152960c3d4a5",
           "gateway": false,
@@ -2346,9 +2235,7 @@
         },
         {
           "canonical_name": "agena.web.browser_wait",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "0bf9c8b1509c4de840770e5bd5317ac34e75229e51cdc1dbcec32a2cc31f048b",
           "gateway": false,
@@ -2361,9 +2248,7 @@
         },
         {
           "canonical_name": "agena.web.crawl",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "1b23e09a5b60051880a5094f879d623073a37ded0bb603241ade2f2594a0347c",
           "gateway": false,
@@ -2379,9 +2264,7 @@
         },
         {
           "canonical_name": "agena.web.fetch",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "2c4ed7a505129c75019298d9445f341bc6594cdab7bc7018f7c908708d942e71",
           "gateway": false,
@@ -2395,9 +2278,7 @@
         },
         {
           "canonical_name": "agena.web.search",
-          "capabilities": [
-            "permission_check"
-          ],
+          "capabilities": [],
           "conditional": null,
           "definition_identity": "bffd9cfed8ad7db5ab383f1ed6e376611699b82108d17e9fbd0ff4c8b61d80ad",
           "gateway": false,

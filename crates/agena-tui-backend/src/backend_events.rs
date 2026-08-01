@@ -1,5 +1,3 @@
-use anyhow::anyhow;
-
 pub(super) fn build_file_index(workspace_root: &Path) -> Vec<PathBuf> {
     let mut builder = WalkBuilder::new(workspace_root);
     builder
@@ -78,8 +76,8 @@ pub(super) fn direct_path_candidate(workspace_root: &Path, query: &str) -> Optio
         .or(Some(resolved))
 }
 
-pub(super) fn api_error(error: impl std::fmt::Display) -> anyhow::Error {
-    anyhow!(error.to_string())
+pub(super) fn api_error(error: agena_application::ApplicationError) -> anyhow::Error {
+    anyhow::Error::new(error)
 }
 
 pub(super) fn optional_non_empty(value: &str) -> Option<&str> {

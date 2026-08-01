@@ -681,9 +681,6 @@ fn merge_timeouts(
     if overlay.tool_invoke.is_some() {
         base.tool_invoke = overlay.tool_invoke;
     }
-    if overlay.permission_ask.is_some() {
-        base.permission_ask = overlay.permission_ask;
-    }
     if overlay.chat.is_some() {
         base.chat = overlay.chat;
     }

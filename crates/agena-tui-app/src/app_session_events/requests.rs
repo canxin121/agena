@@ -135,9 +135,10 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .list_all_messages(session_id)
+                .get_session_state(session_id)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map(|state| state.transcript.turns)
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::RewindMessagesLoaded { session_id, result });
         });
     }
@@ -184,7 +185,7 @@ impl App {
     pub(crate) fn request_session_rewind(
         &mut self,
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     ) {
@@ -196,9 +197,9 @@ impl App {
         let tx = self.tx.clone();
         tokio::spawn(async move {
             let result = backend
-                .rewind_session_to_message(session_id, message_id)
+                .rewind_session_to_turn(session_id, turn_id)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SessionRewound {
                 session_id,
                 message_text,
@@ -220,7 +221,7 @@ impl App {
             let result = backend
                 .get_session_state(session_id)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SessionStateLoaded { session_id, result });
         });
     }
@@ -239,7 +240,7 @@ impl App {
             let result = backend
                 .refresh_session(session_id, after_seq, force)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SessionRefreshed { session_id, result });
         });
     }
@@ -311,7 +312,7 @@ impl App {
             let result = backend
                 .submit_document_with_options(session_id, document, options)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SessionMessageSubmitted {
                 session_id,
                 pending_message_id,
@@ -333,7 +334,7 @@ impl App {
             let result = backend
                 .continue_session_with_options(session_id, options)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SessionContinued { session_id, result });
         });
     }
@@ -350,7 +351,7 @@ impl App {
             let result = backend
                 .compact_session_with_options(session_id, options)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SessionCompacted { session_id, result });
         });
     }
@@ -372,7 +373,7 @@ impl App {
             let result = backend
                 .steer_input(session_id, document)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SteerSubmitted {
                 session_id,
                 pending_message_id,
@@ -420,7 +421,7 @@ impl App {
                         "the active execution changed before cancellation"
                     )),
                 })
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::RunCancelled { session_id, result });
         });
     }
@@ -440,13 +441,15 @@ impl App {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
+        let replied_request_id = request_id.clone();
         tokio::spawn(async move {
             let result = backend
                 .reply_permission_with_options(session_id, request_id, kind, scope, options)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::PermissionReplied {
                 session_id,
+                request_id: replied_request_id,
                 label,
                 result,
             });
@@ -461,12 +464,17 @@ impl App {
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
+        let request_id = reply.request_id.clone();
         tokio::spawn(async move {
             let result = backend
                 .reply_user_input_with_options(session_id, reply, options)
                 .await
-                .map_err(crate::UiFailure::internal);
-            let _ = tx.send(AppMessage::UserInputReplied { session_id, result });
+                .map_err(crate::UiFailure::from_backend);
+            let _ = tx.send(AppMessage::UserInputReplied {
+                session_id,
+                request_id,
+                result,
+            });
         });
     }
 }

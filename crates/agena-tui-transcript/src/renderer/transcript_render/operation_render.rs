@@ -78,6 +78,8 @@ pub(crate) fn render_tool_execution(
         }
     }
 
+    render_presentation_sections(tool, out, width);
+
     render_operation_attachments(tool, out, width, i18n);
 
     let apply_patch = apply_patch_details(&tool.details);
@@ -128,6 +130,37 @@ pub(crate) fn render_tool_execution(
             .as_ref()
             .is_some_and(|payload| !payload.changes.is_empty()),
     );
+}
+
+fn render_presentation_sections(
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+) {
+    let primary = tool.model_output.text.trim();
+    let summary = tool.summary.trim();
+    let mut rendered = Vec::new();
+    for section in &tool.result.display.sections {
+        let title = section.title.trim();
+        let text = section.text.trim();
+        if title.is_empty() || text.is_empty() || text == primary || text == summary {
+            continue;
+        }
+        let key = (title, text);
+        if rendered.contains(&key) {
+            continue;
+        }
+        rendered.push(key);
+        push_section_heading(
+            out,
+            format!("    {title}").as_str(),
+            Style::default()
+                .fg(agena_tui_components::theme::special_color())
+                .add_modifier(Modifier::BOLD),
+            width,
+        );
+        push_expanded_markdown(out, "      ", text, width);
+    }
 }
 
 fn render_operation_attachments(

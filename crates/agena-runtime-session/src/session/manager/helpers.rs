@@ -1,7 +1,6 @@
 use super::{
-    AppError, AttachmentItem, ExecutionControlError, ExecutionStatus,
-    HOST_PERMISSION_REQUEST_SEQUENCE, HashSet, HistoryToolCallId, IpAddr, Message, MessageMetadata,
-    MessagePart, OperationBlock, Ordering, PartContent, PermissionAction, PermissionDecision,
+    AppError, AttachmentItem, ExecutionControlError, ExecutionStatus, HashSet, HistoryToolCallId,
+    Message, MessageMetadata, MessagePart, OperationBlock, PartContent, PermissionAction,
     PermissionMode, PermissionReplyKind, PermissionRiskLevel, PermissionScope,
     PersistedPermissionRule, RequestPart, ReservedMessageIds, ResolvedPendingTool, Role,
     RunAbortReason, SessionPendingTool, SessionStore, TimeRange, ToolError, ToolInvocation,
@@ -9,78 +8,6 @@ use super::{
 };
 use crate::session::Session;
 use agena_domain::{PermissionReply, UserInputReply, UserInputRequest};
-
-pub(super) fn host_permission_grant_matches_action(
-    granted_actions: &[PermissionAction],
-    requested_action: &PermissionAction,
-) -> bool {
-    if granted_actions
-        .iter()
-        .any(|granted| granted == requested_action)
-    {
-        return true;
-    }
-
-    // A plugin can resolve an approved hostname before opening its connection.
-    // Keep the explicit approval bound to this invocation, but do not ask again
-    // merely because the resolver reports the corresponding public IP address.
-    // Private and loopback addresses never use this shortcut.
-    is_public_network_access(requested_action)
-        && granted_actions
-            .iter()
-            .any(|granted| matches!(granted, PermissionAction::NetworkAccess { .. }))
-}
-
-pub(super) fn is_public_network_access(action: &PermissionAction) -> bool {
-    let PermissionAction::NetworkAccess { host, .. } = action else {
-        return false;
-    };
-    let Ok(address) = host.parse::<IpAddr>() else {
-        return false;
-    };
-    match address {
-        IpAddr::V4(address) => {
-            !address.is_private()
-                && !address.is_loopback()
-                && !address.is_link_local()
-                && address.octets()[0] != 0
-                && address.octets()[0] < 224
-        }
-        IpAddr::V6(address) => {
-            !address.is_loopback()
-                && !address.is_unique_local()
-                && !address.is_unicast_link_local()
-                && !address.is_unspecified()
-        }
-    }
-}
-
-pub(super) fn permission_subject(action: &PermissionAction) -> serde_json::Value {
-    match action {
-        PermissionAction::Tool { tool_name, .. } => {
-            serde_json::json!({
-                "kind": "tool",
-                "tool_name": tool_name,
-            })
-        }
-        PermissionAction::PathAccess {
-            access_kind,
-            workspace_root,
-            target_path,
-        } => serde_json::json!({
-            "kind": "path_access",
-            "access_kind": access_kind,
-            "workspace_root": workspace_root,
-            "target_path": target_path,
-        }),
-        PermissionAction::NetworkAccess { target, host, port } => serde_json::json!({
-            "kind": "network_access",
-            "target": target,
-            "host": host,
-            "port": port,
-        }),
-    }
-}
 
 pub(super) fn execution_control_to_app_error(err: ExecutionControlError) -> AppError {
     match err {
@@ -173,7 +100,6 @@ pub(super) fn resolve_pending_tool(
         invocation: record.invocation,
         advertised_tool_identity: record.advertised_tool_identity,
         prepared_shell_command: None,
-        execution_grant: None,
         lifecycle: record.lifecycle,
         session_runtime: session.runtime.clone(),
     })
@@ -497,56 +423,7 @@ pub(super) fn tool_error_to_app_error(err: ToolError) -> AppError {
         ToolError::UserInputRequired(_) => {
             AppError::Internal("unexpected unresolved user input request".to_string())
         }
-        other => AppError::Internal(other.to_string()),
-    }
-}
-
-pub(super) fn apply_advisory_permission_decision(
-    base: PermissionDecision,
-    advice: agena_plugin_host::PermissionDecision,
-    explanation: &str,
-) -> PermissionDecision {
-    match (base, advice) {
-        (PermissionDecision::Deny { reason }, _) => PermissionDecision::Deny { reason },
-        (_, agena_plugin_host::PermissionDecision::Deny) => PermissionDecision::Deny {
-            reason: if explanation.trim().is_empty() {
-                "denied by plugin advice".to_string()
-            } else {
-                explanation.to_string()
-            },
-        },
-        (PermissionDecision::Ask { reason }, _) => PermissionDecision::Ask { reason },
-        (PermissionDecision::Allow, agena_plugin_host::PermissionDecision::Prompt) => {
-            PermissionDecision::Ask {
-                reason: if explanation.trim().is_empty() {
-                    "permission requires confirmation".to_string()
-                } else {
-                    explanation.to_string()
-                },
-            }
-        }
-        (PermissionDecision::Allow, agena_plugin_host::PermissionDecision::Allow) => {
-            PermissionDecision::Allow
-        }
-    }
-}
-
-pub(super) fn risk_for_permission_decision(decision: &PermissionDecision) -> PermissionRiskLevel {
-    match decision {
-        PermissionDecision::Allow => PermissionRiskLevel::Low,
-        PermissionDecision::Ask { .. } => PermissionRiskLevel::Medium,
-        PermissionDecision::Deny { .. } => PermissionRiskLevel::High,
-    }
-}
-
-pub(super) fn plugin_risk_to_core(
-    risk: agena_plugin_host::sdk::PermissionRiskLevel,
-) -> PermissionRiskLevel {
-    match risk {
-        agena_plugin_host::sdk::PermissionRiskLevel::Low => PermissionRiskLevel::Low,
-        agena_plugin_host::sdk::PermissionRiskLevel::Medium => PermissionRiskLevel::Medium,
-        agena_plugin_host::sdk::PermissionRiskLevel::High => PermissionRiskLevel::High,
-        agena_plugin_host::sdk::PermissionRiskLevel::Critical => PermissionRiskLevel::Critical,
+        other => AppError::Tool(Box::new(other)),
     }
 }
 
@@ -594,11 +471,6 @@ pub(super) fn host_user_input_request_id(
     sequence_index: usize,
 ) -> String {
     format!("host-input:{session_id}:{call_id}:{sequence_index}")
-}
-
-pub(super) fn host_permission_request_id(session_id: i64, call_id: i64) -> String {
-    let sequence = HOST_PERMISSION_REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-    format!("host-permission:{session_id}:{call_id}:{sequence}")
 }
 
 pub(super) fn user_input_execution(

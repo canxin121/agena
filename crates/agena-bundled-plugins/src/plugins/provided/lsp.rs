@@ -204,7 +204,9 @@ impl LspPlugin {
         let title = format!("lsp_servers: {} configured", summary.servers.len());
         Ok(ToolInvokeOutput {
             title,
+            summary: String::new(),
             output_text: body,
+            sections: Vec::new(),
             payload: serde_json::to_value(&summary).ok(),
             metadata: Default::default(),
             attachments: Vec::new(),

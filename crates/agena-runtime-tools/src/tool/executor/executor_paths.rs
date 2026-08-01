@@ -78,72 +78,6 @@ impl ToolExecutor {
         normalize_path_for_display(path)
     }
 
-    pub fn ensure_read_permission(&self, target_path: &Path) -> Result<(), ToolError> {
-        self.ensure_access_permission(AccessKind::Read, target_path)
-    }
-
-    pub(crate) fn ensure_edit_permission(&self, target_path: &Path) -> Result<(), ToolError> {
-        self.ensure_access_permission(AccessKind::Write, target_path)
-    }
-
-    pub(crate) fn ensure_filesystem_effects_permission(
-        &self,
-        effects: &[FilesystemEffect],
-        base_path: &Path,
-    ) -> Result<(), ToolError> {
-        for effect in effects {
-            let target = self.resolve_filesystem_effect_path(effect.path.as_str(), base_path);
-            if effect.access.includes_read() {
-                self.ensure_access_permission(AccessKind::Read, &target)?;
-            }
-            if effect.access.includes_write() {
-                self.ensure_access_permission(AccessKind::Write, &target)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn ensure_network_effects_permission(
-        &self,
-        effects: &[NetworkEffect],
-    ) -> Result<(), ToolError> {
-        for effect in effects {
-            let target: NetworkTarget = effect.target.parse().map_err(|err| {
-                ToolError::invalid_input(format!(
-                    "invalid network effect target `{}`: {err}",
-                    effect.target
-                ))
-            })?;
-            self.ensure_network_permission(&target)?;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn ensure_network_permission(
-        &self,
-        _target: &NetworkTarget,
-    ) -> Result<(), ToolError> {
-        if self.authorization_state != ExecutionAuthorizationState::GrantValidated {
-            return Err(ToolError::InvalidExecutionGrant(
-                "network side effect reached execution without a validated grant".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn ensure_access_permission(
-        &self,
-        _access: AccessKind,
-        _target_path: &Path,
-    ) -> Result<(), ToolError> {
-        if self.authorization_state != ExecutionAuthorizationState::GrantValidated {
-            return Err(ToolError::InvalidExecutionGrant(
-                "filesystem side effect reached execution without a validated grant".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
     pub(crate) fn push_path_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
@@ -197,10 +131,8 @@ impl ToolExecutor {
     }
 }
 use super::{
-    AccessKind, ExecutionAuthorizationState, NetworkTarget, Path, PathBuf, ShellOutput,
-    ShellRequest, ToolError, ToolExecutor, ToolPermissionCheck, access_kind_name,
-    canonicalize_path_for_execution, normalize_path_for_display,
-    resolve_managed_project_path_alias, shell,
+    AccessKind, NetworkTarget, Path, PathBuf, ShellOutput, ShellRequest, ToolError, ToolExecutor,
+    ToolPermissionCheck, access_kind_name, canonicalize_path_for_execution,
+    normalize_path_for_display, resolve_managed_project_path_alias, shell,
 };
 use agena_domain::PermissionAction;
-use agena_domain::{FilesystemEffect, NetworkEffect};

@@ -16,14 +16,12 @@ fn uuid_value<T>(value: String, wrap: impl FnOnce(uuid::Uuid) -> T) -> Result<T,
 
 async fn transcript_document_for_role(
     db: &sea_orm::DatabaseConnection,
-    _execution_id: agena_domain::ExecutionId,
-    _role: agena_domain::Role,
     owner: agena_domain::ActivityOwner,
 ) -> Result<agena_domain::ContentDocument, AppError> {
     let (owner_kind, owner_id) = match owner {
         agena_domain::ActivityOwner::TurnInput { turn_id } => ("turn_input", turn_id.to_string()),
-        agena_domain::ActivityOwner::Response { response_id } => {
-            ("response", response_id.to_string())
+        agena_domain::ActivityOwner::AssistantReply { reply_id } => {
+            ("assistant_reply", reply_id.to_string())
         }
         agena_domain::ActivityOwner::Activity { parent_activity_id } => {
             ("activity", parent_activity_id.to_string())
@@ -50,7 +48,7 @@ async fn transcript_document_for_role(
             position,
             segment_id.clone(),
             agena_domain::ContentNode::text_at(
-                uuid_value(segment_id, agena_domain::ResponseSegmentId)?,
+                uuid_value(segment_id, agena_domain::TextSegmentId)?,
                 row.try_get::<String>("", "text")?,
                 position,
                 row.try_get("", "revision_seq")?,
@@ -281,13 +279,13 @@ fn project_runtime_presentation_event(
     let kind = match &event.kind {
         EventKind::MessagePartCheckpointed(update) => update
             .turn_id
-            .zip(update.response_id)
-            .and_then(|(turn_id, response_id)| {
+            .zip(update.reply_id)
+            .and_then(|(turn_id, reply_id)| {
                 transcript_part_patch(
                     seq_session,
                     update.message_role,
                     turn_id,
-                    response_id,
+                    reply_id,
                     &update.part,
                 )
             })
@@ -296,7 +294,7 @@ fn project_runtime_presentation_event(
             seq_session,
             update.message_role,
             update.turn_id,
-            update.response_id,
+            update.reply_id,
             &update.part,
         )
         .map(agena_runtime::RuntimePresentationEventKind::TranscriptPatch),
@@ -333,7 +331,7 @@ fn transcript_part_patch(
     seq_session: i64,
     role: Role,
     turn_id: agena_domain::TurnId,
-    response_id: agena_domain::ResponseId,
+    reply_id: agena_domain::AssistantReplyId,
     part: &MessagePart,
 ) -> Option<agena_domain::TranscriptPatch> {
     let (owner, actor) = match role {
@@ -342,15 +340,15 @@ fn transcript_part_patch(
             agena_domain::ActivityActor::User,
         ),
         Role::Assistant => (
-            agena_domain::ActivityOwner::Response { response_id },
+            agena_domain::ActivityOwner::AssistantReply { reply_id },
             agena_domain::ActivityActor::Assistant,
         ),
         Role::Tool => (
-            agena_domain::ActivityOwner::Response { response_id },
+            agena_domain::ActivityOwner::AssistantReply { reply_id },
             agena_domain::ActivityActor::Tool,
         ),
         Role::System => (
-            agena_domain::ActivityOwner::Response { response_id },
+            agena_domain::ActivityOwner::AssistantReply { reply_id },
             agena_domain::ActivityActor::Runtime,
         ),
     };
@@ -646,27 +644,58 @@ impl SessionManager {
                 current: source.version,
             });
         }
+        let message_id = self
+            .model_user_message_id_for_turn(request.session_id, request.turn_id)
+            .await?;
         if !is_completed_user_rewind_target(
             source
                 .messages
                 .iter()
-                .find(|message| message.id == request.message_id)
+                .find(|message| message.id == message_id)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
-                        "message not found in session {}: {}",
-                        source.id, request.message_id
+                        "canonical turn {} has no projected user message in session {}",
+                        request.turn_id, source.id
                     ))
                 })?,
         ) {
             return Err(AppError::Internal(format!(
-                "rewind target must be a completed user message: {}",
-                request.message_id
+                "rewind target must be a completed canonical user turn: {}",
+                request.turn_id
             )));
         }
         let title = format!("Rewind of {}", source.title);
         self.store
-            .fork_session_before_message(source, request.message_id, title, state.cache_policy())
+            .fork_session_before_message(source, message_id, title, state.cache_policy())
             .await
+    }
+
+    async fn model_user_message_id_for_turn(
+        &self,
+        session_id: i64,
+        turn_id: agena_domain::TurnId,
+    ) -> Result<i64, AppError> {
+        let row = self
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                self.store.db.get_database_backend(),
+                "SELECT m.message_id \
+                 FROM agena_turns t \
+                 JOIN agena_assistant_replies r ON r.turn_id = t.turn_id \
+                 JOIN agena_reply_executions e ON e.reply_id = r.reply_id AND e.source = 'user' \
+                 JOIN agena_model_messages m ON m.execution_id = e.execution_id \
+                 WHERE t.session_id = ? AND t.turn_id = ? AND m.role = 1 \
+                 ORDER BY m.created_at_ms, m.message_id",
+                [session_id.into(), turn_id.to_string().into()],
+            ))
+            .await?
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "canonical turn not found in session {session_id}: {turn_id}"
+                ))
+            })?;
+        Ok(row.try_get("", "message_id")?)
     }
 
     /// Serialise `session_id` as a JSONL bundle. The first line is the
@@ -701,10 +730,10 @@ impl SessionManager {
             .query_all(Statement::from_sql_and_values(
                 self.store.db.get_database_backend(),
                 "SELECT t.turn_id, t.turn_seq, t.created_at_ms AS turn_created_at_ms, \
-                        r.response_id, r.execution_id, r.status, r.revision_seq, \
-                        r.created_at_ms AS response_created_at_ms, r.finished_at_ms \
+                        r.reply_id, r.status, r.revision_seq, \
+                        r.created_at_ms AS reply_created_at_ms, r.finished_at_ms \
                  FROM agena_turns t \
-                 JOIN agena_responses r ON r.turn_id = t.turn_id \
+                 JOIN agena_assistant_replies r ON r.turn_id = t.turn_id \
                  WHERE t.session_id = ? ORDER BY t.turn_seq, r.created_at_ms",
                 [session_id.into()],
             ))
@@ -712,35 +741,29 @@ impl SessionManager {
         let mut turns = Vec::with_capacity(rows.len());
         for row in rows {
             let turn_id = uuid_value(row.try_get("", "turn_id")?, agena_domain::TurnId)?;
-            let response_id =
-                uuid_value(row.try_get("", "response_id")?, agena_domain::ResponseId)?;
-            let execution_id =
-                uuid_value(row.try_get("", "execution_id")?, agena_domain::ExecutionId)?;
+            let reply_id =
+                uuid_value(row.try_get("", "reply_id")?, agena_domain::AssistantReplyId)?;
             let status_text: String = row.try_get("", "status")?;
             let status = match status_text.as_str() {
-                "pending" => agena_domain::ResponseStatus::Pending,
-                "in_progress" => agena_domain::ResponseStatus::InProgress,
-                "completed" => agena_domain::ResponseStatus::Completed,
-                "failed" => agena_domain::ResponseStatus::Failed,
-                "cancelled" => agena_domain::ResponseStatus::Cancelled,
+                "pending" => agena_domain::AssistantReplyStatus::Pending,
+                "in_progress" => agena_domain::AssistantReplyStatus::InProgress,
+                "completed" => agena_domain::AssistantReplyStatus::Completed,
+                "failed" => agena_domain::AssistantReplyStatus::Failed,
+                "cancelled" => agena_domain::AssistantReplyStatus::Cancelled,
                 value => {
                     return Err(AppError::Internal(format!(
-                        "invalid response status {value}"
+                        "invalid assistant reply status {value}"
                     )));
                 }
             };
             let input = transcript_document_for_role(
                 &self.store.db,
-                execution_id,
-                Role::User,
                 agena_domain::ActivityOwner::TurnInput { turn_id },
             )
             .await?;
-            let response_content = transcript_document_for_role(
+            let reply_content = transcript_document_for_role(
                 &self.store.db,
-                execution_id,
-                Role::Assistant,
-                agena_domain::ActivityOwner::Response { response_id },
+                agena_domain::ActivityOwner::AssistantReply { reply_id },
             )
             .await?;
             turns.push(agena_domain::TurnSnapshot {
@@ -748,14 +771,13 @@ impl SessionManager {
                 session_id,
                 sequence: row.try_get("", "turn_seq")?,
                 input,
-                response: agena_domain::ResponseSnapshot {
-                    id: response_id,
+                reply: agena_domain::AssistantReplySnapshot {
+                    id: reply_id,
                     turn_id,
-                    execution_id,
                     status,
-                    content: response_content,
+                    content: reply_content,
                     revision_seq: row.try_get("", "revision_seq")?,
-                    created_at_ms: row.try_get("", "response_created_at_ms")?,
+                    created_at_ms: row.try_get("", "reply_created_at_ms")?,
                     finished_at_ms: row.try_get("", "finished_at_ms")?,
                 },
                 created_at_ms: row.try_get("", "turn_created_at_ms")?,
@@ -818,7 +840,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
         let session = SessionManager::get_session(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        let workflow_state = session.runtime().workflow.state;
+        let workflow_state = session.workflow_state();
         Ok(agena_runtime::SessionPresentation {
             id: session.id,
             parent_id: session.parent_id,
@@ -1425,7 +1447,7 @@ mod tests {
                 session_id,
                 execution_id: agena_domain::ExecutionId::new(),
                 turn_id: agena_domain::TurnId::new(),
-                response_id: agena_domain::ResponseId::new(),
+                reply_id: agena_domain::AssistantReplyId::new(),
                 source: agena_domain::ExecutionSource::Compaction,
                 ts_ms: 1,
             }),

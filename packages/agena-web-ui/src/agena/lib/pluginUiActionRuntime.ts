@@ -76,8 +76,6 @@ export async function resolvePluginCommandOutput(input: {
         message:
           output ||
           ({
-            approval_required: 'The operation requires approval.',
-            policy_denied: 'The operation was blocked by the effective permission policy.',
             capability_unavailable:
               'The current runtime does not provide the required capability.',
             tool_unavailable: 'The requested tool is unavailable.',

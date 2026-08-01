@@ -265,7 +265,7 @@ mod tests {
                 session_id: 7,
                 execution_id: ExecutionId::new(),
                 turn_id: agena_domain::TurnId::new(),
-                response_id: agena_domain::ResponseId::new(),
+                reply_id: agena_domain::AssistantReplyId::new(),
                 source: ExecutionSource::User,
                 ts_ms: 1,
             })

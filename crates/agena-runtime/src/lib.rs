@@ -164,10 +164,6 @@ pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionRegistry,
 };
 pub use agena_runtime_session::{
-    HostActionAuthorization, SessionToolExecutionError, SessionToolExecutionOutcome,
-    SessionToolExecutionService,
-};
-pub use agena_runtime_session::{
     RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
     SessionExecutionControlError,
 };
@@ -202,6 +198,9 @@ pub use agena_runtime_session::{
 };
 pub use agena_runtime_session::{
     SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
+};
+pub use agena_runtime_session::{
+    SessionToolExecutionError, SessionToolExecutionOutcome, SessionToolExecutionService,
 };
 pub(crate) use agena_runtime_session::{
     estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,

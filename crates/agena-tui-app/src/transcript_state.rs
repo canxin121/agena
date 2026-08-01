@@ -90,24 +90,43 @@ impl TranscriptState {
     }
 
     pub(crate) fn merge_snapshot(&mut self, snapshot: agena_domain::TranscriptSnapshot) {
-        let new_turns = snapshot
+        self.apply_snapshot_change(|current| current.merge(snapshot));
+        self.invalidate_render();
+    }
+
+    /// Apply one canonical transcript mutation and reconcile optimistic user
+    /// entries against user inputs that became visible because of it.
+    ///
+    /// A turn can arrive first as an empty execution envelope and acquire its
+    /// input document in a later durable snapshot or live patch. Comparing
+    /// only newly seen turn ids leaves the optimistic entry behind in that
+    /// case. Visibility is the actual transcript boundary: a stable turn id
+    /// crossing from absent/empty to non-empty replaces exactly one pending
+    /// user entry, while permission continuations with empty input replace
+    /// none.
+    fn apply_snapshot_change(
+        &mut self,
+        change: impl FnOnce(&mut agena_domain::TranscriptSnapshot),
+    ) {
+        let visible_before = self
+            .snapshot
             .turns
             .iter()
-            .filter(|incoming| {
-                !self
-                    .snapshot
-                    .turns
-                    .iter()
-                    .any(|current| current.id == incoming.id)
-            })
+            .filter(|turn| !turn.input.is_empty())
+            .map(|turn| (self.snapshot.session_id, turn.id))
+            .collect::<BTreeSet<_>>();
+
+        change(&mut self.snapshot);
+
+        let newly_visible_user_inputs = self
+            .snapshot
+            .turns
+            .iter()
+            .filter(|turn| !turn.input.is_empty())
+            .filter(|turn| !visible_before.contains(&(self.snapshot.session_id, turn.id)))
             .count();
-        for _ in 0..new_turns {
-            if !self.pending_user_messages.is_empty() {
-                self.pending_user_messages.remove(0);
-            }
-        }
-        self.snapshot.merge(snapshot);
-        self.invalidate_render();
+        let reconciled = newly_visible_user_inputs.min(self.pending_user_messages.len());
+        self.pending_user_messages.drain(..reconciled);
     }
 
     pub(crate) fn add_pending_user_message(&mut self, message: PendingUserMessage) {
@@ -143,7 +162,11 @@ impl TranscriptState {
     ) -> bool {
         let refresh_needed = match &event.kind {
             agena_runtime::RuntimePresentationEventKind::TranscriptPatch(patch) => {
-                self.snapshot.apply(patch.clone());
+                if transcript_patch_can_materialize_user_input(patch) {
+                    self.apply_snapshot_change(|snapshot| snapshot.apply(patch.clone()));
+                } else {
+                    self.snapshot.apply(patch.clone());
+                }
                 self.invalidate_render();
                 false
             }
@@ -782,9 +805,9 @@ impl TranscriptState {
         let mut line_nodes = Vec::new();
         let snapshot_entries = transcript_entries(&self.snapshot);
         #[cfg(not(test))]
-        let mut entries = snapshot_entries;
+        let entries = snapshot_entries;
         #[cfg(test)]
-        let mut entries = if self.session_id == Some(self.snapshot.session_id) {
+        let entries = if self.session_id == Some(self.snapshot.session_id) {
             snapshot_entries
         } else {
             self.messages
@@ -792,13 +815,11 @@ impl TranscriptState {
                 .map(agena_tui_transcript::TranscriptEntry::from)
                 .collect::<Vec<_>>()
         };
-        entries.extend(self.pending_user_messages.iter().map(|message| {
-            agena_tui_transcript::pending_user_entry(
-                message.id,
-                message.confirmed,
-                &message.document,
-            )
-        }));
+        let entries = weave_pending_user_entries(
+            &self.snapshot,
+            entries,
+            self.pending_user_messages.as_slice(),
+        );
         if entries.is_empty() && self.pending_user_messages.is_empty() && self.session_id.is_some()
         {
             lines.push(
@@ -2465,6 +2486,54 @@ impl TranscriptState {
     }
 }
 
+fn weave_pending_user_entries(
+    snapshot: &agena_domain::TranscriptSnapshot,
+    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry>,
+    pending_messages: &[PendingUserMessage],
+) -> Vec<agena_tui_transcript::TranscriptEntry> {
+    let empty_active_replies = snapshot
+        .turns
+        .iter()
+        .filter(|turn| turn.input.is_empty() && !turn.reply.status.is_terminal())
+        .map(|turn| turn.reply.id)
+        .collect::<BTreeSet<_>>();
+    let mut pending = pending_messages.iter();
+    let mut entries = Vec::with_capacity(
+        canonical_entries
+            .len()
+            .saturating_add(pending_messages.len()),
+    );
+    for entry in canonical_entries {
+        if matches!(
+            entry.id,
+            agena_tui_transcript::TranscriptEntryId::AssistantReply(reply_id)
+                if empty_active_replies.contains(&reply_id)
+        ) && let Some(message) = pending.next()
+        {
+            entries.push(agena_tui_transcript::pending_user_entry(
+                message.id,
+                message.confirmed,
+                &message.document,
+            ));
+        }
+        entries.push(entry);
+    }
+    entries.extend(pending.map(|message| {
+        agena_tui_transcript::pending_user_entry(message.id, message.confirmed, &message.document)
+    }));
+    entries
+}
+
+fn transcript_patch_can_materialize_user_input(patch: &agena_domain::TranscriptPatch) -> bool {
+    match patch {
+        agena_domain::TranscriptPatch::TurnOpened { turn, .. } => !turn.input.is_empty(),
+        agena_domain::TranscriptPatch::ContentUpserted { owner, .. } => {
+            matches!(owner, agena_domain::ActivityOwner::TurnInput { .. })
+        }
+        agena_domain::TranscriptPatch::AssistantReplyUpdated { .. } => false,
+    }
+}
+
 fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: usize) -> bool {
     let rendered_line = rendered.lines.get(line);
     rendered
@@ -2635,7 +2704,7 @@ fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usi
 
 use super::TranscriptAction;
 use crate::{
-    BTreeMap, I18n, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
+    BTreeMap, BTreeSet, I18n, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
     RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,

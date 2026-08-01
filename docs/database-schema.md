@@ -7,13 +7,13 @@ that each write path has one owner and one set of invariants.
 
 ## Development reset policy
 
-The only accepted SQLite schema version is `7`, stored in
+The only accepted SQLite schema version is `8`, stored in
 `PRAGMA user_version`. There are no migrations between incompatible versions.
 Initialization creates the current tables, indexes, and invariant triggers
-atomically and writes version `7` only for a fresh version-`0` database.
+atomically and writes version `8` only for a fresh version-`0` database.
 
 - A new version-`0` database is created directly in the current format.
-- A version-`7` database is accepted as current.
+- A version-`8` database is accepted as current.
 - Every other version is rejected before schema mutation, whether it is older
   or newer than the application.
 - Initialization never migrates, alters, drops, or automatically rebuilds an
@@ -86,17 +86,18 @@ domain UUID used by events, live patches, durable snapshots, and the TUI.
 `turn_seq` is unique within the session; it provides canonical turn order
 without deriving identity or order from provider messages.
 
-### `agena_responses`
+### `agena_assistant_replies` and `agena_reply_executions`
 
-Owns one visible assistant response inside one turn. Each row binds a stable
-`response_id` to exactly one unique `execution_id`, response status, revision,
-and lifecycle timestamps. Cancellation and every live/durable response update
-must match the exact turn, response, and execution identity; a delayed request
-cannot target a later execution.
+`agena_assistant_replies` owns exactly one stable visible reply for each turn.
+`agena_reply_executions` records the one originating user execution plus any
+permission, user-input, continue, or compaction continuations that append to
+that same reply. Executions are control/audit lifecycles only: they never
+create another user turn or assistant reply. Interactive continuation resolves
+the exact reply from the requesting Activity owner, never from "latest reply".
 
 ### `agena_text_segments`
 
-Owns canonical text for either a turn input or a response. Every segment has a
+Owns canonical text for either a turn input or an assistant reply. Every segment has a
 stable domain UUID, immutable owner and position, and a monotonic revision.
 Text is not used to encode attachment labels, Skill mentions, paste labels, or
 other structured content.
@@ -104,7 +105,7 @@ other structured content.
 ### `agena_activities`
 
 Owns all canonical structured content. Activities may belong to a turn input,
-a response, another activity, or a session. The row records stable identity,
+an assistant reply, another activity, or a session. The row records stable identity,
 actor, typed JSON payload, state, canonical position, revision, and lifecycle
 timestamps.
 
@@ -114,19 +115,21 @@ such as text, Skill reference, text, and directory attachment has one durable
 order rather than two independently sorted collections. Owner-validation
 triggers reject nonexistent or invalid owner kinds.
 
-### `agena_transcript_messages` and `agena_transcript_parts`
+### `agena_model_messages` and `agena_model_message_parts`
 
 Are disposable provider/history projections. Their integer message and part
-identities support replay and APIs that operate on stored provider messages;
-they are not the canonical TUI transcript and do not define conversation-body
-ordering. A projected part may carry the stable canonical `activity_id` or
-`segment_id` that produced it.
+identities support provider replay and runtime diagnostics; they are not a
+public conversation API and do not define conversation-body ordering. A
+projected part may carry the stable canonical `activity_id` or `segment_id`
+that produced it. `awaits_user_reply` is true only for an unanswered
+permission or user-input request, allowing that Activity to survive the
+execution that originally requested it.
 
 Identity, ownership, index, kind, and creation time are immutable. Part session
 ownership is derived through `part.message_id -> message.session_id`, avoiding
 contradictory ownership columns.
 
-### `agena_transcript_projection_states`
+### `agena_model_projection_states`
 
 Tracks the last global event sequence incorporated into the disposable
 provider/history projection. It does not carry a projector generation.
@@ -139,8 +142,8 @@ across versions.
 Fork and rewind creation is intentionally staged:
 
 1. Insert the child and its immutable lineage with `lifecycle_state=creating`.
-2. Allocate fresh message, part, execution, run, turn, response, text-segment,
-   and activity identities.
+2. Allocate fresh message, part, execution, run, turn, assistant-reply,
+   text-segment, and activity identities.
 3. Rewrite every copied entity reference, owner identity, correlation, and
    event-owned session reference before inserting any copied event.
 4. Append copied persistent events without broadcasting them as new activity.
@@ -169,13 +172,14 @@ session
 |- events
 |- permission rules
 |- turns
-|  |- responses
+|  |- assistant replies
+|  |  `- reply executions
 |  |- text segments
 |  `- activities
 |- session-owned and nested activities
-|- transcript messages
-|  `- transcript parts
-`- transcript projection state
+|- model messages
+|  `- model message parts
+`- model projection state
 ```
 
 API handlers must call the session repository deletion function; they must not

@@ -3741,7 +3741,7 @@ Enumerate current tools.
 
 输出：
 
-`payload`: `{ tools[], total, offset, returned, tag?, tags? }`; each tool is `{ name, summary, tags[] }`.
+只有 `output_text`：每行包含 execution-tool 的精确名称、tags 和最多 160 个字符的单行摘要，末尾包含是否还有下一页及其 offset。默认返回 20 条，最大 50 条。完整说明通过 `tools_help` 按需读取；结果不再复制为 structured payload。完成态 Activity 会直接持久化类似 `List tools · 20/133` 的标题。
 
 ### `agena.tools.search`
 
@@ -3823,7 +3823,7 @@ Search the Agena execution tools available in this session.
 
 输出：
 
-`payload`: `{ results[], query, tag?, tags?, total, offset, returned }`; `results[]` contains exact current-session tool names. An unknown `tools_call.tool` must return to this search route instead of treating a fuzzy suggestion as schema proof.
+只有 `output_text`：每行包含匹配 execution-tool 的精确名称、tags 和最多 160 个字符的单行摘要，末尾包含是否还有下一页及其 offset。默认返回 5 条，最大 20 条。结果不再复制为 structured payload。未知的 `tools_call.tool` 必须回到这个搜索路径，不能把模糊建议当作 schema 依据。
 
 ### `agena.tools.help`
 
@@ -3864,7 +3864,7 @@ Get reusable schema, examples, and usage notes for one Agena execution tool.
 
 输出：
 
-No structured payload; detailed usage, schema-valid generated/declared examples, reusable help text, and exact `tools_call` routing are in `output_text`. Generated examples resolve nested `$ref` definitions and include every required field.
+只有 `output_text`：详细用法、schema-valid generated/declared examples、可复用 help 文本和精确 `tools_call` 路由都在其中。Generated examples 会解析嵌套 `$ref` 并包含每个 required 字段。完成态 Activity 使用 `Inspect <tool>` 标题和独立短摘要，不会把整份 help 塞入折叠标题。
 
 ### `agena.tools.tags`
 
@@ -3917,7 +3917,7 @@ List tool tags with pagination.
 
 输出：
 
-`payload`: `{ tags[], total, offset, returned }`; each tag is `{ tag, tool_count }`.
+只有 `output_text`：每行是 tag 及其 tool count，末尾包含是否还有下一页及其 offset。默认返回 20 条，最大 50 条；结果不再复制为 structured payload。完成态 Activity 会直接持久化类似 `List tool tags · 20/37` 的标题。
 
 ### `agena.tools.call`
 

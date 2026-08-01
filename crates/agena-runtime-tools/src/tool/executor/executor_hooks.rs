@@ -69,9 +69,12 @@ impl ToolExecutor {
             .dispatch_tool_after_cancellable(after_in, self.cancellation_token.clone())
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
 
-        execution
-            .view
-            .apply_neutral_fields(hooked.title, hooked.output_text, hooked.metadata);
+        execution.view.apply_neutral_fields(
+            hooked.title,
+            execution.view.summary.clone(),
+            hooked.output_text,
+            hooked.metadata,
+        );
 
         if let Some(payload_value) = hooked.payload {
             execution.output = ToolOutput::from_json_payload(Some(&payload_value))

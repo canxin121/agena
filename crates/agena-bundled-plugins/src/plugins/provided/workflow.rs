@@ -40,7 +40,27 @@ pub(crate) struct WorkflowPluginConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ToolDiscoveryConfig {
+    pub(crate) list: ToolListConfig,
     pub(crate) search: ToolSearchConfig,
+    pub(crate) tags: ToolTagsConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ToolListConfig {
+    pub(crate) default_limit: u32,
+    pub(crate) max_limit: u32,
+    pub(crate) max_summary_chars: u32,
+}
+
+impl Default for ToolListConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: 20,
+            max_limit: 50,
+            max_summary_chars: 160,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -49,14 +69,32 @@ pub(crate) struct ToolSearchConfig {
     pub(crate) default_limit: u32,
     pub(crate) max_limit: u32,
     pub(crate) max_query_length: u32,
+    pub(crate) max_summary_chars: u32,
 }
 
 impl Default for ToolSearchConfig {
     fn default() -> Self {
         Self {
-            default_limit: 50,
-            max_limit: 100,
+            default_limit: 5,
+            max_limit: 20,
             max_query_length: 512,
+            max_summary_chars: 160,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ToolTagsConfig {
+    pub(crate) default_limit: u32,
+    pub(crate) max_limit: u32,
+}
+
+impl Default for ToolTagsConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: 20,
+            max_limit: 50,
         }
     }
 }
@@ -88,9 +126,29 @@ pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
             "Defaults for listing and searching available Agena execution tools.",
         ),
         (
+            "/properties/list",
+            "List",
+            "Pagination and summary limits for execution-tool listing.",
+        ),
+        (
+            "/properties/list/properties/default_limit",
+            "Default Limit",
+            "Number of tools returned when tools_list omits limit.",
+        ),
+        (
+            "/properties/list/properties/max_limit",
+            "Max Limit",
+            "Upper bound enforced for tools_list results.",
+        ),
+        (
+            "/properties/list/properties/max_summary_chars",
+            "Max Summary Characters",
+            "Maximum single-line summary length for each listed tool.",
+        ),
+        (
             "/properties/search",
             "Search",
-            "Default behavior for execution-tool search.",
+            "Pagination, query, and summary limits for execution-tool search.",
         ),
         (
             "/properties/search/properties/default_limit",
@@ -106,6 +164,26 @@ pub(crate) fn tool_discovery_config_schema() -> serde_json::Value {
             "/properties/search/properties/max_query_length",
             "Max Query Length",
             "Upper bound enforced for the tool search query length.",
+        ),
+        (
+            "/properties/search/properties/max_summary_chars",
+            "Max Summary Characters",
+            "Maximum single-line summary length for each matching tool.",
+        ),
+        (
+            "/properties/tags",
+            "Tags",
+            "Pagination limits for listing execution-tool tags.",
+        ),
+        (
+            "/properties/tags/properties/default_limit",
+            "Default Limit",
+            "Number of tags returned when tools_tags omits limit.",
+        ),
+        (
+            "/properties/tags/properties/max_limit",
+            "Max Limit",
+            "Upper bound enforced for tools_tags results.",
         ),
     ] {
         agena_runtime_tools::tool::definition::set_schema_metadata(
@@ -164,7 +242,7 @@ pub(crate) use repo_tools::{
 };
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
 pub(crate) use tool_api_inputs::{
-    ToolApiCallInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
 };
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
@@ -218,6 +296,7 @@ impl WorkflowPlugin {
         config: WorkflowPluginConfig,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<()> {
+        validate_tool_discovery_config(&config.tool_discovery)?;
         self.config
             .set(config)
             .map_err(|_| PluginError::internal("workflow plugin config already initialized"))?;
@@ -322,19 +401,117 @@ fn tags_summary(tags: &[String]) -> String {
     tags.join(", ")
 }
 
+fn compact_tool_summary(value: &str, max_chars: usize) -> String {
+    let single_line = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if single_line.chars().count() <= max_chars {
+        return single_line;
+    }
+    let retained = max_chars.saturating_sub(1);
+    let mut compact = single_line.chars().take(retained).collect::<String>();
+    compact.push('…');
+    compact
+}
+
+fn validate_tool_discovery_config(config: &ToolDiscoveryConfig) -> SdkResult<()> {
+    for (path, value) in [
+        ("list.default_limit", config.list.default_limit),
+        ("list.max_limit", config.list.max_limit),
+        ("list.max_summary_chars", config.list.max_summary_chars),
+        ("search.default_limit", config.search.default_limit),
+        ("search.max_limit", config.search.max_limit),
+        ("search.max_query_length", config.search.max_query_length),
+        ("search.max_summary_chars", config.search.max_summary_chars),
+        ("tags.default_limit", config.tags.default_limit),
+        ("tags.max_limit", config.tags.max_limit),
+    ] {
+        if value == 0 {
+            return Err(PluginError::internal(format!(
+                "tools plugin config `{path}` must be greater than 0"
+            )));
+        }
+    }
+    for (path, default_limit, max_limit) in [
+        ("list", config.list.default_limit, config.list.max_limit),
+        (
+            "search",
+            config.search.default_limit,
+            config.search.max_limit,
+        ),
+        ("tags", config.tags.default_limit, config.tags.max_limit),
+    ] {
+        if default_limit > max_limit {
+            return Err(PluginError::internal(format!(
+                "tools plugin config `{path}.default_limit` must be less than or equal to `{path}.max_limit`"
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
+    use super::workflow_runtime::discovery_text_output;
     use super::{
         AvailableToolRecord, HostRegisteredToolDescriptor, ToolApiHelpInput, ToolDescriptor,
-        WorkflowPlugin,
+        ToolDiscoveryConfig, WorkflowPlugin, compact_tool_summary, validate_tool_discovery_config,
     };
     use agena_plugin_host::sdk::{
         Plugin, PluginErrorKind, PluginKey, ToolDefinition, ToolKey, ToolTag,
     };
 
     use crate::plugins::provided::shell::ShellPlugin;
+
+    #[test]
+    fn discovery_defaults_keep_index_results_compact() {
+        let config = ToolDiscoveryConfig::default();
+        assert_eq!(config.list.default_limit, 20);
+        assert_eq!(config.list.max_limit, 50);
+        assert_eq!(config.list.max_summary_chars, 160);
+        assert_eq!(config.search.default_limit, 5);
+        assert_eq!(config.search.max_limit, 20);
+        assert_eq!(config.search.max_summary_chars, 160);
+        assert_eq!(config.tags.default_limit, 20);
+        assert_eq!(config.tags.max_limit, 50);
+        validate_tool_discovery_config(&config).expect("valid discovery defaults");
+    }
+
+    #[test]
+    fn discovery_config_rejects_zero_and_inverted_limits() {
+        let mut config = ToolDiscoveryConfig::default();
+        config.tags.max_limit = 0;
+        let error = validate_tool_discovery_config(&config).expect_err("zero limit must fail");
+        assert!(error.diagnostic.message.contains("tags.max_limit"));
+
+        let mut config = ToolDiscoveryConfig::default();
+        config.list.default_limit = config.list.max_limit + 1;
+        let error =
+            validate_tool_discovery_config(&config).expect_err("inverted list limits must fail");
+        assert!(error.diagnostic.message.contains("list.default_limit"));
+    }
+
+    #[test]
+    fn discovery_summary_is_single_line_and_unicode_safe() {
+        assert_eq!(
+            compact_tool_summary("  first\n\nsecond\tthird  ", 80),
+            "first second third"
+        );
+        assert_eq!(compact_tool_summary("工具摘要很长", 5), "工具摘要…");
+    }
+
+    #[test]
+    fn discovery_result_has_one_text_content_channel() {
+        let output = discovery_text_output("List tools · 2/3", "Returned 2 of 3 tools.", "a\nb");
+
+        assert_eq!(output.output_text, "a\nb");
+        assert_eq!(output.title, "List tools · 2/3");
+        assert_eq!(output.summary, "Returned 2 of 3 tools.");
+        assert!(output.payload.is_none());
+        assert!(output.metadata.is_empty());
+        assert!(output.sections.is_empty());
+        assert!(output.attachments.is_empty());
+    }
 
     fn registered_tool(namespace: &str, tag: ToolTag) -> HostRegisteredToolDescriptor {
         let plugin = PluginKey::new(namespace, "notes").expect("plugin key");
@@ -529,65 +706,6 @@ mod tests {
 
         WorkflowPlugin::ensure_execution_tool_target("fs.read")
             .expect("execution-tool names remain valid targets");
-    }
-
-    #[test]
-    fn schema_rejection_embeds_help_and_direct_retry_routing() {
-        let descriptor = ToolDescriptor {
-            name: "fs.read".to_string(),
-            summary: Some("Read workspace files.".to_string()),
-            help: Some("Read a file with file_path.".to_string()),
-            examples: vec![r#"{"file_path":"README.md"}"#.to_string()],
-            input_schema: Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string", "minLength": 1}
-                },
-                "required": ["file_path"],
-                "additionalProperties": false
-            })),
-        };
-
-        let error = WorkflowPlugin::invalid_tool_input_with_embedded_help(
-            &descriptor,
-            "$: missing required property 'file_path'",
-        );
-
-        assert_eq!(error.kind, PluginErrorKind::InvalidParams);
-        assert!(error.diagnostic.message.contains("the tool was not run"));
-        assert!(
-            error
-                .diagnostic
-                .message
-                .contains("A separate `tools_help` call is unnecessary")
-        );
-        assert!(error.diagnostic.message.contains("Tool help for `fs.read`"));
-        assert!(error.diagnostic.message.contains("Usage:"));
-        assert!(
-            error
-                .diagnostic
-                .message
-                .contains("Read a file with file_path.")
-        );
-        let data = error.diagnostic.data.expect("structured embedded help");
-        assert_eq!(
-            data.pointer("/kind").and_then(serde_json::Value::as_str),
-            Some("tool_input_rejected_with_help")
-        );
-        assert_eq!(
-            data.pointer("/tool").and_then(serde_json::Value::as_str),
-            Some("fs.read")
-        );
-        assert_eq!(
-            data.pointer("/retry/function")
-                .and_then(serde_json::Value::as_str),
-            Some("tools_call")
-        );
-        assert_eq!(
-            data.pointer("/help/input_schema/required/0")
-                .and_then(serde_json::Value::as_str),
-            Some("file_path")
-        );
     }
 
     #[test]

@@ -54,7 +54,6 @@ pub fn execute(
         match op {
             PatchOp::Add { path, content } => {
                 let absolute = executor.resolve_target_path(&path);
-                executor.ensure_edit_permission(&absolute)?;
                 ensure_parent(&absolute)?;
                 if absolute.exists() {
                     return Err(ToolError::invalid_patch(format!(
@@ -78,7 +77,6 @@ pub fn execute(
             }
             PatchOp::Delete { path } => {
                 let absolute = executor.resolve_target_path(&path);
-                executor.ensure_edit_permission(&absolute)?;
                 if !absolute.exists() {
                     return Err(ToolError::invalid_patch(format!(
                         "delete file target does not exist: {path}"
@@ -106,7 +104,6 @@ pub fn execute(
                 hunks,
             } => {
                 let source = executor.resolve_target_path(&path);
-                executor.ensure_edit_permission(&source)?;
                 if !source.exists() {
                     return Err(ToolError::invalid_patch(format!(
                         "update file target does not exist: {path}"
@@ -118,7 +115,6 @@ pub fn execute(
 
                 if let Some(target_path) = move_to {
                     let target = executor.resolve_target_path(&target_path);
-                    executor.ensure_edit_permission(&target)?;
                     ensure_parent(&target)?;
                     if source != target && target.exists() {
                         return Err(ToolError::invalid_patch(format!(

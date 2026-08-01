@@ -8,19 +8,14 @@ use std::time::Duration;
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::host_api::HostClient;
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const ENVIRONMENT_PLUGIN_ID: &str = "agena.environment";
 
 pub(crate) struct EnvironmentPlugin {
-    host: OnceLock<Arc<dyn HostClient>>,
     workspace_root: OnceLock<PathBuf>,
 }
 
@@ -77,16 +72,12 @@ const fn default_interval_ms() -> u64 {
 impl EnvironmentPlugin {
     pub(crate) fn new() -> Self {
         Self {
-            host: OnceLock::new(),
             workspace_root: OnceLock::new(),
         }
     }
 
     #[hook(init)]
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
-        self.host
-            .set(host)
-            .map_err(|_| PluginError::internal("environment plugin initialized more than once"))?;
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("environment workspace initialized more than once")
         })?;
@@ -101,11 +92,10 @@ impl EnvironmentPlugin {
         filesystem_read,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn wait(&self, input: &EnvironmentWaitInput) -> SdkResult<ToolInvokeOutput> {
-        self.validate_and_authorize(&input.condition).await?;
+        self.validate_condition(&input.condition).await?;
         let started = tokio::time::Instant::now();
         let deadline = started + Duration::from_millis(input.timeout_ms);
         let mut attempts = 0u64;
@@ -147,18 +137,13 @@ impl EnvironmentPlugin {
         }
     }
 
-    async fn validate_and_authorize(&self, condition: &WaitCondition) -> SdkResult<()> {
-        let host = self
-            .host
-            .get()
-            .ok_or_else(|| PluginError::internal("environment plugin invoked before init"))?;
+    async fn validate_condition(&self, condition: &WaitCondition) -> SdkResult<()> {
         match condition {
             WaitCondition::Path { path } => {
                 if path.trim().is_empty() {
                     return Err(PluginError::invalid_params("path must not be empty"));
                 }
-                host.ensure_path_permission(HostPathPermissionCheckRequest::read(path.clone()))
-                    .await
+                Ok(())
             }
             WaitCondition::Tcp { host: target, port } => {
                 if target.trim().is_empty() || *port == 0 {
@@ -166,7 +151,7 @@ impl EnvironmentPlugin {
                         "tcp host must be non-empty and port must be greater than zero",
                     ));
                 }
-                authorize_host(host, target, *port).await
+                validate_public_host(target, *port).await
             }
             WaitCondition::Http { url, .. } => {
                 let url = parse_http_url(url)?;
@@ -176,11 +161,7 @@ impl EnvironmentPlugin {
                 let port = url
                     .port_or_known_default()
                     .ok_or_else(|| PluginError::invalid_params("HTTP URL has no port"))?;
-                host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(
-                    url.as_str(),
-                ))
-                .await?;
-                authorize_host(host, target, port).await
+                validate_public_host(target, port).await
             }
         }
     }
@@ -249,11 +230,7 @@ impl EnvironmentPlugin {
     }
 }
 
-async fn authorize_host(host: &Arc<dyn HostClient>, target: &str, port: u16) -> SdkResult<()> {
-    host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(format!(
-        "{target}:{port}"
-    )))
-    .await?;
+async fn validate_public_host(target: &str, port: u16) -> SdkResult<()> {
     let addresses = tokio::net::lookup_host((target, port))
         .await
         .map_err(|error| PluginError::internal(format!("failed to resolve {target}: {error}")))?
@@ -265,14 +242,11 @@ async fn authorize_host(host: &Arc<dyn HostClient>, target: &str, port: u16) -> 
         )));
     }
     for address in addresses {
-        if is_public_address(address) {
-            continue;
+        if !is_public_address(address) {
+            return Err(PluginError::invalid_params(format!(
+                "environment target `{target}` resolves to non-public address `{address}`"
+            )));
         }
-        host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(match address {
-            IpAddr::V4(address) => format!("{address}:{port}"),
-            IpAddr::V6(address) => format!("[{address}]:{port}"),
-        }))
-        .await?;
     }
     Ok(())
 }

@@ -7,10 +7,10 @@ impl Backend {
     ) -> Result<agena_domain::UsageStats> {
         self.application
             .session_query_service()
-            .map_err(|error| anyhow!(error.to_string()))?
+            .map_err(anyhow::Error::new)?
             .usage_stats(query)
             .await
-            .map_err(|error| anyhow!(error.to_string()))
+            .map_err(anyhow::Error::new)
             .context("failed to load usage statistics")
     }
 
@@ -83,7 +83,7 @@ impl Backend {
         let events = self
             .application
             .event_query_service()
-            .map_err(|error| anyhow!(error.to_string()))?
+            .map_err(anyhow::Error::new)?
             .list_timeline_events_before(
                 &EventFilter::new(Scope::Session { session_id }),
                 agena_runtime::RuntimeReverseEventRange {
@@ -92,34 +92,10 @@ impl Backend {
                 },
             )
             .await
-            .map_err(|error| anyhow!(error.to_string()))?;
+            .map_err(anyhow::Error::new)?;
         let mut all = events;
         all.sort_by_key(|event| event.meta.seq_global);
         Ok(all)
-    }
-
-    pub async fn list_all_messages(&self, session_id: i64) -> Result<Vec<MessageResource>> {
-        let mut cursor = None;
-        let mut messages = Vec::new();
-
-        loop {
-            let page = self
-                .list_messages_with_parts(session_id, cursor.clone(), 200, PartLoadMode::Full)
-                .await
-                .context("failed to list full session message history")?;
-            cursor = page.page.next_cursor.clone();
-            messages.extend(page.items);
-            if cursor.is_none() {
-                break;
-            }
-        }
-
-        messages.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(messages)
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
@@ -147,7 +123,7 @@ impl Backend {
             .queries
             .execution_context(session_id)
             .await
-            .map_err(|error| anyhow!(error.to_string()))
+            .map_err(anyhow::Error::new)
             .with_context(|| {
                 format!("failed to load execution context for session {session_id}")
             })?;
@@ -163,43 +139,6 @@ impl Backend {
         })
     }
 
-    pub async fn list_messages(
-        &self,
-        session_id: i64,
-        cursor: Option<String>,
-        limit: u64,
-    ) -> Result<PaginatedResponse<MessageResource>> {
-        // The transcript view should render history with the same shape and
-        // styling as live events, so it always loads full parts here.
-        self.list_messages_with_parts(session_id, cursor, limit, PartLoadMode::Full)
-            .await
-    }
-
-    pub async fn list_messages_with_parts(
-        &self,
-        session_id: i64,
-        cursor: Option<String>,
-        limit: u64,
-        parts: PartLoadMode,
-    ) -> Result<PaginatedResponse<MessageResource>> {
-        match dispatch::dispatch_query(
-            &self.application,
-            Query::ListMessages(ListMessagesParams {
-                session_id,
-                cursor,
-                limit: Some(limit),
-                parts,
-            }),
-        )
-        .await
-        .map_err(api_error)?
-        {
-            QueryResult::Messages(page) => Ok(page),
-            other => Err(anyhow!("unexpected query result: {:?}", other)),
-        }
-        .context("failed to list session messages")
-    }
-
     pub async fn refresh_session(
         &self,
         session_id: i64,
@@ -209,7 +148,7 @@ impl Backend {
         let events = self
             .application
             .event_query_service()
-            .map_err(|error| anyhow!(error.to_string()))?;
+            .map_err(anyhow::Error::new)?;
         let filter = EventFilter::new(Scope::Session { session_id });
         let latest_event_seq = events
             .list_events_before(
@@ -220,7 +159,7 @@ impl Backend {
                 },
             )
             .await
-            .map_err(|error| anyhow!(error.to_string()))?
+            .map_err(anyhow::Error::new)?
             .into_iter()
             .map(|event| event.meta.seq_global)
             .max();
@@ -249,7 +188,7 @@ impl Backend {
                     },
                 )
                 .await
-                .map_err(|error| anyhow!(error.to_string()))?
+                .map_err(anyhow::Error::new)?
                 .len(),
             None => 0,
         };
@@ -487,11 +426,11 @@ impl Backend {
     ) -> Result<SessionExecutionResource> {
         self.application
             .session_execution_services()
-            .map_err(|error| anyhow!(error.to_string()))?
+            .map_err(anyhow::Error::new)?
             .commands
             .set_session_permission(session_id, permission)
             .await
-            .map_err(|error| anyhow!(error.to_string()))
+            .map_err(anyhow::Error::new)
             .with_context(|| format!("failed to set permission for session {session_id}"))?;
         self.get_session_state(session_id).await
     }
@@ -527,11 +466,11 @@ impl Backend {
     ) -> Result<()> {
         self.application
             .session_execution_services()
-            .map_err(|error| anyhow!(error.to_string()))?
+            .map_err(anyhow::Error::new)?
             .commands
             .steer_input(session_id, document)
             .await
-            .map_err(|error| anyhow!(error.to_string()))
+            .map_err(anyhow::Error::new)
             .context("failed to steer run")
     }
 
@@ -622,10 +561,10 @@ impl Backend {
         .context("failed to submit user input reply")
     }
 
-    pub async fn rewind_session_to_message(
+    pub async fn rewind_session_to_turn(
         &self,
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
     ) -> Result<SessionExecutionResource> {
         let expected_version = self
             .get_session(session_id)
@@ -636,7 +575,7 @@ impl Backend {
             &self.application,
             ApiCommand::RewindSession(RewindSessionParams {
                 session_id,
-                message_id,
+                turn_id,
                 expected_version: Some(expected_version),
             }),
         )
@@ -646,18 +585,17 @@ impl Backend {
             CommandResult::Execution(state) => Ok(state),
             other => Err(anyhow!("unexpected command result: {:?}", other)),
         }
-        .context("failed to rewind session to message")
+        .context("failed to rewind session to turn")
     }
 }
 
 use crate::Result;
 use crate::{
     ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams, EventFilter,
-    GetSessionParams, HashSet, ListMessagesParams, ListSessionsParams, LiveEvent, MessageResource,
-    PaginatedResponse, PartLoadMode, Path, PathBuf, PermissionReply, PermissionReplyKind,
-    PermissionScope, Query, QueryResult, ReplyPermissionParams, ReplyUserInputParams,
-    RewindSessionParams, RunOptions, Scope, SessionExecutionResource, SessionPermissionStudioState,
-    SessionRefresh, SessionResource, SubmitMessageParams, UpdateSessionSelectionParams,
-    UserInputReply, api_error, build_file_index, direct_path_candidate, dispatch,
-    file_search_score, mpsc,
+    GetSessionParams, HashSet, ListSessionsParams, LiveEvent, Path, PathBuf, PermissionReply,
+    PermissionReplyKind, PermissionScope, Query, QueryResult, ReplyPermissionParams,
+    ReplyUserInputParams, RewindSessionParams, RunOptions, Scope, SessionExecutionResource,
+    SessionPermissionStudioState, SessionRefresh, SessionResource, SubmitMessageParams,
+    UpdateSessionSelectionParams, UserInputReply, api_error, build_file_index,
+    direct_path_candidate, dispatch, file_search_score, mpsc,
 };

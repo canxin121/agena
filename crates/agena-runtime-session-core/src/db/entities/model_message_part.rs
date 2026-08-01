@@ -3,10 +3,10 @@ use sea_orm::entity::prelude::*;
 use crate::message::PartContent;
 use agena_storage_sqlite::{StoredExecutionStatus, StoredPartKind};
 
-use super::transcript_message;
+use super::model_message;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_transcript_parts")]
+#[sea_orm(table_name = "agena_model_message_parts")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub part_id: i64,
@@ -18,6 +18,8 @@ pub struct Model {
     pub summary: Option<String>,
     #[sea_orm(default_value = false)]
     pub has_detail: bool,
+    #[sea_orm(default_value = false)]
+    pub awaits_user_reply: bool,
     pub activity_id: Option<String>,
     pub segment_id: Option<String>,
     pub operation_id: Option<String>,
@@ -29,16 +31,16 @@ pub struct Model {
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {
     #[sea_orm(
-        belongs_to = "transcript_message::Entity",
+        belongs_to = "model_message::Entity",
         from = "Column::MessageId",
-        to = "transcript_message::Column::MessageId",
+        to = "model_message::Column::MessageId",
         on_update = "Cascade",
         on_delete = "Cascade"
     )]
     Message,
 }
 
-impl Related<transcript_message::Entity> for Entity {
+impl Related<model_message::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Message.def()
     }

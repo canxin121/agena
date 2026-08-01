@@ -12,7 +12,14 @@ The system deliberately does not expose one overloaded `status` field.
 | `ExecutionLifecycle` | `ExecutionRegistry` and lifecycle events | Is one process currently mutating the session? | `ExecutionStarted` → `ExecutionFinished` |
 | `ExecutionStatus` on messages and parts | transcript projection | Is this particular artifact still being constructed? | checkpoints followed by terminal history/events |
 
-`blocked`, `ready_for_model`, and `tool_pending` are workflow facts. They do not mean that a task is running. Likewise, an in-progress message is not evidence that a worker still exists.
+`blocked` and `tool_pending` are durable workflow facts. They do not mean that a task is running. A provider request is represented only by an active execution and its phase; it is never persisted as resumable work. Likewise, an in-progress message is not evidence that a worker still exists.
+
+An execution and its canonical assistant reply also have different lifetimes.
+An execution may complete after it durably publishes a Permission/UserInput
+Activity, while the reply remains `in_progress` and blocked on that Activity.
+The eventual interaction continuation is another execution attached to the
+same reply. Only the canonical reply boundary owns terminalization of all of
+its remaining Activities.
 
 ## Single-writer boundary
 
@@ -73,8 +80,10 @@ The event log is the source of truth. Activity tables are rebuildable projection
 
 - Reads compare the projection cursor with the event store and transactionally apply every missing session event in order; structural corruption triggers a full rebuild.
 - `RunAborted` terminalizes open messages and parts for its `RunId`.
-- `ExecutionFinished` terminalizes every remaining open message and part for its `ExecutionId`.
-- A completed execution with an open artifact is an invariant violation; the projection marks that artifact failed rather than leaving an impossible spinner.
+- `ExecutionFinished` terminalizes execution-owned open artifacts unless the canonical reply has a pending/in-progress Interaction Activity.
+- A completed execution with a pending Interaction suspends the canonical reply: the reply and its queued Operations remain nonterminal, and its `finished_at_ms` remains null.
+- When no Interaction is pending, a genuinely completed/failed/cancelled reply terminalizes every remaining reply-owned Activity across all of the reply's executions. The reply, not one continuation execution id, is the cleanup boundary.
+- A failed/cancelled reply also cancels unanswered Interaction Activities, so the UI never exposes an approval that has no resumable owner.
 - A delayed nonterminal checkpoint cannot reopen a terminal message.
 
 Event persistence happens before projection application, and durable history is broadcast to live clients only after the projection barrier succeeds. If projection application fails, the next read detects the cursor gap and deterministically catches up from the durable event log. A later event can never advance the projection cursor past an earlier unapplied event.
@@ -94,7 +103,8 @@ The API returns `workflow_state` and optional `active_execution` separately. The
 - never infer execution liveness from the last assistant message;
 - preserve each assistant message as its own resource instead of collapsing consecutive rounds and borrowing the last round's status;
 - never clear `active_execution` on `AssistantMessageFinished`, because tools or another model round may still follow;
-- expose every pending interactive request independently; parallel `tools.call` executions may publish multiple permission requests, and replying to one must not wait for or dismiss the others;
+- expose every pending interactive request independently; a provider tool batch publishes all of its permission requests before blocking;
+- treat an individual interaction reply as a durable decision, not as a user message or a new assistant reply; the final decision in a batch starts one continuation execution for the existing canonical reply;
 - treat lifecycle events as refresh triggers and fetch authoritative workflow state after execution completion.
 
 Optimistic event reduction may improve responsiveness, but it must preserve these ownership rules.

@@ -82,7 +82,7 @@ describe('resolvePluginCommandOutput', () => {
     expect(effect).toEqual({ kind: 'notice', message: 'formatted hi' })
   })
 
-  test('never submits an authorization outcome as a model prompt', async () => {
+  test('never submits a non-completed tool outcome as a model prompt', async () => {
     const effect = await resolvePluginCommandOutput({
       pluginId: 'example.notes',
       result: {
@@ -94,16 +94,15 @@ describe('resolvePluginCommandOutput', () => {
       invokeTool: async () => ({
         plugin_id: 'example.notes',
         tool: 'publish',
-        status: 'approval_required',
-        approval_request_id: 'external-tool-permission-1-2',
-        title: 'Approval required',
-        output_text: 'Publishing requires approval.',
-        payload: { status: 'approval_required' },
+        status: 'capability_unavailable',
+        title: 'Capability unavailable',
+        output_text: 'Publishing is unavailable in this runtime.',
+        payload: { status: 'capability_unavailable' },
         metadata: {},
       }),
     })
 
-    expect(effect).toEqual({ kind: 'notice', message: 'Publishing requires approval.' })
+    expect(effect).toEqual({ kind: 'notice', message: 'Publishing is unavailable in this runtime.' })
   })
 
   test('resolves nested invoke_command outputs recursively', async () => {

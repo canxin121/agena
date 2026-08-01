@@ -20,7 +20,7 @@ pub struct SessionExecutionCommandOutcome {
 pub struct SessionExecutionReceipt {
     pub execution_id: agena_domain::ExecutionId,
     pub turn_id: agena_domain::TurnId,
-    pub response_id: agena_domain::ResponseId,
+    pub reply_id: agena_domain::AssistantReplyId,
 }
 
 impl SessionExecutionCommandOutcome {
@@ -35,14 +35,14 @@ impl SessionExecutionCommandOutcome {
         session_id: i64,
         execution_id: agena_domain::ExecutionId,
         turn_id: agena_domain::TurnId,
-        response_id: agena_domain::ResponseId,
+        reply_id: agena_domain::AssistantReplyId,
     ) -> Self {
         Self {
             session_id,
             receipt: Some(SessionExecutionReceipt {
                 execution_id,
                 turn_id,
-                response_id,
+                reply_id,
             }),
         }
     }

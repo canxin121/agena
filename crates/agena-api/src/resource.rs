@@ -1012,7 +1012,6 @@ pub enum ExecutionPhase {
 pub enum WorkflowState {
     #[default]
     Quiescent,
-    ReadyForModel,
     ToolPending,
     Blocked,
 }
@@ -1265,7 +1264,7 @@ pub struct MessageMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1285,7 +1284,7 @@ impl Default for MessageMetadata {
         Self {
             source: MessageSource::Assistant,
             idempotency_key: None,
-            turn_id: None,
+            model_turn_id: None,
             parent_message_id: None,
             generated_by_call_id: None,
             model_provider_id: String::new(),

@@ -7,8 +7,8 @@ use std::{
 use agena_api::{
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
-        SessionExecutionResource, SessionResource,
+        ProviderAdapterModelsResponse, ProviderSummaryResource, SessionExecutionResource,
+        SessionResource,
     },
 };
 use agena_domain::ModelRef;
@@ -306,7 +306,6 @@ pub struct App {
     pub(super) context_help: Option<HelpOverlay>,
     pub(super) seen_permission_request_ids: BTreeSet<String>,
     pub(super) seen_user_input_request_ids: BTreeSet<String>,
-    pub(super) pending_permission_replay: Option<PermissionReplayState>,
     pub(super) notice: Option<UiNotice>,
     pub(super) seen_failure_ids: HashSet<agena_failure::FailureId>,
     pub(super) sessions: SessionListPresentation,
@@ -436,11 +435,13 @@ pub(super) enum AppMessage {
     },
     PermissionReplied {
         session_id: i64,
+        request_id: String,
         label: String,
         result: UiResult<SessionExecutionResource>,
     },
     UserInputReplied {
         session_id: i64,
+        request_id: String,
         result: UiResult<SessionExecutionResource>,
     },
     ProvidersLoaded {
@@ -464,7 +465,7 @@ pub(super) enum AppMessage {
     },
     RewindMessagesLoaded {
         session_id: i64,
-        result: UiResult<Vec<MessageResource>>,
+        result: UiResult<Vec<agena_domain::TurnSnapshot>>,
     },
     ModelCatalogLoaded {
         query: String,
@@ -551,6 +552,31 @@ pub(super) struct UiFailure {
 }
 
 impl UiFailure {
+    pub(super) fn from_backend(error: anyhow::Error) -> Self {
+        if let Some(error) = error.downcast_ref::<agena_application::ApplicationError>() {
+            return Self::from_failure((*error.failure).clone());
+        }
+        if let Some(error) = error.downcast_ref::<agena_runtime::SessionExecutionCommandError>() {
+            return Self::from_failure(error.failure.clone());
+        }
+        if let Some(error) = error.downcast_ref::<agena_runtime::SessionExecutionControlError>() {
+            return Self::from_failure(error.failure.clone());
+        }
+        if let Some(error) = error.downcast_ref::<agena_runtime::SessionQueryError>() {
+            return Self::from_failure((*error.failure).clone());
+        }
+        if let Some(error) = error.downcast_ref::<agena_runtime::RuntimeEventQueryError>() {
+            return Self::from_failure((*error.failure).clone());
+        }
+        Self::internal(error)
+    }
+
+    pub(super) fn from_failure(failure: agena_failure::Failure) -> Self {
+        Self {
+            failure: Box::new(failure),
+        }
+    }
+
     pub(super) fn internal(diagnostic: impl std::fmt::Display) -> Self {
         let failure = agena_failure::Failure::new(
             agena_failure::FailureCode::new("ui.operation_failed"),
@@ -561,7 +587,7 @@ impl UiFailure {
             agena_failure::FailureImpact::RequestRejected,
             agena_failure::UserPresentation::new(
                 "ui-operation-failed",
-                "The operation could not be completed.",
+                "The terminal interface could not finish this action.",
             ),
         );
         tracing::error!(
@@ -725,3 +751,36 @@ pub(super) use agena_tui::help::{HelpOverlay, HelpOverlayKind};
 pub(super) use agena_tui_components::{
     HelpDialogEntry as HelpEntry, HelpDialogSection as HelpSection,
 };
+
+#[cfg(test)]
+mod ui_failure_tests {
+    use super::UiFailure;
+
+    #[test]
+    fn backend_failure_survives_anyhow_context_without_ui_rewrapping() {
+        let failure = agena_failure::Failure::new(
+            agena_failure::FailureCode::new("tool.execution_failed"),
+            agena_failure::FailureCategory::DependencyUnavailable,
+            agena_failure::FailureResponsibility::Dependency,
+            agena_failure::RetryDirective::AfterUserAction,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::validated(
+                "tool-execution-failed",
+                "Filesystem write failed because the target changed.",
+            ),
+        );
+        let expected_id = failure.id;
+        let error = anyhow::Error::new(agena_application::ApplicationError::from_failure(failure))
+            .context("failed to submit user message");
+
+        let projected = UiFailure::from_backend(error);
+
+        assert_eq!(projected.failure.id, expected_id);
+        assert_eq!(projected.failure.code.as_str(), "tool.execution_failed");
+        assert_eq!(
+            projected.failure.user.fallback,
+            "Filesystem write failed because the target changed."
+        );
+    }
+}

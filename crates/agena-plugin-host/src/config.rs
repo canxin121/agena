@@ -323,8 +323,6 @@ pub struct TimeoutsConfig {
     pub tool_hook: Option<DurationSpec>,
     /// `tool.invoke` timeout (default 5min).
     pub tool_invoke: Option<DurationSpec>,
-    /// `permission.ask_permission` timeout (default 60s).
-    pub permission_ask: Option<DurationSpec>,
     /// `chat.*` timeout (default 5s).
     pub chat: Option<DurationSpec>,
     /// `shell.env` / `command.execute.before` / `config` (default 2s).
@@ -340,10 +338,6 @@ impl TimeoutsConfig {
                 .tool_invoke
                 .clone()
                 .or_else(|| parent.tool_invoke.clone()),
-            permission_ask: self
-                .permission_ask
-                .clone()
-                .or_else(|| parent.permission_ask.clone()),
             chat: self.chat.clone().or_else(|| parent.chat.clone()),
             fast: self.fast.clone().or_else(|| parent.fast.clone()),
         }
@@ -359,10 +353,6 @@ impl TimeoutsConfig {
 
     pub fn tool_invoke_or(&self, default: Duration) -> Duration {
         self.tool_invoke.as_ref().map(|d| d.0).unwrap_or(default)
-    }
-
-    pub fn permission_ask_or(&self, default: Duration) -> Duration {
-        self.permission_ask.as_ref().map(|d| d.0).unwrap_or(default)
     }
 
     pub fn chat_or(&self, default: Duration) -> Duration {

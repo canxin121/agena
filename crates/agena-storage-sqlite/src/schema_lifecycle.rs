@@ -10,7 +10,7 @@ use sea_orm::{
 };
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 /// Validates SQLite invariants and opens the transaction that must contain
 /// table/index/trigger creation plus the schema-version update.

@@ -65,7 +65,7 @@ pub struct SessionProjectedMessagePart {
     pub summary: Option<String>,
     pub has_detail: bool,
     pub activity_id: Option<agena_domain::ActivityId>,
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     pub operation_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub detail: Option<SessionProjectedPartDetail>,

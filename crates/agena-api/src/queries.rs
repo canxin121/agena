@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::pagination::{PageInfo, PaginatedResponse};
 use crate::resource::{
-    HealthResponse, MessageResource, PartLoadMode, PermissionRuleResource,
-    ProviderAdapterModelsResponse, ProviderModelsResponse, ProviderSummaryResource,
-    RuntimeStatusResponse, SessionResource, WorkspaceResource,
+    HealthResponse, PermissionRuleResource, ProviderAdapterModelsResponse, ProviderModelsResponse,
+    ProviderSummaryResource, RuntimeStatusResponse, SessionResource, WorkspaceResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,10 +24,6 @@ pub enum Query {
     ListSessions(ListSessionsParams),
     GetSession(GetSessionParams),
     GetSessionState(GetSessionParams),
-    ListMessages(ListMessagesParams),
-    GetMessage(GetMessageParams),
-    ListMessageParts(ListMessagePartsParams),
-    GetMessagePart(GetMessagePartParams),
     ListEvents(ListEventsParams),
     ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
@@ -48,10 +43,6 @@ pub enum QueryResult {
     Sessions(PaginatedResponse<SessionResource>),
     Session(SessionResource),
     SessionState(crate::resource::SessionExecutionResource),
-    Messages(PaginatedResponse<MessageResource>),
-    Message(MessageResource),
-    MessageParts(Vec<crate::message_part::MessagePartResource>),
-    MessagePart(crate::message_part::MessagePartResource),
     Events(PaginatedEvents),
     PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
@@ -190,36 +181,6 @@ pub struct ListSessionsParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetSessionParams {
     pub session_id: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListMessagesParams {
-    pub session_id: i64,
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<u64>,
-    #[serde(default)]
-    pub parts: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetMessageParams {
-    pub message_id: i64,
-    #[serde(default)]
-    pub parts: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListMessagePartsParams {
-    pub message_id: i64,
-    #[serde(default)]
-    pub mode: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetMessagePartParams {
-    pub part_id: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

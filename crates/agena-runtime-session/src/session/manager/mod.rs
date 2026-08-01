@@ -1,16 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    net::IpAddr,
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
 use arc_swap::ArcSwap;
 use chrono::Utc;
+use sea_orm::{ConnectionTrait, Statement};
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
@@ -20,23 +17,20 @@ use crate::message::{
     OperationPart, PartContent, RequestPart,
 };
 use crate::permission::resolve_permission_with_persisted_rules;
-use crate::tool::{
-    ExecutionGrant, StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution,
-};
+use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::UserInputReply;
 use agena_domain::{
     DecisionTraceStep, ExecutionFinishedEvent, ExecutionOutcome, ExecutionSource,
-    ExecutionStartedEvent, FinishReason, PermissionAction, PermissionDecision, PermissionMode,
-    PermissionRepliedEvent, PermissionReply, PermissionReplyKind, PermissionRiskLevel,
-    PermissionScope, Role, RunAbortReason, TimeRange, UserInputReplyKind,
+    ExecutionStartedEvent, FinishReason, PermissionAction, PermissionMode, PermissionRepliedEvent,
+    PermissionReplyKind, PermissionRiskLevel, PermissionScope, Role, RunAbortReason, TimeRange,
+    UserInputReplyKind,
 };
 use agena_domain::{ExecutionStatus, MessageSource};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
 use agena_storage::PersistedPermissionRule;
 use agena_tool::PreparedShellCommand;
-use agena_tool::ToolPermissionCheck;
 use std::path::PathBuf;
 
 use super::cache::SessionCachePolicy;
@@ -185,6 +179,26 @@ struct PromptTurnBudget {
     model_context_window_tokens: Option<u32>,
 }
 
+/// Stable canonical conversation identity shared by every execution that
+/// contributes to one assistant reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConversationIdentity {
+    turn_id: agena_domain::TurnId,
+    reply_id: agena_domain::AssistantReplyId,
+}
+
+/// Declares how a new execution attaches to the canonical conversation.
+///
+/// Callers resolving an interactive request must pass the exact reply that
+/// owns that request. This keeps execution registration from guessing based
+/// on whichever turn happens to be newest when the reply reaches the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionConversationTarget {
+    NewTurn,
+    LatestReply,
+    ExistingReply(ConversationIdentity),
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedPendingTool {
     pending: SessionPendingTool,
@@ -193,7 +207,6 @@ struct ResolvedPendingTool {
     invocation: ToolInvocation,
     advertised_tool_identity: Option<String>,
     prepared_shell_command: Option<PreparedShellCommand>,
-    execution_grant: Option<ExecutionGrant>,
     lifecycle: TimeRange,
     session_runtime: crate::session::SessionRuntimeState,
 }
@@ -202,60 +215,6 @@ struct PendingHostUserInput {
     session_id: i64,
     response: oneshot::Sender<agena_plugin_host::sdk::host_api::AskUserResponse>,
 }
-
-struct PendingHostPermission {
-    session_id: i64,
-    response: oneshot::Sender<PermissionReply>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct HostPermissionGrantKey {
-    session_id: i64,
-    call_id: i64,
-    plugin_id: String,
-    tool_name: String,
-}
-
-/// A short-lived, exact-action grant for permission checks made by an
-/// execution tool after a user approves an inner Tool API call. This ledger
-/// covers runtime-discovered checks that flow back through the plugin host
-/// during that same exact execution.
-struct HostPermissionGrantGuard {
-    grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
-    key: HostPermissionGrantKey,
-}
-
-impl HostPermissionGrantGuard {
-    fn install(
-        grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
-        session_id: i64,
-        call_id: i64,
-        plugin_id: String,
-        tool_name: String,
-        actions: Vec<PermissionAction>,
-    ) -> Self {
-        let key = HostPermissionGrantKey {
-            session_id,
-            call_id,
-            plugin_id,
-            tool_name,
-        };
-        let mut guard = grants.lock().expect("host permission grant lock poisoned");
-        guard.insert(key.clone(), actions);
-        drop(guard);
-        Self { grants, key }
-    }
-}
-
-impl Drop for HostPermissionGrantGuard {
-    fn drop(&mut self) {
-        if let Ok(mut grants) = self.grants.lock() {
-            grants.remove(&self.key);
-        }
-    }
-}
-
-static HOST_PERMISSION_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 type HostUserInputSequenceKey = (i64, i64);
 
@@ -301,7 +260,7 @@ struct SessionManagerState {
 struct StableRunContext {
     allow_goal_continuation: bool,
     base_run_source: ExecutionSource,
-    active_turn_id: Option<i64>,
+    active_model_turn_id: Option<i64>,
     state: Arc<SessionManagerState>,
     control: Arc<ExecutionControl>,
     steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
@@ -419,7 +378,6 @@ mod stats;
 mod tests;
 
 use self::helpers::*;
-use self::replies::{AggregatedPermissionOutcome, AggregatedPermissionRequest};
 
 impl SessionManagerState {
     fn new(
@@ -450,41 +408,11 @@ pub struct SessionManager {
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
     host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
-    host_permission_waiters: Arc<Mutex<HashMap<String, PendingHostPermission>>>,
-    host_permission_grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
 }
 
-/// A one-shot execution capability created only after every permission check
-/// for a concrete session tool invocation has resolved to `Allow`.
+/// Application-initiated session tools execute directly. This boundary is
+/// deliberately outside the model-originated tool permission state machine.
 ///
-/// Its fields are intentionally private so API surfaces cannot manufacture a
-/// post-authorization executor without the exact invocation grant.
-struct AuthorizedToolInvocation {
-    executor: ToolExecutor,
-    invocation: ToolInvocation,
-    session_id: i64,
-    grant: ExecutionGrant,
-}
-
-impl AuthorizedToolInvocation {
-    fn execute(self, call_id: i64) -> Result<ToolInvocationExecution, ToolError> {
-        self.executor.execute_invocation_detailed_with_grant(
-            &self.grant,
-            &self.invocation,
-            self.session_id,
-            call_id,
-        )
-    }
-}
-
-enum ToolInvocationAuthorization {
-    Allowed(Box<AuthorizedToolInvocation>),
-    Ask(Box<AggregatedPermissionRequest>),
-    Deny(Box<agena_domain::PolicyDeniedResult>),
-    CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
-    ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
-}
-
 #[async_trait::async_trait]
 impl agena_runtime::SessionToolExecutionService for SessionManager {
     async fn execute_session_tool(
@@ -493,44 +421,37 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
         invocation: ToolInvocation,
     ) -> Result<agena_runtime::SessionToolExecutionOutcome, agena_runtime::SessionToolExecutionError>
     {
-        match self
-            .authorize_session_tool_invocation(session_id, invocation.clone())
-            .await
-            .map_err(|error| {
-                agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-            })? {
-            ToolInvocationAuthorization::Allowed(authorized) => authorized
-                .execute(-1)
-                .map(|execution| {
-                    agena_runtime::SessionToolExecutionOutcome::Completed(execution.summary())
-                })
-                .map_err(|error| {
-                    agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-                }),
-            ToolInvocationAuthorization::Ask(request) => {
-                let reason = request.reason.clone();
-                let request_id = self
-                    .create_external_tool_permission_request(session_id, invocation, *request)
-                    .await
-                    .map_err(|error| {
-                        agena_runtime::SessionToolExecutionError::Execution(error.to_string())
-                    })?;
-                Ok(
-                    agena_runtime::SessionToolExecutionOutcome::ApprovalRequired {
-                        request_id: Some(request_id),
-                        reason,
-                    },
-                )
-            }
-            ToolInvocationAuthorization::Deny(denial) => Ok(
-                agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial),
-            ),
-            ToolInvocationAuthorization::CapabilityUnavailable(unavailable) => {
+        let session = self.get_session(session_id).await.map_err(|error| {
+            agena_runtime::SessionToolExecutionError::Execution(error.to_string())
+        })?;
+        let executor = self
+            .execution_state()
+            .tool_executor
+            .for_session_context(&session.runtime.execution);
+        let prepared = (|| {
+            let prepared = executor.prepare_invocation(&invocation, session_id, -1)?;
+            let (invocation, prepared_shell_command) =
+                executor.prepare_shell_invocation(&prepared.invocation, session_id, -1)?;
+            executor.execute_invocation_detailed_with_prepared_shell(
+                &invocation,
+                session_id,
+                -1,
+                prepared_shell_command,
+            )
+        })();
+        match prepared {
+            Ok(execution) => Ok(agena_runtime::SessionToolExecutionOutcome::Completed(
+                execution.summary(),
+            )),
+            Err(ToolError::CapabilityUnavailable(unavailable)) => {
                 Ok(agena_runtime::SessionToolExecutionOutcome::CapabilityUnavailable(unavailable))
             }
-            ToolInvocationAuthorization::ToolUnavailable(unavailable) => Ok(
+            Err(ToolError::ToolUnavailable(unavailable)) => Ok(
                 agena_runtime::SessionToolExecutionOutcome::ToolUnavailable(unavailable),
             ),
+            Err(error) => Err(agena_runtime::SessionToolExecutionError::Execution(
+                error.to_string(),
+            )),
         }
     }
 }
@@ -862,6 +783,111 @@ fn part_contents_from_composer_document(
 }
 
 impl SessionManager {
+    async fn conversation_identity_for_execution(
+        &self,
+        session_id: i64,
+        source: ExecutionSource,
+        target: ExecutionConversationTarget,
+    ) -> Result<ConversationIdentity, AppError> {
+        match target {
+            ExecutionConversationTarget::NewTurn => {
+                if source != ExecutionSource::User {
+                    return Err(AppError::Internal(format!(
+                        "{source:?} execution cannot create a canonical user turn"
+                    )));
+                }
+                return Ok(ConversationIdentity {
+                    turn_id: agena_domain::TurnId::new(),
+                    reply_id: agena_domain::AssistantReplyId::new(),
+                });
+            }
+            ExecutionConversationTarget::ExistingReply(identity) => return Ok(identity),
+            ExecutionConversationTarget::LatestReply => {}
+        }
+
+        if source == ExecutionSource::User {
+            return Err(AppError::Internal(
+                "user execution requires a new canonical turn".to_owned(),
+            ));
+        }
+
+        let row = self
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                self.store.db.get_database_backend(),
+                "SELECT t.turn_id, r.reply_id \
+                 FROM agena_turns t \
+                 JOIN agena_assistant_replies r ON r.turn_id = t.turn_id \
+                 WHERE t.session_id = ? \
+                 ORDER BY t.turn_seq DESC LIMIT 1",
+                [session_id.into()],
+            ))
+            .await?
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "{source:?} requires an existing user turn in session {session_id}"
+                ))
+            })?;
+        let turn_id: String = row.try_get("", "turn_id")?;
+        let reply_id: String = row.try_get("", "reply_id")?;
+        let turn_id = uuid::Uuid::parse_str(turn_id.as_str())
+            .map(agena_domain::TurnId)
+            .map_err(|error| AppError::Internal(format!("invalid canonical turn id: {error}")))?;
+        let reply_id = uuid::Uuid::parse_str(reply_id.as_str())
+            .map(agena_domain::AssistantReplyId)
+            .map_err(|error| AppError::Internal(format!("invalid assistant reply id: {error}")))?;
+        Ok(ConversationIdentity { turn_id, reply_id })
+    }
+
+    /// Resolve the canonical reply directly from the durable model message
+    /// that owns an interaction.
+    ///
+    /// Interaction Activities are a downstream presentation projection and
+    /// can legitimately trail their model-message checkpoint while sibling
+    /// tools are still completing. Reply commands must therefore never use
+    /// `agena_activities.owner_id` or the request part projection as their
+    /// synchronization boundary. A request is appended to an already-owned
+    /// assistant message, so message ownership is sufficient and stable.
+    async fn conversation_identity_for_message(
+        &self,
+        session_id: i64,
+        message_id: i64,
+    ) -> Result<ConversationIdentity, AppError> {
+        let row = self
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                self.store.db.get_database_backend(),
+                "SELECT r.turn_id, r.reply_id \
+                 FROM agena_model_messages m \
+                 JOIN agena_reply_executions e ON e.execution_id = m.execution_id \
+                 JOIN agena_assistant_replies r ON r.reply_id = e.reply_id \
+                 JOIN agena_turns t ON t.turn_id = r.turn_id \
+                 WHERE m.message_id = ? AND m.session_id = ? AND t.session_id = ?",
+                [
+                    message_id.into(),
+                    session_id.into(),
+                    session_id.into(),
+                ],
+            ))
+            .await?
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "message {message_id} in session {session_id} has no canonical assistant reply identity"
+                ))
+            })?;
+        let turn_id: String = row.try_get("", "turn_id")?;
+        let reply_id: String = row.try_get("", "reply_id")?;
+        let turn_id = uuid::Uuid::parse_str(turn_id.as_str())
+            .map(agena_domain::TurnId)
+            .map_err(|error| AppError::Internal(format!("invalid canonical turn id: {error}")))?;
+        let reply_id = uuid::Uuid::parse_str(reply_id.as_str())
+            .map(agena_domain::AssistantReplyId)
+            .map_err(|error| AppError::Internal(format!("invalid assistant reply id: {error}")))?;
+        Ok(ConversationIdentity { turn_id, reply_id })
+    }
+
     async fn begin_execution(
         &self,
         session_id: i64,
@@ -872,7 +898,7 @@ impl SessionManager {
             session_id,
             execution_id: control.execution_id(),
             turn_id: control.turn_id(),
-            response_id: control.response_id(),
+            reply_id: control.reply_id(),
             source,
             ts_ms: Utc::now().timestamp_millis(),
         });
@@ -890,7 +916,7 @@ impl SessionManager {
         let event = EventKind::ExecutionFinished(ExecutionFinishedEvent {
             session_id,
             execution_id: control.execution_id(),
-            response_id: control.response_id(),
+            reply_id: control.reply_id(),
             outcome: outcome.clone(),
             ts_ms: Utc::now().timestamp_millis(),
         });
@@ -938,6 +964,7 @@ impl SessionManager {
         &self,
         session_id: i64,
         source: ExecutionSource,
+        conversation_target: ExecutionConversationTarget,
         task_name: &'static str,
         operation: F,
     ) -> Result<T, AppError>
@@ -952,9 +979,12 @@ impl SessionManager {
             + 'static,
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
     {
+        let identity = self
+            .conversation_identity_for_execution(session_id, source, conversation_target)
+            .await?;
         let (control, steer_rx) = self
             .execution_registry
-            .register(session_id)
+            .register(session_id, identity.turn_id, identity.reply_id)
             .await
             .map_err(execution_control_to_app_error)?;
         if let Err(error) = self
@@ -979,6 +1009,7 @@ impl SessionManager {
         &self,
         session_id: i64,
         source: ExecutionSource,
+        conversation_target: ExecutionConversationTarget,
         task_name: &'static str,
         operation: F,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError>
@@ -993,9 +1024,12 @@ impl SessionManager {
             + 'static,
         Fut: Future<Output = Result<T, AppError>> + Send + 'static,
     {
+        let identity = self
+            .conversation_identity_for_execution(session_id, source, conversation_target)
+            .await?;
         let (control, steer_rx) = self
             .execution_registry
-            .register(session_id)
+            .register(session_id, identity.turn_id, identity.reply_id)
             .await
             .map_err(execution_control_to_app_error)?;
         if let Err(error) = self
@@ -1011,7 +1045,7 @@ impl SessionManager {
             session_id,
             control.execution_id(),
             control.turn_id(),
-            control.response_id(),
+            control.reply_id(),
         );
         let manager = self.background_handle();
         tokio::spawn(async move {
@@ -1098,8 +1132,6 @@ impl SessionManager {
             reply_session_locks: Arc::clone(&self.reply_session_locks),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
             host_user_input_sequences: Arc::clone(&self.host_user_input_sequences),
-            host_permission_waiters: Arc::clone(&self.host_permission_waiters),
-            host_permission_grants: Arc::clone(&self.host_permission_grants),
         }
     }
 
@@ -1155,10 +1187,10 @@ impl SessionManager {
             Arc::new(agena_storage_sqlite::SeaProjectionLookupRepository::new(
                 Arc::clone(&db_arc),
             )),
-            Arc::new(agena_storage_sqlite::SeaMessageProjectionRepository::new(
+            Arc::new(agena_storage_sqlite::SeaModelMessageRepository::new(
                 Arc::clone(&db_arc),
             )),
-            Arc::new(agena_storage_sqlite::SeaMessageProjectionTransactionWriter),
+            Arc::new(agena_storage_sqlite::SeaModelMessageTransactionWriter),
             Arc::new(agena_storage_sqlite::SeaSessionSummaryRepository::new(
                 Arc::clone(&db_arc),
             )),
@@ -1173,8 +1205,6 @@ impl SessionManager {
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),
-            host_permission_waiters: Arc::new(Mutex::new(HashMap::new())),
-            host_permission_grants: Arc::new(StdMutex::new(HashMap::new())),
         }
     }
 
@@ -1202,189 +1232,21 @@ impl SessionManager {
         self.execution_state().tool_executor.clone()
     }
 
-    /// Execute for a sessionless administrative surface while returning Ask,
-    /// Deny, and availability as normal outcomes. Without a session an Ask
-    /// cannot create a durable reply target, so no side effect is started.
+    /// Execute for a sessionless administrative surface. Administrative and
+    /// plugin UI invocations are not model tool calls, so they do not enter
+    /// the model permission state machine.
     pub async fn execute_unscoped_tool(
         &self,
         invocation: ToolInvocation,
         call_id: i64,
     ) -> Result<agena_runtime::SessionToolExecutionOutcome, AppError> {
         let executor = self.tool_executor();
-        let checks = match executor
-            .collect_permission_checks_for_invocation_in_session(&invocation, None)
-        {
-            Ok(checks) => checks,
-            Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                return Ok(
-                    agena_runtime::SessionToolExecutionOutcome::CapabilityUnavailable(unavailable),
-                );
-            }
-            Err(ToolError::ToolUnavailable(unavailable)) => {
-                return Ok(agena_runtime::SessionToolExecutionOutcome::ToolUnavailable(
-                    unavailable,
-                ));
-            }
-            Err(error) => return Err(tool_error_to_app_error(error)),
-        };
-        match self.aggregate_permission_outcome(None, &checks).await? {
-            AggregatedPermissionOutcome::Request(request) => Ok(
-                agena_runtime::SessionToolExecutionOutcome::ApprovalRequired {
-                    request_id: None,
-                    reason: request.reason,
-                },
-            ),
-            AggregatedPermissionOutcome::Deny(denial) => Ok(
-                agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial),
-            ),
-            AggregatedPermissionOutcome::Allow => {
-                let actions = checks.into_iter().map(|check| check.action).collect();
-                let grant = executor
-                    .issue_execution_grant(&invocation, -1, call_id, None, actions)
-                    .map_err(tool_error_to_app_error)?;
-                let execution = executor
-                    .execute_invocation_detailed_with_grant(&grant, &invocation, -1, call_id)
-                    .map_err(tool_error_to_app_error)?;
-                Ok(agena_runtime::SessionToolExecutionOutcome::Completed(
-                    execution.summary(),
-                ))
-            }
-        }
-    }
-
-    /// Resolve all static, persisted, and plugin-provided permission decisions
-    /// for an externally initiated session tool call without creating a user
-    /// approval request. Callers may execute only the returned opaque
-    /// capability.
-    async fn authorize_session_tool_invocation(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<ToolInvocationAuthorization, AppError> {
-        self.authorize_session_tool_invocation_inner(session_id, invocation)
-            .await
-    }
-
-    async fn authorize_session_tool_invocation_inner(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<ToolInvocationAuthorization, AppError> {
-        let session = self.get_session(session_id).await?;
-        let state = self.execution_state();
-        let executor = state
-            .tool_executor
-            .for_session_context(&session.runtime.execution);
-        let checks = match executor
-            .collect_permission_checks_for_invocation_in_session(&invocation, Some(session.id))
-        {
-            Ok(checks) => checks,
-            Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                return Ok(ToolInvocationAuthorization::CapabilityUnavailable(
-                    unavailable,
-                ));
-            }
-            Err(ToolError::ToolUnavailable(unavailable)) => {
-                return Ok(ToolInvocationAuthorization::ToolUnavailable(unavailable));
-            }
-            Err(error) => return Err(tool_error_to_app_error(error)),
-        };
-
-        match self
-            .aggregate_permission_outcome(Some(session.id), checks.as_slice())
-            .await?
-        {
-            AggregatedPermissionOutcome::Allow => {}
-            AggregatedPermissionOutcome::Request(request) => {
-                return Ok(ToolInvocationAuthorization::Ask(request));
-            }
-            AggregatedPermissionOutcome::Deny(denial) => {
-                return Ok(ToolInvocationAuthorization::Deny(denial));
-            }
-        }
-
-        let authorized_actions = checks.iter().map(|check| check.action.clone()).collect();
-        let grant = executor
-            .issue_execution_grant(&invocation, session.id, -1, None, authorized_actions)
+        let execution = executor
+            .execute_invocation_detailed(&invocation, -1, call_id)
             .map_err(tool_error_to_app_error)?;
-        Ok(ToolInvocationAuthorization::Allowed(Box::new(
-            AuthorizedToolInvocation {
-                executor,
-                invocation,
-                session_id: session.id,
-                grant,
-            },
-        )))
-    }
-
-    async fn create_external_tool_permission_request(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-        request: AggregatedPermissionRequest,
-    ) -> Result<String, AppError> {
-        let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        let ids = self.store.reserve_message_ids(1).await?;
-        let turn_id = ids.message_id;
-        let call_id = ids.part_ids[0];
-        let request_id = format!("external-tool-permission-{session_id}-{call_id}");
-        let operation = OperationPart::pending(
-            call_id,
-            invocation,
-            format!("Awaiting permission: {}", request.reason),
-            TimeRange::default(),
-        );
-        let mut message = build_message(
-            ids,
-            Role::Assistant,
-            ExecutionStatus::InProgress,
-            vec![PartContent::operation(operation)],
-            MessageMetadata {
-                turn_id: Some(turn_id),
-                externally_initiated_tool: true,
-                ..MessageMetadata::default()
-            },
-        );
-        message.parts[0].operation_id = Some(request_id.clone());
-        session.messages.push(message.clone());
-        session = self
-            .persist_session_changes(session, vec![message], Vec::new(), None, state.clone())
-            .await?;
-        let pending_tool = session
-            .pending_tools()
-            .into_iter()
-            .find(|pending| {
-                session
-                    .part(&pending.part)
-                    .is_some_and(|part| part.operation_id.as_deref() == Some(request_id.as_str()))
-            })
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "external permission operation was not projected: {request_id}"
-                ))
-            })?;
-        self.apply_permission_request_with_id(
-            session,
-            &pending_tool,
-            request_id.clone(),
-            request.action,
-            request.related_actions,
-            request.requested_actions,
-            request.reason,
-            request.explanation,
-            request.source,
-            request.scope,
-            request.operator,
-            request.risk,
-            request.trace,
-            state,
-        )
-        .await?;
-        Ok(request_id)
+        Ok(agena_runtime::SessionToolExecutionOutcome::Completed(
+            execution.summary(),
+        ))
     }
 
     pub async fn request_host_user_input(
@@ -1492,105 +1354,15 @@ impl SessionManager {
         let (invocation, prepared_shell_command) = scoped_executor
             .prepare_shell_invocation(&prepared.invocation, session.id, call_id)
             .map_err(tool_error_to_app_error)?;
-        let target = scoped_executor
-            .plugin_manager()
-            .lookup_tool(invocation.name.as_str())
-            .ok_or_else(|| {
-                AppError::Internal(format!("target tool `{}` not found", invocation.name))
-            })?;
-        let target_plugin_id = target.plugin_full_name();
-        let target_tool_name = target.tool_name().to_string();
-
-        let permission_checks = scoped_executor
-            .collect_permission_checks_for_invocation_in_session(&invocation, Some(session.id))
-            .map_err(tool_error_to_app_error)?;
-        let authorized_actions: Vec<_> = permission_checks
-            .iter()
-            .map(|check| check.action.clone())
-            .collect();
-        let granted_actions = match self
-            .aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
-            .await?
-        {
-            AggregatedPermissionOutcome::Allow => None,
-            AggregatedPermissionOutcome::Deny(denial) => {
-                return Err(AppError::PolicyDenied(denial));
-            }
-            AggregatedPermissionOutcome::Request(request) => {
-                let request = *request;
-                let reply = self
-                    .request_host_invoked_tool_permission(
-                        session_id,
-                        call_id,
-                        request.clone(),
-                        state.clone(),
-                    )
-                    .await?;
-                match reply.kind {
-                    PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
-                        Some(if request.requested_actions.is_empty() {
-                            vec![request.action]
-                        } else {
-                            request.requested_actions
-                        })
-                    }
-                    PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
-                        return Err(AppError::UserDeclined(Box::new(
-                            agena_domain::UserDeclinedResult {
-                                request_id: reply.request_id,
-                                action: request.action,
-                                related_actions: request.related_actions,
-                                reason: reply.reason,
-                                persisted_scope: matches!(
-                                    reply.kind,
-                                    PermissionReplyKind::DenyAlways
-                                )
-                                .then_some(reply.scope)
-                                .flatten(),
-                            },
-                        )));
-                    }
-                }
-            }
-        };
-
-        // Always install a scoped grant ledger. Runtime-discovered actions
-        // approved through Host API callbacks are appended to this exact
-        // invocation and automatically removed when execution returns.
-        let _permission_grant = HostPermissionGrantGuard::install(
-            Arc::clone(&self.host_permission_grants),
-            session_id,
-            call_id,
-            target_plugin_id,
-            target_tool_name,
-            granted_actions.unwrap_or_default(),
-        );
-        let execution_grant = scoped_executor
-            .issue_execution_grant(
-                &invocation,
-                session_id,
-                call_id,
-                prepared_shell_command.as_ref(),
-                authorized_actions,
-            )
-            .map_err(tool_error_to_app_error)?;
-
-        // The model-visible operation is the outer `tools.call`, while the
-        // target reuses its call id through the host callback context. Keep
-        // that outer pending part up to date when the target is streaming.
+        // Host/application callbacks are not model tool invocations and do
+        // not participate in the model permission state machine.
         let outer_pending_tool = session.pending_tools().into_iter().find(|tool| {
             session
                 .pending_tool_execution(tool)
                 .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
         });
         if let Some(mut stream) = scoped_executor
-            .execute_invocation_streaming_with_grant(
-                &execution_grant,
-                &invocation,
-                session_id,
-                call_id,
-                prepared_shell_command.as_ref(),
-            )
+            .execute_invocation_streaming(&invocation, session_id, call_id)
             .await
             .map_err(tool_error_to_app_error)?
         {
@@ -1639,8 +1411,7 @@ impl SessionManager {
         }
 
         tokio::task::spawn_blocking(move || {
-            scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
-                &execution_grant,
+            scoped_executor.execute_invocation_detailed_with_prepared_shell(
                 &invocation,
                 session_id,
                 call_id,
@@ -1650,71 +1421,6 @@ impl SessionManager {
         .await
         .map_err(|err| AppError::Internal(format!("host-invoked tool task failed: {err}")))?
         .map_err(tool_error_to_app_error)
-    }
-
-    async fn request_host_invoked_tool_permission(
-        &self,
-        session_id: i64,
-        call_id: i64,
-        request: AggregatedPermissionRequest,
-        state: Arc<SessionManagerState>,
-    ) -> Result<PermissionReply, AppError> {
-        // Parallel gateway calls may discover permissions at the same time.
-        // Serialize only the database projection update so each request is
-        // based on the latest session and remains attached to its own call.
-        // The lock is deliberately released before waiting for the user.
-        let request_lock = self.reply_session_lock(session_id).await;
-        let request_guard = request_lock.lock().await;
-        let session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
-        let pending_tool = session
-            .pending_tools()
-            .into_iter()
-            .find(|tool| {
-                session
-                    .pending_tool_execution(tool)
-                    .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
-            })
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool not found for host-invoked permission: session={session_id}, call={call_id}"
-                ))
-            })?;
-        let resolved = resolve_pending_tool(&session, &pending_tool)?;
-        let request_id = host_permission_request_id(session.id, resolved.call_id);
-        let response_rx = self
-            .install_host_permission_waiter(session.id, request_id.clone())
-            .await;
-        if let Err(err) = self
-            .apply_permission_request_with_id(
-                session,
-                &pending_tool,
-                request_id.clone(),
-                request.action,
-                request.related_actions,
-                request.requested_actions,
-                request.reason,
-                request.explanation,
-                request.source,
-                request.scope,
-                request.operator,
-                request.risk,
-                request.trace,
-                state,
-            )
-            .await
-        {
-            self.host_permission_waiters
-                .lock()
-                .await
-                .remove(request_id.as_str());
-            return Err(err);
-        }
-        drop(request_guard);
-        self.await_host_permission_reply(request_id.as_str(), response_rx)
-            .await
     }
 
     fn next_host_user_input_sequence(&self, session_id: i64, call_id: i64) -> usize {
@@ -1804,49 +1510,7 @@ impl SessionManager {
         }
     }
 
-    async fn install_host_permission_waiter(
-        &self,
-        session_id: i64,
-        request_id: String,
-    ) -> oneshot::Receiver<PermissionReply> {
-        let (response_tx, response_rx) = oneshot::channel();
-        self.host_permission_waiters.lock().await.insert(
-            request_id,
-            PendingHostPermission {
-                session_id,
-                response: response_tx,
-            },
-        );
-        response_rx
-    }
-
     async fn cancel_host_interactive_waiters(&self, session_id: i64) {
-        let permission_waiters = {
-            let mut waiters = self.host_permission_waiters.lock().await;
-            let request_ids = waiters
-                .iter()
-                .filter_map(|(request_id, waiter)| {
-                    (waiter.session_id == session_id).then_some(request_id.clone())
-                })
-                .collect::<Vec<_>>();
-            request_ids
-                .into_iter()
-                .filter_map(|request_id| {
-                    waiters
-                        .remove(request_id.as_str())
-                        .map(|waiter| (request_id, waiter))
-                })
-                .collect::<Vec<_>>()
-        };
-        for (request_id, waiter) in permission_waiters {
-            let _ = waiter.response.send(PermissionReply {
-                request_id,
-                kind: PermissionReplyKind::DenyOnce,
-                reason: Some("run cancelled by user".to_string()),
-                scope: None,
-            });
-        }
-
         let input_waiters = {
             let mut waiters = self.host_user_input_waiters.lock().await;
             let request_ids = waiters
@@ -1868,152 +1532,6 @@ impl SessionManager {
                     ..Default::default()
                 });
         }
-    }
-
-    async fn await_host_permission_reply(
-        &self,
-        request_id: &str,
-        response_rx: oneshot::Receiver<PermissionReply>,
-    ) -> Result<PermissionReply, AppError> {
-        response_rx.await.map_err(|_| {
-            AppError::Internal(format!(
-                "host-invoked permission waiter closed before reply: {request_id}"
-            ))
-        })
-    }
-
-    pub async fn authorize_host_action(
-        &self,
-        session_id: i64,
-        call_id: i64,
-        plugin_id: &str,
-        tool_name: &str,
-        check: ToolPermissionCheck,
-    ) -> Result<crate::HostActionAuthorization, AppError> {
-        if self.has_host_permission_grant(session_id, call_id, plugin_id, tool_name, &check.action)
-        {
-            return Ok(crate::HostActionAuthorization::Allowed);
-        }
-
-        let state = self.execution_state();
-        match self
-            .aggregate_permission_outcome(Some(session_id), std::slice::from_ref(&check))
-            .await?
-        {
-            AggregatedPermissionOutcome::Allow => Ok(crate::HostActionAuthorization::Allowed),
-            AggregatedPermissionOutcome::Deny(denial) => {
-                Ok(crate::HostActionAuthorization::PolicyDenied(denial))
-            }
-            AggregatedPermissionOutcome::Request(request) => {
-                let request = *request;
-                let reply = self
-                    .request_host_invoked_tool_permission(
-                        session_id,
-                        call_id,
-                        request.clone(),
-                        state,
-                    )
-                    .await?;
-                match reply.kind {
-                    PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
-                        let actions = if request.related_actions.is_empty() {
-                            vec![request.action]
-                        } else {
-                            request.related_actions
-                        };
-                        self.extend_host_permission_grant(
-                            session_id, call_id, plugin_id, tool_name, actions,
-                        );
-                        Ok(crate::HostActionAuthorization::Allowed)
-                    }
-                    PermissionReplyKind::DenyOnce | PermissionReplyKind::DenyAlways => {
-                        Ok(crate::HostActionAuthorization::UserDeclined(
-                            agena_domain::UserDeclinedResult {
-                                request_id: reply.request_id,
-                                action: request.action,
-                                related_actions: request.related_actions,
-                                reason: reply.reason,
-                                persisted_scope: matches!(
-                                    reply.kind,
-                                    PermissionReplyKind::DenyAlways
-                                )
-                                .then_some(reply.scope)
-                                .flatten(),
-                            },
-                        ))
-                    }
-                }
-            }
-        }
-    }
-
-    fn extend_host_permission_grant(
-        &self,
-        session_id: i64,
-        call_id: i64,
-        plugin_id: &str,
-        tool_name: &str,
-        actions: Vec<PermissionAction>,
-    ) {
-        let key = HostPermissionGrantKey {
-            session_id,
-            call_id,
-            plugin_id: plugin_id.to_string(),
-            tool_name: tool_name.to_string(),
-        };
-        let Ok(mut grants) = self.host_permission_grants.lock() else {
-            return;
-        };
-        let granted = grants.entry(key).or_default();
-        for action in actions {
-            if !granted.contains(&action) {
-                granted.push(action);
-            }
-        }
-    }
-
-    pub fn has_host_permission_grant(
-        &self,
-        session_id: i64,
-        call_id: i64,
-        plugin_id: &str,
-        tool_name: &str,
-        action: &PermissionAction,
-    ) -> bool {
-        let key = HostPermissionGrantKey {
-            session_id,
-            call_id,
-            plugin_id: plugin_id.to_string(),
-            tool_name: tool_name.to_string(),
-        };
-        self.host_permission_grants
-            .lock()
-            .ok()
-            .and_then(|grants| grants.get(&key).cloned())
-            .is_some_and(|actions| host_permission_grant_matches_action(&actions, action))
-    }
-
-    fn install_host_permission_grant_for_pending_tool(
-        &self,
-        state: &SessionManagerState,
-        session_id: i64,
-        pending_tool: &ResolvedPendingTool,
-        actions: Vec<PermissionAction>,
-    ) -> Option<HostPermissionGrantGuard> {
-        let scoped_executor = state
-            .tool_executor
-            .for_session_context(&pending_tool.session_runtime.execution);
-        let target = scoped_executor
-            .plugin_manager()
-            .lookup_tool(pending_tool.invocation.name.as_str())?;
-        Some(HostPermissionGrantGuard::install(
-            Arc::clone(&self.host_permission_grants),
-            session_id,
-            pending_tool.call_id,
-            target.plugin_full_name(),
-            target.tool_name().to_string(),
-            actions,
-        ))
     }
 
     pub fn reconfigure(

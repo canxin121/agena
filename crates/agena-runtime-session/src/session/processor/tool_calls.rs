@@ -172,17 +172,22 @@ impl SessionProcessor {
                 })?;
             let mut operation = OperationPart::pending(
                 call_id,
-                invocation,
-                tool_execution_title(Some(tool_name.as_str())),
+                invocation.clone(),
+                tool_execution_title(Some(invocation.name.as_str())),
                 TimeRange {
                     start_ms: pending.started_at_ms.unwrap_or_default(),
                     end_ms: None,
                 },
             );
-            if let Some(identity) = tool_api_definition_identity(
-                tool_name.as_str(),
-                run.completion.tool_api_functions.as_slice(),
-            ) {
+            if invocation
+                .tool_api_call
+                .as_ref()
+                .is_some_and(|call| call.function != agena_domain::ToolApiFunction::Call)
+                && let Some(identity) = tool_api_definition_identity(
+                    tool_name.as_str(),
+                    run.completion.tool_api_functions.as_slice(),
+                )
+            {
                 operation.set_advertised_tool_identity(identity);
             }
             part.set_content(PartContent::operation(operation));

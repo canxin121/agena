@@ -55,6 +55,8 @@ pub enum AppError {
     CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
     #[error("tool is unavailable: {}", .0.reason)]
     ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
+    #[error("tool execution error: {0}")]
+    Tool(Box<crate::tool::ToolError>),
     #[error("subtask usage budget exceeded: {0}")]
     SubtaskBudgetExceeded(String),
     #[error("session {0} already has an active execution")]
@@ -137,6 +139,7 @@ impl AppError {
             | Self::UserDeclined(_)
             | Self::CapabilityUnavailable(_)
             | Self::ToolUnavailable(_)
+            | Self::Tool(_)
             | Self::Database(_)
             | Self::SerdeJson(_)
             | Self::Io(_)
@@ -301,6 +304,7 @@ impl AppError {
             | Self::UserDeclined(_)
             | Self::CapabilityUnavailable(_)
             | Self::ToolUnavailable(_)
+            | Self::Tool(_)
             | Self::Database(_)
             | Self::SerdeJson(_)
             | Self::Io(_)

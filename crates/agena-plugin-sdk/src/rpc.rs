@@ -109,7 +109,6 @@ pub mod codes {
     pub const PLUGIN_DISCONNECTED: i32 = -33005;
     pub const PLUGIN_PANICKED: i32 = -33006;
     pub const HOST_UNAVAILABLE: i32 = -33007;
-    pub const APPROVAL_REQUIRED: i32 = -33008;
     pub const POLICY_DENIED: i32 = -33009;
     pub const USER_DECLINED: i32 = -33010;
     pub const CAPABILITY_UNAVAILABLE: i32 = -33011;
@@ -144,7 +143,6 @@ pub mod method {
     pub const HOOK_CHAT_SYSTEM_TRANSFORM: &str = "hooks/chat.system.transform";
     pub const HOOK_AUTH: &str = "hooks/auth";
     pub const HOOK_PROVIDER_LIST: &str = "hooks/provider.list";
-    pub const HOOK_PERMISSION_ASK: &str = "hooks/permission.ask_permission";
     pub const HOOK_NOTIFICATION: &str = "hooks/notification";
     pub const HOOK_COMMAND_BEFORE: &str = "hooks/command.execute.before";
     pub const HOOK_SHELL_ENV: &str = "hooks/shell.env";
@@ -165,9 +163,6 @@ pub mod method {
     pub const HOST_EVENT_PUBLISH: &str = "host/event.publish";
     pub const HOST_EVENT_SUBSCRIBE: &str = "host/event.subscribe";
     pub const HOST_EVENT_UNSUBSCRIBE: &str = "host/event.unsubscribe";
-    pub const HOST_PERMISSION_ASK: &str = "host/permission.ask_permission";
-    pub const HOST_PERMISSION_CHECK_PATH: &str = "host/permission.check_path";
-    pub const HOST_PERMISSION_CHECK_NETWORK: &str = "host/permission.check_network";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
     pub const HOST_CONFIG_RELOAD: &str = "host/config.reload";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
@@ -216,6 +211,4 @@ pub mod method {
     pub const HOST_UI_THEME_REGISTER: &str = "host/ui.theme.register";
     pub const HOST_UI_THEME_LIST: &str = "host/ui.theme.list";
     pub const HOST_UI_THEME_REMOVE: &str = "host/ui.theme.remove";
-    pub const HOST_UI_PERMISSION_SET_HANDLER: &str = "host/ui.permission.set_handler";
-    pub const HOST_UI_PERMISSION_CLEAR_HANDLER: &str = "host/ui.permission.clear_handler";
 }

@@ -18,11 +18,11 @@ fn bundled_manifest_separates_gateway_and_execution_tools() {
         .count();
 
     assert_eq!(manifest.counts.tools, tool_count);
-    assert_eq!(manifest.counts.gateway_tools, 5);
-    assert_eq!(gateway_count, 5);
+    assert_eq!(manifest.counts.gateway_tools, 4);
+    assert_eq!(gateway_count, 4);
     assert_eq!(
         manifest.counts.execution_tools,
-        manifest.counts.tools.saturating_sub(5)
+        manifest.counts.tools.saturating_sub(4)
     );
     for (plugin_id, canonical_name) in [
         ("agena.chatgpt", "agena.chatgpt.web_search"),

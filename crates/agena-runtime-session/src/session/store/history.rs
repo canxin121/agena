@@ -82,7 +82,7 @@ impl SessionStore {
                         execution_id: None,
                         run_id: None,
                         turn_id: None,
-                        response_id: None,
+                        reply_id: None,
                         message_id: message.id,
                         message_role: message.role,
                         message_state: message.state,

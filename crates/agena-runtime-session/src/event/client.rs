@@ -14,7 +14,7 @@ pub struct MessagePartCheckpointedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<agena_domain::TurnId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_id: Option<agena_domain::ResponseId>,
+    pub reply_id: Option<agena_domain::AssistantReplyId>,
     pub message_id: i64,
     pub message_role: Role,
     pub message_state: ExecutionStatus,
@@ -34,7 +34,7 @@ pub struct TranscriptPartUpsertedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
     pub turn_id: agena_domain::TurnId,
-    pub response_id: agena_domain::ResponseId,
+    pub reply_id: agena_domain::AssistantReplyId,
     pub message_role: Role,
     pub part: MessagePart,
     pub ts_ms: i64,

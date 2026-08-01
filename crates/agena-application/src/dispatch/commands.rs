@@ -139,14 +139,14 @@ pub async fn dispatch_command(
         }
         Command::RewindSession(RewindSessionParams {
             session_id,
-            message_id,
+            turn_id,
             expected_version,
         }) => {
             let outcome = session_services
                 .commands
                 .rewind_session(agena_runtime::SessionRewindRequest {
                     session_id,
-                    message_id,
+                    turn_id,
                     expected_version,
                 })
                 .await

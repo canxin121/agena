@@ -9,7 +9,7 @@ use crate::message::{
     InteractiveRequestPart, Message, MessagePart, PartContent, RequestPart, RuntimeActivity,
 };
 use agena_domain::{
-    ExecutionSelection, ExecutionSource, ExecutionStatus, ModelRef, PendingInteractiveRequest,
+    ExecutionSelection, ExecutionStatus, ModelRef, PendingInteractiveRequest,
     PendingInteractiveRequestKind, PromptCompactionActivity, PromptTokenUsageSnapshot, Role,
     SessionLifecycleState, SessionRelationKind, SubtaskStatus, TimeRange, ToolInvocation,
     UserInputRequest, WorkflowState,
@@ -154,28 +154,6 @@ pub struct WorkflowRuntimeState {
     pub pending_operations: Vec<SessionPendingOperation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_tool_calls: Vec<PendingToolCallRuntime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_provider_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_adapter_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_parallel_tool_calls: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<ExecutionSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_cache_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_window_generation: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latest_event_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -191,44 +169,6 @@ impl WorkflowRuntimeState {
         self.state == WorkflowState::Quiescent
             && self.pending_operations.is_empty()
             && self.pending_tool_calls.is_empty()
-            && self.model_provider_id.is_none()
-            && self.model_adapter_id.is_none()
-            && self.model_id.is_none()
-            && self.model_thinking_mode.is_none()
-            && self.model_speed_mode.is_none()
-            && self.model_verbosity.is_none()
-            && self.model_parallel_tool_calls.is_none()
-            && self.source.is_none()
-            && self.prompt_cache_key.is_none()
-            && self.prompt_window_generation.is_none()
-            && self.latest_event_seq.is_none()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_model_request(
-        &mut self,
-        source: ExecutionSource,
-        provider_id: String,
-        adapter_id: Option<String>,
-        model_id: String,
-        model_thinking_mode: Option<String>,
-        model_speed_mode: Option<String>,
-        model_verbosity: Option<String>,
-        model_parallel_tool_calls: Option<bool>,
-        prompt_cache_key: String,
-        prompt_window_generation: u64,
-    ) {
-        self.state = WorkflowState::ReadyForModel;
-        self.model_provider_id = Some(provider_id);
-        self.model_adapter_id = adapter_id.filter(|value| !value.trim().is_empty());
-        self.model_id = Some(model_id);
-        self.model_thinking_mode = model_thinking_mode.filter(|value| !value.trim().is_empty());
-        self.model_speed_mode = model_speed_mode.filter(|value| !value.trim().is_empty());
-        self.model_verbosity = model_verbosity.filter(|value| !value.trim().is_empty());
-        self.model_parallel_tool_calls = model_parallel_tool_calls;
-        self.source = Some(source);
-        self.prompt_cache_key = Some(prompt_cache_key);
-        self.prompt_window_generation = Some(prompt_window_generation);
     }
 }
 
@@ -676,23 +616,7 @@ impl SessionRuntimeState {
     }
 
     pub fn effective_model_ref(&self) -> Result<Option<ModelRef>, agena_domain::IdentifierError> {
-        if let Some(model) = self.execution.selection.model_ref()? {
-            return Ok(Some(model));
-        }
-
-        let Some(provider_id) = self.workflow.model_provider_id.as_deref() else {
-            return Ok(None);
-        };
-        let Some(model_id) = self.workflow.model_id.as_deref() else {
-            return Ok(None);
-        };
-
-        match self.workflow.model_adapter_id.as_deref() {
-            Some(adapter_id) => {
-                ModelRef::try_new_with_adapter(provider_id, adapter_id, model_id).map(Some)
-            }
-            None => ModelRef::try_new(provider_id, model_id).map(Some),
-        }
+        self.execution.selection.model_ref()
     }
 
     pub fn model_thinking_mode_override(&self) -> Option<&str> {
@@ -852,68 +776,26 @@ impl Session {
     pub fn refresh_derived(&mut self) {
         self.approx_bytes = self.compute_approx_bytes();
         self.pending_operations = self.derive_pending_operations();
+        self.runtime.workflow = self.workflow_runtime_snapshot();
     }
 
     pub fn sync_workflow_state(&mut self) {
         self.refresh_derived();
-        let previous = self.runtime.workflow.clone();
-        self.runtime.workflow = self.workflow_runtime_snapshot(previous);
     }
 
-    fn workflow_runtime_snapshot(&self, previous: WorkflowRuntimeState) -> WorkflowRuntimeState {
+    fn workflow_runtime_snapshot(&self) -> WorkflowRuntimeState {
         let state = if self.blocked() {
             WorkflowState::Blocked
         } else if self.next_pending_tool().is_some() {
             WorkflowState::ToolPending
-        } else if self.should_run_model() {
-            WorkflowState::ReadyForModel
         } else {
             WorkflowState::Quiescent
-        };
-
-        let (
-            model_provider_id,
-            model_adapter_id,
-            model_id,
-            model_thinking_mode,
-            model_speed_mode,
-            model_verbosity,
-            model_parallel_tool_calls,
-            source,
-            prompt_cache_key,
-            prompt_window_generation,
-        ) = if state == WorkflowState::ReadyForModel {
-            (
-                previous.model_provider_id,
-                previous.model_adapter_id,
-                previous.model_id,
-                previous.model_thinking_mode,
-                previous.model_speed_mode,
-                previous.model_verbosity,
-                previous.model_parallel_tool_calls,
-                previous.source,
-                previous.prompt_cache_key,
-                previous.prompt_window_generation,
-            )
-        } else {
-            (None, None, None, None, None, None, None, None, None, None)
         };
 
         WorkflowRuntimeState {
             state,
             pending_operations: self.pending_operations.clone(),
             pending_tool_calls: self.pending_tool_runtime_snapshots(),
-            model_provider_id,
-            model_adapter_id,
-            model_id,
-            model_thinking_mode,
-            model_speed_mode,
-            model_verbosity,
-            model_parallel_tool_calls,
-            source,
-            prompt_cache_key,
-            prompt_window_generation,
-            latest_event_seq: previous.latest_event_seq,
         }
     }
 
@@ -936,8 +818,7 @@ impl Session {
     }
 
     pub fn workflow_state(&self) -> WorkflowState {
-        self.workflow_runtime_snapshot(self.runtime.workflow.clone())
-            .state
+        self.workflow_runtime_snapshot().state
     }
 
     pub fn runtime(&self) -> &SessionRuntimeState {
@@ -1153,29 +1034,7 @@ impl Session {
                 bytes = bytes.saturating_add(std::mem::size_of_val(usage));
             }
         }
-        bytes = bytes.saturating_add(
-            self.runtime
-                .workflow
-                .prompt_cache_key
-                .as_ref()
-                .map_or(0, String::len),
-        );
         bytes
-    }
-
-    fn should_run_model(&self) -> bool {
-        let Some(message) = self.last_conversation_message() else {
-            return false;
-        };
-        message.role == Role::User
-            || message_has_completed_operation(message)
-            || matches!(
-                (message.role, message.state),
-                (
-                    Role::Assistant,
-                    ExecutionStatus::Pending | ExecutionStatus::InProgress
-                )
-            )
     }
 
     pub fn last_conversation_message(&self) -> Option<&Message> {
@@ -1232,6 +1091,53 @@ impl Session {
             }
             _ => false,
         })
+    }
+
+    /// Permission actions durably approved for this exact message operation.
+    ///
+    /// A provider call id alone is not an authorization identity: providers
+    /// may reuse one in a later turn. The owning assistant message therefore
+    /// participates in the lookup. Callers must still evaluate any current
+    /// permission checks whose actions are absent from this returned set; a
+    /// plugin/catalog change cannot widen an earlier user approval.
+    pub fn operation_permission_approved_actions(
+        &self,
+        assistant_message_id: i64,
+        operation_id: &str,
+    ) -> Vec<agena_domain::PermissionAction> {
+        self.messages
+            .iter()
+            .filter(|message| message.id == assistant_message_id)
+            .flat_map(|message| &message.parts)
+            .find_map(|part| {
+                if part.status != ExecutionStatus::Completed
+                    || part.operation_id.as_deref() != Some(operation_id)
+                {
+                    return None;
+                }
+                let Some(PartContent::Activity(RuntimeActivity::Interaction(
+                    RequestPart::Permission(InteractiveRequestPart {
+                        request,
+                        reply: Some(reply),
+                    }),
+                ))) = part.content.as_ref()
+                else {
+                    return None;
+                };
+                if !matches!(
+                    reply.kind,
+                    agena_domain::PermissionReplyKind::AllowOnce
+                        | agena_domain::PermissionReplyKind::AllowAlways
+                ) {
+                    return None;
+                }
+                Some(if request.requested_actions.is_empty() {
+                    vec![request.action.clone()]
+                } else {
+                    request.requested_actions.clone()
+                })
+            })
+            .unwrap_or_default()
     }
 
     fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {
@@ -1485,25 +1391,6 @@ impl Session {
             .filter_map(|part| part.operation_id.as_deref())
             .collect()
     }
-}
-
-fn message_has_completed_operation(message: &Message) -> bool {
-    message.parts.iter().any(|part| {
-        matches!(
-            part.status,
-            ExecutionStatus::Completed
-                | ExecutionStatus::PolicyDenied
-                | ExecutionStatus::UserDeclined
-                | ExecutionStatus::CapabilityUnavailable
-                | ExecutionStatus::ToolUnavailable
-                | ExecutionStatus::Failed
-                | ExecutionStatus::Cancelled
-        ) && matches!(
-            part.content.as_ref(),
-            Some(PartContent::Activity(RuntimeActivity::Operation(operation)))
-                if !operation.is_provider_only()
-        )
-    })
 }
 
 fn tool_invocation_name(invocation: &ToolInvocation) -> String {

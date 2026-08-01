@@ -162,7 +162,7 @@ pub struct CancelRunParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewindSessionParams {
     pub session_id: i64,
-    pub message_id: i64,
+    pub turn_id: agena_domain::TurnId,
     #[serde(default)]
     pub expected_version: Option<i64>,
 }

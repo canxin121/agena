@@ -66,7 +66,7 @@ impl Message {
                 OperationPart::completed(
                     0,
                     agena_domain::ToolInvocation {
-                        tool_api_function: None,
+                        tool_api_call: None,
                         name: "tool".to_owned(),
                         plugin_name: None,
                         input: agena_domain::StructuredObject::default(),

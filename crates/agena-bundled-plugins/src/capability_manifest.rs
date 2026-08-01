@@ -11,8 +11,9 @@ use sha2::{Digest, Sha256};
 pub struct CapabilityCounts {
     pub plugins: usize,
     pub tools: usize,
-    /// The five agena.tools handlers that may be declared through an AI
-    /// provider's official function/tool protocol.
+    /// The four discovery handlers implemented by the `agena.tools` plugin.
+    /// `tools_call` is a runtime-synthesized provider gateway definition, not
+    /// an executable plugin handler and therefore is not counted here.
     pub gateway_tools: usize,
     /// Every non-gateway tool. All of these share the same discovery,
     /// authorization, and tools_call execution path.
@@ -44,8 +45,9 @@ pub struct BundledPluginCapability {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct BundledToolCapability {
     pub canonical_name: String,
-    /// True only for the fixed agena.tools list/search/help/tags/call protocol
-    /// handlers. False means an ordinary execution tool.
+    /// True only for the fixed agena.tools discovery protocol handlers. The
+    /// `tools_call` provider gateway is runtime-synthesized and has no plugin
+    /// tool entry. False means an ordinary execution tool.
     pub gateway: bool,
     pub summary: Option<String>,
     pub tags: Vec<String>,

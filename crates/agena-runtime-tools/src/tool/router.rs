@@ -1,156 +1,17 @@
-//! Shared scaffolding for static plugins backed by agena's in-process
-//! executor implementations. These tools use the same plugin registry and
-//! permission path as any other plugin tool; this module only supplies the
-//! executor context needed by their Rust implementations.
-
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+//! Schema and permission-hook helpers shared by bundled tool definitions.
+//!
+//! Bundled executor-backed tools are dispatched explicitly by `ToolExecutor`.
+//! Their plugin handlers remain definition-only adapters and must never depend
+//! on thread-local or process-global execution context.
 
 use serde_json::Value as JsonValue;
 
 use crate::message::{ApplyPatchToolInput, ShellToolInput};
+use crate::tool::ToolPayloadOutput;
 use crate::tool::result::ToolPayloadExecution;
-use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 use agena_domain::NetworkEffect;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInput, ToolInvokeOutput};
-
-thread_local! {
-    static IN_PROCESS_TOOL_CTX: RefCell<Option<ToolExecutor>> = const { RefCell::new(None) };
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct InProcessContextKey {
-    session_id: i64,
-    call_id: i64,
-    tool_name: String,
-}
-
-static IN_PROCESS_TOOL_CTX_BY_CALL: LazyLock<Mutex<HashMap<InProcessContextKey, ToolExecutor>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub struct ExecutorContextGuard {
-    keys: Vec<InProcessContextKey>,
-    previous: Option<ToolExecutor>,
-}
-
-impl Drop for ExecutorContextGuard {
-    fn drop(&mut self) {
-        IN_PROCESS_TOOL_CTX.with(|cell| {
-            *cell.borrow_mut() = self.previous.take();
-        });
-        if let Ok(mut contexts) = IN_PROCESS_TOOL_CTX_BY_CALL.lock() {
-            for key in &self.keys {
-                contexts.remove(key);
-            }
-        }
-    }
-}
-
-pub fn install_executor_context(
-    executor: &ToolExecutor,
-    session_id: i64,
-    call_id: i64,
-    tool_name: String,
-) -> ExecutorContextGuard {
-    let mut keys = vec![InProcessContextKey {
-        session_id,
-        call_id,
-        tool_name,
-    }];
-    for alias in routed_internal_tool_names(keys[0].tool_name.as_str()) {
-        keys.push(InProcessContextKey {
-            session_id,
-            call_id,
-            tool_name: alias.to_string(),
-        });
-    }
-    if let Ok(mut contexts) = IN_PROCESS_TOOL_CTX_BY_CALL.lock() {
-        for key in &keys {
-            contexts.insert(key.clone(), executor.clone());
-        }
-    }
-    let previous = IN_PROCESS_TOOL_CTX.with(|cell| cell.replace(Some(executor.clone())));
-    ExecutorContextGuard { keys, previous }
-}
-
-fn current_executor(
-    session_id: i64,
-    call_id: i64,
-    tool_name: &str,
-) -> Result<ToolExecutor, PluginError> {
-    if let Some(executor) = IN_PROCESS_TOOL_CTX.with(|cell| cell.borrow().clone()) {
-        return Ok(executor);
-    }
-    let key = InProcessContextKey {
-        session_id,
-        call_id,
-        tool_name: tool_name.to_string(),
-    };
-    let tool_key = routed_tool_name(tool_name).map(|tool_name| InProcessContextKey {
-        session_id,
-        call_id,
-        tool_name: tool_name.to_string(),
-    });
-    IN_PROCESS_TOOL_CTX_BY_CALL
-        .lock()
-        .ok()
-        .and_then(|contexts| {
-            contexts
-                .get(&key)
-                .cloned()
-                .or_else(|| tool_key.as_ref().and_then(|key| contexts.get(key).cloned()))
-        })
-        .ok_or_else(|| PluginError::internal("static plugin invoked without executor context"))
-}
-
-fn routed_tool_name(tool_name: &str) -> Option<&'static str> {
-    match tool_name {
-        "task" => Some("run"),
-        "tool_search" => Some("search"),
-        "ask_user" => Some("ask"),
-        "enter_snapshot" => Some("enter"),
-        "exit_snapshot" => Some("exit"),
-        "cron_list" => Some("list"),
-        "cron_create" => Some("create"),
-        "cron_delete" => Some("delete"),
-        "cron_update" => Some("update"),
-        "cron_pause" => Some("pause"),
-        "cron_resume" => Some("resume"),
-        "cron_history" => Some("history"),
-        "schedule_wakeup" => Some("wakeup"),
-        "lsp_definition" => Some("definition"),
-        "lsp_references" => Some("references"),
-        "lsp_hover" => Some("hover"),
-        "lsp_diagnostics" => Some("diagnostics"),
-        _ => None,
-    }
-}
-
-fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str] {
-    match tool_name {
-        "run" => &["shell", "process", "task"],
-        "list" => &["shell", "process", "cron_list"],
-        "logs" | "stop" => &["shell", "process"],
-        "search" => &["tool_search"],
-        "ask" => &["ask_user"],
-        "enter" => &["enter_snapshot"],
-        "exit" => &["exit_snapshot"],
-        "create" => &["cron_create"],
-        "delete" => &["cron_delete"],
-        "update" => &["cron_update"],
-        "pause" => &["cron_pause"],
-        "resume" => &["cron_resume"],
-        "history" => &["cron_history"],
-        "wakeup" => &["schedule_wakeup"],
-        "definition" => &["lsp_definition"],
-        "references" => &["lsp_references"],
-        "hover" => &["lsp_hover"],
-        "diagnostics" => &["lsp_diagnostics"],
-        _ => &[],
-    }
-}
 
 pub fn invoke_tool(
     tool_name: &str,
@@ -158,15 +19,10 @@ pub fn invoke_tool(
     session_id: i64,
     call_id: i64,
 ) -> SdkResult<ToolInvokeOutput> {
-    let executor = current_executor(session_id, call_id, tool_name)?;
-    let context = ToolRuntimeContext {
-        session_id: (session_id >= 0).then_some(session_id),
-        call_id: (call_id >= 0).then_some(call_id),
-        prepared_shell_command: None,
-    };
-    let execution = orchestrator::execute_tool(&executor, tool_name, input, context)
-        .map_err(|err| PluginError::internal(format!("{tool_name}: {err}")))?;
-    Ok(tool_execution_to_invoke_output(execution))
+    let _ = (input, session_id, call_id);
+    Err(PluginError::internal(format!(
+        "bundled execution handler `{tool_name}` must be dispatched by ToolExecutor"
+    )))
 }
 
 pub fn permission_paths_for(
@@ -249,7 +105,9 @@ pub fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolI
     let payload = summary.payload.clone();
     ToolInvokeOutput {
         title: summary.title,
+        summary: summary.summary,
         output_text: summary.output_text,
+        sections: summary.sections,
         payload,
         metadata: metadata.into_iter().collect(),
         attachments: execution.view.attachments,

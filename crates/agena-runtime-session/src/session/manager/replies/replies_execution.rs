@@ -5,14 +5,13 @@ use super::{
     ProviderPromptAnchor, RequestPart, ResolvedPendingTool, RunAborted, RunCompleted, RunStarted,
     SessionManager, SessionManagerState, SessionPendingTool, SessionRunOptions, SessionRunRequest,
     SessionRunTermination, StreamingToolExecution, ToolError, ToolInvocationExecution,
-    ToolPermissionCheck, Utc, append_resolved_message_part, apply_advisory_permission_decision,
-    ask_user_title, assistant_message_for_part, build_message, build_request_part,
-    completed_lifecycle, execution_control_to_app_error, max_permission_risk,
+    ToolPermissionCheck, Utc, append_resolved_message_part, ask_user_title,
+    assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
+    execution_control_to_app_error, matching_request_part_refs, max_permission_risk,
     operation_blocks_from_tool_output, pending_operation_for_resolved,
     pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
-    permission_subject, plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
-    resolve_permission_with_persisted_rules, responses_api_request_metadata,
-    risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
+    push_unique_permission_action, resolve_pending_tool, resolve_permission_with_persisted_rules,
+    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
     tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
@@ -21,11 +20,49 @@ use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionRiskLevel,
-    PermissionScope, PolicySourceKind, Role, RunAbortReason, WorkflowState,
+    PermissionScope, PolicySourceKind, Role, RunAbortReason,
 };
 use tracing::Instrument;
 
-use super::super::{StableRunContext, tool_error_to_app_error};
+use super::super::StableRunContext;
+
+/// One member of a provider-emitted tool batch after preflight.
+///
+/// Preflight deliberately separates permission discovery from execution. A
+/// batch must publish *every* independently actionable permission request
+/// before the session enters its blocked state; discovering only the first
+/// request turns a parallel model response into an accidental serial queue.
+enum PendingToolBatchMember {
+    Ready(ResolvedPendingTool),
+    AwaitingPermission {
+        resolved: ResolvedPendingTool,
+        request: Box<AggregatedPermissionRequest>,
+    },
+    Sequential(SessionPendingTool),
+}
+
+/// Fully prepared sequential invocation plus the authorization checks that
+/// must be resolved before it may execute.
+///
+/// Synchronous preflight lives outside the async resolver so the compiler
+/// does not embed every preparation error path and terminalization future in
+/// one multi-megabyte poll frame.
+struct PreparedPendingToolExecution {
+    resolved: ResolvedPendingTool,
+    permission_checks: Vec<ToolPermissionCheck>,
+    session_changed: bool,
+}
+
+enum PendingToolPreparationError {
+    Session(AppError),
+    Tool(ToolError),
+}
+
+impl From<ToolError> for PendingToolPreparationError {
+    fn from(error: ToolError) -> Self {
+        Self::Tool(error)
+    }
+}
 
 impl SessionManager {
     pub(in crate::session::manager) async fn run_until_stable(
@@ -37,7 +74,7 @@ impl SessionManager {
         let StableRunContext {
             allow_goal_continuation,
             base_run_source,
-            mut active_turn_id,
+            mut active_model_turn_id,
             state,
             control,
             mut steer_rx,
@@ -46,6 +83,11 @@ impl SessionManager {
         let _ = allow_goal_continuation;
         let mut reactive_compaction_attempted = false;
         let mut force_model_retry = false;
+        // Provider continuation is an execution-local decision. It is never
+        // reconstructed from "some tool part is terminal" after a restart.
+        // This flag becomes true only at command entry, after the entire
+        // pending tool batch reaches a barrier, or after new steer input.
+        let mut model_requested = true;
         let mut observed_user_message_id = session
             .messages
             .iter()
@@ -69,10 +111,11 @@ impl SessionManager {
                 .rev()
                 .find(|message| message.role == Role::User);
             if latest_user.map(|message| message.id) != observed_user_message_id {
-                active_turn_id = latest_user
-                    .and_then(|message| message.metadata.turn_id)
+                active_model_turn_id = latest_user
+                    .and_then(|message| message.metadata.model_turn_id)
                     .or_else(|| latest_user.map(|message| message.id));
                 observed_user_message_id = latest_user.map(|message| message.id);
+                model_requested = true;
             }
 
             let mut current_options =
@@ -109,98 +152,94 @@ impl SessionManager {
                     .transition(ExecutionPhase::ExecutingTools)
                     .await
                     .map_err(execution_control_to_app_error)?;
-                session = self
-                    .resolve_pending_tools(session, pending_tools, &current_options, state.clone())
-                    .await?;
+                // Tool resolution is itself a large async state machine. A
+                // heap boundary here prevents its branch storage from being
+                // embedded in the provider-loop future and overflowing a
+                // normal Tokio worker stack when a permission continuation
+                // reaches the tool batch immediately.
+                session = Box::pin(self.resolve_pending_tools(
+                    session,
+                    pending_tools,
+                    &current_options,
+                    state.clone(),
+                ))
+                .await?;
+                session.refresh_derived();
+                model_requested = !session.blocked() && session.pending_tools().is_empty();
                 continue;
             }
 
-            match session.workflow_state() {
-                WorkflowState::Quiescent if force_model_retry => {
-                    // A context-overflow attempt may have persisted a failed
-                    // assistant message. The compacted checkpoint excludes it;
-                    // retry the still-pending user turn exactly once.
-                }
-                WorkflowState::Quiescent => {
-                    let last_assistant_text = session
-                        .messages
-                        .iter()
-                        .rev()
-                        .find(|m| m.role == agena_domain::Role::Assistant)
-                        .map(|m| m.as_text_lossy());
-                    let stop_input = agena_plugin_host::AgentStopInput {
-                        session_id: session.id,
-                        stop_hook_active: false,
-                        last_assistant_message: last_assistant_text,
-                    };
-                    match state
-                        .tool_executor
-                        .plugin_manager()
-                        .dispatch_agent_stop_cancellable(stop_input, Some(control.cancel.clone()))
-                        .await
-                    {
-                        Ok(patch) if patch.continue_with_message.is_some() => {
-                            let follow_up = patch.continue_with_message.unwrap_or_default();
-                            let ids = self.store.reserve_message_ids(1).await?;
-                            let follow_up_turn_id = ids.message_id;
-                            let user_message = build_message(
-                                ids,
-                                Role::User,
-                                ExecutionStatus::Completed,
-                                vec![PartContent::text(follow_up)],
-                                MessageMetadata {
-                                    source: MessageSource::System,
-                                    idempotency_key: None,
-                                    turn_id: Some(follow_up_turn_id),
-                                    parent_message_id: session
-                                        .last_conversation_message()
-                                        .map(|m| m.id),
-                                    generated_by_call_id: None,
-                                    externally_initiated_tool: false,
-                                    model_provider_id: current_options
-                                        .model
-                                        .provider_id
-                                        .to_string(),
-                                    model_adapter_id: current_options
-                                        .model
-                                        .adapter_id
-                                        .as_ref()
-                                        .map(ToString::to_string),
-                                    model_id: current_options.model.model_id.to_string(),
-                                    model_thinking_mode: current_options.thinking_mode.clone(),
-                                    model_speed_mode: current_options.speed_mode.clone(),
-                                },
-                            );
-                            session.messages.push(user_message.clone());
-                            session = self
-                                .persist_session_changes(
-                                    session,
-                                    vec![user_message],
-                                    Vec::new(),
-                                    None,
-                                    state.clone(),
-                                )
-                                .await?;
-                            continue;
-                        }
-                        Ok(_) => return Ok(session),
-                        Err(err) => {
-                            if control.cancel.is_cancelled() {
-                                return Err(AppError::Cancelled);
-                            }
-                            tracing::warn!(
-                                target: "agena_plugin_host::agent_stop",
-                                "agent.stop hook failed (stopping normally): {err}"
-                            );
-                            return Ok(session);
-                        }
+            if !model_requested && !force_model_retry {
+                let last_assistant_text = session
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == agena_domain::Role::Assistant)
+                    .map(|m| m.as_text_lossy());
+                let stop_input = agena_plugin_host::AgentStopInput {
+                    session_id: session.id,
+                    stop_hook_active: false,
+                    last_assistant_message: last_assistant_text,
+                };
+                match state
+                    .tool_executor
+                    .plugin_manager()
+                    .dispatch_agent_stop_cancellable(stop_input, Some(control.cancel.clone()))
+                    .await
+                {
+                    Ok(patch) if patch.continue_with_message.is_some() => {
+                        let follow_up = patch.continue_with_message.unwrap_or_default();
+                        let ids = self.store.reserve_message_ids(1).await?;
+                        let follow_up_turn_id = ids.message_id;
+                        let user_message = build_message(
+                            ids,
+                            Role::User,
+                            ExecutionStatus::Completed,
+                            vec![PartContent::text(follow_up)],
+                            MessageMetadata {
+                                source: MessageSource::System,
+                                idempotency_key: None,
+                                model_turn_id: Some(follow_up_turn_id),
+                                parent_message_id: session
+                                    .last_conversation_message()
+                                    .map(|m| m.id),
+                                generated_by_call_id: None,
+                                externally_initiated_tool: false,
+                                model_provider_id: current_options.model.provider_id.to_string(),
+                                model_adapter_id: current_options
+                                    .model
+                                    .adapter_id
+                                    .as_ref()
+                                    .map(ToString::to_string),
+                                model_id: current_options.model.model_id.to_string(),
+                                model_thinking_mode: current_options.thinking_mode.clone(),
+                                model_speed_mode: current_options.speed_mode.clone(),
+                            },
+                        );
+                        session.messages.push(user_message.clone());
+                        session = self
+                            .persist_session_changes(
+                                session,
+                                vec![user_message],
+                                Vec::new(),
+                                None,
+                                state.clone(),
+                            )
+                            .await?;
+                        model_requested = true;
+                        continue;
                     }
-                }
-                WorkflowState::ReadyForModel => {}
-                WorkflowState::ToolPending | WorkflowState::Blocked => {
-                    return Err(AppError::Internal(
-                        "workflow changed after pending-operation resolution".to_string(),
-                    ));
+                    Ok(_) => return Ok(session),
+                    Err(err) => {
+                        if control.cancel.is_cancelled() {
+                            return Err(AppError::Cancelled);
+                        }
+                        tracing::warn!(
+                            target: "agena_plugin_host::agent_stop",
+                            "agent.stop hook failed (stopping normally): {err}"
+                        );
+                        return Ok(session);
+                    }
                 }
             }
             // Reaching this point consumes the one-shot retry authorization.
@@ -273,7 +312,7 @@ impl SessionManager {
                 session,
                 &current_options,
                 base_run_source,
-                active_turn_id,
+                active_model_turn_id,
                 state.clone(),
                 control.clone(),
             ))
@@ -281,13 +320,14 @@ impl SessionManager {
             {
                 Ok(next_session) => {
                     session = next_session;
-                    if active_turn_id.is_none() {
-                        active_turn_id = session
+                    model_requested = false;
+                    if active_model_turn_id.is_none() {
+                        active_model_turn_id = session
                             .messages
                             .iter()
                             .rev()
                             .find(|message| message.role == Role::Assistant)
-                            .and_then(|message| message.metadata.turn_id);
+                            .and_then(|message| message.metadata.model_turn_id);
                     }
                     reactive_compaction_attempted = false;
                     let post_run_input = agena_plugin_host::PostRunInput {
@@ -354,7 +394,7 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         run_source: ExecutionSource,
-        turn_id: Option<i64>,
+        model_turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError> {
@@ -460,22 +500,6 @@ impl SessionManager {
                 "prepared prompt for session run"
             );
 
-            session.runtime.workflow.record_model_request(
-                run_source,
-                options.model.provider_id.to_string(),
-                options.model.adapter_id.as_ref().map(ToString::to_string),
-                options.model.model_id.to_string(),
-                options.thinking_mode.clone(),
-                options.speed_mode.clone(),
-                options.verbosity.clone(),
-                options.request_override.parallel_tool_calls(),
-                prepared.prompt_cache_key.clone(),
-                prepared.prompt_window_generation,
-            );
-            session = self
-                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
-                .await?;
-
             let processor_ids = self.store.reserve_processor_ids().await?;
             let run_id = agena_domain::RunId::new();
             let turn_started_at_unix_ms = Utc::now().timestamp_millis();
@@ -502,10 +526,10 @@ impl SessionManager {
             let run = SessionRunRequest {
                 run_id,
                 execution_id: control.execution_id(),
-                turn_uuid: control.turn_id(),
-                response_id: control.response_id(),
+                turn_id: control.turn_id(),
+                reply_id: control.reply_id(),
                 session_id: session.id,
-                turn_id,
+                model_turn_id,
                 completion_parent_message_id: session
                     .last_conversation_message()
                     .map(|message| message.id),
@@ -778,108 +802,103 @@ impl SessionManager {
         // complete tool executions around user approval.
         if !should_execute_pending_tools_concurrently(&options.request_override) {
             if let Some(tool) = session.next_pending_tool() {
-                return self.resolve_pending_tool(session, tool, state).await;
+                return Box::pin(self.resolve_pending_tool(session, tool, state)).await;
             }
             return Ok(session);
         }
 
-        let mut resolved_tools = Vec::new();
+        let mut ready_tools = Vec::new();
+        let mut permission_requests = Vec::new();
+        let mut sequential_tools = Vec::new();
         for pending_tool in pending_tools {
-            let Some(resolved) = self
-                .prepare_concurrent_pending_tool(&mut session, &pending_tool, state.as_ref())
-                .await?
-            else {
-                break;
-            };
-            resolved_tools.push(resolved);
-        }
-
-        if resolved_tools.len() < 2 {
-            if let Some(tool) = session.next_pending_tool() {
-                return self.resolve_pending_tool(session, tool, state).await;
+            match Box::pin(self.prepare_pending_tool_batch_member(
+                &mut session,
+                &pending_tool,
+                state.as_ref(),
+            ))
+            .await?
+            {
+                PendingToolBatchMember::Ready(resolved) => ready_tools.push(resolved),
+                PendingToolBatchMember::AwaitingPermission { resolved, request } => {
+                    permission_requests.push((resolved, request));
+                }
+                PendingToolBatchMember::Sequential(pending) => sequential_tools.push(pending),
             }
-            return Ok(session);
         }
 
-        let executions = self
-            .execute_pending_tools_concurrently(state.clone(), session.id, resolved_tools.clone())
+        // Permission Activities are durable batch members, not a side effect
+        // of whichever tool happens to be first in transcript order. Persist
+        // all of them before returning a blocked session so the UI can present
+        // all approvals at once and each reply addresses its exact operation.
+        for (resolved, request) in permission_requests {
+            session = Box::pin(self.apply_permission_request(
+                session,
+                &resolved.pending,
+                request.action,
+                request.related_actions,
+                request.requested_actions,
+                request.reason,
+                request.explanation,
+                request.source,
+                request.scope,
+                request.operator,
+                request.risk,
+                request.trace,
+                state.clone(),
+            ))
             .await?;
-        // A concurrent gateway tool can persist nested permission/input
-        // request parts while its execution is suspended. Merge results into
-        // the latest projection so completing the outer calls cannot replace
-        // those request/reply records with the snapshot from before fan-out.
-        session = self
-            .store
-            .load_session(session.id, state.cache_policy())
+        }
+
+        // The parallel worker path intentionally handles only detailed,
+        // non-streaming executions. Keep a singleton on the sequential path
+        // so streaming tool output continues to checkpoint through its normal
+        // lifecycle; a batch needs at least two ready members to fan out.
+        if ready_tools.len() == 1 {
+            sequential_tools.push(
+                ready_tools
+                    .pop()
+                    .expect("checked singleton ready tool")
+                    .pending,
+            );
+        } else if !ready_tools.is_empty() {
+            let executions = Box::pin(self.execute_pending_tools_concurrently(
+                state.clone(),
+                session.id,
+                ready_tools.clone(),
+            ))
             .await?;
-        for (resolved, result) in resolved_tools.into_iter().zip(executions) {
-            match result {
-                Ok(execution) => {
-                    session = self
-                        .apply_tool_success(
-                            session,
-                            &resolved.pending,
-                            execution,
-                            None,
-                            state.clone(),
-                        )
-                        .await?;
-                }
-                Err(ToolError::UserInputRequired(input)) => {
-                    return self
-                        .apply_user_input_request(session, &resolved.pending, *input, state)
-                        .await;
-                }
-                Err(ToolError::Cancelled) => {
-                    session = self
-                        .apply_tool_cancellation(session, &resolved.pending, state.clone())
-                        .await?;
-                }
-                Err(ToolError::PolicyDenied(denial)) => {
-                    session = self
-                        .apply_tool_policy_denied(
-                            session,
-                            &resolved.pending,
-                            *denial,
-                            state.clone(),
-                        )
-                        .await?;
-                }
-                Err(ToolError::UserDeclined(decline)) => {
-                    session = self
-                        .apply_tool_user_declined(
-                            session,
-                            &resolved.pending,
-                            *decline,
-                            Vec::new(),
-                            state.clone(),
-                        )
-                        .await?;
-                }
-                Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                    session = self
-                        .apply_tool_capability_unavailable(
-                            session,
-                            &resolved.pending,
-                            *unavailable,
-                            state.clone(),
-                        )
-                        .await?;
-                }
-                Err(ToolError::ToolUnavailable(unavailable)) => {
-                    session = self
-                        .apply_tool_unavailable(
-                            session,
-                            &resolved.pending,
-                            *unavailable,
-                            state.clone(),
-                        )
-                        .await?;
-                }
-                Err(err) => {
-                    session = self
-                        .apply_tool_error(session, &resolved.pending, err, None, state.clone())
-                        .await?;
+            // A concurrent gateway tool can persist nested permission/input
+            // request parts while its execution is suspended. Merge results
+            // into the latest projection so completing outer calls cannot
+            // replace those request/reply records with another snapshot.
+            session = self
+                .store
+                .load_session(session.id, state.cache_policy())
+                .await?;
+            for (resolved, result) in ready_tools.into_iter().zip(executions) {
+                session = Box::pin(self.apply_tool_execution_result(
+                    session,
+                    &resolved.pending,
+                    result,
+                    state.clone(),
+                ))
+                .await?;
+            }
+        }
+
+        // A non-concurrency-safe invocation still executes in transcript
+        // order. It is reached only after all Ask outcomes above are already
+        // visible, so it can never hide a later permission behind a slow
+        // earlier call.
+        if !session.blocked() {
+            for pending_tool in sequential_tools {
+                if session
+                    .part(&pending_tool.part)
+                    .is_some_and(|part| part.status == ExecutionStatus::Pending)
+                {
+                    session =
+                        Box::pin(self.resolve_pending_tool(session, pending_tool, state.clone()))
+                            .await?;
                 }
             }
         }
@@ -887,12 +906,12 @@ impl SessionManager {
         Ok(session)
     }
 
-    pub(in crate::session::manager) async fn prepare_concurrent_pending_tool(
+    async fn prepare_pending_tool_batch_member(
         &self,
         session: &mut Session,
         pending_tool: &SessionPendingTool,
         state: &SessionManagerState,
-    ) -> Result<Option<ResolvedPendingTool>, AppError> {
+    ) -> Result<PendingToolBatchMember, AppError> {
         let before_prepare = session.clone();
         let mut resolved = resolve_pending_tool(session, pending_tool)?;
         let cancellation = self.execution_registry.cancellation_token(session.id).await;
@@ -912,7 +931,7 @@ impl SessionManager {
                 error = %err,
                 "deferring stale tool call to sequential failure handling"
             );
-            return Ok(None);
+            return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
         }
         let prepared = match scoped_executor.prepare_invocation(
             &resolved.invocation,
@@ -932,7 +951,7 @@ impl SessionManager {
                     "deferring tool preparation error to sequential failure handling"
                 );
                 *session = before_prepare;
-                return Ok(None);
+                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
             }
         };
         let (prepared_invocation, prepared_shell_command) = match scoped_executor
@@ -951,7 +970,7 @@ impl SessionManager {
                     "deferring shell preparation error to sequential failure handling"
                 );
                 *session = before_prepare;
-                return Ok(None);
+                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
             }
         };
         resolved.prepared_shell_command = prepared_shell_command;
@@ -982,11 +1001,6 @@ impl SessionManager {
             )));
         }
 
-        if !scoped_executor.is_concurrency_safe_invocation(&resolved.invocation) {
-            *session = before_prepare;
-            return Ok(None);
-        }
-
         let permission_checks = match scoped_executor
             .collect_permission_checks_for_invocation_in_session(
                 &resolved.invocation,
@@ -1005,39 +1019,42 @@ impl SessionManager {
                     "deferring permission-check error to sequential failure handling"
                 );
                 *session = before_prepare;
-                return Ok(None);
+                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
             }
         };
 
-        for check in &permission_checks {
-            if !matches!(
-                self.resolve_permission_decision(Some(session.id), &check)
-                    .await?
-                    .decision,
-                PermissionDecision::Allow
-            ) {
-                *session = before_prepare;
-                return Ok(None);
+        let approved_actions = session.operation_permission_approved_actions(
+            resolved.pending.part.message_id,
+            &resolved.operation_id,
+        );
+        let permission_checks = permission_checks
+            .into_iter()
+            .filter(|check| !approved_actions.contains(&check.action))
+            .collect::<Vec<_>>();
+        let permission_outcome = if permission_checks.is_empty() {
+            AggregatedPermissionOutcome::Allow
+        } else {
+            self.aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
+                .await?
+        };
+
+        match permission_outcome {
+            AggregatedPermissionOutcome::Request(request) => {
+                return Ok(PendingToolBatchMember::AwaitingPermission { resolved, request });
             }
+            AggregatedPermissionOutcome::Deny(_) => {
+                *session = before_prepare;
+                return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
+            }
+            AggregatedPermissionOutcome::Allow => {}
         }
 
-        let authorized_actions = permission_checks
-            .iter()
-            .map(|check| check.action.clone())
-            .collect();
-        resolved.execution_grant = Some(
-            scoped_executor
-                .issue_execution_grant(
-                    &resolved.invocation,
-                    session.id,
-                    resolved.call_id,
-                    resolved.prepared_shell_command.as_ref(),
-                    authorized_actions,
-                )
-                .map_err(tool_error_to_app_error)?,
-        );
+        if !scoped_executor.is_concurrency_safe_invocation(&resolved.invocation) {
+            *session = before_prepare;
+            return Ok(PendingToolBatchMember::Sequential(pending_tool.clone()));
+        }
 
-        Ok(Some(resolved))
+        Ok(PendingToolBatchMember::Ready(resolved))
     }
 
     #[tracing::instrument(skip(self, state, pending_tools), fields(session_id, tool_count = pending_tools.len()))]
@@ -1075,13 +1092,7 @@ impl SessionManager {
                     &pending_tool.invocation,
                     pending_tool.advertised_tool_identity.as_deref(),
                 )?;
-                let grant = pending_tool.execution_grant.as_ref().ok_or_else(|| {
-                    ToolError::InvalidExecutionGrant(
-                        "concurrent tool execution has no authorization grant".to_string(),
-                    )
-                })?;
-                scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
-                    grant,
+                scoped_executor.execute_invocation_detailed_with_prepared_shell(
                     &pending_tool.invocation,
                     session_id,
                     pending_tool.call_id,
@@ -1099,131 +1110,31 @@ impl SessionManager {
         Ok(results)
     }
 
-    pub(in crate::session::manager) async fn resolve_pending_tool(
+    fn prepare_pending_tool_execution(
         &self,
-        mut session: Session,
-        pending_tool: SessionPendingTool,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let cancellation = self.execution_registry.cancellation_token(session.id).await;
-        let mut resolved = resolve_pending_tool(&session, &pending_tool)?;
+        session: &mut Session,
+        mut resolved: ResolvedPendingTool,
+        state: &SessionManagerState,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+    ) -> Result<PreparedPendingToolExecution, PendingToolPreparationError> {
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution)
-            .with_cancellation_token(cancellation.clone());
-        if let Err(err) = scoped_executor.validate_advertised_tool_identity(
+            .with_cancellation_token(cancellation);
+        scoped_executor.validate_advertised_tool_identity(
             &resolved.invocation,
             resolved.advertised_tool_identity.as_deref(),
-        ) {
-            return Box::pin(self.apply_tool_error(session, &resolved.pending, err, None, state))
-                .await;
-        }
-        let prepared = match scoped_executor.prepare_invocation(
+        )?;
+        let prepared = scoped_executor.prepare_invocation(
             &resolved.invocation,
             session.id,
             resolved.call_id,
-        ) {
-            Ok(prepared) => prepared,
-            Err(ToolError::Cancelled) => {
-                return self
-                    .apply_tool_cancellation(session, &resolved.pending, state)
-                    .await;
-            }
-            Err(ToolError::PolicyDenied(denial)) => {
-                return self
-                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
-                    .await;
-            }
-            Err(ToolError::UserDeclined(decline)) => {
-                return self
-                    .apply_tool_user_declined(
-                        session,
-                        &resolved.pending,
-                        *decline,
-                        Vec::new(),
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                return self
-                    .apply_tool_capability_unavailable(
-                        session,
-                        &resolved.pending,
-                        *unavailable,
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::ToolUnavailable(unavailable)) => {
-                return self
-                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
-                    .await;
-            }
-            Err(err) => {
-                return Box::pin(self.apply_tool_error(
-                    session,
-                    &resolved.pending,
-                    err,
-                    None,
-                    state,
-                ))
-                .await;
-            }
-        };
-        let (prepared_invocation, prepared_shell_command) = match scoped_executor
-            .prepare_shell_invocation(&prepared.invocation, session.id, resolved.call_id)
-        {
-            Ok(prepared) => prepared,
-            Err(ToolError::Cancelled) => {
-                return self
-                    .apply_tool_cancellation(session, &resolved.pending, state)
-                    .await;
-            }
-            Err(ToolError::PolicyDenied(denial)) => {
-                return self
-                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
-                    .await;
-            }
-            Err(ToolError::UserDeclined(decline)) => {
-                return self
-                    .apply_tool_user_declined(
-                        session,
-                        &resolved.pending,
-                        *decline,
-                        Vec::new(),
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                return self
-                    .apply_tool_capability_unavailable(
-                        session,
-                        &resolved.pending,
-                        *unavailable,
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::ToolUnavailable(unavailable)) => {
-                return self
-                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
-                    .await;
-            }
-            Err(err) => {
-                return Box::pin(self.apply_tool_error(
-                    session,
-                    &resolved.pending,
-                    err,
-                    None,
-                    state,
-                ))
-                .await;
-            }
-        };
+        )?;
+        let (prepared_invocation, prepared_shell_command) = scoped_executor
+            .prepare_shell_invocation(&prepared.invocation, session.id, resolved.call_id)?;
         resolved.prepared_shell_command = prepared_shell_command;
         resolved.invocation = prepared_invocation;
+
         let mut session_changed = false;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
             let current_title = match session
@@ -1238,10 +1149,10 @@ impl SessionManager {
 
             resolved.invocation = prepared.invocation.clone();
             let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
-                AppError::Internal(format!(
+                PendingToolPreparationError::Session(AppError::Internal(format!(
                     "pending tool part not found: message={}, part={}",
                     resolved.pending.part.message_id, resolved.pending.part.part_id
-                ))
+                )))
             })?;
             tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
                 &resolved,
@@ -1252,110 +1163,150 @@ impl SessionManager {
             session_changed = true;
         }
 
-        let permission_checks = match scoped_executor
+        let permission_checks = scoped_executor
             .collect_permission_checks_for_invocation_in_session(
                 &resolved.invocation,
                 Some(session.id),
-            ) {
-            Ok(checks) => checks,
-            Err(ToolError::Cancelled) => {
-                return self
-                    .apply_tool_cancellation(session, &resolved.pending, state)
-                    .await;
+            )?;
+        Ok(PreparedPendingToolExecution {
+            resolved,
+            permission_checks,
+            session_changed,
+        })
+    }
+
+    async fn apply_pending_tool_start_error(
+        &self,
+        mut session: Session,
+        pending: &SessionPendingTool,
+        error: ToolError,
+        state: Arc<SessionManagerState>,
+        reload_specialized_state: bool,
+    ) -> Result<Session, AppError> {
+        if reload_specialized_state
+            && matches!(
+                &error,
+                ToolError::PolicyDenied(_)
+                    | ToolError::UserDeclined(_)
+                    | ToolError::CapabilityUnavailable(_)
+                    | ToolError::ToolUnavailable(_)
+            )
+        {
+            session = self
+                .store
+                .load_session(session.id, state.cache_policy())
+                .await?;
+        }
+
+        match error {
+            ToolError::Cancelled => {
+                Box::pin(self.apply_tool_cancellation(session, pending, state)).await
             }
-            Err(ToolError::PolicyDenied(denial)) => {
-                return self
-                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
-                    .await;
+            ToolError::PolicyDenied(denial) => {
+                Box::pin(self.apply_tool_policy_denied(session, pending, *denial, state)).await
             }
-            Err(ToolError::UserDeclined(decline)) => {
-                return self
-                    .apply_tool_user_declined(
-                        session,
-                        &resolved.pending,
-                        *decline,
-                        Vec::new(),
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                return self
-                    .apply_tool_capability_unavailable(
-                        session,
-                        &resolved.pending,
-                        *unavailable,
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::ToolUnavailable(unavailable)) => {
-                return self
-                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
-                    .await;
-            }
-            Err(err) => {
-                return Box::pin(self.apply_tool_error(
+            ToolError::UserDeclined(decline) => {
+                Box::pin(self.apply_tool_user_declined(
                     session,
-                    &resolved.pending,
-                    err,
-                    None,
+                    pending,
+                    *decline,
+                    Vec::new(),
                     state,
+                ))
+                .await
+            }
+            ToolError::CapabilityUnavailable(unavailable) => {
+                Box::pin(self.apply_tool_capability_unavailable(
+                    session,
+                    pending,
+                    *unavailable,
+                    state,
+                ))
+                .await
+            }
+            ToolError::ToolUnavailable(unavailable) => {
+                Box::pin(self.apply_tool_unavailable(session, pending, *unavailable, state)).await
+            }
+            error => Box::pin(self.apply_tool_error(session, pending, error, None, state)).await,
+        }
+    }
+
+    pub(in crate::session::manager) async fn resolve_pending_tool(
+        &self,
+        mut session: Session,
+        pending_tool: SessionPendingTool,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let cancellation = self.execution_registry.cancellation_token(session.id).await;
+        let resolved = resolve_pending_tool(&session, &pending_tool)?;
+        let PreparedPendingToolExecution {
+            resolved,
+            permission_checks,
+            session_changed,
+        } = match self.prepare_pending_tool_execution(
+            &mut session,
+            resolved,
+            state.as_ref(),
+            cancellation.clone(),
+        ) {
+            Ok(prepared) => prepared,
+            Err(PendingToolPreparationError::Session(error)) => return Err(error),
+            Err(PendingToolPreparationError::Tool(error)) => {
+                return Box::pin(self.apply_pending_tool_start_error(
+                    session,
+                    &pending_tool,
+                    error,
+                    state,
+                    false,
                 ))
                 .await;
             }
         };
 
-        match self
-            .aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
+        let approved_actions = session.operation_permission_approved_actions(
+            resolved.pending.part.message_id,
+            &resolved.operation_id,
+        );
+        let permission_checks = permission_checks
+            .into_iter()
+            .filter(|check| !approved_actions.contains(&check.action))
+            .collect::<Vec<_>>();
+        let permission_outcome = if permission_checks.is_empty() {
+            AggregatedPermissionOutcome::Allow
+        } else {
+            Box::pin(
+                self.aggregate_permission_outcome(Some(session.id), permission_checks.as_slice()),
+            )
             .await?
-        {
-            AggregatedPermissionOutcome::Allow => {
-                let authorized_actions = permission_checks
-                    .iter()
-                    .map(|check| check.action.clone())
-                    .collect();
-                resolved.execution_grant = Some(
-                    scoped_executor
-                        .issue_execution_grant(
-                            &resolved.invocation,
-                            session.id,
-                            resolved.call_id,
-                            resolved.prepared_shell_command.as_ref(),
-                            authorized_actions,
-                        )
-                        .map_err(tool_error_to_app_error)?,
-                );
-            }
+        };
+
+        match permission_outcome {
+            AggregatedPermissionOutcome::Allow => {}
             AggregatedPermissionOutcome::Request(request) => {
                 let request = *request;
-                return self
-                    .apply_permission_request(
-                        session,
-                        &resolved.pending,
-                        request.action,
-                        request.related_actions,
-                        request.requested_actions,
-                        request.reason,
-                        request.explanation,
-                        request.source,
-                        request.scope,
-                        request.operator,
-                        request.risk,
-                        request.trace,
-                        state,
-                    )
-                    .await;
+                return Box::pin(self.apply_permission_request(
+                    session,
+                    &resolved.pending,
+                    request.action,
+                    request.related_actions,
+                    request.requested_actions,
+                    request.reason,
+                    request.explanation,
+                    request.source,
+                    request.scope,
+                    request.operator,
+                    request.risk,
+                    request.trace,
+                    state,
+                ))
+                .await;
             }
 
             AggregatedPermissionOutcome::Deny(denial) => {
                 return Box::pin(self.apply_tool_policy_denied(
-
                     session,
                     &resolved.pending,
-
                     *denial,
-
                     state,
                 ))
                 .await;
@@ -1364,109 +1315,47 @@ impl SessionManager {
 
         if session_changed {
             let assistant_message = session.messages[resolved.pending.part.message_index].clone();
-            session = self
-                .persist_session_changes(
-                    session,
-                    vec![assistant_message],
-                    Vec::new(),
-                    None,
-                    state.clone(),
-                )
-                .await?;
+            session = Box::pin(self.persist_session_changes(
+                session,
+                vec![assistant_message],
+                Vec::new(),
+                None,
+                state.clone(),
+            ))
+            .await?;
         }
 
-        let streaming_tool = match state
-            .tool_executor
-            .for_session_context(&session.runtime.execution)
-            .with_cancellation_token(cancellation.clone())
-            .execute_invocation_streaming_with_grant(
-                resolved.execution_grant.as_ref().ok_or_else(|| {
-                    AppError::Internal(
-                        "authorized streaming tool has no execution grant".to_string(),
-                    )
-                })?,
-                &resolved.invocation,
-                session.id,
-                resolved.call_id,
-                resolved.prepared_shell_command.as_ref(),
-            )
-            .await
+        let streaming_tool = match Box::pin(
+            state
+                .tool_executor
+                .for_session_context(&session.runtime.execution)
+                .with_cancellation_token(cancellation.clone())
+                .execute_invocation_streaming(&resolved.invocation, session.id, resolved.call_id),
+        )
+        .await
         {
             Ok(stream) => stream,
-            Err(ToolError::Cancelled) => {
-                return self
-                    .apply_tool_cancellation(session, &resolved.pending, state)
-                    .await;
-            }
-            Err(ToolError::PolicyDenied(denial)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                return self
-                    .apply_tool_policy_denied(session, &resolved.pending, *denial, state)
-                    .await;
-            }
-            Err(ToolError::UserDeclined(decline)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                return self
-                    .apply_tool_user_declined(
-                        session,
-                        &resolved.pending,
-                        *decline,
-                        Vec::new(),
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                return self
-                    .apply_tool_capability_unavailable(
-                        session,
-                        &resolved.pending,
-                        *unavailable,
-                        state,
-                    )
-                    .await;
-            }
-            Err(ToolError::ToolUnavailable(unavailable)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                return self
-                    .apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
-                    .await;
-            }
-            Err(err) => {
-                return Box::pin(self.apply_tool_error(
+            Err(error) => {
+                return Box::pin(self.apply_pending_tool_start_error(
                     session,
                     &resolved.pending,
-                    err,
-                    None,
+                    error,
                     state,
+                    true,
                 ))
                 .await;
             }
         };
 
         if let Some(stream) = streaming_tool {
-            return self
-                .apply_streaming_tool_execution(
-                    session,
-                    &resolved.pending,
-                    stream,
-                    state,
-                    cancellation,
-                )
-                .await;
+            return Box::pin(self.apply_streaming_tool_execution(
+                session,
+                &resolved.pending,
+                stream,
+                state,
+                cancellation,
+            ))
+            .await;
         }
 
         let manager = self.background_handle();
@@ -1484,80 +1373,64 @@ impl SessionManager {
         .await
         .map_err(|err| AppError::Internal(format!("tool execution task failed: {err}")))?;
 
+        let session = self
+            .store
+            .load_session(session.id, state.cache_policy())
+            .await?;
+        Box::pin(self.apply_tool_execution_result(session, &resolved.pending, execution, state))
+            .await
+    }
+
+    /// Apply the one canonical state transition for a completed tool attempt.
+    /// Every execution path (sequential, parallel, and permission-resumed)
+    /// must pass through this method so an error can never leave the original
+    /// operation pending and accidentally request permission a second time.
+    pub(in crate::session::manager) async fn apply_tool_execution_result(
+        &self,
+        session: Session,
+        pending_tool: &SessionPendingTool,
+        execution: Result<ToolInvocationExecution, ToolError>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
         match execution {
             Ok(execution) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                self.apply_tool_success(session, &resolved.pending, execution, None, state)
+                Box::pin(self.apply_tool_success(session, pending_tool, execution, None, state))
                     .await
             }
             Err(ToolError::UserInputRequired(input)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                self.apply_user_input_request(session, &resolved.pending, *input, state)
-                    .await
+                Box::pin(self.apply_user_input_request(session, pending_tool, *input, state)).await
             }
             Err(ToolError::Cancelled) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                self.apply_tool_cancellation(session, &resolved.pending, state)
-                    .await
+                Box::pin(self.apply_tool_cancellation(session, pending_tool, state)).await
             }
             Err(ToolError::PolicyDenied(denial)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                self.apply_tool_policy_denied(session, &resolved.pending, *denial, state)
-                    .await
+                Box::pin(self.apply_tool_policy_denied(session, pending_tool, *denial, state)).await
             }
             Err(ToolError::UserDeclined(decline)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                self.apply_tool_user_declined(
+                Box::pin(self.apply_tool_user_declined(
                     session,
-                    &resolved.pending,
+                    pending_tool,
                     *decline,
                     Vec::new(),
                     state,
-                )
+                ))
                 .await
             }
             Err(ToolError::CapabilityUnavailable(unavailable)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                self.apply_tool_capability_unavailable(
+                Box::pin(self.apply_tool_capability_unavailable(
                     session,
-                    &resolved.pending,
+                    pending_tool,
                     *unavailable,
                     state,
-                )
+                ))
                 .await
             }
             Err(ToolError::ToolUnavailable(unavailable)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                self.apply_tool_unavailable(session, &resolved.pending, *unavailable, state)
+                Box::pin(self.apply_tool_unavailable(session, pending_tool, *unavailable, state))
                     .await
             }
-            Err(err) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
-                Box::pin(self.apply_tool_error(session, &resolved.pending, err, None, state)).await
+            Err(error) => {
+                Box::pin(self.apply_tool_error(session, pending_tool, error, None, state)).await
             }
         }
     }
@@ -1596,150 +1469,8 @@ impl SessionManager {
         {
             return Err(AppError::Cancelled);
         }
-        let mut resolution =
+        let resolution =
             resolve_permission_with_persisted_rules(check.decision.clone(), &persisted_rules);
-
-        if persisted_rules.is_empty() {
-            let plugins = self
-                .execution_state()
-                .tool_executor
-                .plugin_manager()
-                .clone();
-            if !plugins.is_empty() {
-                let default_decision = match resolution.decision {
-                    PermissionDecision::Allow => agena_plugin_host::PermissionDecision::Allow,
-                    PermissionDecision::Deny { .. } => agena_plugin_host::PermissionDecision::Deny,
-                    PermissionDecision::Ask { .. } => agena_plugin_host::PermissionDecision::Prompt,
-                };
-                let req = agena_plugin_host::PermissionAskInput {
-                    session_id: session_id.unwrap_or(-1),
-                    action: format!("{:?}", check.action),
-                    subject: permission_subject(&check.action),
-                    default_decision,
-                };
-                match plugins
-                    .dispatch_permission_ask_blocking_cancellable(req, cancellation.clone())
-                {
-                    Ok(Some(agena_plugin_host::host::PermissionAskOutcome::Decision {
-                        plugin_id,
-                        decision: agena_plugin_host::PermissionDecision::Allow,
-                        authority,
-                    })) => {
-                        resolution.decision = PermissionDecision::Allow;
-                        resolution.risk = PermissionRiskLevel::Low;
-                        resolution.explanation = format!(
-                            "allowed by plugin decision from {plugin_id} ({})",
-                            authority.trust_level
-                        );
-                        resolution.trace.push(DecisionTraceStep {
-                            source_kind: PolicySourceKind::PluginAdvice,
-                            summary: format!(
-                                "allowed by plugin decision from {plugin_id} (trust={}, capabilities={})",
-                                authority.trust_level,
-                                authority.plugin_capabilities.join(", ")
-                            ),
-                            source: Some(plugin_id),
-                            scope: None,
-                            operator: None,
-                        });
-                    }
-                    Ok(Some(agena_plugin_host::host::PermissionAskOutcome::Decision {
-                        plugin_id,
-                        decision: agena_plugin_host::PermissionDecision::Deny,
-                        authority,
-                    })) => {
-                        resolution.decision = PermissionDecision::Deny {
-                            reason: format!("denied by plugin {plugin_id}"),
-                        };
-                        resolution.risk = PermissionRiskLevel::High;
-                        resolution.explanation = format!(
-                            "denied by plugin decision from {plugin_id} ({})",
-                            authority.trust_level
-                        );
-                        resolution.trace.push(DecisionTraceStep {
-                            source_kind: PolicySourceKind::PluginAdvice,
-                            summary: format!(
-                                "denied by plugin decision from {plugin_id} (trust={}, capabilities={})",
-                                authority.trust_level,
-                                authority.plugin_capabilities.join(", ")
-                            ),
-                            source: Some(plugin_id),
-                            scope: None,
-                            operator: None,
-                        });
-                    }
-                    Ok(Some(agena_plugin_host::host::PermissionAskOutcome::Decision {
-                        plugin_id,
-                        decision: agena_plugin_host::PermissionDecision::Prompt,
-                        authority,
-                    })) => {
-                        resolution.decision = PermissionDecision::Ask {
-                            reason: resolution.explanation.clone(),
-                        };
-                        resolution.risk = PermissionRiskLevel::Medium;
-                        resolution.trace.push(DecisionTraceStep {
-                            source_kind: PolicySourceKind::PluginAdvice,
-                            summary: format!(
-                                "plugin {plugin_id} requested confirmation (trust={}, capabilities={})",
-                                authority.trust_level,
-                                authority.plugin_capabilities.join(", ")
-                            ),
-                            source: Some(plugin_id),
-                            scope: None,
-                            operator: None,
-                        });
-                    }
-                    Ok(Some(agena_plugin_host::host::PermissionAskOutcome::Advice {
-                        plugin_id,
-                        advice,
-                        authority,
-                    })) => {
-                        let explanation = if advice.reason.trim().is_empty() {
-                            format!("permission advised by plugin {plugin_id}")
-                        } else {
-                            format!("{} (plugin: {plugin_id})", advice.reason)
-                        };
-                        resolution.explanation = explanation.clone();
-                        let plugin_risk = plugin_risk_to_core(advice.risk);
-                        resolution.decision = apply_advisory_permission_decision(
-                            resolution.decision.clone(),
-                            advice.decision,
-                            &explanation,
-                        );
-                        resolution.risk = max_permission_risk(
-                            max_permission_risk(resolution.risk, plugin_risk),
-                            risk_for_permission_decision(&resolution.decision),
-                        );
-                        resolution.trace.push(DecisionTraceStep {
-                            source_kind: PolicySourceKind::PluginAdvice,
-                            summary: format!(
-                                "{} (trust={}, capabilities={})",
-                                explanation,
-                                authority.trust_level,
-                                authority.plugin_capabilities.join(", ")
-                            ),
-                            source: Some(plugin_id),
-                            scope: None,
-                            operator: None,
-                        });
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        if cancellation
-                            .as_ref()
-                            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
-                        {
-                            return Err(AppError::Cancelled);
-                        }
-                        tracing::warn!(
-                            target: "agena_plugin_host::permission",
-                            "permission plugin failed: {err}"
-                        );
-                    }
-                }
-            }
-        }
-
         Ok(resolution)
     }
 
@@ -1931,6 +1662,41 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
+        let existing_request_parts = matching_request_part_refs(
+            &session,
+            request_id.as_str(),
+            agena_domain::PendingInteractiveRequestKind::Permission,
+            false,
+        );
+        let has_pending_request = existing_request_parts.iter().any(|part_ref| {
+            session
+                .part(part_ref)
+                .is_some_and(|part| part.status == ExecutionStatus::Pending)
+        });
+        let has_replied_request = existing_request_parts.iter().any(|part_ref| {
+            matches!(
+                session
+                    .part(part_ref)
+                    .and_then(|part| part.content.as_ref()),
+                Some(PartContent::Activity(
+                    crate::message::RuntimeActivity::Interaction(RequestPart::Permission(
+                        InteractiveRequestPart { reply: Some(_), .. }
+                    ))
+                ))
+            )
+        });
+        if has_replied_request || (!existing_request_parts.is_empty() && !has_pending_request) {
+            return Box::pin(self.apply_tool_error(
+                session,
+                pending_tool,
+                ToolError::plugin(format!(
+                    "permission request {request_id} is already resolved; the same operation cannot request it again"
+                )),
+                None,
+                state,
+            ))
+            .await;
+        }
         let request = PermissionRequest {
             request_id,
             session_id: Some(session.id),
@@ -1984,9 +1750,9 @@ impl SessionManager {
             }
         };
         let session_id = session.id;
-        self.persist_session_changes(
-            session,
-            vec![assistant_message],
+        let events = if has_pending_request {
+            Vec::new()
+        } else {
             vec![EventKind::PermissionRequested(PermissionRequestedEvent {
                 session_id,
                 request_id: request.request_id.clone(),
@@ -2001,7 +1767,12 @@ impl SessionManager {
                 risk: request.risk,
                 trace,
                 ts_ms: Utc::now().timestamp_millis(),
-            })],
+            })]
+        };
+        self.persist_session_changes(
+            session,
+            vec![assistant_message],
+            events,
             None,
             state.clone(),
         )
@@ -2318,6 +2089,7 @@ impl SessionManager {
             })
             .transpose()?;
         let output_text = summary.output_text.clone();
+        let presentation_summary = summary.summary.clone();
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = operation_blocks_from_tool_output(
             &resolved.invocation,
@@ -2356,6 +2128,10 @@ impl SessionManager {
                 lifecycle.clone(),
             );
             operation.set_title(completion_title.clone());
+            if !presentation_summary.trim().is_empty() {
+                operation.set_summary(presentation_summary.clone());
+            }
+            operation.set_presentation_sections(summary.sections.clone());
             operation.result.metadata.extend(
                 summary
                     .metadata

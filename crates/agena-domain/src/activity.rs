@@ -3,13 +3,13 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ActivityId, ExecutionId, FileChangeRecord, PermissionReply, PermissionRequest, ProcessSummary,
-    PromptCompactionActivity, ReasoningPart, ResponseId, ResponseSegmentId, RunId,
-    SearchResultItem, SubtaskStatus, TodoItem, ToolCallId, ToolInvocation, ToolOutput, TurnId,
-    UserInputReply, UserInputRequest,
+    ActivityId, AssistantReplyId, ExecutionId, FileChangeRecord, PermissionReply,
+    PermissionRequest, ProcessSummary, PromptCompactionActivity, ReasoningPart, RunId,
+    SearchResultItem, SubtaskStatus, TextSegmentId, TodoItem, ToolCallId, ToolInvocation,
+    ToolOutput, TurnId, UserInputReply, UserInputRequest,
 };
 
-/// The only two kinds of content that can appear in a turn or response.
+/// The only two kinds of content that can appear in a turn input or assistant reply.
 ///
 /// Text intentionally stays a primitive. Every structured or stateful value,
 /// including resources and Skill references, is an [`ActivityNode`].
@@ -22,17 +22,17 @@ pub enum ContentNode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContentIdentity {
-    Text(ResponseSegmentId),
+    Text(TextSegmentId),
     Activity(ActivityId),
 }
 
 impl ContentNode {
     pub fn text(text: impl Into<String>) -> Self {
-        Self::text_at(ResponseSegmentId::new(), text, 0, 0)
+        Self::text_at(TextSegmentId::new(), text, 0, 0)
     }
 
     pub fn text_at(
-        id: ResponseSegmentId,
+        id: TextSegmentId,
         text: impl Into<String>,
         position: u32,
         revision_seq: i64,
@@ -94,7 +94,7 @@ impl ContentNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TextSegment {
-    pub id: ResponseSegmentId,
+    pub id: TextSegmentId,
     pub text: String,
     pub position: ContentPosition,
     pub revision_seq: i64,
@@ -213,7 +213,7 @@ impl ContentDocument {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityOwner {
     TurnInput { turn_id: TurnId },
-    Response { response_id: ResponseId },
+    AssistantReply { reply_id: AssistantReplyId },
     Activity { parent_activity_id: ActivityId },
     Session { session_id: i64 },
 }
@@ -461,6 +461,8 @@ pub struct OperationActivity {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<crate::ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model_output_text: String,
     #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
@@ -565,7 +567,7 @@ pub struct CustomActivity {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ResponseStatus {
+pub enum AssistantReplyStatus {
     #[default]
     Pending,
     InProgress,
@@ -574,7 +576,7 @@ pub enum ResponseStatus {
     Cancelled,
 }
 
-impl ResponseStatus {
+impl AssistantReplyStatus {
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
@@ -582,11 +584,10 @@ impl ResponseStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct ResponseSnapshot {
-    pub id: ResponseId,
+pub struct AssistantReplySnapshot {
+    pub id: AssistantReplyId,
     pub turn_id: TurnId,
-    pub execution_id: ExecutionId,
-    pub status: ResponseStatus,
+    pub status: AssistantReplyStatus,
     pub content: ContentDocument,
     pub revision_seq: i64,
     pub created_at_ms: i64,
@@ -601,7 +602,7 @@ pub struct TurnSnapshot {
     pub session_id: i64,
     pub sequence: i64,
     pub input: ContentDocument,
-    pub response: ResponseSnapshot,
+    pub reply: AssistantReplySnapshot,
     pub created_at_ms: i64,
 }
 
@@ -622,9 +623,9 @@ pub enum TranscriptPatch {
         seq_session: i64,
         turn: TurnSnapshot,
     },
-    ResponseUpdated {
+    AssistantReplyUpdated {
         seq_session: i64,
-        response: ResponseSnapshot,
+        reply: AssistantReplySnapshot,
     },
     ContentUpserted {
         seq_session: i64,
@@ -637,7 +638,7 @@ impl TranscriptSnapshot {
     pub fn apply(&mut self, patch: TranscriptPatch) {
         let seq_session = match &patch {
             TranscriptPatch::TurnOpened { seq_session, .. }
-            | TranscriptPatch::ResponseUpdated { seq_session, .. }
+            | TranscriptPatch::AssistantReplyUpdated { seq_session, .. }
             | TranscriptPatch::ContentUpserted { seq_session, .. } => *seq_session,
         };
         if seq_session <= self.seq_session {
@@ -661,19 +662,15 @@ impl TranscriptSnapshot {
                     self.turns.sort_by_key(|turn| turn.sequence);
                 }
             }
-            TranscriptPatch::ResponseUpdated { mut response, .. } => {
-                if let Some(turn) = self
-                    .turns
-                    .iter_mut()
-                    .find(|turn| turn.id == response.turn_id)
-                    && turn.response.id == response.id
-                    && turn.response.execution_id == response.execution_id
-                    && response.revision_seq >= turn.response.revision_seq
+            TranscriptPatch::AssistantReplyUpdated { mut reply, .. } => {
+                if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == reply.turn_id)
+                    && turn.reply.id == reply.id
+                    && reply.revision_seq >= turn.reply.revision_seq
                 {
-                    let mut content = std::mem::take(&mut turn.response.content);
-                    content.merge_from(std::mem::take(&mut response.content));
-                    response.content = content;
-                    turn.response = response;
+                    let mut content = std::mem::take(&mut turn.reply.content);
+                    content.merge_from(std::mem::take(&mut reply.content));
+                    reply.content = content;
+                    turn.reply = reply;
                 }
             }
             TranscriptPatch::ContentUpserted { owner, node, .. } => match owner {
@@ -682,13 +679,10 @@ impl TranscriptSnapshot {
                         turn.input.upsert(node);
                     }
                 }
-                ActivityOwner::Response { response_id } => {
-                    if let Some(turn) = self
-                        .turns
-                        .iter_mut()
-                        .find(|turn| turn.response.id == response_id)
+                ActivityOwner::AssistantReply { reply_id } => {
+                    if let Some(turn) = self.turns.iter_mut().find(|turn| turn.reply.id == reply_id)
                     {
-                        turn.response.content.upsert(node);
+                        turn.reply.content.upsert(node);
                     }
                 }
                 ActivityOwner::Session { session_id } if session_id == self.session_id => {
@@ -735,28 +729,22 @@ impl TranscriptSnapshot {
 ///
 /// A `TurnOpened` patch and a durable refresh are merely two sources of the
 /// same projection. Keeping their reconciliation here prevents either source
-/// from becoming a special overwrite path. Response metadata follows the
-/// response revision, while every content node follows its own stable identity
-/// and revision.
+/// from becoming a special overwrite path. Reply metadata follows the reply
+/// revision, while every content node follows its own stable identity and
+/// revision.
 fn merge_matching_turn(current: &mut TurnSnapshot, mut incoming: TurnSnapshot) {
-    if current.response.id != incoming.response.id
-        || current.response.execution_id != incoming.response.execution_id
-        || current.response.turn_id != incoming.response.turn_id
-    {
+    if current.reply.id != incoming.reply.id || current.reply.turn_id != incoming.reply.turn_id {
         return;
     }
 
     current.input.merge_from(incoming.input);
-    if incoming.response.revision_seq >= current.response.revision_seq {
-        let mut content = std::mem::take(&mut current.response.content);
-        content.merge_from(std::mem::take(&mut incoming.response.content));
-        current.response = incoming.response;
-        current.response.content = content;
+    if incoming.reply.revision_seq >= current.reply.revision_seq {
+        let mut content = std::mem::take(&mut current.reply.content);
+        content.merge_from(std::mem::take(&mut incoming.reply.content));
+        current.reply = incoming.reply;
+        current.reply.content = content;
     } else {
-        current
-            .response
-            .content
-            .merge_from(incoming.response.content);
+        current.reply.content.merge_from(incoming.reply.content);
     }
 }
 
@@ -831,7 +819,7 @@ impl ComposerDocument {
                 .enumerate()
                 .map(|(index, node)| match node {
                     ComposerNode::Text { text } => {
-                        ContentNode::text_at(ResponseSegmentId::new(), text, index as u32, 0)
+                        ContentNode::text_at(TextSegmentId::new(), text, index as u32, 0)
                     }
                     ComposerNode::Activity { activity } => ContentNode::activity(ActivityNode {
                         id: activity.id,
@@ -869,7 +857,7 @@ pub enum CancellationResult {
 pub struct ExecutionTarget {
     pub session_id: i64,
     pub execution_id: ExecutionId,
-    pub response_id: ResponseId,
+    pub reply_id: AssistantReplyId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
 }
@@ -922,13 +910,11 @@ mod tests {
     #[test]
     fn snapshot_reducer_uses_identity_and_revision_not_timestamps() {
         let turn_id = TurnId::new();
-        let response_id = ResponseId::new();
-        let execution_id = ExecutionId::new();
-        let response = ResponseSnapshot {
-            id: response_id,
+        let reply_id = AssistantReplyId::new();
+        let reply = AssistantReplySnapshot {
+            id: reply_id,
             turn_id,
-            execution_id,
-            status: ResponseStatus::InProgress,
+            status: AssistantReplyStatus::InProgress,
             content: ContentDocument::default(),
             revision_seq: 1,
             created_at_ms: 10,
@@ -942,48 +928,48 @@ mod tests {
                 session_id: 1,
                 sequence: 1,
                 input: ContentDocument::default(),
-                response,
+                reply,
                 created_at_ms: 10,
             }],
             session_activities: Vec::new(),
         };
-        snapshot.apply(TranscriptPatch::ResponseUpdated {
+        snapshot.apply(TranscriptPatch::AssistantReplyUpdated {
             seq_session: 2,
-            response: ResponseSnapshot {
-                id: response_id,
+            reply: AssistantReplySnapshot {
+                id: reply_id,
                 turn_id,
-                execution_id,
-                status: ResponseStatus::Cancelled,
+                status: AssistantReplyStatus::Cancelled,
                 content: ContentDocument::default(),
                 revision_seq: 2,
                 created_at_ms: 10,
                 finished_at_ms: Some(5),
             },
         });
-        assert_eq!(snapshot.turns[0].response.status, ResponseStatus::Cancelled);
+        assert_eq!(
+            snapshot.turns[0].reply.status,
+            AssistantReplyStatus::Cancelled
+        );
     }
 
     #[test]
     fn snapshot_replay_converges_by_turn_response_and_segment_identity() {
         let turn_id = TurnId::new();
-        let response_id = ResponseId::new();
-        let execution_id = ExecutionId::new();
-        let segment_id = ResponseSegmentId::new();
+        let reply_id = AssistantReplyId::new();
+        let segment_id = TextSegmentId::new();
         let opened = TurnSnapshot {
             id: turn_id,
             session_id: 7,
             sequence: 1,
             input: ContentDocument::new(vec![ContentNode::text_at(
-                ResponseSegmentId::new(),
+                TextSegmentId::new(),
                 "question",
                 0,
                 1,
             )]),
-            response: ResponseSnapshot {
-                id: response_id,
+            reply: AssistantReplySnapshot {
+                id: reply_id,
                 turn_id,
-                execution_id,
-                status: ResponseStatus::InProgress,
+                status: AssistantReplyStatus::InProgress,
                 content: ContentDocument::default(),
                 revision_seq: 1,
                 created_at_ms: 100,
@@ -998,21 +984,20 @@ mod tests {
             },
             TranscriptPatch::ContentUpserted {
                 seq_session: 2,
-                owner: ActivityOwner::Response { response_id },
+                owner: ActivityOwner::AssistantReply { reply_id },
                 node: ContentNode::text_at(segment_id, "partial", 99, 2),
             },
             TranscriptPatch::ContentUpserted {
                 seq_session: 3,
-                owner: ActivityOwner::Response { response_id },
+                owner: ActivityOwner::AssistantReply { reply_id },
                 node: ContentNode::text_at(segment_id, "partial answer", 0, 3),
             },
-            TranscriptPatch::ResponseUpdated {
+            TranscriptPatch::AssistantReplyUpdated {
                 seq_session: 4,
-                response: ResponseSnapshot {
-                    id: response_id,
+                reply: AssistantReplySnapshot {
+                    id: reply_id,
                     turn_id,
-                    execution_id,
-                    status: ResponseStatus::Cancelled,
+                    status: AssistantReplyStatus::Cancelled,
                     content: ContentDocument::new(vec![ContentNode::text_at(
                         segment_id,
                         "partial answer",
@@ -1039,11 +1024,10 @@ mod tests {
             session_id: 7,
             seq_session: 4,
             turns: vec![TurnSnapshot {
-                response: ResponseSnapshot {
-                    id: response_id,
+                reply: AssistantReplySnapshot {
+                    id: reply_id,
                     turn_id,
-                    execution_id,
-                    status: ResponseStatus::Cancelled,
+                    status: AssistantReplyStatus::Cancelled,
                     content: ContentDocument::new(vec![ContentNode::text_at(
                         segment_id,
                         "partial answer",
@@ -1062,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn separate_cancelled_responses_never_overwrite_each_other() {
+    fn separate_cancelled_assistant_replies_never_overwrite_each_other() {
         let mut snapshot = TranscriptSnapshot {
             session_id: 9,
             ..Default::default()
@@ -1070,9 +1054,8 @@ mod tests {
         let mut response_ids = Vec::new();
         for sequence in 1..=2 {
             let turn_id = TurnId::new();
-            let response_id = ResponseId::new();
-            response_ids.push(response_id);
-            let execution_id = ExecutionId::new();
+            let reply_id = AssistantReplyId::new();
+            response_ids.push(reply_id);
             snapshot.apply(TranscriptPatch::TurnOpened {
                 seq_session: sequence * 2 - 1,
                 turn: TurnSnapshot {
@@ -1082,11 +1065,10 @@ mod tests {
                     input: ContentDocument::new(vec![ContentNode::text(format!(
                         "question {sequence}"
                     ))]),
-                    response: ResponseSnapshot {
-                        id: response_id,
+                    reply: AssistantReplySnapshot {
+                        id: reply_id,
                         turn_id,
-                        execution_id,
-                        status: ResponseStatus::InProgress,
+                        status: AssistantReplyStatus::InProgress,
                         content: ContentDocument::default(),
                         revision_seq: sequence * 2 - 1,
                         created_at_ms: 100 - sequence,
@@ -1095,13 +1077,12 @@ mod tests {
                     created_at_ms: 100 - sequence,
                 },
             });
-            snapshot.apply(TranscriptPatch::ResponseUpdated {
+            snapshot.apply(TranscriptPatch::AssistantReplyUpdated {
                 seq_session: sequence * 2,
-                response: ResponseSnapshot {
-                    id: response_id,
+                reply: AssistantReplySnapshot {
+                    id: reply_id,
                     turn_id,
-                    execution_id,
-                    status: ResponseStatus::Cancelled,
+                    status: AssistantReplyStatus::Cancelled,
                     content: ContentDocument::default(),
                     revision_seq: sequence * 2,
                     created_at_ms: 100 - sequence,
@@ -1110,34 +1091,32 @@ mod tests {
             });
         }
         assert_eq!(snapshot.turns.len(), 2);
-        assert_eq!(snapshot.turns[0].response.id, response_ids[0]);
-        assert_eq!(snapshot.turns[1].response.id, response_ids[1]);
+        assert_eq!(snapshot.turns[0].reply.id, response_ids[0]);
+        assert_eq!(snapshot.turns[1].reply.id, response_ids[1]);
         assert!(
             snapshot
                 .turns
                 .iter()
-                .all(|turn| turn.response.status == ResponseStatus::Cancelled)
+                .all(|turn| turn.reply.status == AssistantReplyStatus::Cancelled)
         );
     }
 
     #[test]
     fn repeated_turn_opened_merges_without_erasing_live_content() {
         let turn_id = TurnId::new();
-        let response_id = ResponseId::new();
-        let execution_id = ExecutionId::new();
-        let question_id = ResponseSegmentId::new();
-        let followup_id = ResponseSegmentId::new();
-        let answer_id = ResponseSegmentId::new();
+        let reply_id = AssistantReplyId::new();
+        let question_id = TextSegmentId::new();
+        let followup_id = TextSegmentId::new();
+        let answer_id = TextSegmentId::new();
         let opened = TurnSnapshot {
             id: turn_id,
             session_id: 11,
             sequence: 1,
             input: ContentDocument::new(vec![ContentNode::text_at(question_id, "question", 0, 1)]),
-            response: ResponseSnapshot {
-                id: response_id,
+            reply: AssistantReplySnapshot {
+                id: reply_id,
                 turn_id,
-                execution_id,
-                status: ResponseStatus::InProgress,
+                status: AssistantReplyStatus::InProgress,
                 content: ContentDocument::default(),
                 revision_seq: 1,
                 created_at_ms: 10,
@@ -1155,7 +1134,7 @@ mod tests {
         });
         snapshot.apply(TranscriptPatch::ContentUpserted {
             seq_session: 2,
-            owner: ActivityOwner::Response { response_id },
+            owner: ActivityOwner::AssistantReply { reply_id },
             node: ContentNode::text_at(answer_id, "live answer", 0, 2),
         });
         snapshot.apply(TranscriptPatch::ContentUpserted {
@@ -1167,11 +1146,11 @@ mod tests {
         snapshot.apply(TranscriptPatch::TurnOpened {
             seq_session: 4,
             turn: TurnSnapshot {
-                response: ResponseSnapshot {
-                    status: ResponseStatus::Completed,
+                reply: AssistantReplySnapshot {
+                    status: AssistantReplyStatus::Completed,
                     revision_seq: 4,
                     finished_at_ms: Some(20),
-                    ..opened.response
+                    ..opened.reply
                 },
                 ..opened
             },
@@ -1179,17 +1158,16 @@ mod tests {
 
         let turn = &snapshot.turns[0];
         assert_eq!(turn.input.text(), "question plus context");
-        assert_eq!(turn.response.content.text(), "live answer");
-        assert_eq!(turn.response.status, ResponseStatus::Completed);
+        assert_eq!(turn.reply.content.text(), "live answer");
+        assert_eq!(turn.reply.status, AssistantReplyStatus::Completed);
         assert_eq!(snapshot.seq_session, 4);
     }
 
     #[test]
     fn durable_refresh_and_live_projection_converge_per_node_revision() {
         let turn_id = TurnId::new();
-        let response_id = ResponseId::new();
-        let execution_id = ExecutionId::new();
-        let segment_id = ResponseSegmentId::new();
+        let reply_id = AssistantReplyId::new();
+        let segment_id = TextSegmentId::new();
         let mut snapshot = TranscriptSnapshot {
             session_id: 12,
             seq_session: 5,
@@ -1198,11 +1176,10 @@ mod tests {
                 session_id: 12,
                 sequence: 1,
                 input: ContentDocument::default(),
-                response: ResponseSnapshot {
-                    id: response_id,
+                reply: AssistantReplySnapshot {
+                    id: reply_id,
                     turn_id,
-                    execution_id,
-                    status: ResponseStatus::InProgress,
+                    status: AssistantReplyStatus::InProgress,
                     content: ContentDocument::new(vec![ContentNode::text_at(
                         segment_id,
                         "newer live text",
@@ -1222,10 +1199,9 @@ mod tests {
             session_id: 12,
             sequence: 1,
             input: ContentDocument::default(),
-            response: ResponseSnapshot {
-                id: response_id,
+            reply: AssistantReplySnapshot {
+                id: reply_id,
                 turn_id,
-                execution_id,
                 status,
                 content: ContentDocument::new(vec![ContentNode::text_at(
                     segment_id,
@@ -1247,12 +1223,15 @@ mod tests {
                 6,
                 4,
                 "stale durable text",
-                ResponseStatus::Cancelled,
+                AssistantReplyStatus::Cancelled,
             )],
             session_activities: Vec::new(),
         });
-        assert_eq!(snapshot.turns[0].response.status, ResponseStatus::Cancelled);
-        assert_eq!(snapshot.turns[0].response.content.text(), "newer live text");
+        assert_eq!(
+            snapshot.turns[0].reply.status,
+            AssistantReplyStatus::Cancelled
+        );
+        assert_eq!(snapshot.turns[0].reply.content.text(), "newer live text");
 
         snapshot.merge(TranscriptSnapshot {
             session_id: 12,
@@ -1261,22 +1240,25 @@ mod tests {
                 7,
                 7,
                 "terminal durable text",
-                ResponseStatus::Completed,
+                AssistantReplyStatus::Completed,
             )],
             session_activities: Vec::new(),
         });
-        assert_eq!(snapshot.turns[0].response.status, ResponseStatus::Completed);
         assert_eq!(
-            snapshot.turns[0].response.content.text(),
+            snapshot.turns[0].reply.status,
+            AssistantReplyStatus::Completed
+        );
+        assert_eq!(
+            snapshot.turns[0].reply.content.text(),
             "terminal durable text"
         );
     }
 
     #[test]
     fn durable_merge_restores_canonical_order_without_downgrading_live_content() {
-        let first_id = ResponseSegmentId::new();
-        let second_id = ResponseSegmentId::new();
-        let third_id = ResponseSegmentId::new();
+        let first_id = TextSegmentId::new();
+        let second_id = TextSegmentId::new();
+        let third_id = TextSegmentId::new();
         let mut document =
             ContentDocument::new(vec![ContentNode::text_at(third_id, "newer third", 0, 5)]);
 
@@ -1307,8 +1289,7 @@ mod tests {
     #[test]
     fn mismatched_activity_owner_is_rejected_without_consuming_sequence() {
         let turn_id = TurnId::new();
-        let response_id = ResponseId::new();
-        let execution_id = ExecutionId::new();
+        let reply_id = AssistantReplyId::new();
         let mut snapshot = TranscriptSnapshot {
             session_id: 13,
             seq_session: 1,
@@ -1317,11 +1298,10 @@ mod tests {
                 session_id: 13,
                 sequence: 1,
                 input: ContentDocument::default(),
-                response: ResponseSnapshot {
-                    id: response_id,
+                reply: AssistantReplySnapshot {
+                    id: reply_id,
                     turn_id,
-                    execution_id,
-                    status: ResponseStatus::InProgress,
+                    status: AssistantReplyStatus::InProgress,
                     content: ContentDocument::default(),
                     revision_seq: 1,
                     created_at_ms: 1,
@@ -1333,7 +1313,7 @@ mod tests {
         };
         let activity = ActivityNode {
             id: ActivityId::new(),
-            owner: ActivityOwner::Response { response_id },
+            owner: ActivityOwner::AssistantReply { reply_id },
             actor: ActivityActor::Assistant,
             state: ActivityState::Completed,
             position: ContentPosition { index: 0 },
@@ -1362,14 +1342,13 @@ mod tests {
 
         assert_eq!(snapshot.seq_session, 1);
         assert!(snapshot.turns[0].input.nodes().is_empty());
-        assert!(snapshot.turns[0].response.content.nodes().is_empty());
+        assert!(snapshot.turns[0].reply.content.nodes().is_empty());
     }
 
     #[test]
-    fn response_update_requires_exact_turn_response_and_execution_identity() {
+    fn assistant_reply_update_requires_exact_turn_and_reply_identity() {
         let turn_id = TurnId::new();
-        let response_id = ResponseId::new();
-        let execution_id = ExecutionId::new();
+        let reply_id = AssistantReplyId::new();
         let mut snapshot = TranscriptSnapshot {
             session_id: 14,
             seq_session: 1,
@@ -1378,11 +1357,10 @@ mod tests {
                 session_id: 14,
                 sequence: 1,
                 input: ContentDocument::default(),
-                response: ResponseSnapshot {
-                    id: response_id,
+                reply: AssistantReplySnapshot {
+                    id: reply_id,
                     turn_id,
-                    execution_id,
-                    status: ResponseStatus::InProgress,
+                    status: AssistantReplyStatus::InProgress,
                     content: ContentDocument::new(vec![ContentNode::text("correct response")]),
                     revision_seq: 1,
                     created_at_ms: 1,
@@ -1393,13 +1371,12 @@ mod tests {
             session_activities: Vec::new(),
         };
 
-        snapshot.apply(TranscriptPatch::ResponseUpdated {
+        snapshot.apply(TranscriptPatch::AssistantReplyUpdated {
             seq_session: 2,
-            response: ResponseSnapshot {
-                id: response_id,
+            reply: AssistantReplySnapshot {
+                id: AssistantReplyId::new(),
                 turn_id,
-                execution_id: ExecutionId::new(),
-                status: ResponseStatus::Cancelled,
+                status: AssistantReplyStatus::Cancelled,
                 content: ContentDocument::default(),
                 revision_seq: 2,
                 created_at_ms: 1,
@@ -1407,14 +1384,26 @@ mod tests {
             },
         });
 
-        assert_eq!(snapshot.turns[0].response.execution_id, execution_id);
         assert_eq!(
-            snapshot.turns[0].response.status,
-            ResponseStatus::InProgress
+            snapshot.turns[0].reply.status,
+            AssistantReplyStatus::InProgress
         );
+        snapshot.apply(TranscriptPatch::AssistantReplyUpdated {
+            seq_session: 3,
+            reply: AssistantReplySnapshot {
+                id: reply_id,
+                turn_id,
+                status: AssistantReplyStatus::Cancelled,
+                content: ContentDocument::default(),
+                revision_seq: 3,
+                created_at_ms: 1,
+                finished_at_ms: Some(3),
+            },
+        });
         assert_eq!(
-            snapshot.turns[0].response.content.text(),
-            "correct response"
+            snapshot.turns[0].reply.status,
+            AssistantReplyStatus::Cancelled
         );
+        assert_eq!(snapshot.turns[0].reply.content.text(), "correct response");
     }
 }

@@ -6,14 +6,14 @@ use agena_storage_sqlite::{StoredExecutionStatus, StoredRole};
 use super::session;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_transcript_messages")]
+#[sea_orm(table_name = "agena_model_messages")]
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub message_id: i64,
     pub session_id: i64,
-    /// Stable user-visible conversation turn. Multiple provider messages may
-    /// belong to one turn while remaining separate protocol records.
-    pub turn_id: Option<i64>,
+    /// Provider/model protocol turn. This numeric identity is intentionally
+    /// distinct from the canonical UUID `TurnId` used by the conversation.
+    pub model_turn_id: Option<i64>,
     pub execution_id: Option<String>,
     pub run_id: Option<String>,
     pub role: StoredRole,

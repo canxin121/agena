@@ -4,8 +4,8 @@
 //! backend-neutral contract crate and must not gain SeaORM types.
 
 mod event_store;
-mod message_projection_repository;
 mod model_catalog_repository;
+mod model_message_repository;
 mod permission_rule_repository;
 mod projection_lookup_repository;
 mod schema;
@@ -19,10 +19,10 @@ mod usage_repository;
 mod workspace_repository;
 
 pub use event_store::SeaEventStore;
-pub use message_projection_repository::{
-    PersistedCompletionUsage, SeaMessageProjectionRepository, SeaMessageProjectionTransactionWriter,
-};
 pub use model_catalog_repository::SeaModelCatalogRepository;
+pub use model_message_repository::{
+    PersistedCompletionUsage, SeaModelMessageRepository, SeaModelMessageTransactionWriter,
+};
 pub use permission_rule_repository::{
     SeaPermissionRuleRepository, SeaPermissionRuleTransactionWriter,
 };

@@ -1039,6 +1039,27 @@ mod tests {
         input: serde_json::Value,
         output: &str,
     ) -> Message {
+        let provider_arguments = agena_domain::StructuredObject::try_from(input).unwrap();
+        let (name, execution_input) = if function == agena_domain::ToolApiFunction::Call {
+            let name = provider_arguments
+                .get("tool")
+                .and_then(agena_domain::StructuredValue::as_text)
+                .expect("tools_call target")
+                .to_owned();
+            let input = provider_arguments
+                .get("input")
+                .cloned()
+                .expect("tools_call input");
+            let execution_input =
+                agena_domain::StructuredObject::try_from(serde_json::Value::from(input))
+                    .expect("tools_call input object");
+            (name, execution_input)
+        } else {
+            (
+                function.function_name().to_owned(),
+                provider_arguments.clone(),
+            )
+        };
         let mut message = Message::prompt_tool_result("call_7", output);
         let Some(PartContent::Activity(
             agena_runtime_contracts::message::RuntimeActivity::Operation(operation),
@@ -1047,10 +1068,13 @@ mod tests {
             panic!("expected operation")
         };
         operation.invocation = agena_domain::ToolInvocation {
-            tool_api_function: Some(function),
-            name: function.function_name().to_owned(),
+            tool_api_call: Some(agena_domain::ToolApiCall {
+                function,
+                arguments: provider_arguments,
+            }),
+            name,
             plugin_name: None,
-            input: agena_domain::StructuredObject::try_from(input).unwrap(),
+            input: execution_input,
         };
         message
     }

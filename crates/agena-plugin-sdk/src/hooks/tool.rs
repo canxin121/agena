@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::attachment::AttachmentItem;
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::ToolTag;
+pub use agena_tool::ToolPresentationSection;
 
 // ── tool.execute.before ────────────────────────────────────────────────────
 
@@ -198,7 +199,11 @@ pub struct ToolPermissionNetworksInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvokeOutput {
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
     pub output_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -212,7 +217,9 @@ impl ToolInvokeOutput {
         let s = s.into();
         Self {
             title: String::new(),
+            summary: String::new(),
             output_text: s,
+            sections: Vec::new(),
             payload: None,
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
@@ -228,11 +235,26 @@ impl ToolInvokeOutput {
     ) -> Self {
         Self {
             title: title.into(),
+            summary: String::new(),
             output_text: output_text.into(),
+            sections: Vec::new(),
             payload,
             metadata,
             attachments,
         }
+    }
+
+    pub fn with_summary(mut self, summary: impl Into<String>) -> Self {
+        self.summary = summary.into();
+        self
+    }
+
+    pub fn with_section(mut self, title: impl Into<String>, text: impl Into<String>) -> Self {
+        self.sections.push(ToolPresentationSection {
+            title: title.into(),
+            text: text.into(),
+        });
+        self
     }
 }
 
@@ -321,7 +343,11 @@ pub struct ToolStreamChunk {
 pub struct ToolStreamEnd {
     pub stream_id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
     pub output_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -335,7 +361,9 @@ impl ToolStreamEnd {
         Self {
             stream_id: stream_id.into(),
             title: String::new(),
+            summary: String::new(),
             output_text: output_text.into(),
+            sections: Vec::new(),
             payload: None,
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
@@ -346,7 +374,9 @@ impl ToolStreamEnd {
         Self {
             stream_id: stream_id.into(),
             title: output.title,
+            summary: output.summary,
             output_text: output.output_text,
+            sections: output.sections,
             payload: output.payload,
             metadata: output.metadata,
             attachments: output.attachments,
@@ -364,7 +394,9 @@ impl ToolStreamEnd {
         Self {
             stream_id: stream_id.into(),
             title: title.into(),
+            summary: String::new(),
             output_text: output_text.into(),
+            sections: Vec::new(),
             payload,
             metadata,
             attachments,

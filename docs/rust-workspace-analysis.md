@@ -1,22 +1,22 @@
 # Agena Rust Workspace 全量依赖与源码骨架分析
 
-> Git 基线：`b4a28da50b15`
+> Git 基线：`e30164c7bc93`
 >
-> 基线提交时间：`2026-07-30T12:31:54+08:00`（使用提交时间以保证相同基线可重复生成）
+> 基线提交时间：`2026-07-31T12:29:04+08:00`（使用提交时间以保证相同基线可重复生成）
 >
 > 事实来源：`cargo metadata --format-version 1 --locked` 与 workspace 第一方 Rust 源码静态扫描。
 
 ## 1. 结论摘要
 
-本报告覆盖 **57 个 workspace package、62 个 Rust target、6 个 binary target、1139 个第一方 `.rs` 文件和 358,019 行 Rust 源码**。
+本报告覆盖 **58 个 workspace package、63 个 Rust target、6 个 binary target、1137 个第一方 `.rs` 文件和 361,955 行 Rust 源码**。
 
 Cargo 的 package、crate 与 binary 不是同一个概念：一个 package 由一个 `Cargo.toml` 定义，可以产生一个或多个 crate target；`lib`、`proc-macro`、`cdylib`、`bin` 和 integration test 都是 crate。因此后文先展示 package/target，再展示 package 间依赖，避免把目录名误当成编译单元。
 
 关键结构事实：
 
-- 直接依赖面最大的第一方 package：`agena-runtime`（27）；`agena-tui-app`（18）；`agena-runtime-plugins`（16）；`agena-runtime-session`（16）；`agena-bundled-plugins`（15）；`agena-cli`（12）；`agena-runtime-provider-adapters`（12）；`agena`（11）。
-- 被依赖最多的第一方 package：`agena-domain`（28）；`agena-provider`（17）；`agena-plugin-host`（16）；`agena-plugin-sdk`（15）；`agena-tui`（11）；`agena-storage`（10）；`agena-runtime-contracts`（9）；`agena-tui-components`（9）。
-- Rust 文件最多的 package：`agena-tui-app`（105）；`agena-runtime-session`（75）；`agena-runtime`（72）；`agena-domain`（67）；`agena-plugin-sdk`（65）；`agena-provider`（60）；`agena`（43）；`agena-bundled-plugins`（42）。
+- 直接依赖面最大的第一方 package：`agena-runtime`（28）；`agena-tui-app`（19）；`agena-runtime-session`（17）；`agena-bundled-plugins`（16）；`agena-runtime-plugins`（16）；`agena-runtime-provider-adapters`（13）；`agena-cli`（12）；`agena`（11）。
+- 被依赖最多的第一方 package：`agena-domain`（28）；`agena-failure`（26）；`agena-provider`（17）；`agena-plugin-host`（16）；`agena-plugin-sdk`（15）；`agena-tui`（11）；`agena-storage`（10）；`agena-runtime-contracts`（9）。
+- Rust 文件最多的 package：`agena-tui-app`（105）；`agena-runtime-session`（77）；`agena-runtime`（70）；`agena-domain`（69）；`agena-plugin-sdk`（65）；`agena-provider`（60）；`agena`（43）；`agena-bundled-plugins`（42）。
 - 模块解析未找到/歧义项：**0**；词法结构告警：**0**。具体项目列在“覆盖与边界”章节。
 
 ### 1.1 架构解读
@@ -28,7 +28,7 @@ Cargo 的 package、crate 与 binary 不是同一个概念：一个 package 由�
 - 持久化依赖主链为 `agena-storage-sqlite → agena-storage → agena-domain`；`agena-application` 对 SQLite 仅有 dev dependency，而生产 composition 由 runtime 持有 concrete adapter。
 - 终端 UI 依赖为 `agena-tui → agena-tui-components`，最终由 `agena` package 的 library/application 层整合。`agena` binary 的进程组合位于 `src/main.rs` 与其 launch/server module tree。
 - 没有第一方 normal reverse dependency、且自身不是 binary package 的 workspace package：`agena-client`、`agena-echo-plugin`、`agena-marketplace-server`、`agena-rollout`。它们可能是独立公共入口、待集成组件或实验性成员，不能仅凭零反向边判定为死代码。
-- 源码接口扫描得到 13,675 个函数/方法签名，其中 13,213 个有函数体并已折叠；同时记录 2,676 个 struct、812 个 enum、107 个 trait 和 2,264 个 impl（均为未展开 token 的词法 item 计数）。
+- 源码接口扫描得到 13,733 个函数/方法签名，其中 13,273 个有函数体并已折叠；同时记录 2,670 个 struct、816 个 enum、106 个 trait 和 2,322 个 impl（均为未展开 token 的词法 item 计数）。
 
 ## 2. 分析口径与重建方式
 
@@ -67,62 +67,63 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 | Package | Manifest | Targets | Rust 文件/行 | Edition / MSRV |
 | --- | --- | --- | ---: | --- |
 | `agena` | `apps/agena/Cargo.toml` | `agena` (bin) | 43 / 10,852 | `2024` / `1.97` |
-| `agena-api` | `crates/agena-api/Cargo.toml` | `agena_api` (lib) | 13 / 3,968 | `2024` / `1.97` |
-| `agena-api-server` | `crates/agena-api-server/Cargo.toml` | `agena_api_server` (lib) | 23 / 4,696 | `2024` / `1.97` |
-| `agena-application` | `crates/agena-application/Cargo.toml` | `agena_application` (lib) | 30 / 9,220 | `2024` / `1.97` |
-| `agena-bundled-plugins` | `crates/agena-bundled-plugins/Cargo.toml` | `agena_bundled_plugins` (lib), `capability_manifest` (test) | 42 / 21,367 | `2024` / `1.97` |
-| `agena-cli` | `crates/agena-cli/Cargo.toml` | `agena_cli` (lib) | 10 / 6,146 | `2024` / `1.97` |
-| `agena-client` | `crates/agena-client/Cargo.toml` | `agena_client` (lib) | 4 / 1,356 | `2024` / `1.97` |
-| `agena-domain` | `crates/agena-domain/Cargo.toml` | `agena_domain` (lib) | 67 / 7,106 | `2024` / `1.97` |
+| `agena-api` | `crates/agena-api/Cargo.toml` | `agena_api` (lib) | 13 / 4,020 | `2024` / `1.97` |
+| `agena-api-server` | `crates/agena-api-server/Cargo.toml` | `agena_api_server` (lib) | 22 / 4,737 | `2024` / `1.97` |
+| `agena-application` | `crates/agena-application/Cargo.toml` | `agena_application` (lib) | 28 / 7,876 | `2024` / `1.97` |
+| `agena-bundled-plugins` | `crates/agena-bundled-plugins/Cargo.toml` | `agena_bundled_plugins` (lib), `capability_manifest` (test) | 42 / 20,863 | `2024` / `1.97` |
+| `agena-cli` | `crates/agena-cli/Cargo.toml` | `agena_cli` (lib) | 10 / 6,151 | `2024` / `1.97` |
+| `agena-client` | `crates/agena-client/Cargo.toml` | `agena_client` (lib) | 4 / 1,357 | `2024` / `1.97` |
+| `agena-domain` | `crates/agena-domain/Cargo.toml` | `agena_domain` (lib) | 69 / 7,312 | `2024` / `1.97` |
 | `agena-e2e` | `tools/agena-e2e/Cargo.toml` | `dsv4f_mcp_fixture` (bin), `dsv4f_tool_api_probe` (bin), `dsv4f_tool_api_suite` (bin) | 12 / 3,821 | `2024` / `1.97` |
-| `agena-echo-plugin` | `examples/echo_plugin/Cargo.toml` | `agena_echo_plugin` (cdylib) | 1 / 149 | `2024` / `1.97` |
+| `agena-echo-plugin` | `examples/echo_plugin/Cargo.toml` | `agena_echo_plugin` (cdylib) | 1 / 146 | `2024` / `1.97` |
 | `agena-echo-plugin-stdio` | `examples/echo_plugin_stdio/Cargo.toml` | `agena-echo-plugin-stdio` (bin) | 1 / 52 | `2024` / `1.97` |
+| `agena-failure` | `crates/agena-failure/Cargo.toml` | `agena_failure` (lib) | 1 / 609 | `2024` / `1.97` |
 | `agena-git-http` | `crates/agena-git-http/Cargo.toml` | `agena_git_http` (lib) | 35 / 11,308 | `2024` / `1.97` |
 | `agena-keyring-store` | `crates/agena-keyring-store/Cargo.toml` | `agena_keyring_store` (lib) | 1 / 92 | `2024` / `1.97` |
 | `agena-lsp` | `crates/agena-lsp/Cargo.toml` | `agena_lsp` (lib) | 8 / 1,314 | `2024` / `1.97` |
-| `agena-macro-core` | `crates/agena-macro-core/Cargo.toml` | `agena_macro_core` (lib) | 35 / 15,813 | `2024` / `1.97` |
+| `agena-macro-core` | `crates/agena-macro-core/Cargo.toml` | `agena_macro_core` (lib) | 35 / 15,798 | `2024` / `1.97` |
 | `agena-macros` | `crates/agena-macros/Cargo.toml` | `agena_macros` (proc-macro) | 1 / 35 | `2024` / `1.97` |
 | `agena-marketplace-server` | `crates/agena-marketplace-server/Cargo.toml` | `agena_marketplace_server` (lib) | 2 / 81 | `2024` / `1.97` |
-| `agena-mcp-client` | `crates/agena-mcp-client/Cargo.toml` | `agena_mcp_client` (lib) | 6 / 3,037 | `2024` / `1.97` |
+| `agena-mcp-client` | `crates/agena-mcp-client/Cargo.toml` | `agena_mcp_client` (lib) | 6 / 3,127 | `2024` / `1.97` |
 | `agena-mcp-server` | `crates/agena-mcp-server/Cargo.toml` | `agena_mcp_server` (lib) | 1 / 640 | `2024` / `1.97` |
 | `agena-memory-index` | `crates/agena-memory-index/Cargo.toml` | `agena_memory_index` (lib) | 1 / 251 | `2024` / `1.97` |
 | `agena-multi-tool-plugin-stdio` | `examples/multi_tool_plugin_stdio/Cargo.toml` | `agena-multi-tool-plugin-stdio` (bin) | 1 / 146 | `2024` / `1.97` |
-| `agena-plugin-host` | `crates/agena-plugin-host/Cargo.toml` | `agena_plugin_host` (lib) | 21 / 9,827 | `2024` / `1.97` |
+| `agena-plugin-host` | `crates/agena-plugin-host/Cargo.toml` | `agena_plugin_host` (lib) | 21 / 9,484 | `2024` / `1.97` |
 | `agena-plugin-marketplace` | `crates/agena-plugin-marketplace/Cargo.toml` | `agena_plugin_marketplace` (lib) | 5 / 1,408 | `2024` / `1.97` |
-| `agena-plugin-sdk` | `crates/agena-plugin-sdk/Cargo.toml` | `agena_plugin_sdk` (lib), `plugin_macro_manifest` (test), `ui` (test) | 65 / 20,407 | `2024` / `1.97` |
-| `agena-provider` | `crates/agena-provider/Cargo.toml` | `agena_provider` (lib) | 60 / 12,902 | `2024` / `1.97` |
+| `agena-plugin-sdk` | `crates/agena-plugin-sdk/Cargo.toml` | `agena_plugin_sdk` (lib), `plugin_macro_manifest` (test), `ui` (test) | 65 / 20,358 | `2024` / `1.97` |
+| `agena-provider` | `crates/agena-provider/Cargo.toml` | `agena_provider` (lib) | 60 / 12,785 | `2024` / `1.97` |
 | `agena-provider-bedrock-auth` | `crates/agena-provider-bedrock-auth/Cargo.toml` | `agena_provider_bedrock_auth` (lib) | 1 / 59 | `2024` / `1.97` |
 | `agena-provider-bedrock-signing` | `crates/agena-provider-bedrock-signing/Cargo.toml` | `agena_provider_bedrock_signing` (lib) | 1 / 79 | `2024` / `1.97` |
 | `agena-provider-bedrock-streaming` | `crates/agena-provider-bedrock-streaming/Cargo.toml` | `agena_provider_bedrock_streaming` (lib) | 1 / 203 | `2024` / `1.97` |
 | `agena-provider-google-auth` | `crates/agena-provider-google-auth/Cargo.toml` | `agena_provider_google_auth` (lib) | 1 / 28 | `2024` / `1.97` |
 | `agena-rollout` | `crates/agena-rollout/Cargo.toml` | `agena_rollout` (lib) | 6 / 529 | `2024` / `1.97` |
-| `agena-runtime` | `crates/agena-runtime/Cargo.toml` | `agena_runtime` (lib) | 72 / 15,088 | `2024` / `1.97` |
-| `agena-runtime-config` | `crates/agena-runtime-config/Cargo.toml` | `agena_runtime_config` (lib) | 20 / 6,859 | `2024` / `1.97` |
-| `agena-runtime-contracts` | `crates/agena-runtime-contracts/Cargo.toml` | `agena_runtime_contracts` (lib) | 16 / 4,407 | `2024` / `1.97` |
+| `agena-runtime` | `crates/agena-runtime/Cargo.toml` | `agena_runtime` (lib) | 70 / 14,742 | `2024` / `1.97` |
+| `agena-runtime-config` | `crates/agena-runtime-config/Cargo.toml` | `agena_runtime_config` (lib) | 20 / 6,932 | `2024` / `1.97` |
+| `agena-runtime-contracts` | `crates/agena-runtime-contracts/Cargo.toml` | `agena_runtime_contracts` (lib) | 16 / 4,736 | `2024` / `1.97` |
 | `agena-runtime-plugins` | `crates/agena-runtime-plugins/Cargo.toml` | `agena_runtime_plugins` (lib) | 8 / 952 | `2024` / `1.97` |
-| `agena-runtime-provider` | `crates/agena-runtime-provider/Cargo.toml` | `agena_runtime_provider` (lib) | 32 / 14,792 | `2024` / `1.97` |
-| `agena-runtime-provider-adapters` | `crates/agena-runtime-provider-adapters/Cargo.toml` | `agena_runtime_provider_adapters` (lib) | 27 / 16,586 | `2024` / `1.97` |
-| `agena-runtime-session` | `crates/agena-runtime-session/Cargo.toml` | `agena_runtime_session` (lib) | 75 / 24,737 | `2024` / `1.97` |
-| `agena-runtime-session-core` | `crates/agena-runtime-session-core/Cargo.toml` | `agena_runtime_session_core` (lib) | 14 / 3,178 | `2024` / `1.97` |
-| `agena-runtime-tools` | `crates/agena-runtime-tools/Cargo.toml` | `agena_runtime_tools` (lib) | 42 / 10,459 | `2024` / `1.97` |
-| `agena-scheduler` | `crates/agena-scheduler/Cargo.toml` | `agena_scheduler` (lib) | 5 / 1,551 | `2024` / `1.97` |
-| `agena-skills` | `crates/agena-skills/Cargo.toml` | `agena_skills` (lib) | 19 / 802 | `2024` / `1.97` |
-| `agena-storage` | `crates/agena-storage/Cargo.toml` | `agena_storage` (lib) | 2 / 1,313 | `2024` / `1.97` |
-| `agena-storage-sqlite` | `crates/agena-storage-sqlite/Cargo.toml` | `agena_storage_sqlite` (lib) | 15 / 3,981 | `2024` / `1.97` |
-| `agena-tool` | `crates/agena-tool/Cargo.toml` | `agena_tool` (lib) | 5 / 2,200 | `2024` / `1.97` |
-| `agena-tui` | `crates/agena-tui/Cargo.toml` | `agena_tui` (lib) | 39 / 12,162 | `2024` / `1.97` |
-| `agena-tui-app` | `crates/agena-tui-app/Cargo.toml` | `agena_tui_app` (lib) | 105 / 39,330 | `2024` / `1.97` |
-| `agena-tui-backend` | `crates/agena-tui-backend/Cargo.toml` | `agena_tui_backend` (lib) | 18 / 6,252 | `2024` / `1.97` |
+| `agena-runtime-provider` | `crates/agena-runtime-provider/Cargo.toml` | `agena_runtime_provider` (lib) | 32 / 15,015 | `2024` / `1.97` |
+| `agena-runtime-provider-adapters` | `crates/agena-runtime-provider-adapters/Cargo.toml` | `agena_runtime_provider_adapters` (lib) | 27 / 16,738 | `2024` / `1.97` |
+| `agena-runtime-session` | `crates/agena-runtime-session/Cargo.toml` | `agena_runtime_session` (lib) | 77 / 27,652 | `2024` / `1.97` |
+| `agena-runtime-session-core` | `crates/agena-runtime-session-core/Cargo.toml` | `agena_runtime_session_core` (lib) | 14 / 3,164 | `2024` / `1.97` |
+| `agena-runtime-tools` | `crates/agena-runtime-tools/Cargo.toml` | `agena_runtime_tools` (lib) | 41 / 10,694 | `2024` / `1.97` |
+| `agena-scheduler` | `crates/agena-scheduler/Cargo.toml` | `agena_scheduler` (lib) | 5 / 1,594 | `2024` / `1.97` |
+| `agena-skills` | `crates/agena-skills/Cargo.toml` | `agena_skills` (lib) | 19 / 806 | `2024` / `1.97` |
+| `agena-storage` | `crates/agena-storage/Cargo.toml` | `agena_storage` (lib) | 2 / 1,318 | `2024` / `1.97` |
+| `agena-storage-sqlite` | `crates/agena-storage-sqlite/Cargo.toml` | `agena_storage_sqlite` (lib) | 15 / 4,224 | `2024` / `1.97` |
+| `agena-tool` | `crates/agena-tool/Cargo.toml` | `agena_tool` (lib) | 5 / 2,210 | `2024` / `1.97` |
+| `agena-tui` | `crates/agena-tui/Cargo.toml` | `agena_tui` (lib) | 39 / 12,249 | `2024` / `1.97` |
+| `agena-tui-app` | `crates/agena-tui-app/Cargo.toml` | `agena_tui_app` (lib) | 105 / 39,705 | `2024` / `1.97` |
+| `agena-tui-backend` | `crates/agena-tui-backend/Cargo.toml` | `agena_tui_backend` (lib) | 17 / 6,199 | `2024` / `1.97` |
 | `agena-tui-components` | `crates/agena-tui-components/Cargo.toml` | `agena_tui_components` (lib) | 38 / 10,235 | `2024` / `1.97` |
 | `agena-tui-media` | `crates/agena-tui-media/Cargo.toml` | `agena_tui_media` (lib) | 4 / 3,412 | `2024` / `1.97` |
 | `agena-tui-permission-studio` | `crates/agena-tui-permission-studio/Cargo.toml` | `agena_tui_permission_studio` (lib) | 4 / 761 | `2024` / `1.97` |
 | `agena-tui-platform` | `crates/agena-tui-platform/Cargo.toml` | `agena_tui_platform` (lib) | 16 / 3,306 | `2024` / `1.97` |
-| `agena-tui-plugin-workbench` | `crates/agena-tui-plugin-workbench/Cargo.toml` | `agena_tui_plugin_workbench` (lib) | 22 / 9,843 | `2024` / `1.97` |
-| `agena-tui-provider-studio` | `crates/agena-tui-provider-studio/Cargo.toml` | `agena_tui_provider_studio` (lib) | 2 / 313 | `2024` / `1.97` |
+| `agena-tui-plugin-workbench` | `crates/agena-tui-plugin-workbench/Cargo.toml` | `agena_tui_plugin_workbench` (lib) | 22 / 9,844 | `2024` / `1.97` |
+| `agena-tui-provider-studio` | `crates/agena-tui-provider-studio/Cargo.toml` | `agena_tui_provider_studio` (lib) | 2 / 290 | `2024` / `1.97` |
 | `agena-tui-session` | `crates/agena-tui-session/Cargo.toml` | `agena_tui_session` (lib) | 6 / 1,572 | `2024` / `1.97` |
 | `agena-tui-settings` | `crates/agena-tui-settings/Cargo.toml` | `agena_tui_settings` (lib) | 1 / 384 | `2024` / `1.97` |
-| `agena-tui-transcript` | `crates/agena-tui-transcript/Cargo.toml` | `agena_tui_transcript` (lib) | 20 / 14,089 | `2024` / `1.97` |
-| `agena-web` | `crates/agena-web/Cargo.toml` | `agena_web` (lib) | 14 / 2,563 | `2024` / `1.97` |
+| `agena-tui-transcript` | `crates/agena-tui-transcript/Cargo.toml` | `agena_tui_transcript` (lib) | 20 / 15,101 | `2024` / `1.97` |
+| `agena-web` | `crates/agena-web/Cargo.toml` | `agena_web` (lib) | 14 / 2,599 | `2024` / `1.97` |
 
 ## 4. Binary crate 依赖分析
 
@@ -134,7 +135,7 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 - 同 package library target：无。
 - 入口可达模块：44；模块引用边：78；未解析声明：0。
 - 第一方直接 normal dependencies：`agena-api-server`、`agena-application`、`agena-cli`、`agena-domain`、`agena-git-http`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-platform`。
-- 第一方传递 normal closure（49）：`agena-api`、`agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-domain`、`agena-git-http`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web`。
+- 第一方传递 normal closure（50）：`agena-api`、`agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-domain`、`agena-failure`、`agena-git-http`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web`。
 - 外部直接 normal declarations（30）：`anyhow`、`argon2`、`async-stream`、`async-trait`、`axum (features=macros+ws)`、`axum-extra (features=cookie)`、`base64`、`bytes`、`clap (features=derive+env)`、`dashmap`、`futures-util`、`getrandom`、`ignore`、`libc`、`portable-pty`、`regex`、`reqwest (features=json+stream+gzip+brotli+deflate)`、`serde (features=derive)`、`serde_json`、`sha2`、`sqlx (features=sqlite+runtime-tokio+tls-rustls)`、`thiserror`、`time (features=formatting)`、`tokio (features=full)`、`tokio-tungstenite (features=connect+rustls-tls-webpki-roots)`、`tower-http (features=compression-full+cors+fs+limit+trace)`、`tracing`、`tracing-subscriber (features=fmt+env-filter)`、`url`、`urlencoding`。
 - 源码 `use` 中观测到的 Cargo dependency crate roots：`agena_api_server`、`agena_application`、`agena_cli`、`agena_domain`、`agena_git_http`、`agena_provider`、`agena_runtime`、`agena_tui`、`agena_tui_app`、`agena_tui_backend`、`agena_tui_platform`、`anyhow`、`argon2`、`async_stream`、`async_trait`、`axum`、`axum_extra`、`base64`、`bytes`、`clap`、`dashmap`、`futures_util`、`ignore`、`portable_pty`、`regex`、`serde`、`serde_json`、`sha2`、`sqlx`、`thiserror`、`time`、`tokio`、`tokio_tungstenite`、`tower_http`、`tracing_subscriber`、`url`。
 
@@ -233,35 +234,44 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 - 同 package library target：无。
 - 入口可达模块：1；模块引用边：0；未解析声明：0。
 - 第一方直接 normal dependencies：`agena-plugin-sdk`。
-- 第一方传递 normal closure（3）：`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`。
+- 第一方传递 normal closure（6）：`agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool`。
 - 外部直接 normal declarations（5）：`async-trait`、`schemars`、`serde (features=derive+derive)`、`serde_json`、`tokio (features=rt-multi-thread+macros+io-std+io-util)`。
 - 源码 `use` 中观测到的 Cargo dependency crate roots：`agena_plugin_sdk`。
 
-<details><summary>resolved transitive external normal closure（275）</summary>
+<details><summary>resolved transitive external normal closure（377）</summary>
 
-- `abi_stable@0.11.3`、`abi_stable_derive@0.11.3`、`abi_stable_shared@0.11.0`、`adler2@2.0.1`、`aho-corasick@1.1.4`、`alloc-no-stdlib@2.0.4`、`alloc-stdlib@0.2.4`、`allocator-api2@0.2.21`、`android_system_properties@0.1.5`、`as_derive_utils@0.11.0`、`async-compression@0.4.42`、`async-trait@0.1.91`
-- `atomic-waker@1.1.2`、`atomic@0.6.1`、`aws-lc-rs@1.17.3`、`aws-lc-sys@0.43.0`、`axum-core@0.5.6`、`axum-macros@0.5.1`、`axum@0.8.9`、`base64@0.22.1`、`bitflags@2.13.1`、`block-buffer@0.10.4`、`brotli-decompressor@5.0.3`、`brotli@8.0.4`
-- `bumpalo@3.20.3`、`bytemuck@1.25.2`、`bytemuck_derive@1.11.0`、`bytes@1.12.1`、`cfg-if@1.0.4`、`chacha20@0.10.1`、`chrono@0.4.45`、`combine@4.6.7`、`compression-codecs@0.4.38`、`compression-core@0.4.32`、`const-oid@0.9.6`、`const_panic@0.2.15`
-- `cookie@0.18.1`、`cookie_store@0.22.1`、`core-foundation-sys@0.8.7`、`core-foundation@0.10.1`、`core-foundation@0.9.4`、`core_extensions@1.5.4`、`core_extensions_proc_macros@1.5.4`、`cpufeatures@0.2.17`、`cpufeatures@0.3.0`、`crc32fast@1.5.0`、`crossbeam-channel@0.5.16`、`crossbeam-utils@0.8.22`
-- `crypto-common@0.1.7`、`data-encoding@2.11.0`、`deranged@0.5.8`、`digest@0.10.7`、`displaydoc@0.2.6`、`document-features@0.2.12`、`dyn-clone@1.0.20`、`encoding_rs@0.8.35`、`equivalent@1.0.2`、`errno@0.3.14`、`flate2@1.1.9`、`fnv@1.0.7`
-- `foldhash@0.2.0`、`form_urlencoded@1.2.2`、`futures-channel@0.3.33`、`futures-core@0.3.33`、`futures-io@0.3.33`、`futures-macro@0.3.33`、`futures-sink@0.3.33`、`futures-task@0.3.33`、`futures-util@0.3.33`、`generational-arena@0.2.9`、`generic-array@0.14.7`、`getrandom@0.2.17`
-- `getrandom@0.3.4`、`getrandom@0.4.3`、`h2@0.4.15`、`hashbrown@0.17.1`、`http-body-util@0.1.4`、`http-body@1.1.0`、`http@1.4.2`、`httparse@1.10.1`、`httpdate@1.0.3`、`hyper-rustls@0.27.9`、`hyper-util@0.1.20`、`hyper@1.11.0`
-- `iana-time-zone-haiku@0.1.2`、`iana-time-zone@0.1.65`、`icu_collections@2.2.0`、`icu_locale_core@2.2.0`、`icu_normalizer@2.2.0`、`icu_normalizer_data@2.2.0`、`icu_properties@2.2.0`、`icu_properties_data@2.2.0`、`icu_provider@2.2.0`、`idna@1.1.0`、`idna_adapter@1.2.2`、`indexmap@2.14.0`
-- `ipnet@2.12.0`、`itoa@1.0.18`、`jni-macros@0.22.4`、`jni-sys-macros@0.4.1`、`jni-sys@0.4.1`、`jni@0.22.4`、`js-sys@0.3.103`、`libc@0.2.189`、`libloading@0.7.4`、`libm@0.2.16`、`litemap@0.8.2`、`litrs@1.0.0`
-- `lock_api@0.4.14`、`log@0.4.33`、`lru-slab@0.1.2`、`matchit@0.8.4`、`memchr@2.8.3`、`mime@0.3.17`、`mime_guess@2.0.5`、`miniz_oxide@0.8.9`、`mio@1.2.2`、`num-conv@0.2.2`、`num-traits@0.2.19`、`num_threads@0.1.7`
-- `once_cell@1.21.4`、`openssl-probe@0.2.1`、`parking_lot@0.12.5`、`parking_lot_core@0.9.12`、`paste@1.0.15`、`percent-encoding@2.3.2`、`pin-project-lite@0.2.17`、`potential_utf@0.1.5`、`powerfmt@0.2.0`、`ppv-lite86@0.2.21`、`proc-macro2@1.0.107`、`psl-types@2.0.11`
-- `publicsuffix@2.3.0`、`quinn-proto@0.11.16`、`quinn-udp@0.5.15`、`quinn@0.11.11`、`quote@1.0.47`、`r-efi@5.3.0`、`r-efi@6.0.0`、`rand@0.10.2`、`rand@0.9.5`、`rand_chacha@0.9.0`、`rand_core@0.10.1`、`rand_core@0.9.5`
-- `rand_pcg@0.10.2`、`redox_syscall@0.5.18`、`ref-cast-impl@1.0.26`、`ref-cast@1.0.26`、`regex-automata@0.4.16`、`regex-syntax@0.8.11`、`regex@1.13.1`、`repr_offset@0.2.2`、`reqwest@0.13.4`、`ring@0.17.14`、`rustc-hash@2.1.3`、`rustls-native-certs@0.8.4`
-- `rustls-pki-types@1.15.0`、`rustls-platform-verifier-android@0.1.1`、`rustls-platform-verifier@0.7.0`、`rustls-webpki@0.103.13`、`rustls@0.23.42`、`ryu@1.0.23`、`schannel@0.1.29`、`schemars@1.2.1`、`schemars_derive@1.2.1`、`scopeguard@1.2.0`、`security-framework-sys@2.17.0`、`security-framework@3.7.0`
-- `serde@1.0.229`、`serde_core@1.0.229`、`serde_derive@1.0.229`、`serde_derive_internals@0.29.1`、`serde_json@1.0.151`、`serde_path_to_error@0.1.20`、`serde_urlencoded@0.7.1`、`sha1@0.10.7`、`signal-hook-registry@1.4.8`、`simd-adler32@0.3.10`、`simd_cesu8@1.2.0`、`simdutf8@0.1.5`
-- `slab@0.4.12`、`smallvec@1.15.2`、`socket2@0.6.5`、`stable_deref_trait@1.2.1`、`subtle@2.6.1`、`syn@1.0.109`、`syn@2.0.119`、`syn@3.0.3`、`sync_wrapper@1.0.2`、`synstructure@0.13.2`、`system-configuration-sys@0.6.0`、`system-configuration@0.7.0`
-- `thiserror-impl@2.0.19`、`thiserror@2.0.19`、`time-core@0.1.9`、`time-macros@0.2.32`、`time@0.3.54`、`tinystr@0.8.3`、`tinyvec@1.12.0`、`tinyvec_macros@0.1.1`、`tokio-macros@2.7.1`、`tokio-rustls@0.26.4`、`tokio-tungstenite@0.29.0`、`tokio-util@0.7.19`
-- `tokio@1.53.1`、`tower-http@0.6.11`、`tower-layer@0.3.3`、`tower-service@0.3.3`、`tower@0.5.3`、`tracing-attributes@0.1.31`、`tracing-core@0.1.36`、`tracing@0.1.44`、`try-lock@0.2.5`、`tstr@0.2.4`、`tstr_proc_macros@0.2.2`、`tungstenite@0.29.0`
-- `typed-arena@2.0.2`、`typenum@1.20.1`、`typewit@1.15.2`、`unicase@2.9.0`、`unicode-ident@1.0.24`、`untrusted@0.9.0`、`url@2.5.8`、`utf8_iter@1.0.4`、`uuid@1.24.0`、`want@0.3.1`、`wasi@0.11.1+wasi-snapshot-preview1`、`wasip2@1.0.4+wasi-0.2.12`
-- `wasm-bindgen-futures@0.4.76`、`wasm-bindgen-macro-support@0.2.126`、`wasm-bindgen-macro@0.2.126`、`wasm-bindgen-shared@0.2.126`、`wasm-bindgen@0.2.126`、`wasm-streams@0.5.0`、`web-sys@0.3.103`、`web-time@1.1.0`、`webpki-root-certs@1.0.9`、`webpki-roots@1.0.9`、`winapi-i686-pc-windows-gnu@0.4.0`、`winapi-x86_64-pc-windows-gnu@0.4.0`
-- `winapi@0.3.9`、`windows-core@0.62.2`、`windows-implement@0.60.2`、`windows-interface@0.59.3`、`windows-link@0.2.1`、`windows-registry@0.6.1`、`windows-result@0.4.1`、`windows-strings@0.5.1`、`windows-sys@0.52.0`、`windows-sys@0.61.2`、`windows-targets@0.52.6`、`windows_aarch64_gnullvm@0.52.6`
-- `windows_aarch64_msvc@0.52.6`、`windows_i686_gnu@0.52.6`、`windows_i686_gnullvm@0.52.6`、`windows_i686_msvc@0.52.6`、`windows_x86_64_gnu@0.52.6`、`windows_x86_64_gnullvm@0.52.6`、`windows_x86_64_msvc@0.52.6`、`wit-bindgen@0.57.1`、`writeable@0.6.3`、`yoke-derive@0.8.2`、`yoke@0.8.3`、`zerocopy-derive@0.8.55`
-- `zerocopy@0.8.55`、`zerofrom-derive@0.1.7`、`zerofrom@0.1.8`、`zeroize@1.9.0`、`zerotrie@0.2.4`、`zerovec-derive@0.11.3`、`zerovec@0.11.6`、`zmij@1.0.23`、`zstd-safe@7.2.4`、`zstd-sys@2.0.16+zstd.1.5.7`、`zstd@0.13.3`
+- `abi_stable@0.11.3`、`abi_stable_derive@0.11.3`、`abi_stable_shared@0.11.0`、`adler2@2.0.1`、`aho-corasick@1.1.4`、`alloc-no-stdlib@2.0.4`、`alloc-stdlib@0.2.4`、`allocator-api2@0.2.21`、`android_system_properties@0.1.5`、`arc-swap@1.9.2`、`as_derive_utils@0.11.0`、`ast-grep-core@0.44.1`
+- `ast-grep-language@0.44.1`、`async-compression@0.4.42`、`async-trait@0.1.91`、`atomic-waker@1.1.2`、`atomic@0.6.1`、`aws-lc-rs@1.17.3`、`aws-lc-sys@0.43.0`、`axum-core@0.5.6`、`axum-macros@0.5.1`、`axum@0.8.9`、`base64@0.22.1`、`bit-set@0.10.0`
+- `bit-vec@0.9.1`、`bitflags@2.13.1`、`bitpacking@0.9.3`、`block-buffer@0.10.4`、`bon-macros@3.9.3`、`bon@3.9.3`、`borsh@1.8.0`、`brotli-decompressor@5.0.3`、`brotli@8.0.4`、`bstr@1.13.0`、`bumpalo@3.20.3`、`bytemuck@1.25.2`
+- `bytemuck_derive@1.11.0`、`byteorder@1.5.0`、`bytes@1.12.1`、`census@0.4.2`、`cfg-if@1.0.4`、`chacha20@0.10.1`、`chrono@0.4.45`、`combine@4.6.7`、`compression-codecs@0.4.38`、`compression-core@0.4.32`、`const-oid@0.9.6`、`const_panic@0.2.15`
+- `cookie@0.18.1`、`cookie_store@0.22.1`、`core-foundation-sys@0.8.7`、`core-foundation@0.10.1`、`core-foundation@0.9.4`、`core_extensions@1.5.4`、`core_extensions_proc_macros@1.5.4`、`cpufeatures@0.2.17`、`cpufeatures@0.3.0`、`crc32fast@1.5.0`、`crossbeam-channel@0.5.16`、`crossbeam-deque@0.8.7`
+- `crossbeam-epoch@0.9.20`、`crossbeam-utils@0.8.22`、`crunchy@0.2.4`、`crypto-common@0.1.7`、`darling@0.23.0`、`darling_core@0.23.0`、`darling_macro@0.23.0`、`data-encoding@2.11.0`、`datasketches@0.2.0`、`deranged@0.5.8`、`digest@0.10.7`、`displaydoc@0.2.6`
+- `document-features@0.2.12`、`downcast-rs@2.0.2`、`dyn-clone@1.0.20`、`either@1.16.0`、`encoding_rs@0.8.35`、`equivalent@1.0.2`、`erased-serde@0.4.10`、`errno@0.3.14`、`fastdivide@0.4.2`、`fastrand@2.5.0`、`flate2@1.1.9`、`fnv@1.0.7`
+- `foldhash@0.2.0`、`form_urlencoded@1.2.2`、`fs4@0.13.1`、`futures-channel@0.3.33`、`futures-core@0.3.33`、`futures-io@0.3.33`、`futures-macro@0.3.33`、`futures-sink@0.3.33`、`futures-task@0.3.33`、`futures-util@0.3.33`、`generational-arena@0.2.9`、`generic-array@0.14.7`
+- `getrandom@0.2.17`、`getrandom@0.3.4`、`getrandom@0.4.3`、`globset@0.4.19`、`h2@0.4.15`、`hashbrown@0.16.1`、`hashbrown@0.17.1`、`heck@0.5.0`、`htmlescape@0.3.1`、`http-body-util@0.1.4`、`http-body@1.1.0`、`http@1.4.2`
+- `httparse@1.10.1`、`httpdate@1.0.3`、`hyper-rustls@0.27.9`、`hyper-util@0.1.20`、`hyper@1.11.0`、`iana-time-zone-haiku@0.1.2`、`iana-time-zone@0.1.65`、`icu_collections@2.2.0`、`icu_locale_core@2.2.0`、`icu_normalizer@2.2.0`、`icu_normalizer_data@2.2.0`、`icu_properties@2.2.0`
+- `icu_properties_data@2.2.0`、`icu_provider@2.2.0`、`ident_case@1.0.1`、`idna@1.1.0`、`idna_adapter@1.2.2`、`ignore@0.4.31`、`indexmap@2.14.0`、`inventory@0.3.24`、`ipnet@2.12.0`、`itertools@0.14.0`、`itoa@1.0.18`、`jni-macros@0.22.4`
+- `jni-sys-macros@0.4.1`、`jni-sys@0.4.1`、`jni@0.22.4`、`js-sys@0.3.103`、`levenshtein_automata@0.2.1`、`libc@0.2.189`、`libloading@0.7.4`、`libm@0.2.16`、`linux-raw-sys@0.12.1`、`litemap@0.8.2`、`litrs@1.0.0`、`lock_api@0.4.14`
+- `log@0.4.33`、`lru-slab@0.1.2`、`lru@0.16.4`、`lz4_flex@0.13.1`、`matchit@0.8.4`、`measure_time@0.9.0`、`memchr@2.8.3`、`memmap2@0.9.11`、`mime@0.3.17`、`mime_guess@2.0.5`、`minimal-lexical@0.2.1`、`miniz_oxide@0.8.9`
+- `mio@1.2.2`、`murmurhash32@0.3.1`、`nom@7.1.3`、`num-conv@0.2.2`、`num-traits@0.2.19`、`num_threads@0.1.7`、`once_cell@1.21.4`、`oneshot@0.1.13`、`openssl-probe@0.2.1`、`ordered-float@5.3.0`、`ownedbytes@0.9.0`、`parking_lot@0.12.5`
+- `parking_lot_core@0.9.12`、`paste@1.0.15`、`percent-encoding@2.3.2`、`pin-project-lite@0.2.17`、`potential_utf@0.1.5`、`powerfmt@0.2.0`、`ppv-lite86@0.2.21`、`prettyplease@0.2.37`、`proc-macro2@1.0.107`、`psl-types@2.0.11`、`publicsuffix@2.3.0`、`quinn-proto@0.11.16`
+- `quinn-udp@0.5.15`、`quinn@0.11.11`、`quote@1.0.47`、`r-efi@5.3.0`、`r-efi@6.0.0`、`rand@0.10.2`、`rand@0.9.5`、`rand_chacha@0.9.0`、`rand_core@0.10.1`、`rand_core@0.9.5`、`rand_pcg@0.10.2`、`rayon-core@1.13.0`
+- `rayon@1.12.0`、`redox_syscall@0.5.18`、`ref-cast-impl@1.0.26`、`ref-cast@1.0.26`、`regex-automata@0.4.16`、`regex-syntax@0.8.11`、`regex@1.13.1`、`repr_offset@0.2.2`、`reqwest@0.13.4`、`ring@0.17.14`、`rust-stemmers@1.2.0`、`rustc-hash@2.1.3`
+- `rustix@1.1.4`、`rustls-native-certs@0.8.4`、`rustls-pki-types@1.15.0`、`rustls-platform-verifier-android@0.1.1`、`rustls-platform-verifier@0.7.0`、`rustls-webpki@0.103.13`、`rustls@0.23.42`、`rustversion@1.0.23`、`ryu@1.0.23`、`same-file@1.0.6`、`schannel@0.1.29`、`schemars@1.2.1`
+- `schemars_derive@1.2.1`、`scopeguard@1.2.0`、`security-framework-sys@2.17.0`、`security-framework@3.7.0`、`serde@1.0.229`、`serde_core@1.0.229`、`serde_derive@1.0.229`、`serde_derive_internals@0.29.1`、`serde_json@1.0.151`、`serde_path_to_error@0.1.20`、`serde_urlencoded@0.7.1`、`sha1@0.10.7`
+- `signal-hook-registry@1.4.8`、`simd-adler32@0.3.10`、`simd_cesu8@1.2.0`、`simdutf8@0.1.5`、`sketches-ddsketch@0.4.0`、`slab@0.4.12`、`smallvec@1.15.2`、`smol_str@0.3.6`、`socket2@0.6.5`、`stable_deref_trait@1.2.1`、`streaming-iterator@0.1.9`、`strsim@0.11.1`
+- `strum@0.28.0`、`strum_macros@0.28.0`、`subtle@2.6.1`、`syn@1.0.109`、`syn@2.0.119`、`syn@3.0.3`、`sync_wrapper@1.0.2`、`synstructure@0.13.2`、`system-configuration-sys@0.6.0`、`system-configuration@0.7.0`、`tantivy-bitpacker@0.10.0`、`tantivy-columnar@0.7.0`
+- `tantivy-common@0.11.0`、`tantivy-fst@0.5.0`、`tantivy-query-grammar@0.26.0`、`tantivy-sstable@0.7.0`、`tantivy-stacker@0.7.0`、`tantivy-tokenizer-api@0.7.0`、`tantivy@0.26.1`、`tempfile@3.27.0`、`thiserror-impl@2.0.19`、`thiserror@2.0.19`、`time-core@0.1.9`、`time-macros@0.2.32`
+- `time@0.3.54`、`tinystr@0.8.3`、`tinyvec@1.12.0`、`tinyvec_macros@0.1.1`、`tokio-macros@2.7.1`、`tokio-rustls@0.26.4`、`tokio-tungstenite@0.29.0`、`tokio-util@0.7.19`、`tokio@1.53.1`、`tower-http@0.6.11`、`tower-layer@0.3.3`、`tower-service@0.3.3`
+- `tower@0.5.3`、`tracing-attributes@0.1.31`、`tracing-core@0.1.36`、`tracing@0.1.44`、`tree-sitter-bash@0.25.1`、`tree-sitter-c-sharp@0.23.5`、`tree-sitter-c@0.24.2`、`tree-sitter-cpp@0.23.4`、`tree-sitter-css@0.25.0`、`tree-sitter-dart@0.2.0`、`tree-sitter-elixir@0.3.5`、`tree-sitter-go@0.25.0`
+- `tree-sitter-haskell@0.23.1`、`tree-sitter-hcl@1.1.0`、`tree-sitter-html@0.23.2`、`tree-sitter-java@0.23.5`、`tree-sitter-javascript@0.25.0`、`tree-sitter-json@0.24.8`、`tree-sitter-language@0.1.7`、`tree-sitter-lua@0.5.0`、`tree-sitter-md@0.5.3`、`tree-sitter-nix@0.3.0`、`tree-sitter-php@0.24.2`、`tree-sitter-python@0.25.0`
+- `tree-sitter-ruby@0.23.1`、`tree-sitter-rust@0.24.2`、`tree-sitter-solidity@1.2.13`、`tree-sitter-swift@0.7.3`、`tree-sitter-typescript@0.23.2`、`tree-sitter-yaml@0.7.2`、`tree-sitter@0.26.11`、`try-lock@0.2.5`、`tstr@0.2.4`、`tstr_proc_macros@0.2.2`、`tungstenite@0.29.0`、`typed-arena@2.0.2`
+- `typeid@1.0.3`、`typenum@1.20.1`、`typetag-impl@0.2.23`、`typetag@0.2.23`、`typewit@1.15.2`、`unicase@2.9.0`、`unicode-ident@1.0.24`、`untrusted@0.9.0`、`url@2.5.8`、`utf8-ranges@1.0.5`、`utf8_iter@1.0.4`、`uuid@1.24.0`
+- `walkdir@2.5.0`、`want@0.3.1`、`wasi@0.11.1+wasi-snapshot-preview1`、`wasip2@1.0.4+wasi-0.2.12`、`wasm-bindgen-futures@0.4.76`、`wasm-bindgen-macro-support@0.2.126`、`wasm-bindgen-macro@0.2.126`、`wasm-bindgen-shared@0.2.126`、`wasm-bindgen@0.2.126`、`wasm-streams@0.5.0`、`web-sys@0.3.103`、`web-time@1.1.0`
+- `webpki-root-certs@1.0.9`、`webpki-roots@1.0.9`、`winapi-i686-pc-windows-gnu@0.4.0`、`winapi-util@0.1.11`、`winapi-x86_64-pc-windows-gnu@0.4.0`、`winapi@0.3.9`、`windows-core@0.62.2`、`windows-implement@0.60.2`、`windows-interface@0.59.3`、`windows-link@0.2.1`、`windows-registry@0.6.1`、`windows-result@0.4.1`
+- `windows-strings@0.5.1`、`windows-sys@0.52.0`、`windows-sys@0.59.0`、`windows-sys@0.61.2`、`windows-targets@0.52.6`、`windows_aarch64_gnullvm@0.52.6`、`windows_aarch64_msvc@0.52.6`、`windows_i686_gnu@0.52.6`、`windows_i686_gnullvm@0.52.6`、`windows_i686_msvc@0.52.6`、`windows_x86_64_gnu@0.52.6`、`windows_x86_64_gnullvm@0.52.6`
+- `windows_x86_64_msvc@0.52.6`、`wit-bindgen@0.57.1`、`writeable@0.6.3`、`yoke-derive@0.8.2`、`yoke@0.8.3`、`zerocopy-derive@0.8.55`、`zerocopy@0.8.55`、`zerofrom-derive@0.1.7`、`zerofrom@0.1.8`、`zeroize@1.9.0`、`zerotrie@0.2.4`、`zerovec-derive@0.11.3`
+- `zerovec@0.11.6`、`zmij@1.0.23`、`zstd-safe@7.2.4`、`zstd-sys@2.0.16+zstd.1.5.7`、`zstd@0.13.3`
 
 </details>
 
@@ -271,35 +281,44 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 - 同 package library target：无。
 - 入口可达模块：1；模块引用边：0；未解析声明：0。
 - 第一方直接 normal dependencies：`agena-plugin-sdk`。
-- 第一方传递 normal closure（3）：`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`。
+- 第一方传递 normal closure（6）：`agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool`。
 - 外部直接 normal declarations（5）：`async-trait`、`schemars`、`serde (features=derive+derive)`、`serde_json`、`tokio (features=rt-multi-thread+macros+io-std+io-util)`。
 - 源码 `use` 中观测到的 Cargo dependency crate roots：`agena_plugin_sdk`。
 
-<details><summary>resolved transitive external normal closure（275）</summary>
+<details><summary>resolved transitive external normal closure（377）</summary>
 
-- `abi_stable@0.11.3`、`abi_stable_derive@0.11.3`、`abi_stable_shared@0.11.0`、`adler2@2.0.1`、`aho-corasick@1.1.4`、`alloc-no-stdlib@2.0.4`、`alloc-stdlib@0.2.4`、`allocator-api2@0.2.21`、`android_system_properties@0.1.5`、`as_derive_utils@0.11.0`、`async-compression@0.4.42`、`async-trait@0.1.91`
-- `atomic-waker@1.1.2`、`atomic@0.6.1`、`aws-lc-rs@1.17.3`、`aws-lc-sys@0.43.0`、`axum-core@0.5.6`、`axum-macros@0.5.1`、`axum@0.8.9`、`base64@0.22.1`、`bitflags@2.13.1`、`block-buffer@0.10.4`、`brotli-decompressor@5.0.3`、`brotli@8.0.4`
-- `bumpalo@3.20.3`、`bytemuck@1.25.2`、`bytemuck_derive@1.11.0`、`bytes@1.12.1`、`cfg-if@1.0.4`、`chacha20@0.10.1`、`chrono@0.4.45`、`combine@4.6.7`、`compression-codecs@0.4.38`、`compression-core@0.4.32`、`const-oid@0.9.6`、`const_panic@0.2.15`
-- `cookie@0.18.1`、`cookie_store@0.22.1`、`core-foundation-sys@0.8.7`、`core-foundation@0.10.1`、`core-foundation@0.9.4`、`core_extensions@1.5.4`、`core_extensions_proc_macros@1.5.4`、`cpufeatures@0.2.17`、`cpufeatures@0.3.0`、`crc32fast@1.5.0`、`crossbeam-channel@0.5.16`、`crossbeam-utils@0.8.22`
-- `crypto-common@0.1.7`、`data-encoding@2.11.0`、`deranged@0.5.8`、`digest@0.10.7`、`displaydoc@0.2.6`、`document-features@0.2.12`、`dyn-clone@1.0.20`、`encoding_rs@0.8.35`、`equivalent@1.0.2`、`errno@0.3.14`、`flate2@1.1.9`、`fnv@1.0.7`
-- `foldhash@0.2.0`、`form_urlencoded@1.2.2`、`futures-channel@0.3.33`、`futures-core@0.3.33`、`futures-io@0.3.33`、`futures-macro@0.3.33`、`futures-sink@0.3.33`、`futures-task@0.3.33`、`futures-util@0.3.33`、`generational-arena@0.2.9`、`generic-array@0.14.7`、`getrandom@0.2.17`
-- `getrandom@0.3.4`、`getrandom@0.4.3`、`h2@0.4.15`、`hashbrown@0.17.1`、`http-body-util@0.1.4`、`http-body@1.1.0`、`http@1.4.2`、`httparse@1.10.1`、`httpdate@1.0.3`、`hyper-rustls@0.27.9`、`hyper-util@0.1.20`、`hyper@1.11.0`
-- `iana-time-zone-haiku@0.1.2`、`iana-time-zone@0.1.65`、`icu_collections@2.2.0`、`icu_locale_core@2.2.0`、`icu_normalizer@2.2.0`、`icu_normalizer_data@2.2.0`、`icu_properties@2.2.0`、`icu_properties_data@2.2.0`、`icu_provider@2.2.0`、`idna@1.1.0`、`idna_adapter@1.2.2`、`indexmap@2.14.0`
-- `ipnet@2.12.0`、`itoa@1.0.18`、`jni-macros@0.22.4`、`jni-sys-macros@0.4.1`、`jni-sys@0.4.1`、`jni@0.22.4`、`js-sys@0.3.103`、`libc@0.2.189`、`libloading@0.7.4`、`libm@0.2.16`、`litemap@0.8.2`、`litrs@1.0.0`
-- `lock_api@0.4.14`、`log@0.4.33`、`lru-slab@0.1.2`、`matchit@0.8.4`、`memchr@2.8.3`、`mime@0.3.17`、`mime_guess@2.0.5`、`miniz_oxide@0.8.9`、`mio@1.2.2`、`num-conv@0.2.2`、`num-traits@0.2.19`、`num_threads@0.1.7`
-- `once_cell@1.21.4`、`openssl-probe@0.2.1`、`parking_lot@0.12.5`、`parking_lot_core@0.9.12`、`paste@1.0.15`、`percent-encoding@2.3.2`、`pin-project-lite@0.2.17`、`potential_utf@0.1.5`、`powerfmt@0.2.0`、`ppv-lite86@0.2.21`、`proc-macro2@1.0.107`、`psl-types@2.0.11`
-- `publicsuffix@2.3.0`、`quinn-proto@0.11.16`、`quinn-udp@0.5.15`、`quinn@0.11.11`、`quote@1.0.47`、`r-efi@5.3.0`、`r-efi@6.0.0`、`rand@0.10.2`、`rand@0.9.5`、`rand_chacha@0.9.0`、`rand_core@0.10.1`、`rand_core@0.9.5`
-- `rand_pcg@0.10.2`、`redox_syscall@0.5.18`、`ref-cast-impl@1.0.26`、`ref-cast@1.0.26`、`regex-automata@0.4.16`、`regex-syntax@0.8.11`、`regex@1.13.1`、`repr_offset@0.2.2`、`reqwest@0.13.4`、`ring@0.17.14`、`rustc-hash@2.1.3`、`rustls-native-certs@0.8.4`
-- `rustls-pki-types@1.15.0`、`rustls-platform-verifier-android@0.1.1`、`rustls-platform-verifier@0.7.0`、`rustls-webpki@0.103.13`、`rustls@0.23.42`、`ryu@1.0.23`、`schannel@0.1.29`、`schemars@1.2.1`、`schemars_derive@1.2.1`、`scopeguard@1.2.0`、`security-framework-sys@2.17.0`、`security-framework@3.7.0`
-- `serde@1.0.229`、`serde_core@1.0.229`、`serde_derive@1.0.229`、`serde_derive_internals@0.29.1`、`serde_json@1.0.151`、`serde_path_to_error@0.1.20`、`serde_urlencoded@0.7.1`、`sha1@0.10.7`、`signal-hook-registry@1.4.8`、`simd-adler32@0.3.10`、`simd_cesu8@1.2.0`、`simdutf8@0.1.5`
-- `slab@0.4.12`、`smallvec@1.15.2`、`socket2@0.6.5`、`stable_deref_trait@1.2.1`、`subtle@2.6.1`、`syn@1.0.109`、`syn@2.0.119`、`syn@3.0.3`、`sync_wrapper@1.0.2`、`synstructure@0.13.2`、`system-configuration-sys@0.6.0`、`system-configuration@0.7.0`
-- `thiserror-impl@2.0.19`、`thiserror@2.0.19`、`time-core@0.1.9`、`time-macros@0.2.32`、`time@0.3.54`、`tinystr@0.8.3`、`tinyvec@1.12.0`、`tinyvec_macros@0.1.1`、`tokio-macros@2.7.1`、`tokio-rustls@0.26.4`、`tokio-tungstenite@0.29.0`、`tokio-util@0.7.19`
-- `tokio@1.53.1`、`tower-http@0.6.11`、`tower-layer@0.3.3`、`tower-service@0.3.3`、`tower@0.5.3`、`tracing-attributes@0.1.31`、`tracing-core@0.1.36`、`tracing@0.1.44`、`try-lock@0.2.5`、`tstr@0.2.4`、`tstr_proc_macros@0.2.2`、`tungstenite@0.29.0`
-- `typed-arena@2.0.2`、`typenum@1.20.1`、`typewit@1.15.2`、`unicase@2.9.0`、`unicode-ident@1.0.24`、`untrusted@0.9.0`、`url@2.5.8`、`utf8_iter@1.0.4`、`uuid@1.24.0`、`want@0.3.1`、`wasi@0.11.1+wasi-snapshot-preview1`、`wasip2@1.0.4+wasi-0.2.12`
-- `wasm-bindgen-futures@0.4.76`、`wasm-bindgen-macro-support@0.2.126`、`wasm-bindgen-macro@0.2.126`、`wasm-bindgen-shared@0.2.126`、`wasm-bindgen@0.2.126`、`wasm-streams@0.5.0`、`web-sys@0.3.103`、`web-time@1.1.0`、`webpki-root-certs@1.0.9`、`webpki-roots@1.0.9`、`winapi-i686-pc-windows-gnu@0.4.0`、`winapi-x86_64-pc-windows-gnu@0.4.0`
-- `winapi@0.3.9`、`windows-core@0.62.2`、`windows-implement@0.60.2`、`windows-interface@0.59.3`、`windows-link@0.2.1`、`windows-registry@0.6.1`、`windows-result@0.4.1`、`windows-strings@0.5.1`、`windows-sys@0.52.0`、`windows-sys@0.61.2`、`windows-targets@0.52.6`、`windows_aarch64_gnullvm@0.52.6`
-- `windows_aarch64_msvc@0.52.6`、`windows_i686_gnu@0.52.6`、`windows_i686_gnullvm@0.52.6`、`windows_i686_msvc@0.52.6`、`windows_x86_64_gnu@0.52.6`、`windows_x86_64_gnullvm@0.52.6`、`windows_x86_64_msvc@0.52.6`、`wit-bindgen@0.57.1`、`writeable@0.6.3`、`yoke-derive@0.8.2`、`yoke@0.8.3`、`zerocopy-derive@0.8.55`
-- `zerocopy@0.8.55`、`zerofrom-derive@0.1.7`、`zerofrom@0.1.8`、`zeroize@1.9.0`、`zerotrie@0.2.4`、`zerovec-derive@0.11.3`、`zerovec@0.11.6`、`zmij@1.0.23`、`zstd-safe@7.2.4`、`zstd-sys@2.0.16+zstd.1.5.7`、`zstd@0.13.3`
+- `abi_stable@0.11.3`、`abi_stable_derive@0.11.3`、`abi_stable_shared@0.11.0`、`adler2@2.0.1`、`aho-corasick@1.1.4`、`alloc-no-stdlib@2.0.4`、`alloc-stdlib@0.2.4`、`allocator-api2@0.2.21`、`android_system_properties@0.1.5`、`arc-swap@1.9.2`、`as_derive_utils@0.11.0`、`ast-grep-core@0.44.1`
+- `ast-grep-language@0.44.1`、`async-compression@0.4.42`、`async-trait@0.1.91`、`atomic-waker@1.1.2`、`atomic@0.6.1`、`aws-lc-rs@1.17.3`、`aws-lc-sys@0.43.0`、`axum-core@0.5.6`、`axum-macros@0.5.1`、`axum@0.8.9`、`base64@0.22.1`、`bit-set@0.10.0`
+- `bit-vec@0.9.1`、`bitflags@2.13.1`、`bitpacking@0.9.3`、`block-buffer@0.10.4`、`bon-macros@3.9.3`、`bon@3.9.3`、`borsh@1.8.0`、`brotli-decompressor@5.0.3`、`brotli@8.0.4`、`bstr@1.13.0`、`bumpalo@3.20.3`、`bytemuck@1.25.2`
+- `bytemuck_derive@1.11.0`、`byteorder@1.5.0`、`bytes@1.12.1`、`census@0.4.2`、`cfg-if@1.0.4`、`chacha20@0.10.1`、`chrono@0.4.45`、`combine@4.6.7`、`compression-codecs@0.4.38`、`compression-core@0.4.32`、`const-oid@0.9.6`、`const_panic@0.2.15`
+- `cookie@0.18.1`、`cookie_store@0.22.1`、`core-foundation-sys@0.8.7`、`core-foundation@0.10.1`、`core-foundation@0.9.4`、`core_extensions@1.5.4`、`core_extensions_proc_macros@1.5.4`、`cpufeatures@0.2.17`、`cpufeatures@0.3.0`、`crc32fast@1.5.0`、`crossbeam-channel@0.5.16`、`crossbeam-deque@0.8.7`
+- `crossbeam-epoch@0.9.20`、`crossbeam-utils@0.8.22`、`crunchy@0.2.4`、`crypto-common@0.1.7`、`darling@0.23.0`、`darling_core@0.23.0`、`darling_macro@0.23.0`、`data-encoding@2.11.0`、`datasketches@0.2.0`、`deranged@0.5.8`、`digest@0.10.7`、`displaydoc@0.2.6`
+- `document-features@0.2.12`、`downcast-rs@2.0.2`、`dyn-clone@1.0.20`、`either@1.16.0`、`encoding_rs@0.8.35`、`equivalent@1.0.2`、`erased-serde@0.4.10`、`errno@0.3.14`、`fastdivide@0.4.2`、`fastrand@2.5.0`、`flate2@1.1.9`、`fnv@1.0.7`
+- `foldhash@0.2.0`、`form_urlencoded@1.2.2`、`fs4@0.13.1`、`futures-channel@0.3.33`、`futures-core@0.3.33`、`futures-io@0.3.33`、`futures-macro@0.3.33`、`futures-sink@0.3.33`、`futures-task@0.3.33`、`futures-util@0.3.33`、`generational-arena@0.2.9`、`generic-array@0.14.7`
+- `getrandom@0.2.17`、`getrandom@0.3.4`、`getrandom@0.4.3`、`globset@0.4.19`、`h2@0.4.15`、`hashbrown@0.16.1`、`hashbrown@0.17.1`、`heck@0.5.0`、`htmlescape@0.3.1`、`http-body-util@0.1.4`、`http-body@1.1.0`、`http@1.4.2`
+- `httparse@1.10.1`、`httpdate@1.0.3`、`hyper-rustls@0.27.9`、`hyper-util@0.1.20`、`hyper@1.11.0`、`iana-time-zone-haiku@0.1.2`、`iana-time-zone@0.1.65`、`icu_collections@2.2.0`、`icu_locale_core@2.2.0`、`icu_normalizer@2.2.0`、`icu_normalizer_data@2.2.0`、`icu_properties@2.2.0`
+- `icu_properties_data@2.2.0`、`icu_provider@2.2.0`、`ident_case@1.0.1`、`idna@1.1.0`、`idna_adapter@1.2.2`、`ignore@0.4.31`、`indexmap@2.14.0`、`inventory@0.3.24`、`ipnet@2.12.0`、`itertools@0.14.0`、`itoa@1.0.18`、`jni-macros@0.22.4`
+- `jni-sys-macros@0.4.1`、`jni-sys@0.4.1`、`jni@0.22.4`、`js-sys@0.3.103`、`levenshtein_automata@0.2.1`、`libc@0.2.189`、`libloading@0.7.4`、`libm@0.2.16`、`linux-raw-sys@0.12.1`、`litemap@0.8.2`、`litrs@1.0.0`、`lock_api@0.4.14`
+- `log@0.4.33`、`lru-slab@0.1.2`、`lru@0.16.4`、`lz4_flex@0.13.1`、`matchit@0.8.4`、`measure_time@0.9.0`、`memchr@2.8.3`、`memmap2@0.9.11`、`mime@0.3.17`、`mime_guess@2.0.5`、`minimal-lexical@0.2.1`、`miniz_oxide@0.8.9`
+- `mio@1.2.2`、`murmurhash32@0.3.1`、`nom@7.1.3`、`num-conv@0.2.2`、`num-traits@0.2.19`、`num_threads@0.1.7`、`once_cell@1.21.4`、`oneshot@0.1.13`、`openssl-probe@0.2.1`、`ordered-float@5.3.0`、`ownedbytes@0.9.0`、`parking_lot@0.12.5`
+- `parking_lot_core@0.9.12`、`paste@1.0.15`、`percent-encoding@2.3.2`、`pin-project-lite@0.2.17`、`potential_utf@0.1.5`、`powerfmt@0.2.0`、`ppv-lite86@0.2.21`、`prettyplease@0.2.37`、`proc-macro2@1.0.107`、`psl-types@2.0.11`、`publicsuffix@2.3.0`、`quinn-proto@0.11.16`
+- `quinn-udp@0.5.15`、`quinn@0.11.11`、`quote@1.0.47`、`r-efi@5.3.0`、`r-efi@6.0.0`、`rand@0.10.2`、`rand@0.9.5`、`rand_chacha@0.9.0`、`rand_core@0.10.1`、`rand_core@0.9.5`、`rand_pcg@0.10.2`、`rayon-core@1.13.0`
+- `rayon@1.12.0`、`redox_syscall@0.5.18`、`ref-cast-impl@1.0.26`、`ref-cast@1.0.26`、`regex-automata@0.4.16`、`regex-syntax@0.8.11`、`regex@1.13.1`、`repr_offset@0.2.2`、`reqwest@0.13.4`、`ring@0.17.14`、`rust-stemmers@1.2.0`、`rustc-hash@2.1.3`
+- `rustix@1.1.4`、`rustls-native-certs@0.8.4`、`rustls-pki-types@1.15.0`、`rustls-platform-verifier-android@0.1.1`、`rustls-platform-verifier@0.7.0`、`rustls-webpki@0.103.13`、`rustls@0.23.42`、`rustversion@1.0.23`、`ryu@1.0.23`、`same-file@1.0.6`、`schannel@0.1.29`、`schemars@1.2.1`
+- `schemars_derive@1.2.1`、`scopeguard@1.2.0`、`security-framework-sys@2.17.0`、`security-framework@3.7.0`、`serde@1.0.229`、`serde_core@1.0.229`、`serde_derive@1.0.229`、`serde_derive_internals@0.29.1`、`serde_json@1.0.151`、`serde_path_to_error@0.1.20`、`serde_urlencoded@0.7.1`、`sha1@0.10.7`
+- `signal-hook-registry@1.4.8`、`simd-adler32@0.3.10`、`simd_cesu8@1.2.0`、`simdutf8@0.1.5`、`sketches-ddsketch@0.4.0`、`slab@0.4.12`、`smallvec@1.15.2`、`smol_str@0.3.6`、`socket2@0.6.5`、`stable_deref_trait@1.2.1`、`streaming-iterator@0.1.9`、`strsim@0.11.1`
+- `strum@0.28.0`、`strum_macros@0.28.0`、`subtle@2.6.1`、`syn@1.0.109`、`syn@2.0.119`、`syn@3.0.3`、`sync_wrapper@1.0.2`、`synstructure@0.13.2`、`system-configuration-sys@0.6.0`、`system-configuration@0.7.0`、`tantivy-bitpacker@0.10.0`、`tantivy-columnar@0.7.0`
+- `tantivy-common@0.11.0`、`tantivy-fst@0.5.0`、`tantivy-query-grammar@0.26.0`、`tantivy-sstable@0.7.0`、`tantivy-stacker@0.7.0`、`tantivy-tokenizer-api@0.7.0`、`tantivy@0.26.1`、`tempfile@3.27.0`、`thiserror-impl@2.0.19`、`thiserror@2.0.19`、`time-core@0.1.9`、`time-macros@0.2.32`
+- `time@0.3.54`、`tinystr@0.8.3`、`tinyvec@1.12.0`、`tinyvec_macros@0.1.1`、`tokio-macros@2.7.1`、`tokio-rustls@0.26.4`、`tokio-tungstenite@0.29.0`、`tokio-util@0.7.19`、`tokio@1.53.1`、`tower-http@0.6.11`、`tower-layer@0.3.3`、`tower-service@0.3.3`
+- `tower@0.5.3`、`tracing-attributes@0.1.31`、`tracing-core@0.1.36`、`tracing@0.1.44`、`tree-sitter-bash@0.25.1`、`tree-sitter-c-sharp@0.23.5`、`tree-sitter-c@0.24.2`、`tree-sitter-cpp@0.23.4`、`tree-sitter-css@0.25.0`、`tree-sitter-dart@0.2.0`、`tree-sitter-elixir@0.3.5`、`tree-sitter-go@0.25.0`
+- `tree-sitter-haskell@0.23.1`、`tree-sitter-hcl@1.1.0`、`tree-sitter-html@0.23.2`、`tree-sitter-java@0.23.5`、`tree-sitter-javascript@0.25.0`、`tree-sitter-json@0.24.8`、`tree-sitter-language@0.1.7`、`tree-sitter-lua@0.5.0`、`tree-sitter-md@0.5.3`、`tree-sitter-nix@0.3.0`、`tree-sitter-php@0.24.2`、`tree-sitter-python@0.25.0`
+- `tree-sitter-ruby@0.23.1`、`tree-sitter-rust@0.24.2`、`tree-sitter-solidity@1.2.13`、`tree-sitter-swift@0.7.3`、`tree-sitter-typescript@0.23.2`、`tree-sitter-yaml@0.7.2`、`tree-sitter@0.26.11`、`try-lock@0.2.5`、`tstr@0.2.4`、`tstr_proc_macros@0.2.2`、`tungstenite@0.29.0`、`typed-arena@2.0.2`
+- `typeid@1.0.3`、`typenum@1.20.1`、`typetag-impl@0.2.23`、`typetag@0.2.23`、`typewit@1.15.2`、`unicase@2.9.0`、`unicode-ident@1.0.24`、`untrusted@0.9.0`、`url@2.5.8`、`utf8-ranges@1.0.5`、`utf8_iter@1.0.4`、`uuid@1.24.0`
+- `walkdir@2.5.0`、`want@0.3.1`、`wasi@0.11.1+wasi-snapshot-preview1`、`wasip2@1.0.4+wasi-0.2.12`、`wasm-bindgen-futures@0.4.76`、`wasm-bindgen-macro-support@0.2.126`、`wasm-bindgen-macro@0.2.126`、`wasm-bindgen-shared@0.2.126`、`wasm-bindgen@0.2.126`、`wasm-streams@0.5.0`、`web-sys@0.3.103`、`web-time@1.1.0`
+- `webpki-root-certs@1.0.9`、`webpki-roots@1.0.9`、`winapi-i686-pc-windows-gnu@0.4.0`、`winapi-util@0.1.11`、`winapi-x86_64-pc-windows-gnu@0.4.0`、`winapi@0.3.9`、`windows-core@0.62.2`、`windows-implement@0.60.2`、`windows-interface@0.59.3`、`windows-link@0.2.1`、`windows-registry@0.6.1`、`windows-result@0.4.1`
+- `windows-strings@0.5.1`、`windows-sys@0.52.0`、`windows-sys@0.59.0`、`windows-sys@0.61.2`、`windows-targets@0.52.6`、`windows_aarch64_gnullvm@0.52.6`、`windows_aarch64_msvc@0.52.6`、`windows_i686_gnu@0.52.6`、`windows_i686_gnullvm@0.52.6`、`windows_i686_msvc@0.52.6`、`windows_x86_64_gnu@0.52.6`、`windows_x86_64_gnullvm@0.52.6`
+- `windows_x86_64_msvc@0.52.6`、`wit-bindgen@0.57.1`、`writeable@0.6.3`、`yoke-derive@0.8.2`、`yoke@0.8.3`、`zerocopy-derive@0.8.55`、`zerocopy@0.8.55`、`zerofrom-derive@0.1.7`、`zerofrom@0.1.8`、`zeroize@1.9.0`、`zerotrie@0.2.4`、`zerovec-derive@0.11.3`
+- `zerovec@0.11.6`、`zmij@1.0.23`、`zstd-safe@7.2.4`、`zstd-sys@2.0.16+zstd.1.5.7`、`zstd@0.13.3`
 
 </details>
 
@@ -309,7 +328,7 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 - 同 package library target：无。
 - 入口可达模块：2；模块引用边：1；未解析声明：0。
 - 第一方直接 normal dependencies：`agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-runtime`。
-- 第一方传递 normal closure（31）：`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web`。
+- 第一方传递 normal closure（32）：`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web`。
 - 外部直接 normal declarations（6）：`anyhow`、`async-trait`、`clap (features=derive+env)`、`serde_json`、`tempfile`、`tokio (features=macros+rt-multi-thread+time)`。
 - 源码 `use` 中观测到的 Cargo dependency crate roots：`agena_mcp_client`、`agena_mcp_server`、`async_trait`。
 
@@ -390,7 +409,7 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 - 同 package library target：无。
 - 入口可达模块：1；模块引用边：0；未解析声明：0。
 - 第一方直接 normal dependencies：`agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-runtime`。
-- 第一方传递 normal closure（31）：`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web`。
+- 第一方传递 normal closure（32）：`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web`。
 - 外部直接 normal declarations（6）：`anyhow`、`async-trait`、`clap (features=derive+env)`、`serde_json`、`tempfile`、`tokio (features=macros+rt-multi-thread+time)`。
 - 源码 `use` 中观测到的 Cargo dependency crate roots：`agena_domain`、`agena_runtime`、`anyhow`、`clap`。
 
@@ -471,7 +490,7 @@ python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysi
 - 同 package library target：无。
 - 入口可达模块：11；模块引用边：19；未解析声明：0。
 - 第一方直接 normal dependencies：`agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-runtime`。
-- 第一方传递 normal closure（31）：`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web`。
+- 第一方传递 normal closure（32）：`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web`。
 - 外部直接 normal declarations（6）：`anyhow`、`async-trait`、`clap (features=derive+env)`、`serde_json`、`tempfile`、`tokio (features=macros+rt-multi-thread+time)`。
 - 源码 `use` 中观测到的 Cargo dependency crate roots：`agena_domain`、`agena_runtime`、`anyhow`、`clap`、`serde_json`、`tempfile`。
 
@@ -565,6 +584,7 @@ flowchart LR
     agena_e2e["agena-e2e"]
     agena_echo_plugin["agena-echo-plugin"]
     agena_echo_plugin_stdio["agena-echo-plugin-stdio"]
+    agena_failure["agena-failure"]
     agena_git_http["agena-git-http"]
     agena_keyring_store["agena-keyring-store"]
     agena_lsp["agena-lsp"]
@@ -623,15 +643,18 @@ flowchart LR
     agena --> agena_tui_backend
     agena --> agena_tui_platform
     agena_api --> agena_domain
+    agena_api --> agena_failure
     agena_api --> agena_plugin_sdk
     agena_api_server --> agena_api
     agena_api_server --> agena_application
     agena_api_server --> agena_domain
+    agena_api_server --> agena_failure
     agena_api_server --> agena_plugin_host
     agena_api_server --> agena_plugin_marketplace
     agena_api_server --> agena_runtime
     agena_application --> agena_api
     agena_application --> agena_domain
+    agena_application --> agena_failure
     agena_application --> agena_plugin_host
     agena_application --> agena_provider
     agena_application --> agena_runtime
@@ -639,6 +662,7 @@ flowchart LR
     agena_application --> agena_storage
     agena_application --> agena_tool
     agena_bundled_plugins --> agena_domain
+    agena_bundled_plugins --> agena_failure
     agena_bundled_plugins --> agena_macros
     agena_bundled_plugins --> agena_mcp_client
     agena_bundled_plugins --> agena_memory_index
@@ -667,6 +691,8 @@ flowchart LR
     agena_cli --> agena_tool
     agena_client --> agena_api
     agena_client --> agena_domain
+    agena_client --> agena_failure
+    agena_domain --> agena_failure
     agena_e2e --> agena_domain
     agena_e2e --> agena_mcp_client
     agena_e2e --> agena_mcp_server
@@ -674,17 +700,23 @@ flowchart LR
     agena_echo_plugin --> agena_plugin_sdk
     agena_echo_plugin_stdio --> agena_plugin_sdk
     agena_macros --> agena_macro_core
+    agena_mcp_client --> agena_failure
     agena_mcp_client --> agena_keyring_store
     agena_mcp_server --> agena_mcp_client
     agena_memory_index --> agena_storage
     agena_multi_tool_plugin_stdio --> agena_plugin_sdk
+    agena_plugin_host --> agena_failure
     agena_plugin_host --> agena_plugin_sdk
     agena_plugin_marketplace --> agena_plugin_host
+    agena_plugin_sdk --> agena_failure
     agena_plugin_sdk --> agena_macros
+    agena_plugin_sdk --> agena_tool
     agena_provider --> agena_domain
+    agena_provider --> agena_failure
     agena_provider_bedrock_signing --> agena_provider_bedrock_auth
     agena_runtime --> agena_bundled_plugins
     agena_runtime --> agena_domain
+    agena_runtime --> agena_failure
     agena_runtime --> agena_keyring_store
     agena_runtime --> agena_lsp
     agena_runtime --> agena_macros
@@ -711,10 +743,12 @@ flowchart LR
     agena_runtime --> agena_tool
     agena_runtime --> agena_web
     agena_runtime_config --> agena_domain
+    agena_runtime_config --> agena_failure
     agena_runtime_config --> agena_plugin_host
     agena_runtime_config --> agena_provider
     agena_runtime_config --> agena_runtime_contracts
     agena_runtime_contracts --> agena_domain
+    agena_runtime_contracts --> agena_failure
     agena_runtime_contracts --> agena_macros
     agena_runtime_contracts --> agena_plugin_host
     agena_runtime_contracts --> agena_plugin_sdk
@@ -738,6 +772,7 @@ flowchart LR
     agena_runtime_plugins --> agena_tool
     agena_runtime_plugins --> agena_web
     agena_runtime_provider --> agena_domain
+    agena_runtime_provider --> agena_failure
     agena_runtime_provider --> agena_plugin_host
     agena_runtime_provider --> agena_provider
     agena_runtime_provider --> agena_provider_google_auth
@@ -745,6 +780,7 @@ flowchart LR
     agena_runtime_provider --> agena_runtime_contracts
     agena_runtime_provider --> agena_runtime_tools
     agena_runtime_provider_adapters --> agena_domain
+    agena_runtime_provider_adapters --> agena_failure
     agena_runtime_provider_adapters --> agena_plugin_host
     agena_runtime_provider_adapters --> agena_plugin_sdk
     agena_runtime_provider_adapters --> agena_provider
@@ -757,6 +793,7 @@ flowchart LR
     agena_runtime_provider_adapters --> agena_runtime_provider
     agena_runtime_provider_adapters --> agena_runtime_tools
     agena_runtime_session --> agena_domain
+    agena_runtime_session --> agena_failure
     agena_runtime_session --> agena_keyring_store
     agena_runtime_session --> agena_lsp
     agena_runtime_session --> agena_plugin_host
@@ -773,11 +810,13 @@ flowchart LR
     agena_runtime_session --> agena_storage_sqlite
     agena_runtime_session --> agena_tool
     agena_runtime_session_core --> agena_domain
+    agena_runtime_session_core --> agena_failure
     agena_runtime_session_core --> agena_provider
     agena_runtime_session_core --> agena_runtime_contracts
     agena_runtime_session_core --> agena_storage
     agena_runtime_session_core --> agena_storage_sqlite
     agena_runtime_tools --> agena_domain
+    agena_runtime_tools --> agena_failure
     agena_runtime_tools --> agena_lsp
     agena_runtime_tools --> agena_plugin_host
     agena_runtime_tools --> agena_plugin_sdk
@@ -785,15 +824,20 @@ flowchart LR
     agena_runtime_tools --> agena_runtime_contracts
     agena_runtime_tools --> agena_scheduler
     agena_runtime_tools --> agena_tool
+    agena_scheduler --> agena_failure
+    agena_skills --> agena_failure
     agena_storage --> agena_domain
     agena_storage_sqlite --> agena_domain
     agena_storage_sqlite --> agena_provider
     agena_storage_sqlite --> agena_storage
     agena_tool --> agena_domain
+    agena_tool --> agena_failure
+    agena_tui --> agena_failure
     agena_tui --> agena_tui_components
     agena_tui_app --> agena_api
     agena_tui_app --> agena_application
     agena_tui_app --> agena_domain
+    agena_tui_app --> agena_failure
     agena_tui_app --> agena_plugin_host
     agena_tui_app --> agena_plugin_sdk
     agena_tui_app --> agena_provider
@@ -812,6 +856,7 @@ flowchart LR
     agena_tui_backend --> agena_api
     agena_tui_backend --> agena_application
     agena_tui_backend --> agena_domain
+    agena_tui_backend --> agena_failure
     agena_tui_backend --> agena_plugin_host
     agena_tui_backend --> agena_plugin_sdk
     agena_tui_backend --> agena_provider
@@ -842,10 +887,12 @@ flowchart LR
     agena_tui_settings --> agena_tui_components
     agena_tui_transcript --> agena_api
     agena_tui_transcript --> agena_domain
+    agena_tui_transcript --> agena_failure
     agena_tui_transcript --> agena_plugin_sdk
     agena_tui_transcript --> agena_tui
     agena_tui_transcript --> agena_tui_components
     agena_tui_transcript --> agena_tui_media
+    agena_web --> agena_failure
 ```
 
 ### 5.2 拓扑层
@@ -854,86 +901,88 @@ flowchart LR
 
 | 层 | Packages |
 | ---: | --- |
-| 0 | `agena-domain`、`agena-git-http`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-marketplace-server`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-rollout`、`agena-scheduler`、`agena-skills`、`agena-tui-components`、`agena-web` |
-| 1 | `agena-macros`、`agena-mcp-client`、`agena-provider`、`agena-provider-bedrock-signing`、`agena-storage`、`agena-tool`、`agena-tui` |
-| 2 | `agena-mcp-server`、`agena-memory-index`、`agena-plugin-sdk`、`agena-storage-sqlite`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-settings` |
-| 3 | `agena-api`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host`、`agena-tui-platform` |
-| 4 | `agena-client`、`agena-plugin-marketplace`、`agena-runtime-contracts`、`agena-tui-session`、`agena-tui-transcript` |
-| 5 | `agena-runtime-config`、`agena-runtime-session-core`、`agena-runtime-tools` |
-| 6 | `agena-runtime-plugins`、`agena-runtime-provider` |
-| 7 | `agena-bundled-plugins`、`agena-runtime-provider-adapters`、`agena-runtime-session` |
-| 8 | `agena-runtime` |
-| 9 | `agena-application`、`agena-e2e` |
-| 10 | `agena-api-server`、`agena-cli`、`agena-tui-backend`、`agena-tui-plugin-workbench` |
-| 11 | `agena-tui-provider-studio` |
-| 12 | `agena-tui-app` |
-| 13 | `agena` |
+| 0 | `agena-failure`、`agena-git-http`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-marketplace-server`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-rollout`、`agena-tui-components` |
+| 1 | `agena-domain`、`agena-macros`、`agena-mcp-client`、`agena-provider-bedrock-signing`、`agena-scheduler`、`agena-skills`、`agena-tui`、`agena-web` |
+| 2 | `agena-mcp-server`、`agena-provider`、`agena-storage`、`agena-tool`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-settings` |
+| 3 | `agena-memory-index`、`agena-plugin-sdk`、`agena-storage-sqlite`、`agena-tui-platform` |
+| 4 | `agena-api`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host` |
+| 5 | `agena-client`、`agena-plugin-marketplace`、`agena-runtime-contracts`、`agena-tui-session`、`agena-tui-transcript` |
+| 6 | `agena-runtime-config`、`agena-runtime-session-core`、`agena-runtime-tools` |
+| 7 | `agena-runtime-plugins`、`agena-runtime-provider` |
+| 8 | `agena-bundled-plugins`、`agena-runtime-provider-adapters`、`agena-runtime-session` |
+| 9 | `agena-runtime` |
+| 10 | `agena-application`、`agena-e2e` |
+| 11 | `agena-api-server`、`agena-cli`、`agena-tui-backend`、`agena-tui-plugin-workbench` |
+| 12 | `agena-tui-provider-studio` |
+| 13 | `agena-tui-app` |
+| 14 | `agena` |
 
 ### 5.3 全量第一方邻接表
 
 | Package | Direct normal | Direct dev | Direct build | Reverse normal | Transitive normal |
 | --- | --- | --- | --- | --- | --- |
-| `agena` | `agena-api-server (features=jsonrpc)`、`agena-application`、`agena-cli`、`agena-domain`、`agena-git-http`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-platform` | — | — | — | `agena-api`、`agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-domain`、`agena-git-http`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web` |
-| `agena-api` | `agena-domain`、`agena-plugin-sdk` | — | — | `agena-api-server`、`agena-application`、`agena-client`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-session`、`agena-tui-transcript` | `agena-domain`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk` |
-| `agena-api-server` | `agena-api`、`agena-application`、`agena-domain`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-runtime` | — | — | `agena` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
-| `agena-application` | `agena-api`、`agena-domain`、`agena-plugin-host`、`agena-provider`、`agena-runtime`、`agena-scheduler`、`agena-storage`、`agena-tool` | `agena-storage-sqlite` | — | `agena`、`agena-api-server`、`agena-cli`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-plugin-workbench` | `agena-api`、`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
-| `agena-bundled-plugins` | `agena-domain`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-tools`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` | — | — | `agena-cli`、`agena-runtime` | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` |
-| `agena-cli` | `agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-provider`、`agena-runtime`、`agena-runtime-plugins`、`agena-storage`、`agena-tool` | — | — | `agena` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
-| `agena-client` | `agena-api`、`agena-domain` | — | — | — | `agena-api`、`agena-domain`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk` |
-| `agena-domain` | — | — | — | `agena`、`agena-api`、`agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-client`、`agena-e2e`、`agena-provider`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-permission-studio`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-transcript` | — |
-| `agena-e2e` | `agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-runtime` | — | — | — | `agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
-| `agena-echo-plugin` | `agena-plugin-sdk (features=cdylib)` | — | — | — | `agena-macro-core`、`agena-macros`、`agena-plugin-sdk` |
-| `agena-echo-plugin-stdio` | `agena-plugin-sdk (features=stdio)` | — | — | — | `agena-macro-core`、`agena-macros`、`agena-plugin-sdk` |
+| `agena` | `agena-api-server (features=jsonrpc)`、`agena-application`、`agena-cli`、`agena-domain`、`agena-git-http`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-platform` | — | — | — | `agena-api`、`agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-domain`、`agena-failure`、`agena-git-http`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web` |
+| `agena-api` | `agena-domain`、`agena-failure`、`agena-plugin-sdk` | — | — | `agena-api-server`、`agena-application`、`agena-client`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-session`、`agena-tui-transcript` | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool` |
+| `agena-api-server` | `agena-api`、`agena-application`、`agena-domain`、`agena-failure`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-runtime` | — | — | `agena` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
+| `agena-application` | `agena-api`、`agena-domain`、`agena-failure`、`agena-plugin-host`、`agena-provider`、`agena-runtime`、`agena-scheduler`、`agena-storage`、`agena-tool` | `agena-storage-sqlite` | — | `agena`、`agena-api-server`、`agena-cli`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-plugin-workbench` | `agena-api`、`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
+| `agena-bundled-plugins` | `agena-domain`、`agena-failure`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-tools`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` | — | — | `agena-cli`、`agena-runtime` | `agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` |
+| `agena-cli` | `agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-provider`、`agena-runtime`、`agena-runtime-plugins`、`agena-storage`、`agena-tool` | — | — | `agena` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-marketplace`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
+| `agena-client` | `agena-api`、`agena-domain`、`agena-failure` | — | — | — | `agena-api`、`agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool` |
+| `agena-domain` | `agena-failure` | — | — | `agena`、`agena-api`、`agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-client`、`agena-e2e`、`agena-provider`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-permission-studio`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-transcript` | `agena-failure` |
+| `agena-e2e` | `agena-domain`、`agena-mcp-client`、`agena-mcp-server`、`agena-runtime` | — | — | — | `agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-mcp-server`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
+| `agena-echo-plugin` | `agena-plugin-sdk (features=cdylib)` | — | — | — | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool` |
+| `agena-echo-plugin-stdio` | `agena-plugin-sdk (features=stdio)` | — | — | — | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool` |
+| `agena-failure` | — | — | — | `agena-api`、`agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-client`、`agena-domain`、`agena-mcp-client`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-tool`、`agena-tui`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-transcript`、`agena-web` | — |
 | `agena-git-http` | — | — | — | `agena` | — |
 | `agena-keyring-store` | — | — | — | `agena-mcp-client`、`agena-runtime`、`agena-runtime-plugins`、`agena-runtime-session` | — |
 | `agena-lsp` | — | — | — | `agena-runtime`、`agena-runtime-plugins`、`agena-runtime-session`、`agena-runtime-tools` | — |
 | `agena-macro-core` | — | — | — | `agena-macros` | — |
 | `agena-macros` | `agena-macro-core` | — | — | `agena-bundled-plugins`、`agena-plugin-sdk`、`agena-runtime`、`agena-runtime-contracts`、`agena-runtime-plugins` | `agena-macro-core` |
 | `agena-marketplace-server` | — | — | — | — | — |
-| `agena-mcp-client` | `agena-keyring-store` | — | — | `agena-bundled-plugins`、`agena-cli`、`agena-e2e`、`agena-mcp-server`、`agena-runtime`、`agena-runtime-plugins` | `agena-keyring-store` |
-| `agena-mcp-server` | `agena-mcp-client` | — | — | `agena-cli`、`agena-e2e` | `agena-keyring-store`、`agena-mcp-client` |
-| `agena-memory-index` | `agena-storage` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins` | `agena-domain`、`agena-storage` |
-| `agena-multi-tool-plugin-stdio` | `agena-plugin-sdk (features=stdio)` | — | — | — | `agena-macro-core`、`agena-macros`、`agena-plugin-sdk` |
-| `agena-plugin-host` | `agena-plugin-sdk (features=cdylib+stdio+http)` | — | — | `agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-plugin-marketplace`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-tools`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-plugin-workbench` | `agena-macro-core`、`agena-macros`、`agena-plugin-sdk` |
-| `agena-plugin-marketplace` | `agena-plugin-host (features=signing)` | — | — | `agena-api-server`、`agena-cli` | `agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk` |
-| `agena-plugin-sdk` | `agena-macros` | — | — | `agena-api`、`agena-bundled-plugins`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host`、`agena-runtime`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-tools`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-transcript` | `agena-macro-core`、`agena-macros` |
-| `agena-provider` | `agena-domain` | — | — | `agena`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-storage-sqlite`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-provider-studio` | `agena-domain` |
+| `agena-mcp-client` | `agena-failure`、`agena-keyring-store` | — | — | `agena-bundled-plugins`、`agena-cli`、`agena-e2e`、`agena-mcp-server`、`agena-runtime`、`agena-runtime-plugins` | `agena-failure`、`agena-keyring-store` |
+| `agena-mcp-server` | `agena-mcp-client` | — | — | `agena-cli`、`agena-e2e` | `agena-failure`、`agena-keyring-store`、`agena-mcp-client` |
+| `agena-memory-index` | `agena-storage` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins` | `agena-domain`、`agena-failure`、`agena-storage` |
+| `agena-multi-tool-plugin-stdio` | `agena-plugin-sdk (features=stdio)` | — | — | — | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool` |
+| `agena-plugin-host` | `agena-failure`、`agena-plugin-sdk (features=cdylib+stdio+http)` | — | — | `agena-api-server`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-plugin-marketplace`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-tools`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-plugin-workbench` | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool` |
+| `agena-plugin-marketplace` | `agena-plugin-host (features=signing)` | — | — | `agena-api-server`、`agena-cli` | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-tool` |
+| `agena-plugin-sdk` | `agena-failure`、`agena-macros`、`agena-tool` | — | — | `agena-api`、`agena-bundled-plugins`、`agena-echo-plugin`、`agena-echo-plugin-stdio`、`agena-multi-tool-plugin-stdio`、`agena-plugin-host`、`agena-runtime`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-tools`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-transcript` | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-tool` |
+| `agena-provider` | `agena-domain`、`agena-failure` | — | — | `agena`、`agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-storage-sqlite`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-provider-studio` | `agena-domain`、`agena-failure` |
 | `agena-provider-bedrock-auth` | — | — | — | `agena-provider-bedrock-signing`、`agena-runtime`、`agena-runtime-provider-adapters` | — |
 | `agena-provider-bedrock-signing` | `agena-provider-bedrock-auth` | — | — | `agena-runtime`、`agena-runtime-provider-adapters` | `agena-provider-bedrock-auth` |
 | `agena-provider-bedrock-streaming` | — | — | — | `agena-runtime`、`agena-runtime-provider-adapters` | — |
 | `agena-provider-google-auth` | — | — | — | `agena-runtime`、`agena-runtime-provider`、`agena-runtime-provider-adapters` | — |
 | `agena-rollout` | — | — | — | — | — |
-| `agena-runtime` | `agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` | — | — | `agena`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-e2e`、`agena-tui-app`、`agena-tui-backend` | `agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
-| `agena-runtime-config` | `agena-domain`、`agena-plugin-host`、`agena-provider`、`agena-runtime-contracts` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session` | `agena-domain`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-storage`、`agena-tool` |
-| `agena-runtime-contracts` | `agena-domain`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-storage`、`agena-tool` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools` | `agena-domain`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-storage`、`agena-tool` |
-| `agena-runtime-plugins` | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` | — | — | `agena-bundled-plugins`、`agena-cli`、`agena-runtime`、`agena-runtime-session` | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` |
-| `agena-runtime-provider` | `agena-domain`、`agena-plugin-host`、`agena-provider`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools` | — | — | `agena-runtime`、`agena-runtime-provider-adapters`、`agena-runtime-session` | `agena-domain`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools`、`agena-scheduler`、`agena-storage`、`agena-tool` |
-| `agena-runtime-provider-adapters` | `agena-domain`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-provider`、`agena-runtime-tools` | `agena-bundled-plugins` | — | `agena-runtime` | `agena-domain`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-provider`、`agena-runtime-tools`、`agena-scheduler`、`agena-storage`、`agena-tool` |
-| `agena-runtime-session` | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-storage`、`agena-storage-sqlite`、`agena-tool` | — | — | `agena-runtime` | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
-| `agena-runtime-session-core` | `agena-domain`、`agena-provider`、`agena-runtime-contracts`、`agena-storage`、`agena-storage-sqlite` | — | — | `agena-runtime-session` | `agena-domain`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-storage`、`agena-storage-sqlite`、`agena-tool` |
-| `agena-runtime-tools` | `agena-domain`、`agena-lsp`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-scheduler`、`agena-tool` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session` | `agena-domain`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-scheduler`、`agena-storage`、`agena-tool` |
-| `agena-scheduler` | — | — | — | `agena-application`、`agena-runtime`、`agena-runtime-session`、`agena-runtime-tools` | — |
-| `agena-skills` | — | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins` | — |
-| `agena-storage` | `agena-domain` | — | — | `agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-memory-index`、`agena-runtime`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-storage-sqlite` | `agena-domain` |
-| `agena-storage-sqlite` | `agena-domain`、`agena-provider`、`agena-storage` | — | — | `agena-runtime`、`agena-runtime-session`、`agena-runtime-session-core` | `agena-domain`、`agena-provider`、`agena-storage` |
-| `agena-tool` | `agena-domain` | — | — | `agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-runtime`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-session`、`agena-runtime-tools` | `agena-domain` |
-| `agena-tui` | `agena-tui-components` | — | — | `agena`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | `agena-tui-components` |
-| `agena-tui-app` | `agena-api`、`agena-application`、`agena-domain`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | `agena-tui-media (features=test-support)` | — | `agena` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web` |
-| `agena-tui-backend` | `agena-api`、`agena-application`、`agena-domain`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-tui` | — | — | `agena`、`agena-tui-app`、`agena-tui-provider-studio` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-components`、`agena-web` |
+| `agena-runtime` | `agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` | — | — | `agena`、`agena-api-server`、`agena-application`、`agena-cli`、`agena-e2e`、`agena-tui-app`、`agena-tui-backend` | `agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
+| `agena-runtime-config` | `agena-domain`、`agena-failure`、`agena-plugin-host`、`agena-provider`、`agena-runtime-contracts` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session` | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-storage`、`agena-tool` |
+| `agena-runtime-contracts` | `agena-domain`、`agena-failure`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-storage`、`agena-tool` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools` | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-storage`、`agena-tool` |
+| `agena-runtime-plugins` | `agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` | — | — | `agena-bundled-plugins`、`agena-cli`、`agena-runtime`、`agena-runtime-session` | `agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-tool`、`agena-web` |
+| `agena-runtime-provider` | `agena-domain`、`agena-failure`、`agena-plugin-host`、`agena-provider`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools` | — | — | `agena-runtime`、`agena-runtime-provider-adapters`、`agena-runtime-session` | `agena-domain`、`agena-failure`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-tools`、`agena-scheduler`、`agena-storage`、`agena-tool` |
+| `agena-runtime-provider-adapters` | `agena-domain`、`agena-failure`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-provider`、`agena-runtime-tools` | `agena-bundled-plugins` | — | `agena-runtime` | `agena-domain`、`agena-failure`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-provider`、`agena-runtime-tools`、`agena-scheduler`、`agena-storage`、`agena-tool` |
+| `agena-runtime-session` | `agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-storage`、`agena-storage-sqlite`、`agena-tool` | — | — | `agena-runtime` | `agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-google-auth`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-web` |
+| `agena-runtime-session-core` | `agena-domain`、`agena-failure`、`agena-provider`、`agena-runtime-contracts`、`agena-storage`、`agena-storage-sqlite` | — | — | `agena-runtime-session` | `agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-storage`、`agena-storage-sqlite`、`agena-tool` |
+| `agena-runtime-tools` | `agena-domain`、`agena-failure`、`agena-lsp`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-scheduler`、`agena-tool` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session` | `agena-domain`、`agena-failure`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime-contracts`、`agena-scheduler`、`agena-storage`、`agena-tool` |
+| `agena-scheduler` | `agena-failure` | — | — | `agena-application`、`agena-runtime`、`agena-runtime-session`、`agena-runtime-tools` | `agena-failure` |
+| `agena-skills` | `agena-failure` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins` | `agena-failure` |
+| `agena-storage` | `agena-domain` | — | — | `agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-memory-index`、`agena-runtime`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-storage-sqlite` | `agena-domain`、`agena-failure` |
+| `agena-storage-sqlite` | `agena-domain`、`agena-provider`、`agena-storage` | — | — | `agena-runtime`、`agena-runtime-session`、`agena-runtime-session-core` | `agena-domain`、`agena-failure`、`agena-provider`、`agena-storage` |
+| `agena-tool` | `agena-domain`、`agena-failure` | — | — | `agena-application`、`agena-bundled-plugins`、`agena-cli`、`agena-plugin-sdk`、`agena-runtime`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-session`、`agena-runtime-tools` | `agena-domain`、`agena-failure` |
+| `agena-tui` | `agena-failure`、`agena-tui-components` | — | — | `agena`、`agena-tui-app`、`agena-tui-backend`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | `agena-failure`、`agena-tui-components` |
+| `agena-tui-app` | `agena-api`、`agena-application`、`agena-domain`、`agena-failure`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | `agena-tui-media (features=test-support)` | — | `agena` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-provider-studio`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript`、`agena-web` |
+| `agena-tui-backend` | `agena-api`、`agena-application`、`agena-domain`、`agena-failure`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-runtime`、`agena-tui` | — | — | `agena`、`agena-tui-app`、`agena-tui-provider-studio` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-components`、`agena-web` |
 | `agena-tui-components` | — | — | — | `agena-tui`、`agena-tui-app`、`agena-tui-media`、`agena-tui-permission-studio`、`agena-tui-platform`、`agena-tui-plugin-workbench`、`agena-tui-session`、`agena-tui-settings`、`agena-tui-transcript` | — |
-| `agena-tui-media` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app`、`agena-tui-platform`、`agena-tui-transcript` | `agena-tui`、`agena-tui-components` |
-| `agena-tui-permission-studio` | `agena-domain`、`agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-domain`、`agena-tui`、`agena-tui-components` |
-| `agena-tui-platform` | `agena-tui`、`agena-tui-components`、`agena-tui-media` | — | — | `agena`、`agena-tui-app` | `agena-tui`、`agena-tui-components`、`agena-tui-media` |
-| `agena-tui-plugin-workbench` | `agena-application`、`agena-domain`、`agena-plugin-host`、`agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-components`、`agena-web` |
-| `agena-tui-provider-studio` | `agena-domain`、`agena-provider`、`agena-tui`、`agena-tui-backend` | — | — | `agena-tui-app` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-web` |
-| `agena-tui-session` | `agena-api`、`agena-domain`、`agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-api`、`agena-domain`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tui`、`agena-tui-components` |
-| `agena-tui-settings` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-tui`、`agena-tui-components` |
-| `agena-tui-transcript` | `agena-api`、`agena-domain`、`agena-plugin-sdk`、`agena-tui`、`agena-tui-components`、`agena-tui-media` | `agena-tui-media (features=test-support)` | — | `agena-tui-app` | `agena-api`、`agena-domain`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tui`、`agena-tui-components`、`agena-tui-media` |
-| `agena-web` | — | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins` | — |
+| `agena-tui-media` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app`、`agena-tui-platform`、`agena-tui-transcript` | `agena-failure`、`agena-tui`、`agena-tui-components` |
+| `agena-tui-permission-studio` | `agena-domain`、`agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-domain`、`agena-failure`、`agena-tui`、`agena-tui-components` |
+| `agena-tui-platform` | `agena-tui`、`agena-tui-components`、`agena-tui-media` | — | — | `agena`、`agena-tui-app` | `agena-failure`、`agena-tui`、`agena-tui-components`、`agena-tui-media` |
+| `agena-tui-plugin-workbench` | `agena-application`、`agena-domain`、`agena-plugin-host`、`agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-components`、`agena-web` |
+| `agena-tui-provider-studio` | `agena-domain`、`agena-provider`、`agena-tui`、`agena-tui-backend` | — | — | `agena-tui-app` | `agena-api`、`agena-application`、`agena-bundled-plugins`、`agena-domain`、`agena-failure`、`agena-keyring-store`、`agena-lsp`、`agena-macro-core`、`agena-macros`、`agena-mcp-client`、`agena-memory-index`、`agena-plugin-host`、`agena-plugin-sdk`、`agena-provider`、`agena-provider-bedrock-auth`、`agena-provider-bedrock-signing`、`agena-provider-bedrock-streaming`、`agena-provider-google-auth`、`agena-runtime`、`agena-runtime-config`、`agena-runtime-contracts`、`agena-runtime-plugins`、`agena-runtime-provider`、`agena-runtime-provider-adapters`、`agena-runtime-session`、`agena-runtime-session-core`、`agena-runtime-tools`、`agena-scheduler`、`agena-skills`、`agena-storage`、`agena-storage-sqlite`、`agena-tool`、`agena-tui`、`agena-tui-backend`、`agena-tui-components`、`agena-web` |
+| `agena-tui-session` | `agena-api`、`agena-domain`、`agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-api`、`agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool`、`agena-tui`、`agena-tui-components` |
+| `agena-tui-settings` | `agena-tui`、`agena-tui-components` | — | — | `agena-tui-app` | `agena-failure`、`agena-tui`、`agena-tui-components` |
+| `agena-tui-transcript` | `agena-api`、`agena-domain`、`agena-failure`、`agena-plugin-sdk`、`agena-tui`、`agena-tui-components`、`agena-tui-media` | `agena-tui-media (features=test-support)` | — | `agena-tui-app` | `agena-api`、`agena-domain`、`agena-failure`、`agena-macro-core`、`agena-macros`、`agena-plugin-sdk`、`agena-tool`、`agena-tui`、`agena-tui-components`、`agena-tui-media` |
+| `agena-web` | `agena-failure` | — | — | `agena-bundled-plugins`、`agena-runtime`、`agena-runtime-plugins` | `agena-failure` |
 
 ## 6. 外部 crate 声明与 lockfile 解析概况
 
-当前 metadata resolve graph 共 1079 个 package，其中第一方 57、外部/registry/git/path package 1022；有 97 个外部名称同时解析出多个版本。
+当前 metadata resolve graph 共 1080 个 package，其中第一方 58、外部/registry/git/path package 1022；有 97 个外部名称同时解析出多个版本。
 
 ### 6.1 每个第一方 package 的直接外部声明
 
@@ -1030,6 +1079,15 @@ flowchart LR
 <details><summary><code>agena-echo-plugin-stdio</code> — direct external dependencies</summary>
 
 - normal（5）：`async-trait`、`schemars`、`serde (features=derive+derive)`、`serde_json`、`tokio (features=rt-multi-thread+macros+io-std+io-util)`
+- dev（0）：—
+- build（0）：—
+- Cargo features（0）：—
+
+</details>
+
+<details><summary><code>agena-failure</code> — direct external dependencies</summary>
+
+- normal（3）：`serde (features=derive)`、`serde_json`、`uuid (features=v4+serde)`
 - dev（0）：—
 - build（0）：—
 - Cargo features（0）：—
@@ -1353,7 +1411,7 @@ flowchart LR
 
 <details><summary><code>agena-tui-backend</code> — direct external dependencies</summary>
 
-- normal（8）：`anyhow`、`base64`、`ignore`、`imagesize`、`mime_guess`、`serde (features=derive)`、`serde_json`、`tokio (features=sync)`
+- normal（9）：`anyhow`、`base64`、`ignore`、`imagesize`、`mime_guess`、`serde (features=derive)`、`serde_json`、`tokio (features=sync)`、`tracing`
 - dev（0）：—
 - build（0）：—
 - Cargo features（0）：—
@@ -1745,7 +1803,7 @@ crate::server::config::routes::settings::sanitize [apps/agena/src/server/config/
 
 ### 7.2 `agena-api::agena_api` (lib)
 
-入口 `crates/agena-api/src/lib.rs`；模块 27；声明边 26；引用边 34；源码观测 dependency roots 5。
+入口 `crates/agena-api/src/lib.rs`；模块 28；声明边 27；引用边 34；源码观测 dependency roots 6。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -1759,13 +1817,13 @@ crate::commands [crates/agena-api/src/commands.rs]
   references: crate::resource
   referenced-by-count: 1
 crate::error [crates/agena-api/src/error.rs]
-  declares: —
+  declares: crate::error::tests
   references: —
-  referenced-by-count: 2
+  referenced-by-count: 3
 crate::message_part [crates/agena-api/src/message_part.rs]
   declares: crate::message_part::tests
   references: crate::resource
-  referenced-by-count: 3
+  referenced-by-count: 2
 crate::notifications [crates/agena-api/src/notifications.rs]
   declares: —
   references: crate, crate::subscribe
@@ -1776,7 +1834,7 @@ crate::pagination [crates/agena-api/src/pagination.rs]
   referenced-by-count: 1
 crate::queries [crates/agena-api/src/queries.rs]
   declares: crate::queries::provider_discovery_contract_tests
-  references: crate, crate::message_part, crate::pagination, crate::resource
+  references: crate, crate::pagination, crate::resource
   referenced-by-count: 3
 crate::resource [crates/agena-api/src/resource.rs]
   declares: crate::resource::auth, crate::resource::configured_model_contract_tests, crate::resource::interaction, crate::resource::message_status_contract_tests, crate::resource::model_pricing_contract_tests, crate::resource::model_ref_contract_tests, crate::resource::permission_config_resource_contract_tests, crate::resource::plugin_ui_catalog_contract_tests, crate::resource::provider_model_resource_contract_tests, crate::resource::run_options_contract_tests, crate::resource::scheduled_job_status_tests
@@ -1793,6 +1851,10 @@ crate::subscribe [crates/agena-api/src/subscribe.rs]
 crate::ws [crates/agena-api/src/ws.rs]
   declares: —
   references: crate::commands, crate::error, crate::notifications, crate::queries, crate::subscribe
+  referenced-by-count: 0
+crate::error::tests [crates/agena-api/src/error.rs]
+  declares: —
+  references: crate::error
   referenced-by-count: 0
 crate::message_part::tests [crates/agena-api/src/message_part.rs]
   declares: —
@@ -1864,7 +1926,7 @@ crate::resource::interaction::user_input_reply_contract_tests [crates/agena-api/
 
 ### 7.3 `agena-api-server::agena_api_server` (lib)
 
-入口 `crates/agena-api-server/src/lib.rs`；模块 28；声明边 27；引用边 30；源码观测 dependency roots 17。
+入口 `crates/agena-api-server/src/lib.rs`；模块 28；声明边 27；引用边 30；源码观测 dependency roots 18。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -1874,9 +1936,9 @@ crate [crates/agena-api-server/src/lib.rs]
   references: crate::rest, crate::sse, crate::state, crate::ws
   referenced-by-count: 1
 crate::error [crates/agena-api-server/src/error.rs]
-  declares: —
+  declares: crate::error::tests
   references: —
-  referenced-by-count: 5
+  referenced-by-count: 6
 crate::ipc [crates/agena-api-server/src/ipc.rs]
   declares: crate::ipc::stub, crate::ipc::unix
   references: —
@@ -1886,9 +1948,9 @@ crate::jsonrpc [crates/agena-api-server/src/jsonrpc/mod.rs]
   references: —
   referenced-by-count: 0
 crate::rest [crates/agena-api-server/src/rest/mod.rs]
-  declares: crate::rest::auth, crate::rest::events, crate::rest::git, crate::rest::marketplace, crate::rest::memory, crate::rest::messages, crate::rest::model_catalog, crate::rest::permissions, crate::rest::plugins, crate::rest::providers, crate::rest::sessions, crate::rest::settings, crate::rest::usage_query_tests, crate::rest::workspaces
+  declares: crate::rest::auth, crate::rest::events, crate::rest::git, crate::rest::marketplace, crate::rest::memory, crate::rest::model_catalog, crate::rest::permissions, crate::rest::plugins, crate::rest::providers, crate::rest::sessions, crate::rest::settings, crate::rest::usage_query_tests, crate::rest::workspaces
   references: crate::error, crate::state
-  referenced-by-count: 15
+  referenced-by-count: 14
 crate::router_contract_tests [crates/agena-api-server/src/lib.rs]
   declares: —
   references: crate
@@ -1905,6 +1967,10 @@ crate::ws [crates/agena-api-server/src/ws.rs]
   declares: —
   references: crate::error, crate::state
   referenced-by-count: 1
+crate::error::tests [crates/agena-api-server/src/error.rs]
+  declares: —
+  references: crate::error
+  referenced-by-count: 0
 crate::ipc::stub [crates/agena-api-server/src/ipc.rs]
   declares: —
   references: crate::state
@@ -1938,10 +2004,6 @@ crate::rest::marketplace [crates/agena-api-server/src/rest/marketplace.rs]
   references: crate::rest
   referenced-by-count: 0
 crate::rest::memory [crates/agena-api-server/src/rest/memory.rs]
-  declares: —
-  references: crate::rest
-  referenced-by-count: 0
-crate::rest::messages [crates/agena-api-server/src/rest/messages.rs]
   declares: —
   references: crate::rest
   referenced-by-count: 0
@@ -1987,14 +2049,14 @@ crate::jsonrpc::protocol::method [crates/agena-api-server/src/jsonrpc/protocol.r
 
 ### 7.4 `agena-application::agena_application` (lib)
 
-入口 `crates/agena-application/src/lib.rs`；模块 39；声明边 38；引用边 58；源码观测 dependency roots 12。
+入口 `crates/agena-application/src/lib.rs`；模块 37；声明边 36；引用边 54；源码观测 dependency roots 13。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-application/src/lib.rs]
   declares: crate::application, crate::dispatch, crate::dto, crate::error, crate::event_projection, crate::pagination, crate::provider_queries, crate::service, crate::session
-  references: crate::application, crate::error, crate::provider_queries, crate::service
+  references: crate::application, crate::error, crate::provider_queries
   referenced-by-count: 6
 crate::application [crates/agena-application/src/application.rs]
   declares: —
@@ -2005,13 +2067,13 @@ crate::dispatch [crates/agena-application/src/dispatch/mod.rs]
   references: crate, crate::dto, crate::pagination, crate::service
   referenced-by-count: 2
 crate::dto [crates/agena-application/src/dto/mod.rs]
-  declares: crate::dto::access, crate::dto::auth, crate::dto::marketplace, crate::dto::memory, crate::dto::messages, crate::dto::model_catalog, crate::dto::plugins, crate::dto::providers, crate::dto::runtime, crate::dto::sessions, crate::dto::workspaces
+  declares: crate::dto::access, crate::dto::auth, crate::dto::marketplace, crate::dto::memory, crate::dto::model_catalog, crate::dto::plugins, crate::dto::providers, crate::dto::runtime, crate::dto::sessions, crate::dto::workspaces
   references: —
-  referenced-by-count: 17
+  referenced-by-count: 16
 crate::error [crates/agena-application/src/error.rs]
-  declares: —
+  declares: crate::error::tests
   references: —
-  referenced-by-count: 1
+  referenced-by-count: 2
 crate::event_projection [crates/agena-application/src/event_projection.rs]
   declares: crate::event_projection::tests
   references: —
@@ -2025,9 +2087,9 @@ crate::provider_queries [crates/agena-application/src/provider_queries.rs]
   references: crate
   referenced-by-count: 2
 crate::service [crates/agena-application/src/service/mod.rs]
-  declares: crate::service::execution, crate::service::git, crate::service::memory, crate::service::messages, crate::service::permissions, crate::service::sessions, crate::service::workspaces
+  declares: crate::service::execution, crate::service::git, crate::service::memory, crate::service::permissions, crate::service::sessions, crate::service::workspaces
   references: crate, crate::dto, crate::pagination
-  referenced-by-count: 10
+  referenced-by-count: 8
 crate::session [crates/agena-application/src/session.rs]
   declares: —
   references: crate, crate::service::sessions
@@ -2056,10 +2118,6 @@ crate::dto::memory [crates/agena-application/src/dto/memory.rs]
   declares: —
   references: crate::dto
   referenced-by-count: 0
-crate::dto::messages [crates/agena-application/src/dto/messages.rs]
-  declares: —
-  references: crate::dto
-  referenced-by-count: 0
 crate::dto::model_catalog [crates/agena-application/src/dto/model_catalog.rs]
   declares: —
   references: crate::dto
@@ -2084,6 +2142,10 @@ crate::dto::workspaces [crates/agena-application/src/dto/workspaces.rs]
   declares: —
   references: crate::dto
   referenced-by-count: 0
+crate::error::tests [crates/agena-application/src/error.rs]
+  declares: —
+  references: crate::error
+  referenced-by-count: 0
 crate::event_projection::tests [crates/agena-application/src/event_projection.rs]
   declares: —
   references: crate::event_projection
@@ -2095,7 +2157,7 @@ crate::pagination::tests [crates/agena-application/src/pagination.rs]
 crate::service::execution [crates/agena-application/src/service/execution.rs]
   declares: —
   references: crate::service, crate::service::sessions
-  referenced-by-count: 1
+  referenced-by-count: 0
 crate::service::git [crates/agena-application/src/service/git.rs]
   declares: crate::service::git::tests
   references: crate::service
@@ -2103,10 +2165,6 @@ crate::service::git [crates/agena-application/src/service/git.rs]
 crate::service::memory [crates/agena-application/src/service/memory.rs]
   declares: crate::service::memory::tests
   references: crate::service
-  referenced-by-count: 1
-crate::service::messages [crates/agena-application/src/service/messages.rs]
-  declares: crate::service::messages::tests
-  references: crate::service, crate::service::execution
   referenced-by-count: 1
 crate::service::permissions [crates/agena-application/src/service/permissions.rs]
   declares: crate::service::permissions::tests
@@ -2131,10 +2189,6 @@ crate::service::git::tests [crates/agena-application/src/service/git.rs]
 crate::service::memory::tests [crates/agena-application/src/service/memory.rs]
   declares: —
   references: crate::service::memory
-  referenced-by-count: 0
-crate::service::messages::tests [crates/agena-application/src/service/messages.rs]
-  declares: —
-  references: crate::service::messages
   referenced-by-count: 0
 crate::service::permissions::tests [crates/agena-application/src/service/permissions.rs]
   declares: —
@@ -2475,7 +2529,7 @@ crate::cli::cli_run::tests [crates/agena-cli/src/cli/cli_run.rs]
 
 ### 7.8 `agena-client::agena_client` (lib)
 
-入口 `crates/agena-client/src/lib.rs`；模块 7；声明边 6；引用边 9；源码观测 dependency roots 4。
+入口 `crates/agena-client/src/lib.rs`；模块 8；声明边 7；引用边 10；源码观测 dependency roots 4。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -2485,9 +2539,9 @@ crate [crates/agena-client/src/lib.rs]
   references: crate::error, crate::http, crate::ws
   referenced-by-count: 1
 crate::error [crates/agena-client/src/error.rs]
-  declares: —
+  declares: crate::error::tests
   references: —
-  referenced-by-count: 3
+  referenced-by-count: 4
 crate::http [crates/agena-client/src/http.rs]
   declares: crate::http::sse_contract_tests
   references: crate::error, crate::ws
@@ -2500,6 +2554,10 @@ crate::ws [crates/agena-client/src/ws.rs]
   declares: crate::ws::tests
   references: crate::error
   referenced-by-count: 3
+crate::error::tests [crates/agena-client/src/error.rs]
+  declares: —
+  references: crate::error
+  referenced-by-count: 0
 crate::http::sse_contract_tests [crates/agena-client/src/http.rs]
   declares: —
   references: crate, crate::http
@@ -2514,15 +2572,15 @@ crate::ws::tests [crates/agena-client/src/ws.rs]
 
 ### 7.9 `agena-domain::agena_domain` (lib)
 
-入口 `crates/agena-domain/src/lib.rs`；模块 113；声明边 112；引用边 149；源码观测 dependency roots 9。
+入口 `crates/agena-domain/src/lib.rs`；模块 115；声明边 114；引用边 152；源码观测 dependency roots 9。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-domain/src/lib.rs]
-  declares: crate::access, crate::activity, crate::auto_compaction, crate::command_events, crate::context_policy, crate::doom_loop, crate::event, crate::execution, crate::execution_access, crate::execution_events, crate::execution_lifecycle, crate::execution_selection, crate::execution_status, crate::finish_reason, crate::ids, crate::interaction_notification, crate::json_path, crate::message_activity, crate::message_activity_values, crate::message_source, crate::model, crate::model_capabilities, crate::model_catalog_values, crate::model_metadata, crate::model_request_override, crate::model_selection, crate::model_values, crate::network_permission, crate::network_target, crate::operation_error, crate::part_kind, crate::path_access, crate::path_permission, crate::pending_interactive_request, crate::permission, crate::permission_config, crate::permission_events, crate::permission_interaction, crate::permission_request, crate::permission_resolution, crate::plugin_invocation, crate::process_values, crate::prompt_compaction, crate::prompt_tokens, crate::reasoning, crate::role, crate::session_cache, crate::session_cost, crate::session_state, crate::session_summary, crate::session_usage, crate::stream_error, crate::structured, crate::thinking, crate::time_range, crate::tool_api, crate::tool_effects, crate::tool_invocation, crate::tool_output, crate::tool_permission, crate::tool_permission_config, crate::tool_result, crate::usage_period, crate::usage_query, crate::usage_stats, crate::user_input
-  references: crate::access, crate::activity, crate::auto_compaction, crate::command_events, crate::context_policy, crate::doom_loop, crate::event, crate::execution, crate::execution_access, crate::execution_events, crate::execution_lifecycle, crate::execution_selection, crate::execution_status, crate::finish_reason, crate::ids, crate::interaction_notification, crate::json_path, crate::message_activity, crate::message_activity_values, crate::message_source, crate::model, crate::model_capabilities, crate::model_catalog_values, crate::model_metadata, crate::model_request_override, crate::model_selection, crate::model_values, crate::network_permission, crate::network_target, crate::operation_error, crate::part_kind, crate::path_access, crate::path_permission, crate::pending_interactive_request, crate::permission, crate::permission_config, crate::permission_events, crate::permission_interaction, crate::permission_request, crate::permission_resolution, crate::plugin_invocation, crate::process_values, crate::prompt_compaction, crate::prompt_tokens, crate::reasoning, crate::role, crate::session_cache, crate::session_cost, crate::session_state, crate::session_summary, crate::session_usage, crate::stream_error, crate::structured, crate::thinking, crate::time_range, crate::tool_api, crate::tool_effects, crate::tool_invocation, crate::tool_output, crate::tool_permission, crate::tool_permission_config, crate::tool_result, crate::usage_period, crate::usage_query, crate::usage_stats, crate::user_input
-  referenced-by-count: 37
+  declares: crate::access, crate::activity, crate::auto_compaction, crate::availability_outcome, crate::command_events, crate::context_policy, crate::doom_loop, crate::event, crate::execution, crate::execution_access, crate::execution_events, crate::execution_lifecycle, crate::execution_selection, crate::execution_status, crate::finish_reason, crate::ids, crate::interaction_notification, crate::json_path, crate::message_activity, crate::message_activity_values, crate::message_source, crate::model, crate::model_capabilities, crate::model_catalog_values, crate::model_metadata, crate::model_request_override, crate::model_selection, crate::model_values, crate::network_permission, crate::network_target, crate::operation_error, crate::part_kind, crate::path_access, crate::path_permission, crate::pending_interactive_request, crate::permission, crate::permission_config, crate::permission_events, crate::permission_interaction, crate::permission_outcome, crate::permission_request, crate::permission_resolution, crate::plugin_invocation, crate::process_values, crate::prompt_compaction, crate::prompt_tokens, crate::reasoning, crate::role, crate::session_cache, crate::session_cost, crate::session_state, crate::session_summary, crate::session_usage, crate::stream_error, crate::structured, crate::thinking, crate::time_range, crate::tool_api, crate::tool_effects, crate::tool_invocation, crate::tool_output, crate::tool_permission, crate::tool_permission_config, crate::tool_result, crate::usage_period, crate::usage_query, crate::usage_stats, crate::user_input
+  references: crate::access, crate::activity, crate::auto_compaction, crate::availability_outcome, crate::command_events, crate::context_policy, crate::doom_loop, crate::event, crate::execution, crate::execution_access, crate::execution_events, crate::execution_lifecycle, crate::execution_selection, crate::execution_status, crate::finish_reason, crate::ids, crate::interaction_notification, crate::json_path, crate::message_activity, crate::message_activity_values, crate::message_source, crate::model, crate::model_capabilities, crate::model_catalog_values, crate::model_metadata, crate::model_request_override, crate::model_selection, crate::model_values, crate::network_permission, crate::network_target, crate::operation_error, crate::part_kind, crate::path_access, crate::path_permission, crate::pending_interactive_request, crate::permission, crate::permission_config, crate::permission_events, crate::permission_interaction, crate::permission_outcome, crate::permission_request, crate::permission_resolution, crate::plugin_invocation, crate::process_values, crate::prompt_compaction, crate::prompt_tokens, crate::reasoning, crate::role, crate::session_cache, crate::session_cost, crate::session_state, crate::session_summary, crate::session_usage, crate::stream_error, crate::structured, crate::thinking, crate::time_range, crate::tool_api, crate::tool_effects, crate::tool_invocation, crate::tool_output, crate::tool_permission, crate::tool_permission_config, crate::tool_result, crate::usage_period, crate::usage_query, crate::usage_stats, crate::user_input
+  referenced-by-count: 38
 crate::access [crates/agena-domain/src/access.rs]
   declares: crate::access::tests
   references: —
@@ -2532,6 +2590,10 @@ crate::activity [crates/agena-domain/src/activity.rs]
   references: crate
   referenced-by-count: 2
 crate::auto_compaction [crates/agena-domain/src/auto_compaction.rs]
+  declares: —
+  references: —
+  referenced-by-count: 1
+crate::availability_outcome [crates/agena-domain/src/availability_outcome.rs]
   declares: —
   references: —
   referenced-by-count: 1
@@ -2675,6 +2737,10 @@ crate::permission_interaction [crates/agena-domain/src/permission_interaction.rs
   declares: crate::permission_interaction::tests
   references: crate
   referenced-by-count: 2
+crate::permission_outcome [crates/agena-domain/src/permission_outcome.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 1
 crate::permission_request [crates/agena-domain/src/permission_request.rs]
   declares: crate::permission_request::tests
   references: crate
@@ -3094,7 +3160,30 @@ crate [examples/echo_plugin_stdio/src/main.rs]
 
 </details>
 
-### 7.15 `agena-git-http::agena_git_http` (lib)
+### 7.15 `agena-failure::agena_failure` (lib)
+
+入口 `crates/agena-failure/src/lib.rs`；模块 3；声明边 2；引用边 2；源码观测 dependency roots 2。
+
+<details><summary>完整模块邻接表</summary>
+
+```text
+crate [crates/agena-failure/src/lib.rs]
+  declares: crate::code, crate::tests
+  references: —
+  referenced-by-count: 2
+crate::code [crates/agena-failure/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
+crate::tests [crates/agena-failure/src/lib.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
+```
+
+</details>
+
+### 7.16 `agena-git-http::agena_git_http` (lib)
 
 入口 `crates/agena-git-http/src/lib.rs`；模块 35；声明边 34；引用边 49；源码观测 dependency roots 8。
 
@@ -3245,7 +3334,7 @@ crate::git::ops::stash [crates/agena-git-http/src/git/ops/stash.rs]
 
 </details>
 
-### 7.16 `agena-keyring-store::agena_keyring_store` (lib)
+### 7.17 `agena-keyring-store::agena_keyring_store` (lib)
 
 入口 `crates/agena-keyring-store/src/lib.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 1。
 
@@ -3260,7 +3349,7 @@ crate [crates/agena-keyring-store/src/lib.rs]
 
 </details>
 
-### 7.17 `agena-lsp::agena_lsp` (lib)
+### 7.18 `agena-lsp::agena_lsp` (lib)
 
 入口 `crates/agena-lsp/src/lib.rs`；模块 10；声明边 9；引用边 23；源码观测 dependency roots 7。
 
@@ -3311,7 +3400,7 @@ crate::transport::stdio [crates/agena-lsp/src/transport/stdio.rs]
 
 </details>
 
-### 7.18 `agena-macro-core::agena_macro_core` (lib)
+### 7.19 `agena-macro-core::agena_macro_core` (lib)
 
 入口 `crates/agena-macro-core/src/lib.rs`；模块 35；声明边 34；引用边 86；源码观测 dependency roots 2。
 
@@ -3462,7 +3551,7 @@ crate::tool_spec_support [crates/agena-macro-core/src/tool_spec_support.rs]
 
 </details>
 
-### 7.19 `agena-macros::agena_macros` (proc-macro)
+### 7.20 `agena-macros::agena_macros` (proc-macro)
 
 入口 `crates/agena-macros/src/lib.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 2。
 
@@ -3477,7 +3566,7 @@ crate [crates/agena-macros/src/lib.rs]
 
 </details>
 
-### 7.20 `agena-marketplace-server::agena_marketplace_server` (lib)
+### 7.21 `agena-marketplace-server::agena_marketplace_server` (lib)
 
 入口 `crates/agena-marketplace-server/src/lib.rs`；模块 2；声明边 1；引用边 1；源码观测 dependency roots 2。
 
@@ -3496,9 +3585,9 @@ crate::server [crates/agena-marketplace-server/src/server.rs]
 
 </details>
 
-### 7.21 `agena-mcp-client::agena_mcp_client` (lib)
+### 7.22 `agena-mcp-client::agena_mcp_client` (lib)
 
-入口 `crates/agena-mcp-client/src/lib.rs`；模块 8；声明边 7；引用边 12；源码观测 dependency roots 12。
+入口 `crates/agena-mcp-client/src/lib.rs`；模块 8；声明边 7；引用边 12；源码观测 dependency roots 13。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -3539,7 +3628,7 @@ crate::token_store::tests [crates/agena-mcp-client/src/token_store.rs]
 
 </details>
 
-### 7.22 `agena-mcp-server::agena_mcp_server` (lib)
+### 7.23 `agena-mcp-server::agena_mcp_server` (lib)
 
 入口 `crates/agena-mcp-server/src/lib.rs`；模块 2；声明边 1；引用边 1；源码观测 dependency roots 3。
 
@@ -3558,7 +3647,7 @@ crate::tests [crates/agena-mcp-server/src/lib.rs]
 
 </details>
 
-### 7.23 `agena-memory-index::agena_memory_index` (lib)
+### 7.24 `agena-memory-index::agena_memory_index` (lib)
 
 入口 `crates/agena-memory-index/src/lib.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 3。
 
@@ -3573,7 +3662,7 @@ crate [crates/agena-memory-index/src/lib.rs]
 
 </details>
 
-### 7.24 `agena-multi-tool-plugin-stdio::agena-multi-tool-plugin-stdio` (bin)
+### 7.25 `agena-multi-tool-plugin-stdio::agena-multi-tool-plugin-stdio` (bin)
 
 入口 `examples/multi_tool_plugin_stdio/src/main.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 1。
 
@@ -3588,9 +3677,9 @@ crate [examples/multi_tool_plugin_stdio/src/main.rs]
 
 </details>
 
-### 7.25 `agena-plugin-host::agena_plugin_host` (lib)
+### 7.26 `agena-plugin-host::agena_plugin_host` (lib)
 
-入口 `crates/agena-plugin-host/src/lib.rs`；模块 26；声明边 25；引用边 83；源码观测 dependency roots 16。
+入口 `crates/agena-plugin-host/src/lib.rs`；模块 27；声明边 26；引用边 85；源码观测 dependency roots 16。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -3598,7 +3687,7 @@ crate [examples/multi_tool_plugin_stdio/src/main.rs]
 crate [crates/agena-plugin-host/src/lib.rs]
   declares: crate::config, crate::dispatcher, crate::error, crate::host, crate::loader, crate::logs, crate::manifest_io, crate::quota, crate::registry, crate::status, crate::transport
   references: crate::config, crate::error, crate::host, crate::loader, crate::logs, crate::registry
-  referenced-by-count: 21
+  referenced-by-count: 22
 crate::config [crates/agena-plugin-host/src/config.rs]
   declares: crate::config::presentation_tests
   references: crate, crate::quota
@@ -3636,9 +3725,9 @@ crate::registry [crates/agena-plugin-host/src/registry.rs]
   references: crate
   referenced-by-count: 6
 crate::status [crates/agena-plugin-host/src/status.rs]
-  declares: —
+  declares: crate::status::tests
   references: crate
-  referenced-by-count: 6
+  referenced-by-count: 7
 crate::transport [crates/agena-plugin-host/src/transport/mod.rs]
   declares: crate::transport::cdylib, crate::transport::http, crate::transport::inproc, crate::transport::stdio, crate::transport::wasm
   references: crate, crate::error
@@ -3679,6 +3768,10 @@ crate::registry::tests [crates/agena-plugin-host/src/registry.rs]
   declares: —
   references: crate, crate::registry
   referenced-by-count: 0
+crate::status::tests [crates/agena-plugin-host/src/status.rs]
+  declares: —
+  references: crate, crate::status
+  referenced-by-count: 0
 crate::transport::cdylib [crates/agena-plugin-host/src/transport/cdylib.rs]
   declares: —
   references: crate, crate::error, crate::transport
@@ -3703,7 +3796,7 @@ crate::transport::wasm [crates/agena-plugin-host/src/transport/wasm.rs]
 
 </details>
 
-### 7.26 `agena-plugin-marketplace::agena_plugin_marketplace` (lib)
+### 7.27 `agena-plugin-marketplace::agena_plugin_marketplace` (lib)
 
 入口 `crates/agena-plugin-marketplace/src/lib.rs`；模块 5；声明边 4；引用边 10；源码观测 dependency roots 5。
 
@@ -3734,9 +3827,9 @@ crate::manifest [crates/agena-plugin-marketplace/src/manifest.rs]
 
 </details>
 
-### 7.27 `agena-plugin-sdk::agena_plugin_sdk` (lib)
+### 7.28 `agena-plugin-sdk::agena_plugin_sdk` (lib)
 
-入口 `crates/agena-plugin-sdk/src/lib.rs`；模块 42；声明边 41；引用边 76；源码观测 dependency roots 9。
+入口 `crates/agena-plugin-sdk/src/lib.rs`；模块 44；声明边 43；引用边 80；源码观测 dependency roots 11。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -3744,7 +3837,7 @@ crate::manifest [crates/agena-plugin-marketplace/src/manifest.rs]
 crate [crates/agena-plugin-sdk/src/lib.rs]
   declares: crate::attachment, crate::cdylib_abi, crate::drivers, crate::error, crate::hooks, crate::host_api, crate::identity, crate::macro_support, crate::manifest, crate::manifest_support, crate::plugin, crate::prelude, crate::rpc
   references: crate::attachment, crate::error, crate::hooks, crate::host_api, crate::identity, crate::macro_support, crate::manifest, crate::plugin
-  referenced-by-count: 8
+  referenced-by-count: 9
 crate::attachment [crates/agena-plugin-sdk/src/attachment.rs]
   declares: —
   references: —
@@ -3758,9 +3851,9 @@ crate::drivers [crates/agena-plugin-sdk/src/drivers/mod.rs]
   references: —
   referenced-by-count: 0
 crate::error [crates/agena-plugin-sdk/src/error.rs]
-  declares: —
+  declares: crate::error::tests
   references: —
-  referenced-by-count: 9
+  referenced-by-count: 10
 crate::hooks [crates/agena-plugin-sdk/src/hooks/mod.rs]
   declares: crate::hooks::agent, crate::hooks::auth, crate::hooks::chat, crate::hooks::command, crate::hooks::config, crate::hooks::event, crate::hooks::notification, crate::hooks::permission, crate::hooks::prompt, crate::hooks::provider, crate::hooks::session, crate::hooks::shell, crate::hooks::tool
   references: crate
@@ -3810,8 +3903,12 @@ crate::drivers::http [crates/agena-plugin-sdk/src/drivers/http.rs]
   references: crate::drivers::dispatch, crate::error, crate::hooks, crate::host_api, crate::plugin, crate::rpc, crate::rpc::codes, crate::rpc::method
   referenced-by-count: 0
 crate::drivers::stdio [crates/agena-plugin-sdk/src/drivers/stdio.rs]
-  declares: —
+  declares: crate::drivers::stdio::authorization_error_code_tests
   references: crate::drivers::dispatch, crate::error, crate::hooks, crate::host_api, crate::plugin, crate::rpc, crate::rpc::codes, crate::rpc::method
+  referenced-by-count: 1
+crate::error::tests [crates/agena-plugin-sdk/src/error.rs]
+  declares: —
+  references: crate::error
   referenced-by-count: 0
 crate::hooks::agent [crates/agena-plugin-sdk/src/hooks/agent.rs]
   declares: —
@@ -3896,11 +3993,15 @@ crate::manifest::tests [crates/agena-plugin-sdk/src/manifest.rs]
 crate::rpc::codes [crates/agena-plugin-sdk/src/rpc.rs]
   declares: —
   references: —
-  referenced-by-count: 2
+  referenced-by-count: 3
 crate::rpc::method [crates/agena-plugin-sdk/src/rpc.rs]
   declares: —
   references: —
   referenced-by-count: 3
+crate::drivers::stdio::authorization_error_code_tests [crates/agena-plugin-sdk/src/drivers/stdio.rs]
+  declares: —
+  references: crate, crate::drivers::stdio, crate::rpc::codes
+  referenced-by-count: 0
 crate::hooks::command::tests [crates/agena-plugin-sdk/src/hooks/command.rs]
   declares: —
   references: crate::hooks::command
@@ -3913,7 +4014,7 @@ crate::macro_support::schema_examples::tests [crates/agena-plugin-sdk/src/macro_
 
 </details>
 
-### 7.28 `agena-plugin-sdk::plugin_macro_manifest` (test)
+### 7.29 `agena-plugin-sdk::plugin_macro_manifest` (test)
 
 入口 `crates/agena-plugin-sdk/tests/plugin_macro_manifest.rs`；模块 8；声明边 7；引用边 8；源码观测 dependency roots 0。
 
@@ -3956,7 +4057,7 @@ crate::plugin_macro_manifest_shapes_b [crates/agena-plugin-sdk/tests/plugin_macr
 
 </details>
 
-### 7.29 `agena-plugin-sdk::ui` (test)
+### 7.30 `agena-plugin-sdk::ui` (test)
 
 入口 `crates/agena-plugin-sdk/tests/ui.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 0。
 
@@ -3971,7 +4072,7 @@ crate [crates/agena-plugin-sdk/tests/ui.rs]
 
 </details>
 
-### 7.30 `agena-provider::agena_provider` (lib)
+### 7.31 `agena-provider::agena_provider` (lib)
 
 入口 `crates/agena-provider/src/lib.rs`；模块 81；声明边 80；引用边 123；源码观测 dependency roots 8。
 
@@ -4306,7 +4407,7 @@ crate::tool_stream::tests [crates/agena-provider/src/tool_stream.rs]
 
 </details>
 
-### 7.31 `agena-provider-bedrock-auth::agena_provider_bedrock_auth` (lib)
+### 7.32 `agena-provider-bedrock-auth::agena_provider_bedrock_auth` (lib)
 
 入口 `crates/agena-provider-bedrock-auth/src/lib.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 2。
 
@@ -4321,7 +4422,7 @@ crate [crates/agena-provider-bedrock-auth/src/lib.rs]
 
 </details>
 
-### 7.32 `agena-provider-bedrock-signing::agena_provider_bedrock_signing` (lib)
+### 7.33 `agena-provider-bedrock-signing::agena_provider_bedrock_signing` (lib)
 
 入口 `crates/agena-provider-bedrock-signing/src/lib.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 2。
 
@@ -4336,7 +4437,7 @@ crate [crates/agena-provider-bedrock-signing/src/lib.rs]
 
 </details>
 
-### 7.33 `agena-provider-bedrock-streaming::agena_provider_bedrock_streaming` (lib)
+### 7.34 `agena-provider-bedrock-streaming::agena_provider_bedrock_streaming` (lib)
 
 入口 `crates/agena-provider-bedrock-streaming/src/lib.rs`；模块 2；声明边 1；引用边 1；源码观测 dependency roots 9。
 
@@ -4355,7 +4456,7 @@ crate::tests [crates/agena-provider-bedrock-streaming/src/lib.rs]
 
 </details>
 
-### 7.34 `agena-provider-google-auth::agena_provider_google_auth` (lib)
+### 7.35 `agena-provider-google-auth::agena_provider_google_auth` (lib)
 
 入口 `crates/agena-provider-google-auth/src/lib.rs`；模块 1；声明边 0；引用边 0；源码观测 dependency roots 0。
 
@@ -4370,7 +4471,7 @@ crate [crates/agena-provider-google-auth/src/lib.rs]
 
 </details>
 
-### 7.35 `agena-rollout::agena_rollout` (lib)
+### 7.36 `agena-rollout::agena_rollout` (lib)
 
 入口 `crates/agena-rollout/src/lib.rs`；模块 6；声明边 5；引用边 12；源码观测 dependency roots 6。
 
@@ -4405,17 +4506,17 @@ crate::share [crates/agena-rollout/src/share.rs]
 
 </details>
 
-### 7.36 `agena-runtime::agena_runtime` (lib)
+### 7.37 `agena-runtime::agena_runtime` (lib)
 
-入口 `crates/agena-runtime/src/lib.rs`；模块 90；声明边 89；引用边 139；源码观测 dependency roots 35。
+入口 `crates/agena-runtime/src/lib.rs`；模块 88；声明边 87；引用边 137；源码观测 dependency roots 35。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-runtime/src/lib.rs]
-  declares: crate::application_services, crate::background_task, crate::background_task_completion, crate::background_task_registry, crate::background_task_spec, crate::background_task_state, crate::bootstrap_error, crate::bootstrap_request, crate::bootstrap_result, crate::composition, crate::config, crate::connect, crate::control_state, crate::invocation_guard, crate::lsp_config, crate::mcp_runtime, crate::model_catalog, crate::model_catalog_cache, crate::model_catalog_composition, crate::model_catalog_curation, crate::model_catalog_http, crate::model_catalog_live, crate::model_catalog_runtime_service, crate::model_catalog_service, crate::model_catalog_source, crate::oauth_callback, crate::optional, crate::output_format, crate::periodic, crate::permission_runtime, crate::permission_store, crate::plugin_composition, crate::plugins, crate::policy, crate::process_state, crate::provider_composition, crate::refresh, crate::refresh_policy, crate::registration, crate::reload, crate::reload_gate, crate::reload_watch, crate::runtime, crate::runtime_authentication_service, crate::runtime_composition_config, crate::runtime_control_service, crate::runtime_draft_authentication_service, crate::runtime_status_service, crate::runtime_tool_execution_service, crate::scheduler_composition, crate::services, crate::snapshot, crate::snapshot_state, crate::staleness, crate::store, crate::task_state, crate::tests, crate::tool, crate::tracing_config, crate::watch, crate::watch_paths
-  references: crate::application_services, crate::background_task, crate::background_task_completion, crate::background_task_registry, crate::background_task_spec, crate::background_task_state, crate::bootstrap_error, crate::bootstrap_request, crate::bootstrap_result, crate::composition, crate::connect, crate::control_state, crate::invocation_guard, crate::lsp_config, crate::mcp_runtime, crate::model_catalog_cache, crate::model_catalog_composition, crate::model_catalog_curation, crate::model_catalog_http, crate::model_catalog_live, crate::model_catalog_runtime_service, crate::model_catalog_service, crate::model_catalog_source, crate::oauth_callback, crate::output_format, crate::periodic, crate::permission_runtime, crate::permission_store, crate::plugin_composition, crate::policy, crate::process_state, crate::provider_composition, crate::refresh, crate::refresh_policy, crate::registration, crate::reload, crate::reload_gate, crate::reload_watch, crate::runtime, crate::runtime_authentication_service, crate::runtime_composition_config, crate::runtime_control_service, crate::runtime_draft_authentication_service, crate::runtime_status_service, crate::runtime_tool_execution_service, crate::scheduler_composition, crate::services, crate::snapshot, crate::snapshot_state, crate::staleness, crate::store, crate::task_state, crate::tracing_config, crate::watch, crate::watch_paths
-  referenced-by-count: 43
+  declares: crate::application_services, crate::background_task, crate::background_task_completion, crate::background_task_registry, crate::background_task_spec, crate::background_task_state, crate::bootstrap_error, crate::bootstrap_request, crate::bootstrap_result, crate::composition, crate::config, crate::connect, crate::control_state, crate::invocation_guard, crate::lsp_config, crate::mcp_runtime, crate::model_catalog, crate::model_catalog_cache, crate::model_catalog_composition, crate::model_catalog_curation, crate::model_catalog_http, crate::model_catalog_live, crate::model_catalog_runtime_service, crate::model_catalog_service, crate::model_catalog_source, crate::oauth_callback, crate::optional, crate::output_format, crate::periodic, crate::plugin_composition, crate::plugins, crate::policy, crate::process_state, crate::provider_composition, crate::refresh, crate::refresh_policy, crate::registration, crate::reload, crate::reload_gate, crate::reload_watch, crate::runtime, crate::runtime_authentication_service, crate::runtime_composition_config, crate::runtime_control_service, crate::runtime_draft_authentication_service, crate::runtime_status_service, crate::runtime_tool_execution_service, crate::scheduler_composition, crate::services, crate::snapshot, crate::snapshot_state, crate::staleness, crate::store, crate::task_state, crate::tests, crate::tool, crate::tracing_config, crate::watch, crate::watch_paths
+  references: crate::application_services, crate::background_task, crate::background_task_completion, crate::background_task_registry, crate::background_task_spec, crate::background_task_state, crate::bootstrap_error, crate::bootstrap_request, crate::bootstrap_result, crate::composition, crate::connect, crate::control_state, crate::invocation_guard, crate::lsp_config, crate::mcp_runtime, crate::model_catalog_cache, crate::model_catalog_composition, crate::model_catalog_curation, crate::model_catalog_http, crate::model_catalog_live, crate::model_catalog_runtime_service, crate::model_catalog_service, crate::model_catalog_source, crate::oauth_callback, crate::output_format, crate::periodic, crate::plugin_composition, crate::policy, crate::process_state, crate::provider_composition, crate::refresh, crate::refresh_policy, crate::registration, crate::reload, crate::reload_gate, crate::reload_watch, crate::runtime, crate::runtime_authentication_service, crate::runtime_composition_config, crate::runtime_control_service, crate::runtime_draft_authentication_service, crate::runtime_status_service, crate::runtime_tool_execution_service, crate::scheduler_composition, crate::services, crate::snapshot, crate::snapshot_state, crate::staleness, crate::store, crate::task_state, crate::tracing_config, crate::watch, crate::watch_paths
+  referenced-by-count: 44
 crate::application_services [crates/agena-runtime/src/application_services.rs]
   declares: —
   references: crate
@@ -4532,14 +4633,6 @@ crate::periodic [crates/agena-runtime/src/periodic.rs]
   declares: —
   references: crate
   referenced-by-count: 1
-crate::permission_runtime [crates/agena-runtime/src/permission_runtime.rs]
-  declares: —
-  references: crate::permission_store
-  referenced-by-count: 1
-crate::permission_store [crates/agena-runtime/src/permission_store.rs]
-  declares: —
-  references: —
-  referenced-by-count: 2
 crate::plugin_composition [crates/agena-runtime/src/plugin_composition.rs]
   declares: —
   references: crate
@@ -4610,7 +4703,7 @@ crate::runtime_status_service [crates/agena-runtime/src/runtime_status_service.r
   referenced-by-count: 1
 crate::runtime_tool_execution_service [crates/agena-runtime/src/runtime_tool_execution_service.rs]
   declares: —
-  references: —
+  references: crate
   referenced-by-count: 1
 crate::scheduler_composition [crates/agena-runtime/src/scheduler_composition.rs]
   declares: —
@@ -4776,9 +4869,9 @@ crate::runtime::host_client::image::tests [crates/agena-runtime/src/runtime/host
 
 </details>
 
-### 7.37 `agena-runtime-config::agena_runtime_config` (lib)
+### 7.38 `agena-runtime-config::agena_runtime_config` (lib)
 
-入口 `crates/agena-runtime-config/src/lib.rs`；模块 27；声明边 26；引用边 43；源码观测 dependency roots 9。
+入口 `crates/agena-runtime-config/src/lib.rs`；模块 27；声明边 26；引用边 44；源码观测 dependency roots 9。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -4786,7 +4879,7 @@ crate::runtime::host_client::image::tests [crates/agena-runtime/src/runtime/host
 crate [crates/agena-runtime-config/src/lib.rs]
   declares: crate::config, crate::config_environment, crate::config_error, crate::config_override, crate::config_paths, crate::config_values, crate::lsp_config, crate::mcp_config, crate::runtime_config_settings_service, crate::runtime_configuration_service
   references: crate::config, crate::config_environment, crate::config_error, crate::config_override, crate::config_paths, crate::config_values, crate::lsp_config, crate::mcp_config, crate::runtime_config_settings_service, crate::runtime_configuration_service
-  referenced-by-count: 11
+  referenced-by-count: 12
 crate::config [crates/agena-runtime-config/src/config/mod.rs]
   declares: crate::config::edit, crate::config::loader, crate::config::overrides, crate::config::raw
   references: —
@@ -4845,7 +4938,7 @@ crate::config::raw [crates/agena-runtime-config/src/config/raw.rs]
   referenced-by-count: 4
 crate::config_error::tests [crates/agena-runtime-config/src/config_error.rs]
   declares: —
-  references: crate::config_error
+  references: crate, crate::config_error
   referenced-by-count: 0
 crate::config_override::tests [crates/agena-runtime-config/src/config_override.rs]
   declares: —
@@ -4895,9 +4988,9 @@ crate::config::raw::raw_provider [crates/agena-runtime-config/src/config/raw/raw
 
 </details>
 
-### 7.38 `agena-runtime-contracts::agena_runtime_contracts` (lib)
+### 7.39 `agena-runtime-contracts::agena_runtime_contracts` (lib)
 
-入口 `crates/agena-runtime-contracts/src/lib.rs`；模块 22；声明边 21；引用边 15；源码观测 dependency roots 13。
+入口 `crates/agena-runtime-contracts/src/lib.rs`；模块 23；声明边 22；引用边 17；源码观测 dependency roots 13。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -4905,7 +4998,7 @@ crate::config::raw::raw_provider [crates/agena-runtime-config/src/config/raw/raw
 crate [crates/agena-runtime-contracts/src/lib.rs]
   declares: crate::authorization, crate::identity, crate::message, crate::permission
   references: crate::authorization, crate::message
-  referenced-by-count: 0
+  referenced-by-count: 1
 crate::authorization [crates/agena-runtime-contracts/src/authorization/mod.rs]
   declares: crate::authorization::permission_ceiling_tests
   references: crate::permission
@@ -4975,9 +5068,9 @@ crate::message::part::interaction [crates/agena-runtime-contracts/src/message/pa
   references: —
   referenced-by-count: 0
 crate::message::part::message_part [crates/agena-runtime-contracts/src/message/part/message_part.rs]
-  declares: —
+  declares: crate::message::part::message_part::tests
   references: crate::message::part
-  referenced-by-count: 0
+  referenced-by-count: 1
 crate::message::part::skill_reference [crates/agena-runtime-contracts/src/message/part/skill_reference.rs]
   declares: crate::message::part::skill_reference::tests
   references: —
@@ -4985,6 +5078,10 @@ crate::message::part::skill_reference [crates/agena-runtime-contracts/src/messag
 crate::message::part::tool [crates/agena-runtime-contracts/src/message/part/tool.rs]
   declares: —
   references: crate::message::part
+  referenced-by-count: 0
+crate::message::part::message_part::tests [crates/agena-runtime-contracts/src/message/part/message_part.rs]
+  declares: —
+  references: crate, crate::message::part::message_part
   referenced-by-count: 0
 crate::message::part::skill_reference::tests [crates/agena-runtime-contracts/src/message/part/skill_reference.rs]
   declares: —
@@ -4994,7 +5091,7 @@ crate::message::part::skill_reference::tests [crates/agena-runtime-contracts/src
 
 </details>
 
-### 7.39 `agena-runtime-plugins::agena_runtime_plugins` (lib)
+### 7.40 `agena-runtime-plugins::agena_runtime_plugins` (lib)
 
 入口 `crates/agena-runtime-plugins/src/lib.rs`；模块 9；声明边 8；引用边 3；源码观测 dependency roots 8。
 
@@ -5041,9 +5138,9 @@ crate::plugins::storage [crates/agena-runtime-plugins/src/plugins/storage.rs]
 
 </details>
 
-### 7.40 `agena-runtime-provider::agena_runtime_provider` (lib)
+### 7.41 `agena-runtime-provider::agena_runtime_provider` (lib)
 
-入口 `crates/agena-runtime-provider/src/lib.rs`；模块 44；声明边 43；引用边 79；源码观测 dependency roots 19。
+入口 `crates/agena-runtime-provider/src/lib.rs`；模块 45；声明边 44；引用边 80；源码观测 dependency roots 19。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -5105,9 +5202,9 @@ crate::provider::chat_wire [crates/agena-runtime-provider/src/provider/chat_wire
   references: crate, crate::provider, crate::provider::utils, crate::provider::wire_message
   referenced-by-count: 2
 crate::provider::core [crates/agena-runtime-provider/src/provider/core.rs]
-  declares: —
+  declares: crate::provider::core::tests
   references: crate, crate::provider, crate::provider::chat_wire
-  referenced-by-count: 4
+  referenced-by-count: 5
 crate::provider::credential [crates/agena-runtime-provider/src/provider/credential.rs]
   declares: —
   references: crate, crate::config_support, crate::provider::auth, crate::provider::utils
@@ -5172,6 +5269,10 @@ crate::provider::chat_wire::tests [crates/agena-runtime-provider/src/provider/ch
   declares: —
   references: crate::provider, crate::provider::chat_wire
   referenced-by-count: 0
+crate::provider::core::tests [crates/agena-runtime-provider/src/provider/core.rs]
+  declares: —
+  references: crate::provider::core
+  referenced-by-count: 0
 crate::provider::multi_adapter::tests [crates/agena-runtime-provider/src/provider/multi_adapter.rs]
   declares: —
   references: crate::provider, crate::provider::multi_adapter
@@ -5228,9 +5329,9 @@ crate::provider::registry::completion::tool_api_function_validation_tests [crate
 
 </details>
 
-### 7.41 `agena-runtime-provider-adapters::agena_runtime_provider_adapters` (lib)
+### 7.42 `agena-runtime-provider-adapters::agena_runtime_provider_adapters` (lib)
 
-入口 `crates/agena-runtime-provider-adapters/src/lib.rs`；模块 37；声明边 36；引用边 69；源码观测 dependency roots 15。
+入口 `crates/agena-runtime-provider-adapters/src/lib.rs`；模块 38；声明边 37；引用边 70；源码观测 dependency roots 16。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -5280,9 +5381,9 @@ crate::config_support::registry::auth_resolution [crates/agena-runtime-provider-
   references: crate, crate::config_support::registry, crate::provider
   referenced-by-count: 1
 crate::config_support::registry::model_listing [crates/agena-runtime-provider-adapters/src/config_support/registry/model_listing.rs]
-  declares: —
+  declares: crate::config_support::registry::model_listing::tests
   references: crate::config_support::registry
-  referenced-by-count: 1
+  referenced-by-count: 2
 crate::config_support::registry::provider_registry [crates/agena-runtime-provider-adapters/src/config_support/registry/provider_registry.rs]
   declares: —
   references: crate, crate::config_support::registry
@@ -5359,6 +5460,10 @@ crate::provider::openai::tests [crates/agena-runtime-provider-adapters/src/provi
   declares: —
   references: crate::provider, crate::provider::openai
   referenced-by-count: 0
+crate::config_support::registry::model_listing::tests [crates/agena-runtime-provider-adapters/src/config_support/registry/model_listing.rs]
+  declares: —
+  references: crate::config_support::registry::model_listing
+  referenced-by-count: 0
 crate::provider::anthropic::anthropic_requests::tests [crates/agena-runtime-provider-adapters/src/provider/anthropic/anthropic_requests.rs]
   declares: —
   references: crate::provider::anthropic::anthropic_requests
@@ -5387,17 +5492,17 @@ crate::provider::openai::openai_wire::tests [crates/agena-runtime-provider-adapt
 
 </details>
 
-### 7.42 `agena-runtime-session::agena_runtime_session` (lib)
+### 7.43 `agena-runtime-session::agena_runtime_session` (lib)
 
-入口 `crates/agena-runtime-session/src/lib.rs`；模块 104；声明边 103；引用边 223；源码观测 dependency roots 29。
+入口 `crates/agena-runtime-session/src/lib.rs`；模块 109；声明边 108；引用边 236；源码观测 dependency roots 30。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-runtime-session/src/lib.rs]
-  declares: crate::compaction_policy, crate::completion_request, crate::context_budget, crate::context_governor, crate::error, crate::event, crate::event_bridge, crate::event_publish_service, crate::event_query_service, crate::execution_registry, crate::guards, crate::installation_id, crate::metrics, crate::periodic, crate::presentation_event, crate::prompt_budget, crate::prompt_merge, crate::session, crate::session_cache, crate::session_cache_policy, crate::session_configuration, crate::session_execution_control, crate::session_execution_service, crate::session_maintenance, crate::session_plugin_command, crate::session_query_service, crate::session_requests, crate::session_tool_execution, crate::task_control, crate::tool, crate::usage_stats
+  declares: crate::compaction_policy, crate::completion_request, crate::context_budget, crate::context_governor, crate::error, crate::event, crate::event_bridge, crate::event_publish_service, crate::event_query_service, crate::execution_registry, crate::guards, crate::installation_id, crate::metrics, crate::periodic, crate::presentation_event, crate::prompt_budget, crate::prompt_merge, crate::service_failure, crate::session, crate::session_cache, crate::session_cache_policy, crate::session_configuration, crate::session_execution_control, crate::session_execution_service, crate::session_maintenance, crate::session_plugin_command, crate::session_query_service, crate::session_requests, crate::session_tool_execution, crate::task_control, crate::tool, crate::usage_stats
   references: crate::compaction_policy, crate::completion_request, crate::context_budget, crate::context_governor, crate::error, crate::event_bridge, crate::event_publish_service, crate::event_query_service, crate::execution_registry, crate::guards, crate::installation_id, crate::metrics, crate::periodic, crate::presentation_event, crate::prompt_budget, crate::prompt_merge, crate::session, crate::session_cache, crate::session_cache_policy, crate::session_configuration, crate::session_execution_control, crate::session_execution_service, crate::session_maintenance, crate::session_plugin_command, crate::session_query_service, crate::session_requests, crate::session_tool_execution, crate::task_control, crate::usage_stats
-  referenced-by-count: 48
+  referenced-by-count: 50
 crate::compaction_policy [crates/agena-runtime-session/src/compaction_policy.rs]
   declares: —
   references: —
@@ -5415,24 +5520,24 @@ crate::context_governor [crates/agena-runtime-session/src/context_governor.rs]
   references: —
   referenced-by-count: 2
 crate::error [crates/agena-runtime-session/src/error.rs]
-  declares: —
-  references: —
-  referenced-by-count: 2
+  declares: crate::error::tests
+  references: crate::tool
+  referenced-by-count: 3
 crate::event [crates/agena-runtime-session/src/event/mod.rs]
   declares: crate::event::bridge, crate::event::bus, crate::event::client, crate::event::error, crate::event::kind, crate::event::publisher
   references: —
-  referenced-by-count: 13
+  referenced-by-count: 14
 crate::event_bridge [crates/agena-runtime-session/src/event_bridge.rs]
   declares: —
   references: crate
   referenced-by-count: 1
 crate::event_publish_service [crates/agena-runtime-session/src/event_publish_service.rs]
   declares: —
-  references: —
+  references: crate::service_failure
   referenced-by-count: 1
 crate::event_query_service [crates/agena-runtime-session/src/event_query_service.rs]
   declares: —
-  references: crate
+  references: crate, crate::service_failure
   referenced-by-count: 1
 crate::execution_registry [crates/agena-runtime-session/src/execution_registry.rs]
   declares: crate::execution_registry::tests
@@ -5466,10 +5571,14 @@ crate::prompt_merge [crates/agena-runtime-session/src/prompt_merge.rs]
   declares: crate::prompt_merge::tests
   references: —
   referenced-by-count: 2
+crate::service_failure [crates/agena-runtime-session/src/service_failure.rs]
+  declares: crate::service_failure::tests
+  references: —
+  referenced-by-count: 4
 crate::session [crates/agena-runtime-session/src/session/mod.rs]
   declares: crate::session::cache, crate::session::cost, crate::session::doom_loop, crate::session::history, crate::session::manager, crate::session::processor, crate::session::prompt_window, crate::session::store
   references: crate
-  referenced-by-count: 23
+  referenced-by-count: 24
 crate::session_cache [crates/agena-runtime-session/src/session_cache.rs]
   declares: crate::session_cache::tests
   references: crate
@@ -5484,7 +5593,7 @@ crate::session_configuration [crates/agena-runtime-session/src/session_configura
   referenced-by-count: 1
 crate::session_execution_control [crates/agena-runtime-session/src/session_execution_control.rs]
   declares: crate::session_execution_control::tests
-  references: —
+  references: crate::service_failure
   referenced-by-count: 2
 crate::session_execution_service [crates/agena-runtime-session/src/session_execution_service.rs]
   declares: crate::session_execution_service::tests
@@ -5500,7 +5609,7 @@ crate::session_plugin_command [crates/agena-runtime-session/src/session_plugin_c
   referenced-by-count: 1
 crate::session_query_service [crates/agena-runtime-session/src/session_query_service.rs]
   declares: crate::session_query_service::tests
-  references: crate
+  references: crate, crate::service_failure
   referenced-by-count: 2
 crate::session_requests [crates/agena-runtime-session/src/session_requests.rs]
   declares: —
@@ -5517,7 +5626,7 @@ crate::task_control [crates/agena-runtime-session/src/task_control.rs]
 crate::tool [crates/agena-runtime-session/src/lib.rs]
   declares: —
   references: —
-  referenced-by-count: 9
+  referenced-by-count: 11
 crate::usage_stats [crates/agena-runtime-session/src/usage_stats.rs]
   declares: crate::usage_stats::tests
   references: —
@@ -5529,6 +5638,10 @@ crate::context_budget::tests [crates/agena-runtime-session/src/context_budget.rs
 crate::context_governor::tests [crates/agena-runtime-session/src/context_governor.rs]
   declares: —
   references: crate::context_governor
+  referenced-by-count: 0
+crate::error::tests [crates/agena-runtime-session/src/error.rs]
+  declares: —
+  references: crate, crate::error
   referenced-by-count: 0
 crate::event::bridge [crates/agena-runtime-session/src/event/bridge.rs]
   declares: —
@@ -5574,6 +5687,10 @@ crate::prompt_merge::tests [crates/agena-runtime-session/src/prompt_merge.rs]
   declares: —
   references: crate::prompt_merge
   referenced-by-count: 0
+crate::service_failure::tests [crates/agena-runtime-session/src/service_failure.rs]
+  declares: —
+  references: crate
+  referenced-by-count: 0
 crate::session::cache [crates/agena-runtime-session/src/session/cache.rs]
   declares: —
   references: crate::session
@@ -5592,8 +5709,8 @@ crate::session::history [crates/agena-runtime-session/src/session/history/mod.rs
   referenced-by-count: 12
 crate::session::manager [crates/agena-runtime-session/src/session/manager/mod.rs]
   declares: crate::session::manager::compact, crate::session::manager::helpers, crate::session::manager::history, crate::session::manager::replies, crate::session::manager::runs, crate::session::manager::sessions, crate::session::manager::stats, crate::session::manager::tests
-  references: crate, crate::event, crate::event::publisher, crate::session, crate::session::cache, crate::session::history, crate::session::manager::helpers, crate::session::manager::replies, crate::session::processor, crate::session::prompt_window, crate::session::store, crate::tool
-  referenced-by-count: 11
+  references: crate, crate::event, crate::event::publisher, crate::session, crate::session::cache, crate::session::history, crate::session::manager::helpers, crate::session::processor, crate::session::prompt_window, crate::session::store, crate::tool
+  referenced-by-count: 12
 crate::session::processor [crates/agena-runtime-session/src/session/processor.rs]
   declares: crate::session::processor::events, crate::session::processor::helpers, crate::session::processor::media, crate::session::processor::parts, crate::session::processor::run, crate::session::processor::tests, crate::session::processor::tool_call_helpers, crate::session::processor::tool_calls
   references: crate, crate::error, crate::event, crate::session, crate::session::history, crate::session::processor::helpers, crate::session::processor::media, crate::session::processor::tool_call_helpers, crate::session::store
@@ -5671,7 +5788,7 @@ crate::session::manager::history [crates/agena-runtime-session/src/session/manag
   references: crate, crate::event, crate::event::bus, crate::session, crate::session::cost, crate::session::history, crate::session::manager
   referenced-by-count: 1
 crate::session::manager::replies [crates/agena-runtime-session/src/session/manager/replies.rs]
-  declares: crate::session::manager::replies::replies_execution, crate::session::manager::replies::replies_state, crate::session::manager::replies::tests, crate::session::manager::replies::tool_failure
+  declares: crate::session::manager::replies::replies_execution, crate::session::manager::replies::replies_state, crate::session::manager::replies::tests, crate::session::manager::replies::tool_failure, crate::session::manager::replies::tool_non_execution
   references: crate, crate::session, crate::session::manager, crate::tool
   referenced-by-count: 5
 crate::session::manager::runs [crates/agena-runtime-session/src/session/manager/runs.rs]
@@ -5783,12 +5900,16 @@ crate::session::manager::replies::tests [crates/agena-runtime-session/src/sessio
   references: crate, crate::session, crate::session::manager::replies
   referenced-by-count: 0
 crate::session::manager::replies::tool_failure [crates/agena-runtime-session/src/session/manager/replies/tool_failure.rs]
-  declares: —
+  declares: crate::session::manager::replies::tool_failure::tests
   references: crate, crate::session, crate::session::manager, crate::session::manager::replies
+  referenced-by-count: 1
+crate::session::manager::replies::tool_non_execution [crates/agena-runtime-session/src/session/manager/replies/tool_non_execution.rs]
+  declares: —
+  references: crate, crate::event, crate::session, crate::session::manager, crate::session::manager::replies
   referenced-by-count: 0
 crate::session::manager::runs::tests [crates/agena-runtime-session/src/session/manager/runs.rs]
   declares: —
-  references: crate, crate::session::manager::runs
+  references: crate::session::manager::runs
   referenced-by-count: 0
 crate::session::manager::tests::tests [crates/agena-runtime-session/src/session/manager/tests.rs]
   declares: —
@@ -5810,11 +5931,15 @@ crate::session::history::store::tests::tests [crates/agena-runtime-session/src/s
   declares: —
   references: crate, crate::session::history, crate::session::history::store::tests
   referenced-by-count: 0
+crate::session::manager::replies::tool_failure::tests [crates/agena-runtime-session/src/session/manager/replies/tool_failure.rs]
+  declares: —
+  references: crate::session::manager::replies::tool_failure, crate::tool
+  referenced-by-count: 0
 ```
 
 </details>
 
-### 7.43 `agena-runtime-session-core::agena_runtime_session_core` (lib)
+### 7.44 `agena-runtime-session-core::agena_runtime_session_core` (lib)
 
 入口 `crates/agena-runtime-session-core/src/lib.rs`；模块 20；声明边 19；引用边 21；源码观测 dependency roots 8。
 
@@ -5842,7 +5967,7 @@ crate::db::crud [crates/agena-runtime-session-core/src/db/crud/mod.rs]
   references: —
   referenced-by-count: 0
 crate::db::entities [crates/agena-runtime-session-core/src/db/entities/mod.rs]
-  declares: crate::db::entities::permission_rule, crate::db::entities::session, crate::db::entities::session_lineage, crate::db::entities::transcript_message, crate::db::entities::transcript_part, crate::db::entities::transcript_projection_state, crate::db::entities::workspace
+  declares: crate::db::entities::model_message, crate::db::entities::model_message_part, crate::db::entities::model_projection_state, crate::db::entities::permission_rule, crate::db::entities::session, crate::db::entities::session_lineage, crate::db::entities::workspace
   references: —
   referenced-by-count: 1
 crate::db::event_entity [crates/agena-runtime-session-core/src/db/event_entity.rs]
@@ -5869,6 +5994,18 @@ crate::db::crud::session [crates/agena-runtime-session-core/src/db/crud/session.
   declares: crate::db::crud::session::tests
   references: crate::db::entities, crate::db::event_entity, crate::session
   referenced-by-count: 1
+crate::db::entities::model_message [crates/agena-runtime-session-core/src/db/entities/model_message.rs]
+  declares: —
+  references: crate, crate::db::entities::session
+  referenced-by-count: 1
+crate::db::entities::model_message_part [crates/agena-runtime-session-core/src/db/entities/model_message_part.rs]
+  declares: —
+  references: crate, crate::db::entities::model_message
+  referenced-by-count: 0
+crate::db::entities::model_projection_state [crates/agena-runtime-session-core/src/db/entities/model_projection_state.rs]
+  declares: —
+  references: crate::db::entities::session
+  referenced-by-count: 0
 crate::db::entities::permission_rule [crates/agena-runtime-session-core/src/db/entities/permission_rule.rs]
   declares: —
   references: —
@@ -5878,18 +6015,6 @@ crate::db::entities::session [crates/agena-runtime-session-core/src/db/entities/
   references: crate::db::entities::workspace, crate::session
   referenced-by-count: 5
 crate::db::entities::session_lineage [crates/agena-runtime-session-core/src/db/entities/session_lineage.rs]
-  declares: —
-  references: crate::db::entities::session
-  referenced-by-count: 0
-crate::db::entities::transcript_message [crates/agena-runtime-session-core/src/db/entities/transcript_message.rs]
-  declares: —
-  references: crate, crate::db::entities::session
-  referenced-by-count: 1
-crate::db::entities::transcript_part [crates/agena-runtime-session-core/src/db/entities/transcript_part.rs]
-  declares: —
-  references: crate, crate::db::entities::transcript_message
-  referenced-by-count: 0
-crate::db::entities::transcript_projection_state [crates/agena-runtime-session-core/src/db/entities/transcript_projection_state.rs]
   declares: —
   references: crate::db::entities::session
   referenced-by-count: 0
@@ -5905,9 +6030,9 @@ crate::db::crud::session::tests [crates/agena-runtime-session-core/src/db/crud/s
 
 </details>
 
-### 7.44 `agena-runtime-tools::agena_runtime_tools` (lib)
+### 7.45 `agena-runtime-tools::agena_runtime_tools` (lib)
 
-入口 `crates/agena-runtime-tools/src/lib.rs`；模块 52；声明边 51；引用边 111；源码观测 dependency roots 23。
+入口 `crates/agena-runtime-tools/src/lib.rs`；模块 52；声明边 51；引用边 108；源码观测 dependency roots 23。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -5915,7 +6040,7 @@ crate::db::crud::session::tests [crates/agena-runtime-session-core/src/db/crud/s
 crate [crates/agena-runtime-tools/src/lib.rs]
   declares: crate::monitor, crate::project_paths, crate::snapshot_capabilities, crate::snapshot_managed, crate::snapshot_operations, crate::snapshot_registry, crate::tool, crate::tool_output
   references: crate::monitor, crate::project_paths, crate::snapshot_capabilities, crate::snapshot_managed, crate::snapshot_operations, crate::snapshot_registry, crate::tool_output
-  referenced-by-count: 31
+  referenced-by-count: 30
 crate::monitor [crates/agena-runtime-tools/src/monitor.rs]
   declares: crate::monitor::tests
   references: —
@@ -5941,8 +6066,8 @@ crate::snapshot_registry [crates/agena-runtime-tools/src/snapshot_registry.rs]
   references: —
   referenced-by-count: 2
 crate::tool [crates/agena-runtime-tools/src/tool/mod.rs]
-  declares: crate::tool::apply_patch, crate::tool::ask_user, crate::tool::bash, crate::tool::builtin_tools, crate::tool::cron, crate::tool::definition, crate::tool::executor, crate::tool::file_attachment, crate::tool::glob, crate::tool::grep, crate::tool::lsp, crate::tool::mcp, crate::tool::orchestrator, crate::tool::output_helpers, crate::tool::payload, crate::tool::powershell, crate::tool::process_tool, crate::tool::read, crate::tool::result, crate::tool::router, crate::tool::shell, crate::tool::shell_tools, crate::tool::snapshot, crate::tool::task, crate::tool::tests, crate::tool::tool_registry, crate::tool::tool_search, crate::tool::truncation
-  references: crate, crate::tool::output_helpers, crate::tool::router, crate::tool::tool_registry
+  declares: crate::tool::apply_patch, crate::tool::ask_user, crate::tool::bash, crate::tool::builtin_tools, crate::tool::cron, crate::tool::definition, crate::tool::executor, crate::tool::file_attachment, crate::tool::glob, crate::tool::grep, crate::tool::lsp, crate::tool::mcp, crate::tool::orchestrator, crate::tool::output_helpers, crate::tool::payload, crate::tool::powershell, crate::tool::process_tool, crate::tool::read, crate::tool::result, crate::tool::router, crate::tool::shell, crate::tool::shell_tools, crate::tool::snapshot, crate::tool::task, crate::tool::tests, crate::tool::tool_registry, crate::tool::tool_search
+  references: crate, crate::tool::output_helpers, crate::tool::tool_registry
   referenced-by-count: 26
 crate::tool_output [crates/agena-runtime-tools/src/tool_output.rs]
   declares: crate::tool_output::tests
@@ -5990,7 +6115,7 @@ crate::tool::definition [crates/agena-runtime-tools/src/tool/definition.rs]
   referenced-by-count: 0
 crate::tool::executor [crates/agena-runtime-tools/src/tool/executor/mod.rs]
   declares: crate::tool::executor::executor_core, crate::tool::executor::executor_execution, crate::tool::executor::executor_hooks, crate::tool::executor::executor_paths, crate::tool::executor::executor_permissions
-  references: crate::tool, crate::tool::bash, crate::tool::orchestrator, crate::tool::shell
+  references: crate::tool, crate::tool::bash, crate::tool::shell
   referenced-by-count: 5
 crate::tool::file_attachment [crates/agena-runtime-tools/src/tool/file_attachment.rs]
   declares: —
@@ -6015,7 +6140,7 @@ crate::tool::mcp [crates/agena-runtime-tools/src/tool/mcp.rs]
 crate::tool::orchestrator [crates/agena-runtime-tools/src/tool/orchestrator.rs]
   declares: —
   references: crate, crate::tool, crate::tool::apply_patch, crate::tool::ask_user, crate::tool::cron, crate::tool::glob, crate::tool::grep, crate::tool::lsp, crate::tool::process_tool, crate::tool::read, crate::tool::snapshot, crate::tool::task, crate::tool::tool_search
-  referenced-by-count: 2
+  referenced-by-count: 1
 crate::tool::output_helpers [crates/agena-runtime-tools/src/tool/output_helpers.rs]
   declares: —
   references: crate, crate::tool, crate::tool::shell_tools
@@ -6039,11 +6164,11 @@ crate::tool::read [crates/agena-runtime-tools/src/tool/read.rs]
 crate::tool::result [crates/agena-runtime-tools/src/tool/result.rs]
   declares: crate::tool::result::tests
   references: crate, crate::tool
-  referenced-by-count: 3
+  referenced-by-count: 2
 crate::tool::router [crates/agena-runtime-tools/src/tool/router.rs]
   declares: —
-  references: crate, crate::tool, crate::tool::apply_patch, crate::tool::orchestrator, crate::tool::result
-  referenced-by-count: 1
+  references: crate, crate::tool, crate::tool::apply_patch, crate::tool::result
+  referenced-by-count: 0
 crate::tool::shell [crates/agena-runtime-tools/src/tool/shell.rs]
   declares: crate::tool::shell::tests
   references: —
@@ -6065,17 +6190,13 @@ crate::tool::tests [crates/agena-runtime-tools/src/tool/tests.rs]
   references: crate, crate::tool
   referenced-by-count: 0
 crate::tool::tool_registry [crates/agena-runtime-tools/src/tool/tool_registry.rs]
-  declares: —
+  declares: crate::tool::tool_registry::failure_tests
   references: crate, crate::tool
-  referenced-by-count: 1
+  referenced-by-count: 2
 crate::tool::tool_search [crates/agena-runtime-tools/src/tool/tool_search.rs]
   declares: —
   references: crate, crate::tool
   referenced-by-count: 1
-crate::tool::truncation [crates/agena-runtime-tools/src/tool/truncation.rs]
-  declares: —
-  references: crate, crate::tool, crate::tool::result
-  referenced-by-count: 0
 crate::tool_output::tests [crates/agena-runtime-tools/src/tool_output.rs]
   declares: —
   references: crate::tool_output
@@ -6090,7 +6211,7 @@ crate::tool::executor::executor_core [crates/agena-runtime-tools/src/tool/execut
   referenced-by-count: 0
 crate::tool::executor::executor_execution [crates/agena-runtime-tools/src/tool/executor/executor_execution.rs]
   declares: —
-  references: crate, crate::tool, crate::tool::executor
+  references: crate, crate::tool, crate::tool::executor, crate::tool::orchestrator
   referenced-by-count: 0
 crate::tool::executor::executor_hooks [crates/agena-runtime-tools/src/tool/executor/executor_hooks.rs]
   declares: —
@@ -6102,7 +6223,7 @@ crate::tool::executor::executor_paths [crates/agena-runtime-tools/src/tool/execu
   referenced-by-count: 0
 crate::tool::executor::executor_permissions [crates/agena-runtime-tools/src/tool/executor/executor_permissions.rs]
   declares: —
-  references: crate::tool::executor
+  references: crate::tool, crate::tool::executor
   referenced-by-count: 0
 crate::tool::glob::tests [crates/agena-runtime-tools/src/tool/glob.rs]
   declares: —
@@ -6120,11 +6241,15 @@ crate::tool::shell::tests [crates/agena-runtime-tools/src/tool/shell.rs]
   declares: —
   references: crate::tool::shell
   referenced-by-count: 0
+crate::tool::tool_registry::failure_tests [crates/agena-runtime-tools/src/tool/tool_registry.rs]
+  declares: —
+  references: crate::tool::tool_registry
+  referenced-by-count: 0
 ```
 
 </details>
 
-### 7.45 `agena-scheduler::agena_scheduler` (lib)
+### 7.46 `agena-scheduler::agena_scheduler` (lib)
 
 入口 `crates/agena-scheduler/src/lib.rs`；模块 8；声明边 7；引用边 14；源码观测 dependency roots 7。
 
@@ -6167,9 +6292,9 @@ crate::store::tests [crates/agena-scheduler/src/store.rs]
 
 </details>
 
-### 7.46 `agena-skills::agena_skills` (lib)
+### 7.47 `agena-skills::agena_skills` (lib)
 
-入口 `crates/agena-skills/src/lib.rs`；模块 22；声明边 21；引用边 38；源码观测 dependency roots 4。
+入口 `crates/agena-skills/src/lib.rs`；模块 22；声明边 21；引用边 38；源码观测 dependency roots 5。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -6266,7 +6391,7 @@ crate::skill::tests [crates/agena-skills/src/skill.rs]
 
 </details>
 
-### 7.47 `agena-storage::agena_storage` (lib)
+### 7.48 `agena-storage::agena_storage` (lib)
 
 入口 `crates/agena-storage/src/lib.rs`；模块 5；声明边 4；引用边 6；源码观测 dependency roots 4。
 
@@ -6297,7 +6422,7 @@ crate::memory_store::tests [crates/agena-storage/src/memory_store.rs]
 
 </details>
 
-### 7.48 `agena-storage-sqlite::agena_storage_sqlite` (lib)
+### 7.49 `agena-storage-sqlite::agena_storage_sqlite` (lib)
 
 入口 `crates/agena-storage-sqlite/src/lib.rs`；模块 26；声明边 25；引用边 27；源码观测 dependency roots 9。
 
@@ -6305,20 +6430,20 @@ crate::memory_store::tests [crates/agena-storage/src/memory_store.rs]
 
 ```text
 crate [crates/agena-storage-sqlite/src/lib.rs]
-  declares: crate::event_store, crate::message_projection_repository, crate::model_catalog_repository, crate::permission_rule_repository, crate::projection_lookup_repository, crate::schema, crate::schema_invariants, crate::schema_lifecycle, crate::session_stats_repository, crate::session_summary_repository, crate::stored_values, crate::transaction, crate::usage_repository, crate::workspace_repository
-  references: crate::event_store, crate::message_projection_repository, crate::model_catalog_repository, crate::permission_rule_repository, crate::projection_lookup_repository, crate::schema, crate::schema_invariants, crate::schema_lifecycle, crate::session_stats_repository, crate::session_summary_repository, crate::stored_values, crate::transaction, crate::usage_repository, crate::workspace_repository
+  declares: crate::event_store, crate::model_catalog_repository, crate::model_message_repository, crate::permission_rule_repository, crate::projection_lookup_repository, crate::schema, crate::schema_invariants, crate::schema_lifecycle, crate::session_stats_repository, crate::session_summary_repository, crate::stored_values, crate::transaction, crate::usage_repository, crate::workspace_repository
+  references: crate::event_store, crate::model_catalog_repository, crate::model_message_repository, crate::permission_rule_repository, crate::projection_lookup_repository, crate::schema, crate::schema_invariants, crate::schema_lifecycle, crate::session_stats_repository, crate::session_summary_repository, crate::stored_values, crate::transaction, crate::usage_repository, crate::workspace_repository
   referenced-by-count: 2
 crate::event_store [crates/agena-storage-sqlite/src/event_store.rs]
   declares: —
   references: —
   referenced-by-count: 1
-crate::message_projection_repository [crates/agena-storage-sqlite/src/message_projection_repository.rs]
-  declares: crate::message_projection_repository::tests
-  references: crate
-  referenced-by-count: 2
 crate::model_catalog_repository [crates/agena-storage-sqlite/src/model_catalog_repository.rs]
   declares: crate::model_catalog_repository::tests
   references: —
+  referenced-by-count: 2
+crate::model_message_repository [crates/agena-storage-sqlite/src/model_message_repository.rs]
+  declares: crate::model_message_repository::tests
+  references: crate
   referenced-by-count: 2
 crate::permission_rule_repository [crates/agena-storage-sqlite/src/permission_rule_repository.rs]
   declares: crate::permission_rule_repository::tests
@@ -6364,13 +6489,13 @@ crate::workspace_repository [crates/agena-storage-sqlite/src/workspace_repositor
   declares: crate::workspace_repository::tests
   references: —
   referenced-by-count: 2
-crate::message_projection_repository::tests [crates/agena-storage-sqlite/src/message_projection_repository.rs]
-  declares: —
-  references: crate::message_projection_repository
-  referenced-by-count: 0
 crate::model_catalog_repository::tests [crates/agena-storage-sqlite/src/model_catalog_repository.rs]
   declares: —
   references: crate::model_catalog_repository
+  referenced-by-count: 0
+crate::model_message_repository::tests [crates/agena-storage-sqlite/src/model_message_repository.rs]
+  declares: —
+  references: crate::model_message_repository
   referenced-by-count: 0
 crate::permission_rule_repository::tests [crates/agena-storage-sqlite/src/permission_rule_repository.rs]
   declares: —
@@ -6412,7 +6537,7 @@ crate::workspace_repository::tests [crates/agena-storage-sqlite/src/workspace_re
 
 </details>
 
-### 7.49 `agena-tool::agena_tool` (lib)
+### 7.50 `agena-tool::agena_tool` (lib)
 
 入口 `crates/agena-tool/src/lib.rs`；模块 9；声明边 8；引用边 4；源码观测 dependency roots 8。
 
@@ -6459,15 +6584,15 @@ crate::tool_search::tests [crates/agena-tool/src/tool_search.rs]
 
 </details>
 
-### 7.50 `agena-tui::agena_tui` (lib)
+### 7.51 `agena-tui::agena_tui` (lib)
 
-入口 `crates/agena-tui/src/lib.rs`；模块 75；声明边 74；引用边 93；源码观测 dependency roots 12。
+入口 `crates/agena-tui/src/lib.rs`；模块 75；声明边 74；引用边 93；源码观测 dependency roots 13。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-tui/src/lib.rs]
-  declares: crate::choice, crate::command_palette, crate::composer, crate::file_attach, crate::file_mentions, crate::flash, crate::help, crate::i18n, crate::input, crate::keymap, crate::link, crate::main_focus, crate::model_catalog, crate::model_chooser, crate::path_browser, crate::permission_prompt, crate::presentation_config, crate::prompt_history, crate::selection_picker, crate::session_status, crate::slash_commands, crate::status_line, crate::terminal, crate::terminal_capabilities, crate::terminal_color, crate::terminal_graphics, crate::terminal_input, crate::terminal_lifecycle, crate::terminal_overrides, crate::terminal_protocol, crate::terminal_transaction, crate::timeline, crate::usage, crate::user_input
+  declares: crate::choice, crate::command_palette, crate::composer, crate::file_attach, crate::file_mentions, crate::help, crate::i18n, crate::input, crate::keymap, crate::link, crate::main_focus, crate::model_catalog, crate::model_chooser, crate::notice, crate::path_browser, crate::permission_prompt, crate::presentation_config, crate::prompt_history, crate::selection_picker, crate::session_status, crate::slash_commands, crate::status_line, crate::terminal, crate::terminal_capabilities, crate::terminal_color, crate::terminal_graphics, crate::terminal_input, crate::terminal_lifecycle, crate::terminal_overrides, crate::terminal_protocol, crate::terminal_transaction, crate::timeline, crate::usage, crate::user_input
   references: —
   referenced-by-count: 8
 crate::choice [crates/agena-tui/src/choice.rs]
@@ -6489,10 +6614,6 @@ crate::file_attach [crates/agena-tui/src/file_attach.rs]
 crate::file_mentions [crates/agena-tui/src/file_mentions.rs]
   declares: crate::file_mentions::tests
   references: crate, crate::i18n, crate::keymap
-  referenced-by-count: 1
-crate::flash [crates/agena-tui/src/flash.rs]
-  declares: crate::flash::tests
-  references: —
   referenced-by-count: 1
 crate::help [crates/agena-tui/src/help.rs]
   declares: crate::help::tests
@@ -6525,6 +6646,10 @@ crate::model_catalog [crates/agena-tui/src/model_catalog.rs]
 crate::model_chooser [crates/agena-tui/src/model_chooser.rs]
   declares: crate::model_chooser::tests
   references: crate, crate::i18n, crate::keymap
+  referenced-by-count: 1
+crate::notice [crates/agena-tui/src/notice.rs]
+  declares: crate::notice::tests
+  references: —
   referenced-by-count: 1
 crate::path_browser [crates/agena-tui/src/path_browser.rs]
   declares: crate::path_browser::tests
@@ -6626,10 +6751,6 @@ crate::file_mentions::tests [crates/agena-tui/src/file_mentions.rs]
   declares: —
   references: crate::file_mentions
   referenced-by-count: 0
-crate::flash::tests [crates/agena-tui/src/flash.rs]
-  declares: —
-  references: crate::flash
-  referenced-by-count: 0
 crate::help::tests [crates/agena-tui/src/help.rs]
   declares: —
   references: crate::help, crate::i18n
@@ -6673,6 +6794,10 @@ crate::model_catalog::tests [crates/agena-tui/src/model_catalog.rs]
 crate::model_chooser::tests [crates/agena-tui/src/model_chooser.rs]
   declares: —
   references: crate::model_chooser
+  referenced-by-count: 0
+crate::notice::tests [crates/agena-tui/src/notice.rs]
+  declares: —
+  references: crate::notice
   referenced-by-count: 0
 crate::path_browser::tests [crates/agena-tui/src/path_browser.rs]
   declares: —
@@ -6770,9 +6895,9 @@ crate::user_input::tests [crates/agena-tui/src/user_input.rs]
 
 </details>
 
-### 7.51 `agena-tui-app::agena_tui_app` (lib)
+### 7.52 `agena-tui-app::agena_tui_app` (lib)
 
-入口 `crates/agena-tui-app/src/lib.rs`；模块 143；声明边 142；引用边 212；源码观测 dependency roots 28。
+入口 `crates/agena-tui-app/src/lib.rs`；模块 143；声明边 142；引用边 215；源码观测 dependency roots 28。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -6780,7 +6905,7 @@ crate::user_input::tests [crates/agena-tui/src/user_input.rs]
 crate [crates/agena-tui-app/src/lib.rs]
   declares: crate::app_choice_helpers, crate::app_command_actions, crate::app_command_helpers, crate::app_composer, crate::app_composer_helpers, crate::app_composer_state, crate::app_help, crate::app_input, crate::app_lifecycle, crate::app_mouse, crate::app_navigation, crate::app_overlays, crate::app_paste, crate::app_permission_display, crate::app_permission_helpers, crate::app_permission_studio, crate::app_permissions, crate::app_provider_runtime, crate::app_provider_text, crate::app_session_events, crate::app_session_helpers, crate::app_session_input, crate::app_session_interactive, crate::app_settings, crate::app_settings_choices, crate::app_settings_helpers, crate::app_skill_picker, crate::app_skill_studio, crate::app_status_context, crate::app_studio_overlays, crate::app_studio_state_impls, crate::app_tests, crate::app_timeline_helpers, crate::app_transcript_actions, crate::app_transcript_helpers, crate::app_transcript_input, crate::app_types, crate::app_usage, crate::app_user_input, crate::commands, crate::composer_queue, crate::composer_state_impls, crate::keymap_contract_tests, crate::plugin_workbench, crate::provider_studio, crate::run_options_state, crate::state_store_impls, crate::transcript_state, crate::tui_config_tests, crate::view
   references: crate::app_choice_helpers, crate::app_command_helpers, crate::app_composer_helpers, crate::app_permission_display, crate::app_permission_helpers, crate::app_permission_studio, crate::app_provider_text, crate::app_session_helpers, crate::app_settings_helpers, crate::app_timeline_helpers, crate::app_transcript_helpers, crate::app_types, crate::app_usage, crate::commands, crate::composer_queue, crate::plugin_workbench, crate::provider_studio::provider_auth, crate::provider_studio::provider_fields, crate::provider_studio::provider_selection, crate::state_store_impls
-  referenced-by-count: 98
+  referenced-by-count: 99
 crate::app_choice_helpers [crates/agena-tui-app/src/app_choice_helpers.rs]
   declares: crate::app_choice_helpers::tests
   references: crate
@@ -6906,7 +7031,7 @@ crate::app_studio_state_impls [crates/agena-tui-app/src/app_studio_state_impls.r
   references: crate
   referenced-by-count: 0
 crate::app_tests [crates/agena-tui-app/src/app_tests.rs]
-  declares: crate::app_tests::live_transcript_tests, crate::app_tests::pending_message_tests, crate::app_tests::prompt_history_tests, crate::app_tests::rewind_message_tests, crate::app_tests::transcript_character_cursor_tests, crate::app_tests::transcript_expansion_tests, crate::app_tests::transcript_mouse_scroll_tests, crate::app_tests::ui
+  declares: crate::app_tests::live_transcript_tests, crate::app_tests::pending_message_tests, crate::app_tests::prompt_history_tests, crate::app_tests::transcript_character_cursor_tests, crate::app_tests::transcript_expansion_tests, crate::app_tests::transcript_mouse_scroll_tests, crate::app_tests::ui
   references: crate
   referenced-by-count: 1
 crate::app_timeline_helpers [crates/agena-tui-app/src/app_timeline_helpers.rs]
@@ -6915,7 +7040,7 @@ crate::app_timeline_helpers [crates/agena-tui-app/src/app_timeline_helpers.rs]
   referenced-by-count: 1
 crate::app_transcript_actions [crates/agena-tui-app/src/app_transcript_actions.rs]
   declares: —
-  references: crate
+  references: crate, crate::app_types
   referenced-by-count: 0
 crate::app_transcript_helpers [crates/agena-tui-app/src/app_transcript_helpers.rs]
   declares: —
@@ -6926,9 +7051,9 @@ crate::app_transcript_input [crates/agena-tui-app/src/app_transcript_input.rs]
   references: crate
   referenced-by-count: 0
 crate::app_types [crates/agena-tui-app/src/app_types.rs]
-  declares: crate::app_types::composer, crate::app_types::overlays, crate::app_types::session
+  declares: crate::app_types::composer, crate::app_types::overlays, crate::app_types::session, crate::app_types::ui_failure_tests
   references: crate, crate::app_types::composer, crate::app_types::overlays, crate::app_types::session, crate::composer_queue, crate::transcript_state
-  referenced-by-count: 5
+  referenced-by-count: 7
 crate::app_usage [crates/agena-tui-app/src/app_usage.rs]
   declares: —
   references: crate
@@ -7149,10 +7274,6 @@ crate::app_tests::prompt_history_tests [crates/agena-tui-app/src/app_tests.rs]
   declares: —
   references: crate
   referenced-by-count: 0
-crate::app_tests::rewind_message_tests [crates/agena-tui-app/src/app_tests.rs]
-  declares: —
-  references: crate
-  referenced-by-count: 0
 crate::app_tests::transcript_character_cursor_tests [crates/agena-tui-app/src/app_tests.rs]
   declares: —
   references: crate
@@ -7181,6 +7302,10 @@ crate::app_types::session [crates/agena-tui-app/src/app_types/session.rs]
   declares: —
   references: crate::app_types, crate::commands
   referenced-by-count: 1
+crate::app_types::ui_failure_tests [crates/agena-tui-app/src/app_types.rs]
+  declares: —
+  references: crate::app_types
+  referenced-by-count: 0
 crate::commands::tests [crates/agena-tui-app/src/commands.rs]
   declares: —
   references: crate::commands
@@ -7191,7 +7316,7 @@ crate::plugin_workbench::workbench_config [crates/agena-tui-app/src/plugin_workb
   referenced-by-count: 0
 crate::plugin_workbench::workbench_editor [crates/agena-tui-app/src/plugin_workbench/workbench_editor.rs]
   declares: —
-  references: crate::plugin_workbench
+  references: crate, crate::plugin_workbench
   referenced-by-count: 0
 crate::plugin_workbench::workbench_input [crates/agena-tui-app/src/plugin_workbench/workbench_input.rs]
   declares: —
@@ -7199,7 +7324,7 @@ crate::plugin_workbench::workbench_input [crates/agena-tui-app/src/plugin_workbe
   referenced-by-count: 0
 crate::plugin_workbench::workbench_navigation [crates/agena-tui-app/src/plugin_workbench/workbench_navigation.rs]
   declares: —
-  references: crate::plugin_workbench
+  references: crate, crate::plugin_workbench
   referenced-by-count: 0
 crate::plugin_workbench::workbench_render [crates/agena-tui-app/src/plugin_workbench/workbench_render.rs]
   declares: —
@@ -7353,17 +7478,17 @@ crate::view::view_settings_helpers::cell_highlight_tests [crates/agena-tui-app/s
 
 </details>
 
-### 7.52 `agena-tui-backend::agena_tui_backend` (lib)
+### 7.53 `agena-tui-backend::agena_tui_backend` (lib)
 
-入口 `crates/agena-tui-backend/src/lib.rs`；模块 19；声明边 18；引用边 27；源码观测 dependency roots 10。
+入口 `crates/agena-tui-backend/src/lib.rs`；模块 19；声明边 18；引用边 26；源码观测 dependency roots 10。
 
 <details><summary>完整模块邻接表</summary>
 
 ```text
 crate [crates/agena-tui-backend/src/lib.rs]
-  declares: crate::backend_auth, crate::backend_catalog, crate::backend_config, crate::backend_drafts, crate::backend_events, crate::backend_helpers, crate::backend_plugins, crate::backend_provider, crate::backend_session, crate::backend_types, crate::backend_util, crate::backend_workspace
-  references: crate::backend_auth, crate::backend_catalog, crate::backend_config, crate::backend_drafts, crate::backend_events, crate::backend_helpers, crate::backend_types, crate::backend_util
-  referenced-by-count: 16
+  declares: crate::backend_auth, crate::backend_catalog, crate::backend_config, crate::backend_drafts, crate::backend_events, crate::backend_plugins, crate::backend_provider, crate::backend_session, crate::backend_types, crate::backend_util, crate::backend_workspace
+  references: crate::backend_auth, crate::backend_catalog, crate::backend_config, crate::backend_drafts, crate::backend_events, crate::backend_types, crate::backend_util
+  referenced-by-count: 15
 crate::backend_auth [crates/agena-tui-backend/src/backend_auth.rs]
   declares: —
   references: crate
@@ -7381,10 +7506,6 @@ crate::backend_drafts [crates/agena-tui-backend/src/backend_drafts/mod.rs]
   references: crate::backend_drafts::provider_draft_auth, crate::backend_drafts::provider_draft_config
   referenced-by-count: 1
 crate::backend_events [crates/agena-tui-backend/src/backend_events.rs]
-  declares: —
-  references: crate
-  referenced-by-count: 1
-crate::backend_helpers [crates/agena-tui-backend/src/backend_helpers.rs]
   declares: —
   references: crate
   referenced-by-count: 1
@@ -7413,9 +7534,9 @@ crate::backend_workspace [crates/agena-tui-backend/src/backend_workspace.rs]
   references: crate
   referenced-by-count: 0
 crate::backend_drafts::provider_draft_auth [crates/agena-tui-backend/src/backend_drafts/provider_draft_auth.rs]
-  declares: —
+  declares: crate::backend_drafts::provider_draft_auth::failure_projection_tests
   references: crate
-  referenced-by-count: 1
+  referenced-by-count: 2
 crate::backend_drafts::provider_draft_config [crates/agena-tui-backend/src/backend_drafts/provider_draft_config.rs]
   declares: —
   references: crate
@@ -7432,6 +7553,10 @@ crate::backend_provider::settings [crates/agena-tui-backend/src/backend_provider
   declares: —
   references: crate
   referenced-by-count: 0
+crate::backend_drafts::provider_draft_auth::failure_projection_tests [crates/agena-tui-backend/src/backend_drafts/provider_draft_auth.rs]
+  declares: —
+  references: crate::backend_drafts::provider_draft_auth
+  referenced-by-count: 0
 crate::backend_provider::selection::tests [crates/agena-tui-backend/src/backend_provider/selection.rs]
   declares: —
   references: crate, crate::backend_provider::selection
@@ -7440,7 +7565,7 @@ crate::backend_provider::selection::tests [crates/agena-tui-backend/src/backend_
 
 </details>
 
-### 7.53 `agena-tui-components::agena_tui_components` (lib)
+### 7.54 `agena-tui-components::agena_tui_components` (lib)
 
 入口 `crates/agena-tui-components/src/lib.rs`；模块 52；声明边 51；引用边 121；源码观测 dependency roots 5。
 
@@ -7659,7 +7784,7 @@ crate::workbench_frame::tests [crates/agena-tui-components/src/workbench_frame.r
 
 </details>
 
-### 7.54 `agena-tui-media::agena_tui_media` (lib)
+### 7.55 `agena-tui-media::agena_tui_media` (lib)
 
 入口 `crates/agena-tui-media/src/lib.rs`；模块 8；声明边 7；引用边 9；源码观测 dependency roots 16。
 
@@ -7702,7 +7827,7 @@ crate::unicode_math::tests [crates/agena-tui-media/src/unicode_math.rs]
 
 </details>
 
-### 7.55 `agena-tui-permission-studio::agena_tui_permission_studio` (lib)
+### 7.56 `agena-tui-permission-studio::agena_tui_permission_studio` (lib)
 
 入口 `crates/agena-tui-permission-studio/src/lib.rs`；模块 6；声明边 5；引用边 6；源码观测 dependency roots 4。
 
@@ -7737,7 +7862,7 @@ crate::permission_studio::tests [crates/agena-tui-permission-studio/src/permissi
 
 </details>
 
-### 7.56 `agena-tui-platform::agena_tui_platform` (lib)
+### 7.57 `agena-tui-platform::agena_tui_platform` (lib)
 
 入口 `crates/agena-tui-platform/src/lib.rs`；模块 23；声明边 22；引用边 30；源码观测 dependency roots 9。
 
@@ -7840,7 +7965,7 @@ crate::terminal::graphics::tests [crates/agena-tui-platform/src/terminal/graphic
 
 </details>
 
-### 7.57 `agena-tui-plugin-workbench::agena_tui_plugin_workbench` (lib)
+### 7.58 `agena-tui-plugin-workbench::agena_tui_plugin_workbench` (lib)
 
 入口 `crates/agena-tui-plugin-workbench/src/lib.rs`；模块 28；声明边 27；引用边 61；源码观测 dependency roots 7。
 
@@ -7963,9 +8088,9 @@ crate::model::workbench_text_render::plugin [crates/agena-tui-plugin-workbench/s
 
 </details>
 
-### 7.58 `agena-tui-provider-studio::agena_tui_provider_studio` (lib)
+### 7.59 `agena-tui-provider-studio::agena_tui_provider_studio` (lib)
 
-入口 `crates/agena-tui-provider-studio/src/lib.rs`；模块 3；声明边 2；引用边 2；源码观测 dependency roots 4。
+入口 `crates/agena-tui-provider-studio/src/lib.rs`；模块 3；声明边 2；引用边 2；源码观测 dependency roots 2。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -7986,7 +8111,7 @@ crate::tests [crates/agena-tui-provider-studio/src/lib.rs]
 
 </details>
 
-### 7.59 `agena-tui-session::agena_tui_session` (lib)
+### 7.60 `agena-tui-session::agena_tui_session` (lib)
 
 入口 `crates/agena-tui-session/src/lib.rs`；模块 12；声明边 11；引用边 14；源码观测 dependency roots 7。
 
@@ -8045,7 +8170,7 @@ crate::session_view::tests [crates/agena-tui-session/src/session_view.rs]
 
 </details>
 
-### 7.60 `agena-tui-settings::agena_tui_settings` (lib)
+### 7.61 `agena-tui-settings::agena_tui_settings` (lib)
 
 入口 `crates/agena-tui-settings/src/lib.rs`；模块 2；声明边 1；引用边 1；源码观测 dependency roots 3。
 
@@ -8064,9 +8189,9 @@ crate::tests [crates/agena-tui-settings/src/lib.rs]
 
 </details>
 
-### 7.61 `agena-tui-transcript::agena_tui_transcript` (lib)
+### 7.62 `agena-tui-transcript::agena_tui_transcript` (lib)
 
-入口 `crates/agena-tui-transcript/src/lib.rs`；模块 29；声明边 28；引用边 61；源码观测 dependency roots 15。
+入口 `crates/agena-tui-transcript/src/lib.rs`；模块 29；声明边 28；引用边 62；源码观测 dependency roots 15。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -8102,7 +8227,7 @@ crate::selection [crates/agena-tui-transcript/src/selection.rs]
 crate::snapshot [crates/agena-tui-transcript/src/snapshot.rs]
   declares: crate::snapshot::tests
   references: crate
-  referenced-by-count: 2
+  referenced-by-count: 4
 crate::test_fixtures [crates/agena-tui-transcript/src/lib.rs]
   declares: —
   references: crate
@@ -8173,15 +8298,15 @@ crate::renderer::transcript_ast::tests [crates/agena-tui-transcript/src/renderer
   referenced-by-count: 0
 crate::renderer::transcript_render::message_render [crates/agena-tui-transcript/src/renderer/transcript_render/message_render.rs]
   declares: —
-  references: crate, crate::renderer, crate::renderer::transcript_ast, crate::renderer::transcript_render::operation_render, crate::renderer::transcript_render::request_render
-  referenced-by-count: 2
+  references: crate, crate::renderer, crate::renderer::transcript_ast, crate::renderer::transcript_render::operation_render, crate::renderer::transcript_render::request_render, crate::snapshot
+  referenced-by-count: 1
 crate::renderer::transcript_render::operation_render [crates/agena-tui-transcript/src/renderer/transcript_render/operation_render.rs]
   declares: —
   references: crate, crate::renderer, crate::renderer::transcript_ast, crate::renderer::transcript_render::request_render
   referenced-by-count: 2
 crate::renderer::transcript_render::request_render [crates/agena-tui-transcript/src/renderer/transcript_render/request_render.rs]
   declares: —
-  references: crate, crate::renderer, crate::renderer::transcript_render::message_render
+  references: crate, crate::renderer, crate::snapshot
   referenced-by-count: 2
 crate::renderer::transcript_text::syntax_highlight_tests [crates/agena-tui-transcript/src/renderer/transcript_text.rs]
   declares: —
@@ -8191,9 +8316,9 @@ crate::renderer::transcript_text::syntax_highlight_tests [crates/agena-tui-trans
 
 </details>
 
-### 7.62 `agena-web::agena_web` (lib)
+### 7.63 `agena-web::agena_web` (lib)
 
-入口 `crates/agena-web/src/lib.rs`；模块 17；声明边 16；引用边 28；源码观测 dependency roots 14。
+入口 `crates/agena-web/src/lib.rs`；模块 17；声明边 16；引用边 28；源码观测 dependency roots 15。
 
 <details><summary>完整模块邻接表</summary>
 
@@ -11646,7 +11771,7 @@ pub struct CancelRunParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RewindSessionParams {
     pub session_id: i64,
-    pub message_id: i64,
+    pub turn_id: agena_domain::TurnId,
     #[serde(default)]
     pub expected_version: Option<i64>,
 }
@@ -11742,56 +11867,46 @@ pub struct DeletePermissionRuleParams {
 
 </details>
 
-<details><summary><code>crates/agena-api/src/error.rs</code> — 94 lines; struct=1, enum=1, impl=9, fn=7</summary>
+<details><summary><code>crates/agena-api/src/error.rs</code> — 184 lines; mod=1, struct=1, impl=6, fn=12</summary>
 
 - Package：`agena-api`
-- Target/module：agena_api: crate::error
+- Target/module：agena_api: crate::error, crate::error::tests
 
 `````rust
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
+    RetryDirective, UserPresentation, UserProblem,
+};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorCode {
-
-    BadRequest,
-
-    NotFound,
-
-    Conflict,
-
-    Forbidden,
-
-    Unauthorized,
-
-    ServiceUnavailable,
-
-    Internal,
-
-    Protocol,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiError {
-    pub code: ErrorCode,
-    pub message: String,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
+    pub problem: UserProblem,
 }
 
 impl ApiError {
-    pub fn bad_request(msg: impl Into<String>) -> Self;
+    pub fn from_failure(problem: Failure) -> Self;
 
-    pub fn not_found(msg: impl Into<String>) -> Self;
+    pub fn bad_request(message: &'static str) -> Self;
 
-    pub fn conflict(msg: impl Into<String>) -> Self;
+    pub fn not_found(message: &'static str) -> Self;
 
-    pub fn internal(msg: impl Into<String>) -> Self;
+    pub fn conflict(message: &'static str) -> Self;
 
-    pub fn protocol(msg: impl Into<String>) -> Self;
+    pub fn internal(_diagnostic: impl Into<String>) -> Self;
 
-    pub fn service_unavailable(msg: impl Into<String>) -> Self;
+    pub fn protocol(_diagnostic: impl Into<String>) -> Self;
+
+    pub fn service_unavailable(_diagnostic: impl Into<String>) -> Self;
+
+    fn new(
+        code: &'static str,
+        category: FailureCategory,
+        responsibility: FailureResponsibility,
+        retry: RetryDirective,
+        recovery: RecoveryDirective,
+        user: UserPresentation,
+    ) -> Self;
 }
 
 impl std::fmt::Display for ApiError {
@@ -11799,6 +11914,21 @@ impl std::fmt::Display for ApiError {
 }
 
 impl std::error::Error for ApiError {}
+
+#[cfg(test)]
+mod tests {
+    use super::ApiError;
+    use agena_failure::{FailureCategory, ModelFeedback};
+
+    #[test]
+    fn internal_diagnostic_is_not_serialized_or_displayed();
+
+    #[test]
+    fn machine_code_is_not_part_of_display_text();
+
+    #[test]
+    fn api_projection_never_contains_model_feedback();
+}
 `````
 
 </details>
@@ -11823,7 +11953,7 @@ pub mod ws;
 pub use error::ApiError;
 pub use scope::Scope;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub type EventKindTag = smol_str::SmolStr;
 
@@ -11856,7 +11986,7 @@ pub struct EventResource {
 
 </details>
 
-<details><summary><code>crates/agena-api/src/message_part.rs</code> — 688 lines; mod=1, struct=22, enum=11, impl=10, fn=18</summary>
+<details><summary><code>crates/agena-api/src/message_part.rs</code> — 702 lines; mod=1, struct=23, enum=11, impl=10, fn=18</summary>
 
 - Package：`agena-api`
 - Target/module：agena_api: crate::message_part, crate::message_part::tests
@@ -11889,7 +12019,7 @@ pub struct MessagePartResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<agena_domain::ActivityId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -11911,6 +12041,10 @@ pub enum PartExecutionStatusResource {
     Pending,
     InProgress,
     Completed,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }
@@ -11963,8 +12097,7 @@ pub struct MessageSkillReferencePartResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageErrorPartResource {
-    pub code: String,
-    pub message: String,
+    pub problem: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -12132,9 +12265,7 @@ impl ToolOutputResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperationErrorResource {
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub failure: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -12158,6 +12289,10 @@ pub enum ToolResultStateResource {
     Pending,
     Running,
     Completed,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }
@@ -12168,10 +12303,18 @@ pub struct ToolResultDisplayResource {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSectionResource>,
 }
 
 impl ToolResultDisplayResource {
     pub fn is_empty(&self) -> bool;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPresentationSectionResource {
+    pub title: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -12487,7 +12630,7 @@ pub fn normalize_limit(limit: Option<u64>) -> u64;
 
 </details>
 
-<details><summary><code>crates/agena-api/src/queries.rs</code> — 256 lines; mod=1, struct=16, enum=3, impl=1, fn=3</summary>
+<details><summary><code>crates/agena-api/src/queries.rs</code> — 217 lines; mod=1, struct=12, enum=3, impl=1, fn=3</summary>
 
 - Package：`agena-api`
 - Target/module：agena_api: crate::queries, crate::queries::provider_discovery_contract_tests
@@ -12497,9 +12640,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::pagination::{PageInfo, PaginatedResponse};
 use crate::resource::{
-    HealthResponse, MessageResource, PartLoadMode, PermissionRuleResource,
-    ProviderAdapterModelsResponse, ProviderModelsResponse, ProviderSummaryResource,
-    RuntimeStatusResponse, SessionResource, WorkspaceResource,
+    HealthResponse, PermissionRuleResource, ProviderAdapterModelsResponse, ProviderModelsResponse,
+    ProviderSummaryResource, RuntimeStatusResponse, SessionResource, WorkspaceResource,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -12516,10 +12658,6 @@ pub enum Query {
     ListSessions(ListSessionsParams),
     GetSession(GetSessionParams),
     GetSessionState(GetSessionParams),
-    ListMessages(ListMessagesParams),
-    GetMessage(GetMessageParams),
-    ListMessageParts(ListMessagePartsParams),
-    GetMessagePart(GetMessagePartParams),
     ListEvents(ListEventsParams),
     ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
@@ -12539,10 +12677,6 @@ pub enum QueryResult {
     Sessions(PaginatedResponse<SessionResource>),
     Session(SessionResource),
     SessionState(crate::resource::SessionExecutionResource),
-    Messages(PaginatedResponse<MessageResource>),
-    Message(MessageResource),
-    MessageParts(Vec<crate::message_part::MessagePartResource>),
-    MessagePart(crate::message_part::MessagePartResource),
     Events(PaginatedEvents),
     PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
@@ -12644,36 +12778,6 @@ pub struct GetSessionParams {
     pub session_id: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListMessagesParams {
-    pub session_id: i64,
-    #[serde(default)]
-    pub cursor: Option<String>,
-    #[serde(default)]
-    pub limit: Option<u64>,
-    #[serde(default)]
-    pub parts: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetMessageParams {
-    pub message_id: i64,
-    #[serde(default)]
-    pub parts: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ListMessagePartsParams {
-    pub message_id: i64,
-    #[serde(default)]
-    pub mode: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetMessagePartParams {
-    pub part_id: i64,
-}
-
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ListEventsParams {
 
@@ -12708,7 +12812,7 @@ pub struct GetPermissionRuleParams {
 
 </details>
 
-<details><summary><code>crates/agena-api/src/resource/auth.rs</code> — 362 lines; struct=13, enum=5, impl=6, fn=7</summary>
+<details><summary><code>crates/agena-api/src/resource/auth.rs</code> — 346 lines; struct=11, enum=5, impl=6, fn=7</summary>
 
 - Package：`agena-api`
 - Target/module：agena_api: crate::resource::auth
@@ -12761,20 +12865,6 @@ pub struct ProviderAdapterSummaryResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderNativeToolBindingResource {
-    pub tool: String,
-    pub route: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderNativeToolsSummaryResource {
-    pub active: bool,
-    pub model_count: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bindings: Vec<ProviderNativeToolBindingResource>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderDefaultsResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
@@ -12795,8 +12885,6 @@ pub struct ProviderSummaryResource {
     pub defaults: ProviderDefaultsResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub provider_native_tools: Option<ProviderNativeToolsSummaryResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13104,7 +13192,7 @@ mod permission_reply_contract_tests {
 
 </details>
 
-<details><summary><code>crates/agena-api/src/resource.rs</code> — 1848 lines; mod=11, struct=74, enum=34, impl=17, fn=23</summary>
+<details><summary><code>crates/agena-api/src/resource.rs</code> — 1851 lines; mod=11, struct=74, enum=34, impl=17, fn=23</summary>
 
 - Package：`agena-api`
 - Target/module：agena_api: crate::resource, crate::resource::configured_model_contract_tests, crate::resource::message_status_contract_tests, crate::resource::model_pricing_contract_tests, crate::resource::model_ref_contract_tests, crate::resource::permission_config_resource_contract_tests, crate::resource::plugin_ui_catalog_contract_tests, crate::resource::provider_model_resource_contract_tests, crate::resource::run_options_contract_tests, crate::resource::scheduled_job_status_tests
@@ -13158,7 +13246,7 @@ pub struct ScheduledJobRunResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -13494,7 +13582,7 @@ pub struct RuntimeBackgroundTaskResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
     pub created_at: DateTime<Utc>,
     pub started_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -13554,7 +13642,7 @@ pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
     pub model_count: usize,
 }
 
@@ -13969,7 +14057,6 @@ pub enum ExecutionPhase {
 pub enum WorkflowState {
     #[default]
     Quiescent,
-    ReadyForModel,
     ToolPending,
     Blocked,
 }
@@ -14015,7 +14102,7 @@ pub struct SessionExecutionContextResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subtask_finished_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub subtask_error: Option<String>,
+    pub subtask_failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -14144,6 +14231,10 @@ pub enum MessageStatus {
     Pending,
     InProgress,
     Completed,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }
@@ -14173,7 +14264,7 @@ pub struct MessageMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -14622,7 +14713,7 @@ pub struct ProviderAdapterModelsResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ProviderModelResource>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -14783,52 +14874,91 @@ pub enum ServerMessage {
 
 ### 8.3 `agena-api-server`
 
-<details><summary><code>crates/agena-api-server/src/error.rs</code> — 63 lines; enum=1, impl=3, fn=4</summary>
+<details><summary><code>crates/agena-api-server/src/error.rs</code> — 143 lines; mod=1, struct=1, impl=11, fn=16</summary>
 
 - Package：`agena-api-server`
-- Target/module：agena_api_server: crate::error
+- Target/module：agena_api_server: crate::error, crate::error::tests
 
 `````rust
 use agena_api::error::ApiError;
 use agena_application::ApplicationError;
+use agena_failure::FailureCategory;
 use axum::{
     Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 
-#[derive(Debug, thiserror::Error)]
-pub enum ServerError {
-    #[error("bad request: {0}")]
-    BadRequest(String),
-    #[error("not found: {0}")]
-    NotFound(String),
-    #[error("conflict: {0}")]
-    Conflict(String),
-    #[error("service unavailable: {0}")]
-    ServiceUnavailable(String),
-    #[error("internal: {0}")]
-    Internal(String),
+#[derive(Debug)]
+pub struct ServerError {
+    application: ApplicationError,
 }
 
 impl ServerError {
+    pub fn from_failure(failure: agena_failure::Failure) -> Self;
+
+    pub fn from_failure_with_diagnostic(
+        failure: agena_failure::Failure,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn bad_request(message: &'static str) -> Self;
+
+    pub fn bad_request_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn not_found(message: &'static str) -> Self;
+
+    pub fn not_found_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn conflict(message: &'static str) -> Self;
+
+    pub fn conflict_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn service_unavailable(diagnostic: impl std::fmt::Display) -> Self;
+
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self;
+
     pub fn into_api(self) -> ApiError;
 
     pub fn status(&self) -> StatusCode;
 }
+
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for ServerError {}
 
 impl IntoResponse for ServerError {
     fn into_response(self) -> Response;
 }
 
 impl From<ApplicationError> for ServerError {
-    fn from(value: ApplicationError) -> Self;
+    fn from(application: ApplicationError) -> Self;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ServerError;
+    use agena_application::ApplicationError;
+
+    #[test]
+    fn transport_preserves_failure_identity_and_excludes_diagnostic();
 }
 `````
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/ipc.rs</code> — 247 lines; mod=2, fn=5</summary>
+<details><summary><code>crates/agena-api-server/src/ipc.rs</code> — 244 lines; mod=2, fn=5</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::ipc, crate::ipc::stub, crate::ipc::unix
@@ -15135,7 +15265,7 @@ pub enum AppServerNotification {
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/jsonrpc/server.rs</code> — 304 lines; struct=2, enum=1, trait=1, impl=4, fn=21</summary>
+<details><summary><code>crates/agena-api-server/src/jsonrpc/server.rs</code> — 315 lines; struct=2, enum=1, trait=1, impl=4, fn=22</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::jsonrpc::server
@@ -15274,11 +15404,13 @@ where
     T: serde::Serialize;
 
 fn to_json_rpc_error(error: AppServerError) -> JsonRpcError;
+
+fn json_rpc_problem(code: i64, error: agena_api::ApiError) -> JsonRpcError;
 `````
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/lib.rs</code> — 754 lines; mod=8, fn=6</summary>
+<details><summary><code>crates/agena-api-server/src/lib.rs</code> — 744 lines; mod=8, fn=6</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate, crate::router_contract_tests
@@ -15523,7 +15655,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/rest/marketplace.rs</code> — 395 lines; impl=8, fn=12</summary>
+<details><summary><code>crates/agena-api-server/src/rest/marketplace.rs</code> — 391 lines; impl=7, fn=11</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::rest::marketplace
@@ -15568,8 +15700,6 @@ fn normalize_registry_url(registry_url: &str) -> Result<String, ServerError>;
 
 fn marketplace_client()
 -> agena_plugin_marketplace::MarketplaceClient<agena_plugin_marketplace::ReqwestFetcher>;
-
-fn marketplace_bad_request(error: impl ToString) -> ServerError;
 
 async fn spawn_marketplace_background_task<F>(
     state: &AppState,
@@ -15629,43 +15759,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/rest/messages.rs</code> — 83 lines; impl=4, fn=4</summary>
-
-- Package：`agena-api-server`
-- Target/module：agena_api_server: crate::rest::messages
-
-`````rust
-pub async fn list_messages(
-    State(state): State<AppState>,
-    Path(session_id): Path<i64>,
-    AxumQuery(query): AxumQuery<MessageListQuery>,
-) -> Result<impl IntoResponse, ServerError>;
-
-pub async fn get_message(
-    State(state): State<AppState>,
-    Path(message_id): Path<i64>,
-    AxumQuery(query): AxumQuery<MessageDetailQuery>,
-) -> Result<impl IntoResponse, ServerError>;
-
-pub async fn list_message_parts(
-    State(state): State<AppState>,
-    Path(message_id): Path<i64>,
-    AxumQuery(query): AxumQuery<MessagePartsQuery>,
-) -> Result<impl IntoResponse, ServerError>;
-
-pub async fn get_message_part(
-    State(state): State<AppState>,
-    Path(part_id): Path<i64>,
-) -> Result<impl IntoResponse, ServerError>;
-use super::{
-    AppState, AxumQuery, IntoResponse, MessageDetailQuery, MessageListQuery, MessagePartsQuery,
-    Path, ServerError, State, query_json,
-};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-api-server/src/rest/mod.rs</code> — 699 lines; mod=14, struct=5, impl=15, fn=31</summary>
+<details><summary><code>crates/agena-api-server/src/rest/mod.rs</code> — 713 lines; mod=13, struct=3, impl=15, fn=31</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::rest, crate::rest::usage_query_tests
@@ -15691,13 +15785,12 @@ use agena_application::dto::{
     HealthResponse, ItemsResponse, MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
     MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
     MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
-    MarketplaceUpgradeRequest, MemoryWriteRequest, MessageListQuery, PartLoadMode,
-    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
-    PluginUiRequestContext, RuntimeBackgroundTaskCancelResponse,
-    RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
-    SessionEventStreamQuery, SessionListQuery, SessionMessageRequest, SessionReplyRequestBody,
-    SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
+    MarketplaceUpgradeRequest, MemoryWriteRequest, PermissionRuleRevokeRequest,
+    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
+    PluginUiCatalogResponse, PluginUiInvokeToolRequest, PluginUiRequestContext,
+    RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
+    SessionCreateRequest, SessionEventStreamQuery, SessionListQuery, SessionMessageRequest,
+    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
     WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };
@@ -15706,8 +15799,7 @@ use agena_runtime::{
     ConfigSettingsDeleteInput, ConfigSettingsEditResponse, ConfigSettingsGetInput,
     ConfigSettingsListInput, ConfigSettingsListResponse, ConfigSettingsPatchInput,
     ConfigSettingsReadResponse, ConfigSettingsReloadResponse, ConfigSettingsSetInput,
-    ConfigSettingsSource, ConfigSettingsValidateInput, RuntimeConfigSettingsError,
-    RuntimeConfigSettingsErrorKind, list_json_path,
+    ConfigSettingsSource, ConfigSettingsValidateInput, RuntimeConfigSettingsError, list_json_path,
 };
 use async_stream::stream;
 use axum::{
@@ -15732,7 +15824,6 @@ mod events;
 mod git;
 mod marketplace;
 mod memory;
-mod messages;
 mod model_catalog;
 mod permissions;
 mod plugins;
@@ -15742,7 +15833,6 @@ mod settings;
 mod workspaces;
 
 pub use events::*;
-pub use messages::*;
 pub use permissions::*;
 pub use sessions::*;
 pub use settings::*;
@@ -15800,18 +15890,6 @@ pub struct SessionForkRequestBody {
     pub at_event_seq: Option<i64>,
     #[serde(default)]
     pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MessageDetailQuery {
-    #[serde(default)]
-    pub parts: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MessagePartsQuery {
-    #[serde(default)]
-    pub mode: PartLoadMode,
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError>;
@@ -15899,7 +15977,7 @@ fn parse_usage_datetime(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod usage_query_tests {
-    use super::{ServerError, UsagePeriod, UsageStatsHttpQuery, usage_stats_query_from_http};
+    use super::{UsagePeriod, UsageStatsHttpQuery, usage_stats_query_from_http};
 
     #[test]
     fn http_usage_query_maps_filters_and_timezone();
@@ -15941,7 +16019,7 @@ fn settings_error(error: RuntimeConfigSettingsError) -> ServerError;
 
 fn if_match_version(headers: &HeaderMap) -> Result<Option<i64>, ServerError>;
 
-fn sse_error_event(message: impl Into<String>) -> Event;
+fn sse_error_event(diagnostic: impl std::fmt::Display) -> Event;
 
 fn bearer_token(headers: &HeaderMap) -> Option<String>;
 `````
@@ -16032,7 +16110,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/rest/plugins.rs</code> — 298 lines; struct=1, impl=7, fn=9</summary>
+<details><summary><code>crates/agena-api-server/src/rest/plugins.rs</code> — 335 lines; struct=1, impl=7, fn=9</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::rest::plugins
@@ -16294,7 +16372,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/rest/settings.rs</code> — 107 lines; impl=6, fn=6</summary>
+<details><summary><code>crates/agena-api-server/src/rest/settings.rs</code> — 108 lines; impl=6, fn=6</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::rest::settings
@@ -16397,7 +16475,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/sse.rs</code> — 115 lines; struct=1, impl=2, fn=2</summary>
+<details><summary><code>crates/agena-api-server/src/sse.rs</code> — 116 lines; struct=1, impl=2, fn=2</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::sse
@@ -16492,7 +16570,7 @@ pub(crate) fn event_filter_from_subscribe(request: SubscribeRequest) -> agena_do
 
 </details>
 
-<details><summary><code>crates/agena-api-server/src/ws.rs</code> — 225 lines; struct=1, fn=4</summary>
+<details><summary><code>crates/agena-api-server/src/ws.rs</code> — 222 lines; struct=1, fn=4</summary>
 
 - Package：`agena-api-server`
 - Target/module：agena_api_server: crate::ws
@@ -16550,7 +16628,7 @@ async fn spawn_subscription(
 
 ### 8.4 `agena-application`
 
-<details><summary><code>crates/agena-application/src/application.rs</code> — 939 lines; struct=2, enum=1, impl=3, fn=52</summary>
+<details><summary><code>crates/agena-application/src/application.rs</code> — 945 lines; struct=2, enum=1, impl=3, fn=52</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::application
@@ -16869,8 +16947,7 @@ use std::future::Future;
 use crate::{
     Application, ApplicationError,
     dto::{
-        CursorPaginationQuery, MessageListQuery,
-        ModelCatalogResponse as ApplicationModelCatalogResponse,
+        CursorPaginationQuery, ModelCatalogResponse as ApplicationModelCatalogResponse,
         PermissionRuleResource as ApplicationPermissionRuleResource, PermissionRuleWriteRequest,
         RuntimeBackgroundTaskResource as ApplicationRuntimeBackgroundTaskResource,
         SearchPaginationQuery, SessionListQuery, WorkspaceListQuery, WorkspacePathRequest,
@@ -16891,8 +16968,7 @@ use agena_api::{
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
-        GetMessageParams, GetMessagePartParams, GetPermissionRuleParams, GetSessionParams,
-        GetWorkspaceParams, ListEventsParams, ListMessagePartsParams, ListMessagesParams,
+        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
         ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
         PaginatedEvents, Query, QueryResult,
@@ -16998,7 +17074,7 @@ pub use queries::dispatch_query;
 
 </details>
 
-<details><summary><code>crates/agena-application/src/dispatch/queries.rs</code> — 248 lines; fn=3</summary>
+<details><summary><code>crates/agena-application/src/dispatch/queries.rs</code> — 197 lines; fn=3</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::dispatch::queries
@@ -17019,13 +17095,12 @@ pub async fn dispatch_query(
     query: Query,
 ) -> Result<QueryResult, ApplicationError>;
 use super::{
-    Application, ApplicationError, CursorPaginationQuery, GetMessageParams, GetMessagePartParams,
-    GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
-    ListMessagePartsParams, ListMessagesParams, ListPermissionRulesParams,
+    Application, ApplicationError, CursorPaginationQuery, GetPermissionRuleParams,
+    GetSessionParams, GetWorkspaceParams, ListEventsParams, ListPermissionRulesParams,
     ListProviderAdapterModelsParams, ListProviderModelsParams,
-    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-    MessageListQuery, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
-    SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
+    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, PageInfo,
+    PaginatedEvents, Query, QueryResult, SearchPaginationQuery, SessionListQuery,
+    WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
     runtime_status_response,
 };
 `````
@@ -17602,27 +17677,7 @@ use super::{Deserialize, MemoryType, Serialize};
 
 </details>
 
-<details><summary><code>crates/agena-application/src/dto/messages.rs</code> — 10 lines; struct=1</summary>
-
-- Package：`agena-application`
-- Target/module：agena_application: crate::dto::messages
-
-`````rust
-pub use agena_api::resource::{MessageResource, PartLoadMode};
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MessageListQuery {
-    #[serde(flatten)]
-    pub pagination: CursorPaginationQuery,
-    #[serde(default)]
-    pub parts: PartLoadMode,
-}
-use super::{CursorPaginationQuery, Deserialize};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-application/src/dto/mod.rs</code> — 137 lines; mod=11, struct=8, impl=2, fn=5</summary>
+<details><summary><code>crates/agena-application/src/dto/mod.rs</code> — 135 lines; mod=10, struct=8, impl=2, fn=5</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::dto
@@ -17641,7 +17696,6 @@ mod access;
 mod auth;
 mod marketplace;
 mod memory;
-mod messages;
 mod model_catalog;
 mod plugins;
 mod providers;
@@ -17656,7 +17710,6 @@ pub use agena_api::resource::{
 pub use auth::*;
 pub use marketplace::*;
 pub use memory::*;
-pub use messages::*;
 pub use model_catalog::*;
 pub use plugins::*;
 pub use providers::*;
@@ -17774,7 +17827,7 @@ pub struct ModelCatalogResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
     pub model_count: usize,
 }
 
@@ -17944,7 +17997,7 @@ use super::{Deserialize, Serialize};
 
 </details>
 
-<details><summary><code>crates/agena-application/src/dto/providers.rs</code> — 58 lines; struct=6</summary>
+<details><summary><code>crates/agena-application/src/dto/providers.rs</code> — 37 lines; struct=4</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::dto::providers
@@ -17955,20 +18008,6 @@ pub struct ProviderAdapterSummaryResource {
     pub adapter_id: String,
     pub enabled: bool,
     pub configured_model_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProviderNativeToolBindingResource {
-    pub tool: String,
-    pub route: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProviderNativeToolsSummaryResource {
-    pub active: bool,
-    pub model_count: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bindings: Vec<ProviderNativeToolBindingResource>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -17992,9 +18031,6 @@ pub struct ProviderSummaryResource {
     pub defaults: ProviderDefaultsResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adapters: Vec<ProviderAdapterSummaryResource>,
-
-    #[serde(skip)]
-    pub provider_native_tools: Option<ProviderNativeToolsSummaryResource>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -18169,7 +18205,7 @@ pub struct RuntimeBackgroundTaskResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
     pub created_at: DateTime<Utc>,
     pub started_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -18287,7 +18323,7 @@ pub struct SessionReplyRequestBody<T> {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionRewindRequestBody {
-    pub message_id: i64,
+    pub turn_id: agena_domain::TurnId,
 }
 
 #[cfg(test)]
@@ -18385,36 +18421,103 @@ use super::{DateTime, Deserialize, SearchPaginationQuery, Serialize, Utc};
 
 </details>
 
-<details><summary><code>crates/agena-application/src/error.rs</code> — 37 lines; enum=1, impl=6, fn=5</summary>
+<details><summary><code>crates/agena-application/src/error.rs</code> — 226 lines; mod=1, struct=1, impl=11, fn=18</summary>
 
 - Package：`agena-application`
-- Target/module：agena_application: crate::error
+- Target/module：agena_application: crate::error, crate::error::tests
 
 `````rust
-#[derive(Debug, thiserror::Error)]
-pub enum ApplicationError {
-    #[error("bad request: {0}")]
-    BadRequest(String),
-    #[error("not found: {0}")]
-    NotFound(String),
-    #[error("conflict: {0}")]
-    Conflict(String),
-    #[error("service unavailable: {0}")]
-    ServiceUnavailable(String),
-    #[error("internal: {0}")]
-    Internal(String),
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
+    RetryDirective, UserPresentation,
+};
+
+#[derive(Debug)]
+pub struct ApplicationError {
+    pub failure: Box<Failure>,
+    diagnostic: Option<String>,
 }
 
 impl ApplicationError {
-    pub fn bad_request(message: impl Into<String>) -> Self;
+    pub fn from_failure(failure: Failure) -> Self;
 
-    pub fn not_found(message: impl Into<String>) -> Self;
+    pub fn from_failure_with_diagnostic(
+        failure: Failure,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
 
-    pub fn conflict(message: impl Into<String>) -> Self;
+    pub fn bad_request(message: &'static str) -> Self;
 
-    pub fn service_unavailable(message: impl Into<String>) -> Self;
+    pub fn not_found(message: &'static str) -> Self;
 
-    pub fn internal(message: impl Into<String>) -> Self;
+    pub fn conflict(message: &'static str) -> Self;
+
+    pub fn bad_request_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn not_found_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn conflict_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn service_unavailable(diagnostic: impl std::fmt::Display) -> Self;
+
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self;
+
+    pub fn diagnostic_message(&self) -> Option<&str>;
+
+    pub fn is_not_found(&self) -> bool;
+
+    fn expected(
+        code: &'static str,
+        category: FailureCategory,
+        retry: RetryDirective,
+        recovery: RecoveryDirective,
+        message: &'static str,
+    ) -> Self;
+
+    fn expected_with_diagnostic(
+        code: &'static str,
+        category: FailureCategory,
+        retry: RetryDirective,
+        recovery: RecoveryDirective,
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    fn diagnostic(
+        code: &'static str,
+        category: FailureCategory,
+        responsibility: FailureResponsibility,
+        retry: RetryDirective,
+        recovery: RecoveryDirective,
+        fallback: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+}
+
+impl std::fmt::Display for ApplicationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for ApplicationError {}
+
+#[cfg(test)]
+mod tests {
+    use super::ApplicationError;
+
+    #[test]
+    fn internal_diagnostics_are_not_part_of_display_text();
+
+    #[test]
+    fn expected_input_message_remains_actionable();
 }
 `````
 
@@ -18445,7 +18548,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-application/src/lib.rs</code> — 20 lines; mod=9</summary>
+<details><summary><code>crates/agena-application/src/lib.rs</code> — 19 lines; mod=9</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate
@@ -18464,7 +18567,6 @@ pub mod session;
 pub use application::{Application, AuthLoginKind};
 pub use error::ApplicationError;
 pub use provider_queries::provider_model_resource_from_domain;
-pub use service::message_part_resource_from_runtime;
 `````
 
 </details>
@@ -18527,7 +18629,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-application/src/provider_queries.rs</code> — 386 lines; fn=18</summary>
+<details><summary><code>crates/agena-application/src/provider_queries.rs</code> — 379 lines; fn=18</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::provider_queries
@@ -18543,7 +18645,6 @@ use agena_api::{
         ProviderModelCapabilitiesResource, ProviderModelMetadataResource,
         ProviderModelRequestOverrideResource, ProviderModelResource,
         ProviderModelSpeedModeResource, ProviderModelThinkingModeResource, ProviderModelsResponse,
-        ProviderNativeToolBindingResource, ProviderNativeToolsSummaryResource,
         ProviderSummaryResource, ReasoningEffortResource, ThinkingDisplayResource,
         ThinkingRequestResource,
     },
@@ -18629,7 +18730,7 @@ fn map_provider_catalog_error(error: ProviderCatalogError) -> ApplicationError;
 
 </details>
 
-<details><summary><code>crates/agena-application/src/service/execution.rs</code> — 782 lines; impl=1, fn=25</summary>
+<details><summary><code>crates/agena-application/src/service/execution.rs</code> — 805 lines; impl=1, fn=28</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::service::execution
@@ -18721,6 +18822,12 @@ async fn pending_interactive_requests(
     session_id: i64,
 ) -> ApplicationResult<Vec<PendingInteractiveRequestResource>>;
 
+fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationError;
+
+fn runtime_event_query_error(error: agena_runtime::RuntimeEventQueryError) -> ApplicationError;
+
+fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError;
+
 pub(crate) const fn execution_access_from_domain(
     value: agena_domain::ExecutionAccess,
 ) -> agena_api::resource::ExecutionAccess;
@@ -18761,7 +18868,7 @@ use agena_provider::{ProviderCatalog, ProviderCatalogError};
 
 </details>
 
-<details><summary><code>crates/agena-application/src/service/git.rs</code> — 556 lines; mod=1, impl=1, fn=18</summary>
+<details><summary><code>crates/agena-application/src/service/git.rs</code> — 565 lines; mod=1, impl=1, fn=18</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::service::git, crate::service::git::tests
@@ -18851,7 +18958,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-application/src/service/memory.rs</code> — 146 lines; mod=1, impl=1, fn=12</summary>
+<details><summary><code>crates/agena-application/src/service/memory.rs</code> — 147 lines; mod=1, impl=1, fn=12</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::service::memory, crate::service::memory::tests
@@ -18901,267 +19008,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-application/src/service/messages.rs</code> — 1523 lines; mod=1, struct=4, impl=2, fn=50</summary>
-
-- Package：`agena-application`
-- Target/module：agena_application: crate::service::messages, crate::service::messages::tests
-
-`````rust
-use super::{
-    ApplicationError, ApplicationResult, ApplicationService, DateTime, HashMap, MessageCursor,
-    MessageListQuery, MessageResource, PageOrder, PaginatedResponse, PartLoadMode, Utc, build_page,
-    decode_cursor, normalize_limit,
-};
-use agena_api::message_part::{
-    MessageAttachmentPartResource, MessageErrorPartResource, MessagePartDetailResource,
-    MessagePartKindResource, MessagePartResource, MessageReasoningPartResource,
-    MessageRequestPartResource, MessageSkillReferencePartResource, MessageTextPartResource,
-    PartExecutionStatusResource,
-};
-use agena_api::resource::{
-    MessageMetadata, MessageRole, MessageSkillReference, MessageStatus, MessageUsage,
-};
-use agena_domain::{ExecutionStatus, PartKind, ToolResultState};
-use agena_runtime::{
-    SessionProjectedMessage, SessionProjectedMessageHeader, SessionProjectedPartDetail,
-    SessionQueryService,
-};
-
-impl ApplicationService {
-    pub async fn list_messages(
-        &self,
-        queries: &dyn SessionQueryService,
-        session_id: i64,
-        query: MessageListQuery,
-    ) -> ApplicationResult<PaginatedResponse<MessageResource>>;
-
-    pub async fn get_message(
-        &self,
-        queries: &dyn SessionQueryService,
-        message_id: i64,
-        parts: PartLoadMode,
-    ) -> ApplicationResult<Option<MessageResource>>;
-
-    pub async fn list_message_parts(
-        &self,
-        queries: &dyn SessionQueryService,
-        message_id: i64,
-        mode: PartLoadMode,
-    ) -> ApplicationResult<Vec<MessagePartResource>>;
-
-    pub async fn get_message_part(
-        &self,
-        queries: &dyn SessionQueryService,
-        part_id: i64,
-    ) -> ApplicationResult<Option<MessagePartResource>>;
-}
-
-async fn list_message_headers(
-    queries: &dyn SessionQueryService,
-    session_id: i64,
-    cursor: Option<MessageCursor>,
-    limit: u64,
-) -> ApplicationResult<PaginatedResponse<MessageResource>>;
-
-fn project_visible_message_headers(
-    session_id: i64,
-    headers: Vec<SessionProjectedMessageHeader>,
-) -> ApplicationResult<Vec<VisibleMessageHeader>>;
-
-fn merge_message_resource_usage(existing: &mut Option<MessageUsage>, next: Option<MessageUsage>);
-
-fn paginate_visible_message_headers(
-    messages: &[VisibleMessageHeader],
-    cursor: Option<MessageCursor>,
-    limit: u64,
-) -> (Vec<MessageResource>, bool, Option<(i64, i64)>);
-
-fn message_resource_cursor_key(message: &MessageResource) -> (i64, i64);
-
-#[derive(Debug, Clone)]
-struct VisibleMessageHeader {
-    resource: MessageResource,
-    source_message_ids: Vec<i64>,
-}
-
-fn message_resource_from_message(
-    session_id: i64,
-    message: &VisibleMessageRecord,
-    parts_mode: PartLoadMode,
-    part_count: u64,
-) -> MessageResource;
-
-const fn message_role_from_domain(value: agena_domain::Role) -> MessageRole;
-
-const fn message_status_from_domain(value: agena_domain::ExecutionStatus) -> MessageStatus;
-
-#[derive(Debug, Clone)]
-struct VisibleMessageRecord {
-    message: RuntimeMessage,
-    updated_at: DateTime<Utc>,
-
-    source_message_ids: Vec<i64>,
-}
-
-#[derive(Debug, Clone)]
-struct VisibleMessageProjection {
-    messages: Vec<VisibleMessageRecord>,
-}
-
-impl VisibleMessageProjection {
-    fn find_message(&self, message_id: i64) -> Option<&VisibleMessageRecord>;
-
-    fn find_part(&self, part_id: i64) -> Option<&agena_runtime::SessionProjectedMessagePart>;
-}
-
-async fn load_visible_message_projection_from_queries(
-    queries: &dyn SessionQueryService,
-    session_id: i64,
-    include_content: bool,
-) -> ApplicationResult<VisibleMessageProjection>;
-
-#[derive(Debug, Clone)]
-struct RuntimeMessage {
-    id: i64,
-    role: agena_domain::Role,
-    state: ExecutionStatus,
-    created_at: DateTime<Utc>,
-    metadata: MessageMetadata,
-    usage: Option<MessageUsage>,
-    parts: Vec<agena_runtime::SessionProjectedMessagePart>,
-}
-
-fn message_from_runtime_projection(
-    value: SessionProjectedMessage,
-) -> ApplicationResult<RuntimeMessage>;
-
-async fn paginated_message_projection(
-    visible: VisibleMessageProjection,
-    session_id: i64,
-    cursor: Option<MessageCursor>,
-    limit: u64,
-    parts: PartLoadMode,
-) -> ApplicationResult<PaginatedResponse<MessageResource>>;
-
-fn part_counts_from_visible_projection(projection: &VisibleMessageProjection) -> HashMap<i64, u64>;
-
-fn visible_part_count(part_counts: &HashMap<i64, u64>, message: &VisibleMessageRecord) -> u64;
-
-fn project_visible_messages(messages: Vec<RuntimeMessage>) -> VisibleMessageProjection;
-
-fn same_visible_assistant_turn(existing: &RuntimeMessage, next: &RuntimeMessage) -> bool;
-
-fn merge_assistant_provider_round(existing: &mut VisibleMessageRecord, mut next: RuntimeMessage);
-
-fn merge_usage(existing: &mut Option<MessageUsage>, next: Option<MessageUsage>);
-
-fn normalize_message_parts(message: &mut RuntimeMessage);
-
-fn paginate_visible_messages(
-    messages: &[VisibleMessageRecord],
-    cursor: Option<MessageCursor>,
-    limit: u64,
-) -> (Vec<VisibleMessageRecord>, bool, Option<(i64, i64)>);
-
-fn message_cursor_key(message: &VisibleMessageRecord) -> (i64, i64);
-
-pub fn message_part_resource_from_runtime(
-    part: &agena_runtime::SessionProjectedMessagePart,
-    mode: PartLoadMode,
-) -> MessagePartResource;
-
-const fn part_execution_status_from_domain(value: ExecutionStatus) -> PartExecutionStatusResource;
-
-const fn message_part_kind_from_domain(value: PartKind) -> MessagePartKindResource;
-
-fn message_part_detail_from_runtime(
-    value: &SessionProjectedPartDetail,
-) -> MessagePartDetailResource;
-
-fn message_attachment_from_domain(
-    value: agena_plugin_host::sdk::attachment::AttachmentItem,
-) -> agena_api::resource::MessageAttachment;
-
-fn operation_part_from_domain(
-    value: &agena_runtime::SessionProjectedOperationPart,
-) -> agena_api::message_part::OperationPartResource;
-
-const fn tool_gateway_function_from_domain(
-    value: agena_domain::ToolApiFunction,
-) -> agena_api::message_part::ToolGatewayFunctionResource;
-
-fn structured_object_from_domain(
-    value: &agena_domain::StructuredObject,
-) -> agena_api::message_part::StructuredObjectResource;
-fn structured_value_from_domain(
-    value: &agena_domain::StructuredValue,
-) -> agena_api::message_part::StructuredValueResource;
-fn model_visible_output_from_domain(
-    value: &agena_runtime::SessionProjectedModelVisibleOutput,
-) -> agena_api::message_part::ModelVisibleOutputResource;
-fn tool_output_from_domain(
-    value: &agena_domain::ToolOutput,
-) -> agena_api::message_part::ToolOutputResource;
-fn tool_result_from_domain(
-    value: &agena_runtime::SessionProjectedToolResult,
-) -> agena_api::message_part::ToolResultEnvelopeResource;
-fn artifact_from_domain(
-    value: &agena_domain::ArtifactRef,
-) -> agena_api::message_part::ArtifactRefResource;
-fn operation_block_from_domain(
-    value: &agena_runtime::SessionProjectedOperationBlock,
-) -> agena_api::message_part::OperationBlockResource;
-
-fn message_permission_request_from_runtime(
-    request: &agena_domain::PermissionRequest,
-    reply: Option<&agena_domain::PermissionReply>,
-) -> MessageRequestPartResource;
-
-fn message_user_input_request_from_runtime(
-    request: &agena_domain::UserInputRequest,
-    reply: Option<&agena_domain::UserInputReply>,
-) -> MessageRequestPartResource;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use agena_domain::ExecutionStatus;
-
-    fn assistant(
-        id: i64,
-        turn_id: Option<i64>,
-        state: agena_domain::ExecutionStatus,
-    ) -> RuntimeMessage;
-
-    #[test]
-    fn consecutive_assistant_rounds_keep_independent_identity_and_state();
-
-    #[test]
-    fn provider_rounds_in_one_turn_project_as_one_assistant_message();
-
-    #[test]
-    fn changing_model_route_starts_a_separate_visible_assistant_message();
-
-    #[test]
-    fn header_projection_matches_assistant_round_merging_without_core_messages();
-
-    #[test]
-    fn full_part_projection_is_typed_and_summary_projection_has_no_detail();
-
-    #[test]
-    fn runtime_full_projection_decodes_detail_at_application_boundary();
-
-    fn runtime_text_part(
-        message_id: i64,
-        part_index: i32,
-        text: &str,
-    ) -> agena_runtime::SessionProjectedMessagePart;
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-application/src/service/mod.rs</code> — 259 lines; mod=7, struct=7, type=1, impl=3, fn=11</summary>
+<details><summary><code>crates/agena-application/src/service/mod.rs</code> — 260 lines; mod=6, struct=6, type=1, impl=3, fn=11</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::service
@@ -19196,15 +19043,15 @@ use crate::{
         ActiveExecutionResource, ActiveSnapshotResource, CursorPaginationQuery, GitCommitRequest,
         GitCommitResource, GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest,
         GitStatusResource, ManagedSnapshotResource, MemoryResource, MemoryWriteRequest,
-        MessageListQuery, MessageResource, PartLoadMode, PendingInteractiveRequestResource,
-        PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
-        ScheduledJobRunResource, SearchPaginationQuery, SessionAutomationResource,
-        SessionCreateRequest, SessionExecutionContextResource, SessionExecutionResource,
-        SessionLifecycleState, SessionRelationKind, SessionResource, SessionRunOptionsRequest,
-        SessionUpdateRequest, SessionUsageResource, SnapshotBackendSupportResource,
-        SnapshotStatusResource, SubtaskStatus, WorkspaceFileDownloadQuery, WorkspaceFileKind,
-        WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
-        WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
+        PendingInteractiveRequestResource, PermissionRuleResource, PermissionRuleWriteRequest,
+        ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
+        SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
+        SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
+        SessionRunOptionsRequest, SessionUpdateRequest, SessionUsageResource,
+        SnapshotBackendSupportResource, SnapshotStatusResource, SubtaskStatus,
+        WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
+        WorkspaceFileTreeResource, WorkspaceListQuery, WorkspacePathRequest,
+        WorkspaceResolveRequest, WorkspaceResource,
     },
     pagination::{
         PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,
@@ -19216,14 +19063,12 @@ type ApplicationResult<T> = Result<T, ApplicationError>;
 pub(crate) mod execution;
 mod git;
 mod memory;
-mod messages;
 mod permissions;
 pub(crate) mod sessions;
 mod workspaces;
 
 pub(crate) use execution::execution_access_from_domain;
 pub use execution::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
-pub use messages::message_part_resource_from_runtime;
 
 #[derive(Debug, Clone)]
 pub struct PermissionRuleWriteCommand {
@@ -19256,12 +19101,6 @@ struct WorkspaceCursor {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SessionCursor {
     updated_at_ms: i64,
-    id: i64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct MessageCursor {
-    created_at_ms: i64,
     id: i64,
 }
 
@@ -19327,7 +19166,7 @@ fn timestamp_millis_to_utc(timestamp_ms: i64) -> ApplicationResult<DateTime<Utc>
 
 </details>
 
-<details><summary><code>crates/agena-application/src/service/permissions.rs</code> — 585 lines; mod=1, impl=2, fn=22</summary>
+<details><summary><code>crates/agena-application/src/service/permissions.rs</code> — 596 lines; mod=1, impl=2, fn=22</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::service::permissions, crate::service::permissions::tests
@@ -19465,7 +19304,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-application/src/service/sessions.rs</code> — 491 lines; mod=1, enum=1, impl=2, fn=14</summary>
+<details><summary><code>crates/agena-application/src/service/sessions.rs</code> — 497 lines; mod=1, enum=1, impl=2, fn=14</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::service::sessions, crate::service::sessions::tests
@@ -19568,7 +19407,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-application/src/service/workspaces.rs</code> — 491 lines; mod=1, impl=1, fn=16</summary>
+<details><summary><code>crates/agena-application/src/service/workspaces.rs</code> — 515 lines; mod=1, impl=1, fn=16</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::service::workspaces, crate::service::workspaces::tests
@@ -19665,7 +19504,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-application/src/session.rs</code> — 263 lines; fn=11</summary>
+<details><summary><code>crates/agena-application/src/session.rs</code> — 264 lines; fn=11</summary>
 
 - Package：`agena-application`
 - Target/module：agena_application: crate::session
@@ -19747,7 +19586,7 @@ pub async fn session_execution_resource(
 
 ### 8.5 `agena-bundled-plugins`
 
-<details><summary><code>crates/agena-bundled-plugins/src/capability_manifest.rs</code> — 309 lines; struct=5, fn=5</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/capability_manifest.rs</code> — 311 lines; struct=5, fn=5</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::capability_manifest
@@ -20162,7 +20001,7 @@ pub mod sources;
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/chatgpt.rs</code> — 614 lines; struct=4, enum=1, impl=3, fn=26</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/chatgpt.rs</code> — 611 lines; struct=4, enum=1, impl=3, fn=26</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::chatgpt
@@ -20176,9 +20015,9 @@ use std::{
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::host_api::{HostClient, HostPathPermissionCheckRequest};
+use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20308,65 +20147,65 @@ impl ChatGptToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome>;
 
-    #[tool(summary = "Use OpenAI's current Responses web_search tool.", help = "tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Pending calls and response_id are returned for continuation.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Use OpenAI's current Responses web_search tool.", help = "tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Pending calls and response_id are returned for continuation.", read_only, network, internet, discovery, display = detailed)]
     async fn web_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Use OpenAI's compatibility web_search_preview tool.", help = "Supports official preview fields such as search_content_types, search_context_size, and user_location.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Use OpenAI's compatibility web_search_preview tool.", help = "Supports official preview fields such as search_content_types, search_context_size, and user_location.", read_only, network, internet, discovery, display = detailed)]
     async fn web_search_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Search OpenAI vector stores with the official file_search tool.", help = "Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Search OpenAI vector stores with the official file_search tool.", help = "Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.", read_only, network, internet, discovery, display = detailed)]
     async fn file_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Run OpenAI's current computer tool and return pending computer calls.", help = "When the response contains computer_call items, execute the requested actions in Agena's browser/computer environment and call this tool again with previous_response_id plus official computer_call_output items in input_items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Run OpenAI's current computer tool and return pending computer calls.", help = "When the response contains computer_call items, execute the requested actions in Agena's browser/computer environment and call this tool again with previous_response_id plus official computer_call_output items in input_items.", mutating, network, internet, display = detailed)]
     async fn computer(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Run OpenAI's computer_use_preview compatibility tool.", help = "Set display_width, display_height, and environment in tool_options. Continue with computer_call_output items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Run OpenAI's computer_use_preview compatibility tool.", help = "Set display_width, display_height, and environment in tool_options. Continue with computer_call_output items.", mutating, network, internet, display = detailed)]
     async fn computer_use_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Connect OpenAI Responses to an official remote MCP server or connector.", help = "Set server_label and one of server_url, connector_id, or tunnel_id in tool_options. Official allowed_tools, authorization, headers, require_approval, defer_loading, and allowed_callers fields are preserved.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Connect OpenAI Responses to an official remote MCP server or connector.", help = "Set server_label and one of server_url, connector_id, or tunnel_id in tool_options. Official allowed_tools, authorization, headers, require_approval, defer_loading, and allowed_callers fields are preserved.", mutating, network, internet, display = detailed)]
     async fn mcp(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Run Python with OpenAI's hosted code_interpreter tool.", help = "tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.", read_only, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Run Python with OpenAI's hosted code_interpreter tool.", help = "tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.", read_only, network, internet, display = detailed)]
     async fn code_interpreter(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Enable OpenAI programmatic tool calling.", help = "This official Responses tool lets generated programs invoke eligible tools. Use input_items to continue any resulting calls.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Enable OpenAI programmatic tool calling.", help = "This official Responses tool lets generated programs invoke eligible tools. Use input_items to continue any resulting calls.", mutating, network, internet, display = detailed)]
     async fn programmatic_tool_calling(
         &self,
         input: ChatGptToolInput,
     ) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Generate or edit an image with OpenAI's Responses image_generation tool.", help = "tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.", mutating, filesystem_write, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Generate or edit an image with OpenAI's Responses image_generation tool.", help = "tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.", mutating, filesystem_write, network, internet, display = detailed)]
     async fn image_generation(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Expose OpenAI's local_shell protocol tool as an ordinary Agena request.", help = "The provider returns local_shell_call items. Execute them with Agena shell permissions, then continue using previous_response_id and local_shell_call_output items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Expose OpenAI's local_shell protocol tool as an ordinary Agena request.", help = "The provider returns local_shell_call items. Execute them with Agena shell permissions, then continue using previous_response_id and local_shell_call_output items.", mutating, network, internet, display = detailed)]
     async fn local_shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Expose OpenAI's shell tool with official environment configuration.", help = "tool_options.environment accepts OpenAI local/container environment objects. Execute pending shell_call items under Agena permissions and continue with shell_call_output items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Expose OpenAI's shell tool with official environment configuration.", help = "tool_options.environment accepts OpenAI local/container environment objects. Execute pending shell_call items under Agena permissions and continue with shell_call_output items.", mutating, network, internet, display = detailed)]
     async fn shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Use OpenAI hosted or client tool_search.", help = "Set tool_options.execution to server or client, plus optional description and parameters. Continue client calls with tool_search_output items in input_items.", read_only, network, internet, discovery, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Use OpenAI hosted or client tool_search.", help = "Set tool_options.execution to server or client, plus optional description and parameters. Continue client calls with tool_search_output items in input_items.", read_only, network, internet, discovery, display = detailed)]
     async fn tool_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Expose OpenAI's apply_patch protocol tool.", help = "Execute returned apply_patch_call operations through Agena's permission-checked fs.apply_patch path, then continue with apply_patch_call_output items.", mutating, filesystem_read, filesystem_write, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary = "Expose OpenAI's apply_patch protocol tool.", help = "Execute returned apply_patch_call operations through Agena's permission-checked fs.apply_patch path, then continue with apply_patch_call_output items.", mutating, filesystem_read, filesystem_write, network, internet, display = detailed)]
     async fn apply_patch(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(name = "function", summary = "Send an official OpenAI function tool declaration.", help = "Set tool_options.name, description, parameters, and strict. This remains an ordinary Agena wrapper; returned function calls are continued through input_items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(name = "function", summary = "Send an official OpenAI function tool declaration.", help = "Set tool_options.name, description, parameters, and strict. This remains an ordinary Agena wrapper; returned function calls are continued through input_items.", mutating, network, internet, display = detailed)]
     async fn function_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(name = "custom", summary = "Send an official OpenAI custom tool declaration.", help = "Set the official custom tool name, description, and format fields in tool_options; continue custom_tool_call outputs through input_items.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(name = "custom", summary = "Send an official OpenAI custom tool declaration.", help = "Set the official custom tool name, description, and format fields in tool_options; continue custom_tool_call outputs through input_items.", mutating, network, internet, display = detailed)]
     async fn custom_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(name = "namespace", summary = "Send an official OpenAI namespace tool declaration.", help = "Use tool_options to define the namespace and nested tools according to the current Responses schema.", mutating, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(name = "namespace", summary = "Send an official OpenAI namespace tool declaration.", help = "Use tool_options to define the namespace and nested tools according to the current Responses schema.", mutating, network, internet, display = detailed)]
     async fn namespace_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary = "Edit permitted local images through OpenAI's Images edit endpoint.", help = "This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating, filesystem_read, filesystem_write, network, internet, display = detailed, capabilities(HostCapability::PermissionCheck), path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
+    #[tool(summary = "Edit permitted local images through OpenAI's Images edit endpoint.", help = "This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating, filesystem_read, filesystem_write, network, internet, display = detailed, path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
     async fn image_edit(&self, input: ChatGptImageEditInput) -> SdkResult<ToolInvokeOutput>;
 }
 `````
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/claude.rs</code> — 394 lines; struct=3, enum=1, impl=3, fn=19</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/claude.rs</code> — 392 lines; struct=3, enum=1, impl=3, fn=19</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::claude
@@ -20381,9 +20220,7 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -20481,37 +20318,37 @@ impl ClaudeToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome>;
 
-    #[tool(summary="Use Claude's current Bash client tool.", help="The declaration uses bash_20250124. Execute returned bash tool_use blocks through Agena shell permissions, append assistant content and user tool_result content to messages, then call this tool again.", mutating, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Use Claude's current Bash client tool.", help="The declaration uses bash_20250124. Execute returned bash tool_use blocks through Agena shell permissions, append assistant content and user tool_result content to messages, then call this tool again.", mutating, network, internet, display=detailed)]
     async fn bash(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Run Claude's latest hosted code execution tool.", help="Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.", read_only, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Run Claude's latest hosted code execution tool.", help="Uses code_execution_20260521 with persistent REPL state. Official allowed_callers, cache_control, defer_loading, and strict fields may be supplied in tool_options.", read_only, network, internet, display=detailed)]
     async fn code_execution(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Run Claude Computer Use and return pending computer actions.", help="Uses computer_20251124. Set display_width_px and display_height_px in tool_options. Agena executors should normalize left_mouse_down/left_mouse_up, drag paths, key combinations, screenshots, zoom, and cursor actions before returning tool_result blocks.", mutating, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Run Claude Computer Use and return pending computer actions.", help="Uses computer_20251124. Set display_width_px and display_height_px in tool_options. Agena executors should normalize left_mouse_down/left_mouse_up, drag paths, key combinations, screenshots, zoom, and cursor actions before returning tool_result blocks.", mutating, network, internet, display=detailed)]
     async fn computer(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Use Claude's memory client tool.", help="Uses memory_20250818. Execute returned memory commands against Agena's permission-checked memory store and continue with tool_result blocks.", mutating, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Use Claude's memory client tool.", help="Uses memory_20250818. Execute returned memory commands against Agena's permission-checked memory store and continue with tool_result blocks.", mutating, network, internet, display=detailed)]
     async fn memory(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Use Claude's current text editor client tool.", help="Uses text_editor_20250728 with name str_replace_based_edit_tool. Execute view/create/str_replace/insert operations through Agena filesystem permissions and continue with tool_result blocks.", mutating, filesystem_read, filesystem_write, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Use Claude's current text editor client tool.", help="Uses text_editor_20250728 with name str_replace_based_edit_tool. Execute view/create/str_replace/insert operations through Agena filesystem permissions and continue with tool_result blocks.", mutating, filesystem_read, filesystem_write, network, internet, display=detailed)]
     async fn text_editor(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Search the web with Claude's latest server web search.", help="Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Search the web with Claude's latest server web search.", help="Uses web_search_20260318. tool_options supports allowed_callers, allowed_domains, blocked_domains, cache_control, defer_loading, max_uses, response_inclusion, strict, and user_location.", read_only, network, internet, discovery, display=detailed)]
     async fn web_search(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Fetch web documents with Claude's latest server web fetch.", help="Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Fetch web documents with Claude's latest server web fetch.", help="Uses web_fetch_20260318. tool_options supports allowed/blocked domains, citations, max_content_tokens, max_uses, response_inclusion, strict, and use_cache.", read_only, network, internet, discovery, display=detailed)]
     async fn web_fetch(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Ask an Anthropic advisor model with Claude's advisor server tool.", help="Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.", read_only, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Ask an Anthropic advisor model with Claude's advisor server tool.", help="Uses advisor_20260301. Set tool_options.model and optional caching, max_tokens, max_uses, allowed_callers, cache_control, defer_loading, and strict.", read_only, network, internet, display=detailed)]
     async fn advisor(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Use Claude's BM25 deferred tool search.", help="Uses tool_search_tool_bm25_20251119. The returned tool_reference/server_tool_use content remains in the provider response and can be continued through messages.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Use Claude's BM25 deferred tool search.", help="Uses tool_search_tool_bm25_20251119. The returned tool_reference/server_tool_use content remains in the provider response and can be continued through messages.", read_only, network, internet, discovery, display=detailed)]
     async fn tool_search_bm25(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Use Claude's regex deferred tool search.", help="Uses tool_search_tool_regex_20251119 and supports official allowed_callers, cache_control, defer_loading, and strict options.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Use Claude's regex deferred tool search.", help="Uses tool_search_tool_regex_20251119 and supports official allowed_callers, cache_control, defer_loading, and strict options.", read_only, network, internet, discovery, display=detailed)]
     async fn tool_search_regex(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Configure a Claude MCP toolset.", help="Set tool_options.mcp_server_name plus optional configs and default_config. The wrapper sends the official mcp_toolset declaration and returns approval/tool-use content for continuation.", mutating, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Configure a Claude MCP toolset.", help="Set tool_options.mcp_server_name plus optional configs and default_config. The wrapper sends the official mcp_toolset declaration and returns approval/tool-use content for continuation.", mutating, network, internet, display=detailed)]
     async fn mcp_toolset(&self, input: ClaudeToolInput) -> SdkResult<ToolInvokeOutput>;
 }
 `````
@@ -20832,7 +20669,7 @@ impl CronPlugin {
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/environment.rs</code> — 343 lines; mod=1, struct=2, enum=1, impl=1, fn=13</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/environment.rs</code> — 317 lines; mod=1, struct=2, enum=1, impl=1, fn=13</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::environment, crate::plugins::provided::environment::tests
@@ -20846,19 +20683,14 @@ use std::time::Duration;
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::host_api::HostClient;
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub(crate) const ENVIRONMENT_PLUGIN_ID: &str = "agena.environment";
 
 pub(crate) struct EnvironmentPlugin {
-    host: OnceLock<Arc<dyn HostClient>>,
     workspace_root: OnceLock<PathBuf>,
 }
 
@@ -20912,7 +20744,7 @@ impl EnvironmentPlugin {
     pub(crate) fn new() -> Self;
 
     #[hook(init)]
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome>;
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome>;
 
     #[tool(
         summary = "Wait until a path, TCP endpoint, or HTTP health check is ready.",
@@ -20920,17 +20752,16 @@ impl EnvironmentPlugin {
         filesystem_read,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn wait(&self, input: &EnvironmentWaitInput) -> SdkResult<ToolInvokeOutput>;
 
-    async fn validate_and_authorize(&self, condition: &WaitCondition) -> SdkResult<()>;
+    async fn validate_condition(&self, condition: &WaitCondition) -> SdkResult<()>;
 
     async fn check_condition(&self, condition: &WaitCondition) -> Result<String, String>;
 }
 
-async fn authorize_host(host: &Arc<dyn HostClient>, target: &str, port: u16) -> SdkResult<()>;
+async fn validate_public_host(target: &str, port: u16) -> SdkResult<()>;
 
 fn parse_http_url(value: &str) -> SdkResult<url::Url>;
 
@@ -21256,7 +21087,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/gemini.rs</code> — 484 lines; struct=5, impl=3, fn=21</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/gemini.rs</code> — 479 lines; struct=5, impl=3, fn=21</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::gemini
@@ -21270,9 +21101,9 @@ use std::{
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::host_api::{HostClient, HostPathPermissionCheckRequest};
+use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
 };
 use base64::Engine as _;
 use schemars::JsonSchema;
@@ -21406,47 +21237,47 @@ impl GeminiToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome>;
 
-    #[tool(summary="Run Gemini hosted code execution.", help="Uses the official Interactions code_execution declaration. Continue any function calls with function_result steps in input_steps.", read_only, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Run Gemini hosted code execution.", help="Uses the official Interactions code_execution declaration. Continue any function calls with function_result steps in input_steps.", read_only, network, internet, display=detailed)]
     async fn code_execution(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Fetch and ground URLs with Gemini URL Context.", help="Uses the official url_context tool. Put URLs in the prompt or official request fields.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Fetch and ground URLs with Gemini URL Context.", help="Uses the official url_context tool. Put URLs in the prompt or official request fields.", read_only, network, internet, discovery, display=detailed)]
     async fn url_context(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Search Google with Gemini grounding.", help="tool_options.search_types accepts web_search, image_search, and enterprise_web_search.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Search Google with Gemini grounding.", help="tool_options.search_types accepts web_search, image_search, and enterprise_web_search.", read_only, network, internet, discovery, display=detailed)]
     async fn google_search(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Search Gemini File Search stores.", help="tool_options supports file_search_store_names, metadata_filter, and top_k.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Search Gemini File Search stores.", help="tool_options supports file_search_store_names, metadata_filter, and top_k.", read_only, network, internet, discovery, display=detailed)]
     async fn file_search(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Use Google Maps grounding through Gemini.", help="tool_options supports enable_widget, latitude, and longitude.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Use Google Maps grounding through Gemini.", help="tool_options supports enable_widget, latitude, and longitude.", read_only, network, internet, discovery, display=detailed)]
     async fn google_maps(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Run Gemini Computer Use and return official pending calls.", help="tool_options supports browser/mobile/desktop environments, safety policy controls, prompt-injection detection, and excluded predefined functions. Continue with function_result steps.", mutating, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Run Gemini Computer Use and return official pending calls.", help="tool_options supports browser/mobile/desktop environments, safety policy controls, prompt-injection detection, and excluded predefined functions. Continue with function_result steps.", mutating, network, internet, display=detailed)]
     async fn computer_use(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Connect Gemini to a remote MCP server.", help="tool_options supports url, name, headers, and allowed_tools according to the current Interactions MCPServer schema.", mutating, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Connect Gemini to a remote MCP server.", help="tool_options supports url, name, headers, and allowed_tools according to the current Interactions MCPServer schema.", mutating, network, internet, display=detailed)]
     async fn mcp_server(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Use Gemini Retrieval across Vertex AI Search, RAG Store, Exa, or Parallel AI Search.", help="Pass retrieval_types and the official *_search_config fields in tool_options.", read_only, network, internet, discovery, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Use Gemini Retrieval across Vertex AI Search, RAG Store, Exa, or Parallel AI Search.", help="Pass retrieval_types and the official *_search_config fields in tool_options.", read_only, network, internet, discovery, display=detailed)]
     async fn retrieval(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(name="function", summary="Send an official Gemini function declaration through Interactions.", help="Set the official name, description, and JSON schema fields in tool_options; continue with function_result steps.", mutating, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(name="function", summary="Send an official Gemini function declaration through Interactions.", help="Set the official name, description, and JSON schema fields in tool_options; continue with function_result steps.", mutating, network, internet, display=detailed)]
     async fn function_tool(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Generate images with Gemini's image response modality.", help="Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.", mutating, filesystem_write, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck))]
+    #[tool(summary="Generate images with Gemini's image response modality.", help="Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.", mutating, filesystem_write, network, internet, display=detailed)]
     async fn image_generation(
         &self,
         input: GeminiImageGenerateInput,
     ) -> SdkResult<ToolInvokeOutput>;
 
-    #[tool(summary="Edit permitted local images with Gemini multimodal image generation.", help="Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.", mutating, filesystem_read, filesystem_write, network, internet, display=detailed, capabilities(HostCapability::PermissionCheck), path(requests=input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
+    #[tool(summary="Edit permitted local images with Gemini multimodal image generation.", help="Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.", mutating, filesystem_read, filesystem_write, network, internet, display=detailed, path(requests=input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
     async fn image_edit(&self, input: GeminiImageEditInput) -> SdkResult<ToolInvokeOutput>;
 }
 `````
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/image.rs</code> — 618 lines; struct=6, enum=4, impl=3, fn=22</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/image.rs</code> — 586 lines; struct=6, enum=4, impl=3, fn=20</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::image
@@ -21458,11 +21289,9 @@ use std::sync::{Arc, OnceLock};
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
+use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
 };
 use base64::Engine as _;
 use schemars::JsonSchema;
@@ -21472,7 +21301,6 @@ use sha2::{Digest, Sha256};
 pub(crate) const OPENAI_PLUGIN_ID: &str = "agena.openai";
 
 pub(crate) struct OpenAiToolsPlugin {
-    host: OnceLock<Arc<dyn HostClient>>,
     workspace_root: OnceLock<PathBuf>,
     config: OnceLock<OpenAiToolsConfig>,
 }
@@ -21582,8 +21410,6 @@ struct ImageEditInput {
 impl OpenAiToolsPlugin {
     pub(crate) fn new() -> Self;
 
-    fn host(&self) -> SdkResult<&Arc<dyn HostClient>>;
-
     fn workspace_root(&self) -> SdkResult<&Path>;
 
     fn config(&self) -> SdkResult<&OpenAiToolsConfig>;
@@ -21595,8 +21421,6 @@ impl OpenAiToolsPlugin {
     fn image_model(&self) -> SdkResult<String>;
 
     fn api_key(&self) -> SdkResult<String>;
-
-    async fn authorize_endpoint(&self, url: &str) -> SdkResult<()>;
 
     fn resolve_input_path(&self, value: &str) -> SdkResult<PathBuf>;
 
@@ -21618,7 +21442,7 @@ impl OpenAiToolsPlugin {
 )]
 impl OpenAiToolsPlugin {
     #[hook(init)]
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome>;
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome>;
 
     #[tool(
         summary = "Search the public web through OpenAI's official Responses web-search service.",
@@ -21628,7 +21452,6 @@ impl OpenAiToolsPlugin {
         internet,
         discovery,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(r#"{"query":"Latest Rust language release notes","model":"gpt-4.1"}"#)
     )]
     async fn web_search(&self, input: OpenAiWebSearchInput) -> SdkResult<ToolInvokeOutput>;
@@ -21641,7 +21464,6 @@ impl OpenAiToolsPlugin {
         network,
         internet,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(r#"{"prompt":"A watercolor map of a floating city","size":"1536x1024","quality":"high"}"#)
     )]
     async fn image_generation(&self, input: ImageGenerateInput) -> SdkResult<ToolInvokeOutput>;
@@ -21655,7 +21477,6 @@ impl OpenAiToolsPlugin {
         network,
         internet,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         examples(r#"{"prompt":"Replace the sky with an aurora","images":["assets/source.png"]}"#)
     )]
@@ -21687,7 +21508,7 @@ fn openai_api_error(
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/interaction.rs</code> — 187 lines; mod=1, struct=1, impl=1, fn=8</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/interaction.rs</code> — 188 lines; mod=1, struct=1, impl=1, fn=8</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::interaction, crate::plugins::provided::interaction::tests
@@ -21760,7 +21581,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/lsp.rs</code> — 281 lines; struct=3, impl=2, fn=10</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/lsp.rs</code> — 283 lines; struct=3, impl=2, fn=10</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::lsp
@@ -21904,7 +21725,7 @@ impl LspPlugin {
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/mcp.rs</code> — 1083 lines; mod=1, struct=7, impl=1, fn=34</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/mcp.rs</code> — 1095 lines; mod=1, struct=7, impl=1, fn=34</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::mcp, crate::plugins::provided::mcp::tests
@@ -22236,7 +22057,7 @@ pub(crate) mod official_service;
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/notebook.rs</code> — 332 lines; mod=1, struct=2, enum=2, impl=2, fn=12</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/notebook.rs</code> — 333 lines; mod=1, struct=2, enum=2, impl=2, fn=12</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::notebook, crate::plugins::provided::notebook::tests
@@ -22367,9 +22188,7 @@ use std::{
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
+use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 use agena_provider::{
     AttributedCompletionUsage, BillableUsageItem, CompletionUsage,
@@ -22409,7 +22228,7 @@ pub(crate) fn env_secret(env_name: &str, provider: &str) -> SdkResult<String>;
 
 pub(crate) fn endpoint(base_url: &str, path: &str) -> SdkResult<String>;
 
-pub(crate) async fn authorize_network(host: &Arc<dyn HostClient>, url: &str) -> SdkResult<()>;
+pub(crate) async fn authorize_network(_host: &Arc<dyn HostClient>, url: &str) -> SdkResult<()>;
 
 pub(crate) fn merge_object_options(
     base: serde_json::Value,
@@ -22528,7 +22347,7 @@ fn json_u64(value: &serde_json::Value, keys: &[&str]) -> Option<u64>;
 fn count_object_type(value: &serde_json::Value, expected: &str) -> u64;
 
 async fn persist_response_receipt(
-    host: &Arc<dyn HostClient>,
+    _host: &Arc<dyn HostClient>,
     workspace_root: &Path,
     provider: &str,
     tool: &str,
@@ -22569,7 +22388,7 @@ struct ImageCandidate {
 }
 
 async fn persist_images(
-    host: &Arc<dyn HostClient>,
+    _host: &Arc<dyn HostClient>,
     workspace_root: &Path,
     provider: &str,
     title: &str,
@@ -23714,7 +23533,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/skills.rs</code> — 1807 lines; mod=1, struct=16, enum=2, impl=7, fn=64</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/skills.rs</code> — 1812 lines; mod=1, struct=16, enum=2, impl=7, fn=64</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::skills, crate::plugins::provided::skills::tests
@@ -24156,7 +23975,7 @@ impl SkillsPlugin {
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/tasks.rs</code> — 1099 lines; mod=1, struct=9, enum=1, impl=3, fn=31</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/tasks.rs</code> — 1105 lines; mod=1, struct=9, enum=1, impl=3, fn=31</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::tasks, crate::plugins::provided::tasks::tests
@@ -24529,7 +24348,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/tool_api.rs</code> — 210 lines; mod=1, struct=1, impl=1, fn=11</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/tool_api.rs</code> — 148 lines; mod=1, struct=1, impl=1, fn=10</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::tool_api, crate::plugins::provided::tool_api::tests
@@ -24538,8 +24357,8 @@ mod tests {
 use std::sync::Arc;
 
 use crate::plugins::provided::workflow::{
-    ToolApiCallInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
-    WorkflowPlanConfig, WorkflowPlugin, WorkflowPluginConfig, tool_discovery_config_schema,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, WorkflowPlanConfig,
+    WorkflowPlugin, WorkflowPluginConfig, tool_discovery_config_schema,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
@@ -24556,7 +24375,7 @@ pub(crate) struct ToolApiPlugin {
     namespace = "agena",
     name = "tools",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "The five Tool API functions for discovering and running Agena execution tools.",
+    summary = "Tool API discovery functions. The runtime resolves tools_call directly to its execution target.",
     config_schema = tool_discovery_config_schema(),
     display = brief_detailed
 )]
@@ -24608,17 +24427,6 @@ impl ToolApiPlugin {
         concurrency_safe
     )]
     async fn tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput>;
-
-    #[tool(
-        summary = "Run one Agena execution tool with complete input; validation errors include tool help for a direct retry.",
-        discovery,
-        ui_display = detailed,
-        capabilities(
-            HostCapability::ListTools,
-            HostCapability::InvokeTool
-        )
-    )]
-    async fn call(&self, input: &ToolApiCallInput) -> SdkResult<ToolInvokeOutput>;
 }
 
 #[cfg(test)]
@@ -24631,7 +24439,7 @@ mod tests {
     fn capabilities_for(tool_name: &str) -> Vec<HostCapability>;
 
     #[test]
-    fn help_and_call_declare_every_host_capability_they_use();
+    fn help_declares_every_host_capability_it_uses();
 
     #[test]
     fn definitions_distinguish_tool_api_functions_from_execution_tools();
@@ -24915,7 +24723,7 @@ use super::{Deserialize, HostSession, JsonSchema, Serialize};
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/workflow/tool_api_inputs.rs</code> — 90 lines; struct=5, fn=1</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/workflow/tool_api_inputs.rs</code> — 61 lines; struct=4</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::workflow::tool_api_inputs
@@ -24929,17 +24737,6 @@ use agena_macros::ToolInput;
 pub(crate) struct ToolApiHelpInput {
 
     pub tool: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, ToolInput)]
-#[input(non_empty("tool"))]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ToolApiCallInput {
-
-    pub tool: String,
-
-    #[schemars(schema_with = "tool_api_call_input_schema")]
-    pub input: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -24991,7 +24788,6 @@ pub(crate) struct ToolApiTagsInput {
     pub limit: Option<u32>,
 }
 
-fn tool_api_call_input_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema;
 use super::{Deserialize, JsonSchema, Serialize};
 `````
 
@@ -25321,7 +25117,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/workflow/workflow_runtime.rs</code> — 956 lines; impl=1, fn=24</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/workflow/workflow_runtime.rs</code> — 905 lines; impl=1, fn=22</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::workflow::workflow_runtime
@@ -25417,16 +25213,6 @@ impl WorkflowPlugin {
         tags: Option<&[String]>,
     ) -> ToolInvokeOutput;
 
-    pub(in crate::plugins::provided::workflow) fn invalid_tool_input_with_embedded_help(
-        descriptor: &ToolDescriptor,
-        validation_error: &str,
-    ) -> PluginError;
-
-    pub(crate) async fn invoke_tool_api_call(
-        &self,
-        input: &ToolApiCallInput,
-    ) -> SdkResult<ToolInvokeOutput>;
-
     pub(in crate::plugins::provided::workflow) fn ensure_execution_tool_target(
         requested: &str,
     ) -> SdkResult<()>;
@@ -25441,17 +25227,17 @@ use super::{
     EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
     HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput, PlanSetInput,
     PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskAccess, RunSubtaskModelSelection,
-    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess, TaskToolInput, ToolApiCallInput,
-    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput,
-    ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput,
-    ToolTag, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
-    WorkflowPlugin, ask_user, search_tools, snapshot_enter_permission_paths, tags_summary,
+    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess, TaskToolInput, ToolApiHelpInput,
+    ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor,
+    ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
+    WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin,
+    ask_user, search_tools, snapshot_enter_permission_paths, tags_summary,
 };
 `````
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/workflow.rs</code> — 602 lines; mod=7, struct=7, enum=1, impl=3, fn=19</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/plugins/provided/workflow.rs</code> — 561 lines; mod=7, struct=7, enum=1, impl=3, fn=18</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::plugins::provided::workflow, crate::plugins::provided::workflow::tests
@@ -25542,7 +25328,7 @@ pub(crate) use repo_tools::{
 };
 pub(crate) use runtime_tools::{SessionRenameToolInput, SessionToolResponse};
 pub(crate) use tool_api_inputs::{
-    ToolApiCallInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
 };
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
@@ -25624,7 +25410,7 @@ mod tests {
         WorkflowPlugin,
     };
     use agena_plugin_host::sdk::{
-        Plugin, PluginErrorCode, PluginKey, ToolDefinition, ToolKey, ToolTag,
+        Plugin, PluginErrorKind, PluginKey, ToolDefinition, ToolKey, ToolTag,
     };
 
     use crate::plugins::provided::shell::ShellPlugin;
@@ -25651,9 +25437,6 @@ mod tests {
 
     #[test]
     fn protocol_functions_cannot_target_themselves();
-
-    #[test]
-    fn schema_rejection_embeds_help_and_direct_retry_routing();
 
     #[test]
     fn shell_help_retry_example_contains_every_ref_backed_required_field();
@@ -25821,7 +25604,7 @@ pub(crate) use plugin::{WEB_PLUGIN_ID, WebPlugin};
 
 </details>
 
-<details><summary><code>crates/agena-bundled-plugins/src/web/plugin.rs</code> — 3169 lines; mod=1, struct=32, enum=2, type=2, impl=17, fn=105</summary>
+<details><summary><code>crates/agena-bundled-plugins/src/web/plugin.rs</code> — 2887 lines; mod=1, struct=31, enum=2, type=2, impl=15, fn=93</summary>
 
 - Package：`agena-bundled-plugins`
 - Target/module：agena_bundled_plugins: crate::web::plugin, crate::web::plugin::tests
@@ -25850,10 +25633,8 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
-use agena_plugin_host::sdk::{HostCapability, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::host_api::HostClient;
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 
 fn json_schema_for_default_with_metadata<T>(
     default: T,
@@ -26018,7 +25799,6 @@ fn default_web_config() -> WebConfig;
 pub(crate) struct WebPlugin {
     state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,
-    host: OnceLock<Arc<dyn HostClient>>,
     sync_lock: Mutex<()>,
     browser_clients: Mutex<BTreeMap<String, CdpClient>>,
     user_agent: String,
@@ -26234,7 +26014,7 @@ impl WebPlugin {
     async fn init(
         &self,
         ctx: agena_plugin_host::sdk::InitContext,
-        host: Arc<dyn HostClient>,
+        _host: Arc<dyn HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome>;
 
     fn state(&self) -> SdkResult<&WebPluginState>;
@@ -26243,13 +26023,11 @@ impl WebPlugin {
 
     fn workspace_root(&self) -> SdkResult<&Path>;
 
-    fn host(&self) -> SdkResult<&Arc<dyn HostClient>>;
-
     fn store(&self) -> SdkResult<CrawlStore>;
 
     fn spider_fetch_options(&self, rendered: bool) -> SdkResult<SpiderFetchOptions>;
 
-    async fn ensure_network_permission(&self, url: &url::Url) -> SdkResult<()>;
+    async fn validate_network_target(&self, url: &url::Url) -> SdkResult<()>;
 
     async fn browser_preflight_redirects(&self, initial: &url::Url) -> SdkResult<Vec<String>>;
 
@@ -26279,7 +26057,6 @@ impl WebPlugin {
         network,
         internet,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(
             r#"{"url":"https://openai.com"}"#,
             r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
@@ -26296,7 +26073,6 @@ impl WebPlugin {
         internet,
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         path(write = self.store_write_permission_path()?),
         network(connect = prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?.to_string())
     )]
@@ -26310,7 +26086,6 @@ impl WebPlugin {
         internet,
         discovery,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(
             r#"{"query":"Agena plugin architecture","max_results":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
@@ -26326,8 +26101,7 @@ impl WebPlugin {
         read_only,
         network,
         internet,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_open(&self, input: &BrowserOpenInput) -> SdkResult<ToolInvokeOutput>;
 
@@ -26337,7 +26111,6 @@ impl WebPlugin {
         read_only,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn browser_list(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput>;
@@ -26347,8 +26120,7 @@ impl WebPlugin {
         summary = "Close one page target in the managed interactive browser.",
         mutating,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput>;
     #[tool(
@@ -26357,7 +26129,6 @@ impl WebPlugin {
         read_only,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn browser_snapshot(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput>;
@@ -26367,8 +26138,7 @@ impl WebPlugin {
         summary = "Click a browser element selected by CSS or the latest snapshot ref.",
         mutating,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_click(&self, input: &BrowserClickInput) -> SdkResult<ToolInvokeOutput>;
 
@@ -26377,8 +26147,7 @@ impl WebPlugin {
         summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
         mutating,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_type(&self, input: &BrowserTypeInput) -> SdkResult<ToolInvokeOutput>;
 
@@ -26388,7 +26157,6 @@ impl WebPlugin {
         read_only,
         network,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         concurrency_safe
     )]
     async fn browser_wait(&self, input: &BrowserWaitInput) -> SdkResult<ToolInvokeOutput>;
@@ -26399,8 +26167,7 @@ impl WebPlugin {
         mutating,
         filesystem_write,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_screenshot(
         &self,
@@ -26413,8 +26180,7 @@ impl WebPlugin {
         mutating,
         filesystem_write,
         network,
-        display = detailed,
-        capabilities(HostCapability::PermissionCheck)
+        display = detailed
     )]
     async fn browser_download(&self, input: &BrowserDownloadInput) -> SdkResult<ToolInvokeOutput>;
 
@@ -26437,10 +26203,7 @@ impl WebPlugin {
     fn store_write_permission_path(&self) -> SdkResult<String>;
 }
 
-async fn ensure_network_permission_with_host(
-    host_client: &Arc<dyn HostClient>,
-    url: &url::Url,
-) -> SdkResult<()>;
+async fn validate_public_network_target(url: &url::Url) -> SdkResult<()>;
 
 type CdpSocket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -26471,14 +26234,14 @@ struct NavigationDecision {
 #[derive(Clone)]
 struct CdpClient {
     commands: mpsc::Sender<CdpCommandRequest>,
-    navigation_policy: Arc<OnceLock<Arc<dyn HostClient>>>,
+    navigation_interception_enabled: Arc<OnceLock<()>>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
 }
 
 impl CdpClient {
     async fn connect(endpoint: &str, target_id: Option<&str>) -> SdkResult<Self>;
 
-    async fn enable_navigation_interception(&self, host: Arc<dyn HostClient>) -> SdkResult<()>;
+    async fn enable_navigation_interception(&self) -> SdkResult<()>;
 
     async fn command(
         &self,
@@ -26508,14 +26271,10 @@ async fn run_cdp_connection(
     session_id: Option<String>,
     mut next_id: u64,
     mut commands: mpsc::Receiver<CdpCommandRequest>,
-    navigation_policy: Arc<OnceLock<Arc<dyn HostClient>>>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
 );
 
-async fn authorize_browser_document_request(
-    host: &Arc<dyn HostClient>,
-    raw_url: &str,
-) -> Result<(), String>;
+async fn authorize_browser_document_request(raw_url: &str) -> Result<(), String>;
 
 async fn send_cdp_request(
     sink: &mut CdpSink,
@@ -26612,8 +26371,6 @@ fn host_matches(host: &str, pattern: &str) -> bool;
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
-    use std::sync::{Arc, Mutex as StdMutex};
-    use std::time::Duration;
 
     use agena_plugin_host::sdk::Plugin;
 
@@ -26621,62 +26378,6 @@ mod tests {
         CdpClient, WebPlugin, browser_element_expression, browser_type_expression,
         is_public_address, resolve_browser_redirect,
     };
-
-    struct BrowserPermissionHost {
-        allow: bool,
-        targets: StdMutex<Vec<String>>,
-    }
-
-    impl BrowserPermissionHost {
-        fn new(allow: bool) -> Self;
-
-        fn targets(&self) -> Vec<String>;
-    }
-
-    #[async_trait::async_trait]
-    impl agena_plugin_host::sdk::HostClient for BrowserPermissionHost {
-        async fn log(
-            &self,
-            _level: agena_plugin_host::sdk::host_api::LogLevel,
-            _message: String,
-            _fields: serde_json::Value,
-        );
-
-        async fn publish_event(
-            &self,
-            _event: agena_plugin_host::sdk::EventEnvelope,
-        ) -> agena_plugin_host::sdk::Result<()>;
-
-        async fn subscribe_events(
-            &self,
-            _filter: agena_plugin_host::sdk::EventFilter,
-        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::host_api::EventSubscription>;
-
-        async fn ask_permission(
-            &self,
-            _request: agena_plugin_host::sdk::PermissionAskInput,
-        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::PermissionDecision>;
-
-        async fn check_network_permission(
-            &self,
-            request: agena_plugin_host::sdk::host_api::HostNetworkPermissionCheckRequest,
-        ) -> agena_plugin_host::sdk::Result<
-            agena_plugin_host::sdk::host_api::HostPermissionCheckResponse,
-        >;
-
-        async fn read_config(
-            &self,
-            _path: Option<String>,
-        ) -> agena_plugin_host::sdk::Result<serde_json::Value>;
-
-        async fn invoke_tool(
-            &self,
-            _tool: String,
-            _input: serde_json::Value,
-        ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput>;
-    }
-
-    async fn one_request_http_fixture() -> (String, tokio::sync::oneshot::Receiver<()>);
 
     #[test]
     fn public_dns_addresses_do_not_need_a_second_permission_check();
@@ -26689,9 +26390,6 @@ mod tests {
 
     #[tokio::test]
     async fn cdp_client_can_create_attach_evaluate_and_capture();
-
-    #[tokio::test]
-    async fn cdp_fetch_intercepts_document_requests_before_dispatch();
 
     #[test]
     fn browser_redirect_resolution_stays_http_and_supports_relative_locations();
@@ -26827,7 +26525,7 @@ pub(super) fn application_from_runtime(
 
 </details>
 
-<details><summary><code>crates/agena-cli/src/cli/cli_render.rs</code> — 885 lines; impl=1, fn=25</summary>
+<details><summary><code>crates/agena-cli/src/cli/cli_render.rs</code> — 887 lines; impl=1, fn=25</summary>
 
 - Package：`agena-cli`
 - Target/module：agena_cli: crate::cli::cli_render
@@ -26966,7 +26664,7 @@ impl AgenaCli {
 
 </details>
 
-<details><summary><code>crates/agena-cli/src/cli/cli_run.rs</code> — 1476 lines; mod=1, struct=1, enum=1, impl=1, fn=51</summary>
+<details><summary><code>crates/agena-cli/src/cli/cli_run.rs</code> — 1478 lines; mod=1, struct=1, enum=1, impl=1, fn=51</summary>
 
 - Package：`agena-cli`
 - Target/module：agena_cli: crate::cli::cli_run, crate::cli::cli_run::tests
@@ -27541,7 +27239,7 @@ pub(super) fn push_warning(
 
 </details>
 
-<details><summary><code>crates/agena-cli/src/cli/mod.rs</code> — 1736 lines; mod=9, struct=108, enum=23, type=2, impl=4, fn=11</summary>
+<details><summary><code>crates/agena-cli/src/cli/mod.rs</code> — 1737 lines; mod=9, struct=108, enum=23, type=2, impl=4, fn=11</summary>
 
 - Package：`agena-cli`
 - Target/module：agena_cli: crate::cli, crate::cli::parser_contract_tests
@@ -29038,26 +28736,39 @@ pub use cli::*;
 
 ### 8.7 `agena-client`
 
-<details><summary><code>crates/agena-client/src/error.rs</code> — 27 lines; enum=1, impl=2, fn=2</summary>
+<details><summary><code>crates/agena-client/src/error.rs</code> — 85 lines; mod=1, enum=1, impl=6, fn=8</summary>
 
 - Package：`agena-client`
-- Target/module：agena_client: crate::error
+- Target/module：agena_client: crate::error, crate::error::tests
 
 `````rust
 use agena_api::error::ApiError;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum ClientError {
-    #[error("transport: {0}")]
     Transport(String),
-    #[error("decode: {0}")]
-    Decode(#[from] serde_json::Error),
-    #[error("server returned error: {0}")]
+    Decode(serde_json::Error),
     Api(ApiError),
-    #[error("subscription closed")]
     SubscriptionClosed,
-    #[error("websocket protocol violation: {0}")]
     Protocol(String),
+}
+
+impl ClientError {
+    pub fn problem(&self) -> Option<&agena_failure::UserProblem>;
+
+    pub fn diagnostic_message(&self) -> Option<String>;
+}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for ClientError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)>;
+}
+
+impl From<serde_json::Error> for ClientError {
+    fn from(error: serde_json::Error) -> Self;
 }
 
 impl From<reqwest::Error> for ClientError {
@@ -29067,11 +28778,19 @@ impl From<reqwest::Error> for ClientError {
 impl From<tokio_tungstenite::tungstenite::Error> for ClientError {
     fn from(err: tokio_tungstenite::tungstenite::Error) -> Self;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::ClientError;
+
+    #[test]
+    fn transport_diagnostic_is_not_the_display_message();
+}
 `````
 
 </details>
 
-<details><summary><code>crates/agena-client/src/http.rs</code> — 1056 lines; mod=1, struct=3, impl=5, fn=36</summary>
+<details><summary><code>crates/agena-client/src/http.rs</code> — 999 lines; mod=1, struct=3, impl=5, fn=36</summary>
 
 - Package：`agena-client`
 - Target/module：agena_client: crate::http, crate::http::sse_contract_tests
@@ -29089,14 +28808,13 @@ use agena_api::{
     },
     notifications::Notification,
     queries::{
-        GetMessageParams, GetMessagePartParams, GetPermissionRuleParams, GetSessionParams,
-        GetWorkspaceParams, ListEventsParams, ListMessagePartsParams, ListMessagesParams,
+        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
         ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
         PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        HealthResponse, PartLoadMode, PermissionRuleResource, ProviderAdapterModelsRequest,
+        HealthResponse, PermissionRuleResource, ProviderAdapterModelsRequest,
         ProviderAdapterModelsResponse, RunOptions, SavedProviderAdapterModelsRequest,
         SessionExecutionResource, SessionResource, WorkspaceResource,
     },
@@ -29409,7 +29127,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/activity.rs</code> — 1418 lines; mod=1, struct=26, enum=14, impl=12, fn=39</summary>
+<details><summary><code>crates/agena-domain/src/activity.rs</code> — 1409 lines; mod=1, struct=26, enum=14, impl=12, fn=39</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::activity, crate::activity::tests
@@ -29420,10 +29138,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ActivityId, ExecutionFailureKind, ExecutionId, FileChangeRecord, PermissionReply,
-    PermissionRequest, ProcessSummary, PromptCompactionActivity, ReasoningPart, ResponseId,
-    ResponseSegmentId, RunId, SearchResultItem, SubtaskStatus, TodoItem, ToolCallId,
-    ToolInvocation, ToolOutput, TurnId, UserInputReply, UserInputRequest,
+    ActivityId, AssistantReplyId, ExecutionId, FileChangeRecord, PermissionReply,
+    PermissionRequest, ProcessSummary, PromptCompactionActivity, ReasoningPart, RunId,
+    SearchResultItem, SubtaskStatus, TextSegmentId, TodoItem, ToolCallId, ToolInvocation,
+    ToolOutput, TurnId, UserInputReply, UserInputRequest,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -29435,7 +29153,7 @@ pub enum ContentNode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ContentIdentity {
-    Text(ResponseSegmentId),
+    Text(TextSegmentId),
     Activity(ActivityId),
 }
 
@@ -29443,7 +29161,7 @@ impl ContentNode {
     pub fn text(text: impl Into<String>) -> Self;
 
     pub fn text_at(
-        id: ResponseSegmentId,
+        id: TextSegmentId,
         text: impl Into<String>,
         position: u32,
         revision_seq: i64,
@@ -29465,7 +29183,7 @@ impl ContentNode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TextSegment {
-    pub id: ResponseSegmentId,
+    pub id: TextSegmentId,
     pub text: String,
     pub position: ContentPosition,
     pub revision_seq: i64,
@@ -29495,7 +29213,7 @@ impl ContentDocument {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityOwner {
     TurnInput { turn_id: TurnId },
-    Response { response_id: ResponseId },
+    AssistantReply { reply_id: AssistantReplyId },
     Activity { parent_activity_id: ActivityId },
     Session { session_id: i64 },
 }
@@ -29703,6 +29421,8 @@ pub struct OperationActivity {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<crate::ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model_output_text: String,
     #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
@@ -29716,9 +29436,7 @@ pub struct OperationActivity {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct OperationActivityError {
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub problem: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -29794,10 +29512,7 @@ pub enum MaintenanceActivity {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ErrorActivity {
-    pub code: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_kind: Option<ExecutionFailureKind>,
+    pub problem: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -29812,7 +29527,7 @@ pub struct CustomActivity {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum ResponseStatus {
+pub enum AssistantReplyStatus {
     #[default]
     Pending,
     InProgress,
@@ -29821,17 +29536,16 @@ pub enum ResponseStatus {
     Cancelled,
 }
 
-impl ResponseStatus {
+impl AssistantReplyStatus {
     pub const fn is_terminal(self) -> bool;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct ResponseSnapshot {
-    pub id: ResponseId,
+pub struct AssistantReplySnapshot {
+    pub id: AssistantReplyId,
     pub turn_id: TurnId,
-    pub execution_id: ExecutionId,
-    pub status: ResponseStatus,
+    pub status: AssistantReplyStatus,
     pub content: ContentDocument,
     pub revision_seq: i64,
     pub created_at_ms: i64,
@@ -29846,7 +29560,7 @@ pub struct TurnSnapshot {
     pub session_id: i64,
     pub sequence: i64,
     pub input: ContentDocument,
-    pub response: ResponseSnapshot,
+    pub reply: AssistantReplySnapshot,
     pub created_at_ms: i64,
 }
 
@@ -29867,9 +29581,9 @@ pub enum TranscriptPatch {
         seq_session: i64,
         turn: TurnSnapshot,
     },
-    ResponseUpdated {
+    AssistantReplyUpdated {
         seq_session: i64,
-        response: ResponseSnapshot,
+        reply: AssistantReplySnapshot,
     },
     ContentUpserted {
         seq_session: i64,
@@ -29936,7 +29650,7 @@ pub enum CancellationResult {
 pub struct ExecutionTarget {
     pub session_id: i64,
     pub execution_id: ExecutionId,
-    pub response_id: ResponseId,
+    pub reply_id: AssistantReplyId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
 }
@@ -29957,7 +29671,7 @@ mod tests {
     fn snapshot_replay_converges_by_turn_response_and_segment_identity();
 
     #[test]
-    fn separate_cancelled_responses_never_overwrite_each_other();
+    fn separate_cancelled_assistant_replies_never_overwrite_each_other();
 
     #[test]
     fn repeated_turn_opened_merges_without_erasing_live_content();
@@ -29972,7 +29686,7 @@ mod tests {
     fn mismatched_activity_owner_is_rejected_without_consuming_sequence();
 
     #[test]
-    fn response_update_requires_exact_turn_response_and_execution_identity();
+    fn assistant_reply_update_requires_exact_turn_and_reply_identity();
 }
 `````
 
@@ -29992,6 +29706,50 @@ pub struct SessionAutoCompactionConfig {
 
 impl Default for SessionAutoCompactionConfig {
     fn default() -> Self;
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-domain/src/availability_outcome.rs</code> — 38 lines; struct=2, enum=1</summary>
+
+- Package：`agena-domain`
+- Target/module：agena_domain: crate::availability_outcome
+
+`````rust
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CapabilitySourceKind {
+    AgentProfile,
+    ExecutionAccess,
+    ModelProfile,
+    RuntimeConfiguration,
+    Platform,
+    Build,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CapabilityUnavailableResult {
+    pub capability: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    pub reason: String,
+    pub source: CapabilitySourceKind,
+
+    pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolUnavailableResult {
+    pub tool_name: String,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suggestions: Vec<String>,
+
+    pub source: String,
+    pub retryable: bool,
 }
 `````
 
@@ -30246,7 +30004,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/execution.rs</code> — 71 lines; mod=1, enum=4, fn=1</summary>
+<details><summary><code>crates/agena-domain/src/execution.rs</code> — 82 lines; mod=1, enum=4, fn=1</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::execution, crate::execution::tests
@@ -30288,15 +30046,12 @@ pub enum ExecutionFailureKind {
 pub enum ExecutionOutcome {
     Completed,
     Cancelled,
-    Failed {
-        failure_kind: ExecutionFailureKind,
-        message: String,
-    },
+    Failed { failure: agena_failure::UserProblem },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};
+    use super::{ExecutionOutcome, ExecutionPhase, ExecutionSource};
 
     #[test]
     fn execution_values_have_stable_wire_shapes();
@@ -30339,8 +30094,8 @@ impl ExecutionAccess {
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ExecutionAccess, ExecutionId, ExecutionOutcome, ExecutionSource, ResponseId, SubtaskStatus,
-    TurnId,
+    AssistantReplyId, ExecutionAccess, ExecutionId, ExecutionOutcome, ExecutionSource,
+    SubtaskStatus, TurnId,
 };
 
 fn is_false(value: &bool) -> bool;
@@ -30350,7 +30105,7 @@ pub struct ExecutionStartedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
     pub turn_id: TurnId,
-    pub response_id: ResponseId,
+    pub reply_id: AssistantReplyId,
     pub source: ExecutionSource,
     pub ts_ms: i64,
 }
@@ -30359,7 +30114,7 @@ pub struct ExecutionStartedEvent {
 pub struct ExecutionFinishedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
-    pub response_id: ResponseId,
+    pub reply_id: AssistantReplyId,
     pub outcome: ExecutionOutcome,
     pub ts_ms: i64,
 }
@@ -30379,7 +30134,7 @@ pub struct SubtaskStatusChangedEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
     pub ts_ms: i64,
 }
 
@@ -30524,7 +30279,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/execution_status.rs</code> — 72 lines; mod=1, struct=1, enum=1, impl=1, fn=2</summary>
+<details><summary><code>crates/agena-domain/src/execution_status.rs</code> — 97 lines; mod=1, struct=1, enum=1, impl=1, fn=2</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::execution_status, crate::execution_status::tests
@@ -30554,6 +30309,14 @@ pub enum ExecutionStatus {
     Pending,
     InProgress,
     Completed,
+
+    PolicyDenied,
+
+    UserDeclined,
+
+    CapabilityUnavailable,
+
+    ToolUnavailable,
     Failed,
     Cancelled,
 }
@@ -30696,8 +30459,8 @@ macro_rules! uuid_id {
 uuid_id!(ExecutionId);
 uuid_id!(RunId);
 uuid_id!(TurnId);
-uuid_id!(ResponseId);
-uuid_id!(ResponseSegmentId);
+uuid_id!(AssistantReplyId);
+uuid_id!(TextSegmentId);
 uuid_id!(ActivityId);
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
@@ -30807,7 +30570,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/lib.rs</code> — 187 lines; mod=66</summary>
+<details><summary><code>crates/agena-domain/src/lib.rs</code> — 195 lines; mod=68</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate
@@ -30851,6 +30614,7 @@ mod permission;
 mod permission_config;
 mod permission_events;
 mod permission_interaction;
+mod permission_outcome;
 mod permission_request;
 mod permission_resolution;
 mod plugin_invocation;
@@ -30883,13 +30647,14 @@ mod user_input;
 pub use access::{AccessKind, AccessSelector};
 pub use activity::{
     ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
-    ActivityProvenance, ActivityState, CancellationResult, ChecklistActivity, ComposerActivity,
-    ComposerDocument, ComposerNode, ContentDocument, ContentNode, ContentPosition, CustomActivity,
-    ErrorActivity, ExecutionTarget, FileChangesActivity, InteractionActivity, MaintenanceActivity,
-    NestedTaskActivity, OperationActivity, OperationActivityError, ProgressActivity,
-    ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference, ResponseSnapshot,
-    ResponseStatus, SearchActivity, SkillExecutionActivity, SkillReferenceActivity,
-    TextArtifactActivity, TextSegment, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
+    ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,
+    CancellationResult, ChecklistActivity, ComposerActivity, ComposerDocument, ComposerNode,
+    ContentDocument, ContentNode, ContentPosition, CustomActivity, ErrorActivity, ExecutionTarget,
+    FileChangesActivity, InteractionActivity, MaintenanceActivity, NestedTaskActivity,
+    OperationActivity, OperationActivityError, ProgressActivity, ReasoningActivity,
+    ResourceActivity, ResourceKind, ResourceReference, SearchActivity, SkillExecutionActivity,
+    SkillReferenceActivity, TextArtifactActivity, TextSegment, TranscriptPatch, TranscriptSnapshot,
+    TurnSnapshot,
 };
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use command_events::{
@@ -30912,7 +30677,7 @@ pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
 pub use finish_reason::{FinishReason, RunAbortReason};
 pub use ids::{
-    ActivityId, ExecutionId, MessageId, PartId, ResponseId, ResponseSegmentId, RunId, ToolCallId,
+    ActivityId, AssistantReplyId, ExecutionId, MessageId, PartId, RunId, TextSegmentId, ToolCallId,
     TurnId,
 };
 pub use interaction_notification::InteractionNotificationLevel;
@@ -30952,9 +30717,11 @@ pub use pending_interactive_request::{
 pub use permission::{PermissionMode, PermissionReplyKind, PermissionScope};
 pub use permission_config::PermissionConfig;
 pub use permission_events::{
-    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
+    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent, ToolPolicyDeniedEvent,
+    ToolUserDeclinedEvent,
 };
 pub use permission_interaction::{PendingPermission, PermissionReply, PermissionRequest};
+pub use permission_outcome::{PermissionAuthorityKind, PolicyDeniedResult, UserDeclinedResult};
 pub use permission_request::{
     DecisionTrace, DecisionTraceStep, PermissionAction, PermissionRiskLevel, PolicySourceKind,
 };
@@ -30977,17 +30744,17 @@ pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
 pub use session_state::{SessionLifecycleState, SessionRelationKind, SubtaskStatus, WorkflowState};
 pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};
-pub use stream_error::{ErrorInfo, StreamErrorEvent};
+pub use stream_error::StreamErrorEvent;
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 pub use time_range::TimeRange;
 pub use tool_api::ToolApiFunction;
 pub use tool_effects::{FilesystemAccess, FilesystemEffect, NetworkEffect};
-pub use tool_invocation::ToolInvocation;
+pub use tool_invocation::{ToolApiCall, ToolInvocation};
 pub use tool_output::{ToolManagedOutput, ToolOutput};
 pub use tool_permission::ToolPermissionRules;
 pub use tool_permission_config::ToolPermissionConfig;
-pub use tool_result::{ToolResultDisplay, ToolResultState};
+pub use tool_result::{ToolPresentationSection, ToolResultDisplay, ToolResultState};
 pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;
 pub use usage_stats::{
@@ -30995,6 +30762,10 @@ pub use usage_stats::{
     UsageDailyBreakdown, UsageStats, UsageTotals,
 };
 pub use user_input::{PendingInteractiveRequestKind, UserInputReplyKind};
+mod availability_outcome;
+pub use availability_outcome::{
+    CapabilitySourceKind, CapabilityUnavailableResult, ToolUnavailableResult,
+};
 `````
 
 </details>
@@ -31154,7 +30925,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/message_activity_values.rs</code> — 85 lines; mod=1, struct=5, impl=1, fn=5</summary>
+<details><summary><code>crates/agena-domain/src/message_activity_values.rs</code> — 84 lines; mod=1, struct=5, impl=1, fn=5</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::message_activity_values, crate::message_activity_values::tests
@@ -31206,8 +30977,7 @@ pub struct WebSearchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ErrorPart {
-    pub code: String,
-    pub message: String,
+    pub problem: agena_failure::UserProblem,
 }
 
 fn is_false(value: &bool) -> bool;
@@ -31955,7 +31725,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/operation_error.rs</code> — 27 lines; mod=1, struct=1, fn=1</summary>
+<details><summary><code>crates/agena-domain/src/operation_error.rs</code> — 48 lines; mod=1, struct=1, impl=1, fn=3</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::operation_error, crate::operation_error::tests
@@ -31965,9 +31735,13 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OperationError {
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub failure: agena_failure::Failure,
+}
+
+impl OperationError {
+    pub fn user_message(&self) -> &str;
+
+    pub fn model_message(&self) -> Option<String>;
 }
 
 #[cfg(test)]
@@ -32243,7 +32017,7 @@ fn merge_tool_section(
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/permission_events.rs</code> — 80 lines; mod=1, struct=3, fn=1</summary>
+<details><summary><code>crates/agena-domain/src/permission_events.rs</code> — 97 lines; mod=1, struct=5, fn=1</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::permission_events, crate::permission_events::tests
@@ -32252,6 +32026,7 @@ fn merge_tool_section(
 use serde::{Deserialize, Serialize};
 
 use crate::{DecisionTraceStep, PermissionAction, PermissionReplyKind, PermissionRiskLevel};
+use crate::{PolicyDeniedResult, UserDeclinedResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionRequestedEvent {
@@ -32306,6 +32081,22 @@ pub struct PermissionRuleEvent {
     pub revoked_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_by: Option<String>,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPolicyDeniedEvent {
+    pub session_id: i64,
+    pub call_id: i64,
+    pub denial: PolicyDeniedResult,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolUserDeclinedEvent {
+    pub session_id: i64,
+    pub call_id: i64,
+    pub decline: UserDeclinedResult,
     pub ts_ms: i64,
 }
 
@@ -32383,6 +32174,67 @@ mod tests {
 
     #[test]
     fn permission_interaction_values_use_the_stable_compact_wire_shape();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-domain/src/permission_outcome.rs</code> — 56 lines; struct=2, enum=1</summary>
+
+- Package：`agena-domain`
+- Target/module：agena_domain: crate::permission_outcome
+
+`````rust
+use serde::{Deserialize, Serialize};
+
+use crate::{DecisionTraceStep, PermissionAction, PermissionRiskLevel, PermissionScope};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionAuthorityKind {
+    StaticPolicy,
+    PersistedRule,
+    PluginPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PolicyDeniedResult {
+    pub action: PermissionAction,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_actions: Vec<PermissionAction>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub denied_actions: Vec<PermissionAction>,
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub explanation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<PermissionScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator: Option<String>,
+    pub authority: PermissionAuthorityKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule_revision_ms: Option<i64>,
+    #[serde(default)]
+    pub risk: PermissionRiskLevel,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trace: Vec<DecisionTraceStep>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserDeclinedResult {
+    pub request_id: String,
+    pub action: PermissionAction,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related_actions: Vec<PermissionAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persisted_scope: Option<PermissionScope>,
 }
 `````
 
@@ -32467,7 +32319,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/permission_resolution.rs</code> — 87 lines; mod=1, struct=1, enum=2, impl=1, fn=3</summary>
+<details><summary><code>crates/agena-domain/src/permission_resolution.rs</code> — 89 lines; mod=1, struct=1, enum=2, impl=1, fn=3</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::permission_resolution, crate::permission_resolution::tests
@@ -32487,6 +32339,8 @@ pub fn decide_from_mode(mode: PermissionMode, reason: impl Into<String>) -> Perm
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionResolutionSource {
     PersistedRule {
+        rule_id: Option<i64>,
+        revision_ms: Option<i64>,
         scope: PermissionScope,
         source: String,
         reason: Option<String>,
@@ -32904,7 +32758,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/session_state.rs</code> — 170 lines; mod=1, enum=4, impl=4, fn=9</summary>
+<details><summary><code>crates/agena-domain/src/session_state.rs</code> — 166 lines; mod=1, enum=4, impl=4, fn=9</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::session_state, crate::session_state::tests
@@ -32974,7 +32828,6 @@ impl SessionLifecycleState {
 pub enum WorkflowState {
     #[default]
     Quiescent,
-    ReadyForModel,
     ToolPending,
     Blocked,
 }
@@ -33071,7 +32924,7 @@ pub struct SessionUsage {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/stream_error.rs</code> — 36 lines; mod=1, struct=2, fn=1</summary>
+<details><summary><code>crates/agena-domain/src/stream_error.rs</code> — 36 lines; mod=1, struct=1, fn=1</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::stream_error, crate::stream_error::tests
@@ -33080,21 +32933,15 @@ pub struct SessionUsage {
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ErrorInfo {
-    pub code: String,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamErrorEvent {
     pub session_id: i64,
-    pub error: ErrorInfo,
+    pub problem: agena_failure::UserProblem,
     pub ts_ms: i64,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ErrorInfo, StreamErrorEvent};
+    use super::StreamErrorEvent;
 
     #[test]
     fn stream_error_payload_round_trips();
@@ -33374,7 +33221,7 @@ pub struct NetworkEffect {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/tool_invocation.rs</code> — 75 lines; mod=1, struct=1, impl=4, fn=3</summary>
+<details><summary><code>crates/agena-domain/src/tool_invocation.rs</code> — 91 lines; mod=1, struct=2, impl=4, fn=4</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::tool_invocation, crate::tool_invocation::tests
@@ -33385,17 +33232,19 @@ use serde::{Deserialize, Serialize};
 use crate::{StructuredObject, ToolApiFunction};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ToolApiCall {
+    pub function: ToolApiFunction,
+    #[serde(default)]
+    pub arguments: StructuredObject,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ToolInvocation {
 
-    #[serde(
-        default,
-        rename = "gateway_function",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub tool_api_function: Option<ToolApiFunction>,
-
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_function_name: Option<String>,
+    pub tool_api_call: Option<ToolApiCall>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_name: Option<String>,
@@ -33420,6 +33269,9 @@ mod tests {
 
     #[test]
     fn direct_and_plugin_invocations_preserve_their_stable_identity();
+
+    #[test]
+    fn removed_direct_provider_identity_does_not_deserialize();
 }
 `````
 
@@ -33540,7 +33392,7 @@ impl ToolPermissionConfig {
 
 </details>
 
-<details><summary><code>crates/agena-domain/src/tool_result.rs</code> — 50 lines; mod=1, struct=1, enum=1, impl=2, fn=3</summary>
+<details><summary><code>crates/agena-domain/src/tool_result.rs</code> — 76 lines; mod=1, struct=2, enum=1, impl=2, fn=3</summary>
 
 - Package：`agena-domain`
 - Target/module：agena_domain: crate::tool_result, crate::tool_result::tests
@@ -33555,6 +33407,12 @@ pub enum ToolResultState {
     Pending,
     Running,
     Completed,
+
+    PolicyDenied,
+
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
     Failed,
     Cancelled,
 }
@@ -33566,10 +33424,20 @@ pub struct ToolResultDisplay {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSection>,
 }
 
 impl ToolResultDisplay {
     pub fn is_empty(&self) -> bool;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ToolPresentationSection {
+    pub title: String,
+    pub text: String,
 }
 
 impl ToolResultState {
@@ -34646,7 +34514,7 @@ pub(super) fn payload_string(value: &Value, field: &str) -> anyhow::Result<Strin
 
 ### 8.10 `agena-echo-plugin`
 
-<details><summary><code>examples/echo_plugin/src/lib.rs</code> — 149 lines; struct=2, impl=1, fn=12</summary>
+<details><summary><code>examples/echo_plugin/src/lib.rs</code> — 146 lines; struct=2, impl=1, fn=11</summary>
 
 - Package：`agena-echo-plugin`
 - Target/module：agena_echo_plugin: crate
@@ -34704,9 +34572,6 @@ impl EchoPlugin {
 
     #[hook(run.post)]
     async fn post_run(&self, _input: PostRunInput);
-
-    #[hook(permission.ask)]
-    async fn permission_ask(&self, _input: PermissionAskInput) -> Option<PermissionAskDecision>;
 
     #[hook(session.start)]
     async fn session_start(&self, input: SessionStartInput) -> SessionStartPatch;
@@ -34767,7 +34632,303 @@ impl EchoPlugin {
 
 </details>
 
-### 8.12 `agena-git-http`
+### 8.12 `agena-failure`
+
+<details><summary><code>crates/agena-failure/src/lib.rs</code> — 609 lines; mod=2, struct=7, enum=7, impl=19, fn=41</summary>
+
+- Package：`agena-failure`
+- Target/module：agena_failure: crate, crate::code, crate::tests
+
+`````rust
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FailureId(pub Uuid);
+
+impl FailureId {
+    pub fn new() -> Self;
+}
+
+impl Default for FailureId {
+    fn default() -> Self;
+}
+
+impl std::fmt::Display for FailureId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct FailureCode(String);
+
+impl FailureCode {
+    pub fn new(value: impl Into<String>) -> Self;
+
+    pub fn as_str(&self) -> &str;
+}
+
+impl std::fmt::Display for FailureCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureCategory {
+    InvalidInput,
+    NotFound,
+    Conflict,
+    PermissionRequired,
+    PermissionDenied,
+    AuthenticationRequired,
+    RateLimited,
+    QuotaExceeded,
+    Timeout,
+    DependencyUnavailable,
+    ProtocolFailure,
+    DataCorruption,
+    Internal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureResponsibility {
+    Caller,
+    Policy,
+    Dependency,
+    System,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryDirective {
+    Never,
+    CorrectInput,
+    AfterUserAction,
+    AfterRefresh,
+    ImmediateOnce,
+    Backoff,
+    UseAlternative,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryDirective {
+    None,
+    Refresh,
+    Reauthenticate,
+    OpenSettings,
+    RequestPermission,
+    AskUser,
+    Retry,
+    ChooseAlternative,
+    RestartPlugin,
+    RestartRuntime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureImpact {
+    RequestRejected,
+    OperationFailed,
+    OperationPaused,
+    PartialSuccess,
+    BackgroundTaskFailed,
+    RuntimeDegraded,
+    FatalStartupFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserPresentation {
+    pub key: String,
+    pub fallback: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_key: Option<String>,
+}
+
+impl UserPresentation {
+
+    pub fn new(key: impl Into<String>, fallback: &'static str) -> Self;
+
+    pub fn validated(key: impl Into<String>, message: impl AsRef<str>) -> Self;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FieldIssue {
+    #[serde(deserialize_with = "deserialize_safe_field_path")]
+    field: String,
+    pub kind: FieldIssueKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldIssueKind {
+    Required,
+    Invalid,
+    OutOfRange,
+    Unsupported,
+    NotFound,
+}
+
+impl FieldIssue {
+    pub fn new(field: impl AsRef<str>, kind: FieldIssueKind) -> Self;
+
+    pub fn field(&self) -> &str;
+}
+
+fn sanitize_field_path(field: &str) -> String;
+
+fn deserialize_safe_field_path<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelFeedback {
+    pub kind: ModelFeedbackKind,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fields: Vec<FieldIssue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelFeedbackKind {
+    InternalToolFailure,
+    InvalidInput,
+    InvalidPattern,
+    ToolUnavailable,
+    StaleToolCall,
+    PermissionRequired,
+    UserInputRequired,
+    PluginFailure,
+    PermissionDenied,
+    UserDeclined,
+}
+
+impl ModelFeedback {
+    fn fixed(kind: ModelFeedbackKind) -> Self;
+
+    pub fn internal_tool_failure() -> Self;
+
+    pub fn invalid_input() -> Self;
+
+    pub fn invalid_input_with_fields(fields: impl IntoIterator<Item = FieldIssue>) -> Self;
+
+    pub fn invalid_pattern() -> Self;
+
+    pub fn tool_unavailable() -> Self;
+
+    pub fn stale_tool_call() -> Self;
+
+    pub fn permission_required() -> Self;
+
+    pub fn user_input_required() -> Self;
+
+    pub fn plugin_failure() -> Self;
+
+    pub fn permission_denied() -> Self;
+
+    pub fn user_declined() -> Self;
+
+    pub fn retry(&self) -> RetryDirective;
+
+    pub fn message(&self) -> String;
+}
+
+impl FieldIssueKind {
+    pub const fn as_str(self) -> &'static str;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Failure {
+    pub id: FailureId,
+    pub code: FailureCode,
+    pub category: FailureCategory,
+    pub responsibility: FailureResponsibility,
+    pub retry: RetryDirective,
+    pub recovery: RecoveryDirective,
+    pub impact: FailureImpact,
+    pub user: UserPresentation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelFeedback>,
+}
+
+impl Failure {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        code: FailureCode,
+        category: FailureCategory,
+        responsibility: FailureResponsibility,
+        retry: RetryDirective,
+        recovery: RecoveryDirective,
+        impact: FailureImpact,
+        user: UserPresentation,
+    ) -> Self;
+
+    pub fn with_model_feedback(mut self, model: ModelFeedback) -> Self;
+
+    pub fn is_unexpected(&self) -> bool;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserProblem {
+    pub id: FailureId,
+    pub code: FailureCode,
+    pub category: FailureCategory,
+    pub responsibility: FailureResponsibility,
+    pub retry: RetryDirective,
+    pub recovery: RecoveryDirective,
+    pub impact: FailureImpact,
+    pub user: UserPresentation,
+}
+
+impl UserProblem {
+    pub fn is_unexpected(&self) -> bool;
+}
+
+impl From<Failure> for UserProblem {
+    fn from(failure: Failure) -> Self;
+}
+
+impl From<&Failure> for UserProblem {
+    fn from(failure: &Failure) -> Self;
+}
+
+pub mod code {
+    use super::FailureCode;
+
+    pub fn internal_unexpected() -> FailureCode;
+
+    pub fn request_invalid() -> FailureCode;
+
+    pub fn dependency_unavailable() -> FailureCode;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_failure_round_trips_without_diagnostic_channel();
+
+    #[test]
+    fn model_feedback_is_explicitly_opt_in();
+
+    #[test]
+    fn user_problem_excludes_model_feedback_by_type_and_serialization();
+
+    #[test]
+    fn persisted_model_feedback_cannot_supply_model_prose();
+
+    #[test]
+    fn dynamic_validation_copy_rejects_diagnostic_canaries();
+}
+`````
+
+</details>
+
+### 8.13 `agena-git-http`
 
 <details><summary><code>crates/agena-git-http/src/git/auth.rs</code> — 94 lines; struct=2, impl=1, fn=6</summary>
 
@@ -37533,7 +37694,7 @@ pub(crate) fn normalize_directory_path(input: &str) -> String;
 
 </details>
 
-### 8.13 `agena-keyring-store`
+### 8.14 `agena-keyring-store`
 
 <details><summary><code>crates/agena-keyring-store/src/lib.rs</code> — 92 lines; struct=1, enum=1, trait=1, impl=6, fn=11</summary>
 
@@ -37595,7 +37756,7 @@ impl SecretStore for KeyringSecretStore {
 
 </details>
 
-### 8.14 `agena-lsp`
+### 8.15 `agena-lsp`
 
 <details><summary><code>crates/agena-lsp/src/client.rs</code> — 660 lines; mod=1, struct=4, enum=1, trait=1, impl=5, fn=33</summary>
 
@@ -38208,7 +38369,7 @@ fn spawn_stderr_reader(name: String, stderr: tokio::process::ChildStderr);
 
 </details>
 
-### 8.15 `agena-macro-core`
+### 8.16 `agena-macro-core`
 
 <details><summary><code>crates/agena-macro-core/src/input_arg_output_support.rs</code> — 240 lines; impl=3, fn=9</summary>
 
@@ -39950,7 +40111,7 @@ fn expand_plugin_generated_input(
 
 </details>
 
-<details><summary><code>crates/agena-macro-core/src/plugin_hooks.rs</code> — 552 lines; struct=1, enum=1, fn=10</summary>
+<details><summary><code>crates/agena-macro-core/src/plugin_hooks.rs</code> — 541 lines; struct=1, enum=1, fn=10</summary>
 
 - Package：`agena-macro-core`
 - Target/module：agena_macro_core: crate::plugin_hooks
@@ -39994,7 +40155,6 @@ pub enum PluginHookKind {
     Event,
     Auth,
     ProviderList,
-    PermissionAsk,
     Notification,
     CommandExecuteBefore,
     CommandExecuteAfter,
@@ -40053,7 +40213,7 @@ fn expand_plugin_hook_filter_guard(filters: &PluginHookFilters) -> proc_macro2::
 
 </details>
 
-<details><summary><code>crates/agena-macro-core/src/plugin_hooks_support.rs</code> — 515 lines; struct=4, enum=2, impl=2, fn=12</summary>
+<details><summary><code>crates/agena-macro-core/src/plugin_hooks_support.rs</code> — 511 lines; struct=4, enum=2, impl=2, fn=12</summary>
 
 - Package：`agena-macro-core`
 - Target/module：agena_macro_core: crate::plugin_hooks_support
@@ -41325,7 +41485,7 @@ impl SchemaRelationSource for ToolSpecConfig {
 
 </details>
 
-### 8.16 `agena-macros`
+### 8.17 `agena-macros`
 
 <details><summary><code>crates/agena-macros/src/lib.rs</code> — 35 lines; fn=3</summary>
 
@@ -41353,7 +41513,7 @@ pub fn derive_plugin_config_store(input: TokenStream) -> TokenStream;
 
 </details>
 
-### 8.17 `agena-marketplace-server`
+### 8.18 `agena-marketplace-server`
 
 <details><summary><code>crates/agena-marketplace-server/src/lib.rs</code> — 9 lines; mod=1</summary>
 
@@ -41420,7 +41580,7 @@ async fn plugin_artifact(
 
 </details>
 
-### 8.18 `agena-mcp-client`
+### 8.19 `agena-mcp-client`
 
 <details><summary><code>crates/agena-mcp-client/src/error.rs</code> — 83 lines; enum=1, type=1, impl=3, fn=3</summary>
 
@@ -41525,7 +41685,7 @@ pub use token_store::{
 
 </details>
 
-<details><summary><code>crates/agena-mcp-client/src/manager.rs</code> — 1697 lines; mod=1, struct=11, enum=6, trait=1, type=1, impl=17, fn=85</summary>
+<details><summary><code>crates/agena-mcp-client/src/manager.rs</code> — 1787 lines; mod=1, struct=11, enum=6, trait=1, type=1, impl=17, fn=86</summary>
 
 - Package：`agena-mcp-client`
 - Target/module：agena_mcp_client: crate::manager, crate::manager::tests
@@ -41697,7 +41857,7 @@ struct ServerEventState {
     tool_generation: AtomicU64,
     resource_generation: AtomicU64,
     prompt_generation: AtomicU64,
-    last_refresh_error: RwLock<Option<String>>,
+    last_refresh_failure: RwLock<Option<agena_failure::Failure>>,
 }
 
 #[derive(Clone)]
@@ -41768,7 +41928,7 @@ pub struct McpConnectionManager {
 struct Inner {
     servers: BTreeMap<String, Arc<ConnectedServer>>,
     specs: BTreeMap<String, ServerSpec>,
-    last_errors: BTreeMap<String, String>,
+    last_failures: BTreeMap<String, agena_failure::Failure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41777,12 +41937,12 @@ pub struct McpServerStatus {
     pub connected: bool,
     pub tool_count: usize,
     pub network_target: Option<String>,
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::Failure>,
     pub instructions: Option<String>,
     pub tool_generation: u64,
     pub resource_generation: u64,
     pub prompt_generation: u64,
-    pub last_refresh_error: Option<String>,
+    pub last_refresh_failure: Option<agena_failure::Failure>,
     pub reconnect_supervisor_running: bool,
     pub auth_mode: McpServerAuthMode,
 
@@ -41877,8 +42037,10 @@ impl McpConnectionManager {
         tool_policy: McpToolPolicy,
     ) -> AgenaMcpClientHandler;
 
-    async fn record_error(&self, name: &str, error: String);
+    async fn record_error(&self, name: &str, error: &McpError);
 }
+
+fn mcp_failure(error: &McpError) -> agena_failure::Failure;
 
 async fn run_reconnect_supervisor(
     manager: std::sync::Weak<McpConnectionManager>,
@@ -42573,7 +42735,7 @@ mod tests {
 
 </details>
 
-### 8.19 `agena-mcp-server`
+### 8.20 `agena-mcp-server`
 
 <details><summary><code>crates/agena-mcp-server/src/lib.rs</code> — 640 lines; mod=1, struct=3, enum=1, trait=1, impl=12, fn=37</summary>
 
@@ -42782,7 +42944,7 @@ mod tests {
 
 </details>
 
-### 8.20 `agena-memory-index`
+### 8.21 `agena-memory-index`
 
 <details><summary><code>crates/agena-memory-index/src/lib.rs</code> — 251 lines; struct=3, enum=1, impl=2, fn=9</summary>
 
@@ -42889,7 +43051,7 @@ fn optional_text(document: &TantivyDocument, field: Field) -> Option<String>;
 
 </details>
 
-### 8.21 `agena-multi-tool-plugin-stdio`
+### 8.22 `agena-multi-tool-plugin-stdio`
 
 <details><summary><code>examples/multi_tool_plugin_stdio/src/main.rs</code> — 146 lines; struct=6, impl=2, fn=6</summary>
 
@@ -42996,9 +43158,9 @@ impl NotesPlugin {
 
 </details>
 
-### 8.22 `agena-plugin-host`
+### 8.23 `agena-plugin-host`
 
-<details><summary><code>crates/agena-plugin-host/src/config.rs</code> — 541 lines; mod=1, struct=10, enum=5, impl=12, fn=33</summary>
+<details><summary><code>crates/agena-plugin-host/src/config.rs</code> — 531 lines; mod=1, struct=10, enum=5, impl=12, fn=32</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::config, crate::config::presentation_tests
@@ -43230,8 +43392,6 @@ pub struct TimeoutsConfig {
 
     pub tool_invoke: Option<DurationSpec>,
 
-    pub permission_ask: Option<DurationSpec>,
-
     pub chat: Option<DurationSpec>,
 
     pub fast: Option<DurationSpec>,
@@ -43245,8 +43405,6 @@ impl TimeoutsConfig {
     pub fn tool_hook_or(&self, default: Duration) -> Duration;
 
     pub fn tool_invoke_or(&self, default: Duration) -> Duration;
-
-    pub fn permission_ask_or(&self, default: Duration) -> Duration;
 
     pub fn chat_or(&self, default: Duration) -> Duration;
 
@@ -43445,7 +43603,7 @@ impl From<serde_json::Error> for TransportError {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/host/host_handle.rs</code> — 1631 lines; enum=1, impl=8, fn=42</summary>
+<details><summary><code>crates/agena-plugin-host/src/host/host_handle.rs</code> — 1465 lines; impl=8, fn=41</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::host::host_handle
@@ -43486,8 +43644,6 @@ impl HostHandle {
         method: &str,
         params: serde_json::Value,
     ) -> Result<bool, PluginError>;
-
-    pub async fn permission_handler(&self) -> Option<String>;
 
     pub fn status_registry(&self) -> Arc<crate::status::StatusRegistry>;
 
@@ -43632,30 +43788,28 @@ use super::{
     HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
     HostMcpListServersParams, HostMcpRemoveServerParams, HostMessageSubtaskParams,
     HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
-    HostPermissionCheckNetworkParams, HostPermissionCheckPathParams, HostPluginStatusGetParams,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostReadSubtaskOutputParams,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
-    HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
-    HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
-    HostSetSessionModelParams, HostSnapshotListParams, HostStatuslineContributeParams,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveParams,
-    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteParams,
-    HostStorageGetParams, HostStorageListParams, HostStorageSetParams, HostSubscribeParams,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
-    HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
-    HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
-    PermissionAskInput, PermissionDecision, PluginError, PluginErrorCode, PluginKey,
-    PluginLogRecord, PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
-    ScopedHostClient, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
-    ToolRegistryEventListener, VecDeque, callback_context_from_params,
-    dispatch_permission_ask_transport, host_api, host_status_from, host_unavailable, method, parse,
+    HostPluginStatusGetParams, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostReadSubtaskOutputParams, HostRegisteredToolDescriptor, HostRegisteredToolListResponse,
+    HostRunSubtaskParams, HostSchedulerCreateParams, HostSchedulerDeleteParams,
+    HostSchedulerListParams, HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams,
+    HostSecretSetParams, HostSetSessionModelParams, HostSnapshotListParams,
+    HostStatuslineContributeParams, HostStatuslineContributeRequest, HostStatuslineListResponse,
+    HostStatuslineRemoveParams, HostStatuslineRemoveResponse, HostStatuslineSegment,
+    HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams, HostStorageSetParams,
+    HostSubscribeParams, HostThemeListResponse, HostThemePalette, HostThemeRegisterParams,
+    HostThemeRegisterRequest, HostThemeRemoveParams, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams,
+    HostUnsubscribeParams, PluginError, PluginErrorKind, PluginKey, PluginLogRecord,
+    PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient,
+    ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,
+    callback_context_from_params, host_api, host_status_from, host_unavailable, method, parse,
     scoped_context, transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
 };
 `````
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/host/host_scoped_client.rs</code> — 572 lines; impl=2, fn=59</summary>
+<details><summary><code>crates/agena-plugin-host/src/host/host_scoped_client.rs</code> — 534 lines; impl=2, fn=56</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::host::host_scoped_client
@@ -43680,21 +43834,6 @@ impl HostClient for ScopedHostClient {
     async fn subscribe_events(&self, filter: EventFilter) -> crate::sdk::Result<EventSubscription>;
 
     async fn unsubscribe_events(&self, subscription_id: String) -> crate::sdk::Result<()>;
-
-    async fn ask_permission(
-        &self,
-        req: PermissionAskInput,
-    ) -> crate::sdk::Result<PermissionDecision>;
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> crate::sdk::Result<HostPermissionCheckResponse>;
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> crate::sdk::Result<HostPermissionCheckResponse>;
 
     async fn read_config(&self, path: Option<String>) -> crate::sdk::Result<serde_json::Value>;
 
@@ -43882,8 +44021,7 @@ use super::{
     HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
     HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatusGetRequest,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolListResponse,
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
@@ -43895,9 +44033,8 @@ use super::{
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    PermissionAskInput, PermissionDecision, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
-    RunSubtaskRequest, RunSubtaskResponse, ScopedHostClient, SubtaskControlResponse,
-    ToolDescriptor, ToolInvokeOutput, host_api, method,
+    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
+    ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput, host_api, method,
 };
 `````
 
@@ -43922,7 +44059,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/host/plugin_host_core.rs</code> — 1715 lines; impl=5, fn=81</summary>
+<details><summary><code>crates/agena-plugin-host/src/host/plugin_host_core.rs</code> — 1622 lines; impl=5, fn=77</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::host::plugin_host_core
@@ -44118,28 +44255,6 @@ impl PluginHost {
         input: ChatSystemTransformInput,
     ) -> Result<ChatSystemTransformInput, PluginError>;
 
-    pub async fn dispatch_permission_ask(
-        &self,
-        input: PermissionAskInput,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError>;
-
-    pub async fn dispatch_permission_ask_cancellable(
-        &self,
-        input: PermissionAskInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError>;
-
-    pub fn dispatch_permission_ask_blocking(
-        &self,
-        input: PermissionAskInput,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError>;
-
-    pub fn dispatch_permission_ask_blocking_cancellable(
-        &self,
-        input: PermissionAskInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError>;
-
     pub async fn broadcast_notification(&self, input: NotificationInput);
 
     pub async fn dispatch_command_before(
@@ -44279,31 +44394,29 @@ use super::{
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch, Duration, EventEnvelope,
-    HashMap, HookSubscription, HostCallbackContext, HostCapability, HostHandle,
-    HostStatuslineSegment, HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput,
-    PermissionAdvice, PermissionAskDecision, PermissionAskInput, PermissionAskOutcome,
-    PluginCommandCatalogItem, PluginCommandInvokeInput, PluginCommandOutput, PluginError,
-    PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
-    PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
-    PluginToolRegistry, PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction,
-    PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    RegisteredTool, RwLock, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput,
-    ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput,
-    ToolInvokeOutput, ToolInvokeStream, ToolKey, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd,
-    TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
+    HashMap, HookSubscription, HostCallbackContext, HostHandle, HostStatuslineSegment,
+    HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput, PluginCommandCatalogItem,
+    PluginCommandInvokeInput, PluginCommandOutput, PluginError, PluginHost, PluginInspect,
+    PluginKey, PluginLogRecord, PluginLogStore, PluginStudioControlCatalogItem,
+    PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginToolRegistry,
+    PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction, PluginUiCatalog,
+    PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch, RegisteredTool, RwLock,
+    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
+    TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolInvokeStream, ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput,
+    ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd, TransportError,
+    UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
     block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
-    block_on_scoped_thread, call_permission_ask_hook, call_with_timeout, dispatcher,
-    hook_registration_for_plugin, host_api, merge_json, method, plugin_has_capability,
-    requires_long_lived_tool_invoke_timeout, shutdown_transport, tool_hook_context,
-    transport_to_plugin_error,
+    block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
+    merge_json, method, requires_long_lived_tool_invoke_timeout, shutdown_transport,
+    tool_hook_context, transport_to_plugin_error,
 };
 `````
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/host.rs</code> — 1014 lines; mod=5, struct=65, enum=1, type=1, impl=6, fn=33</summary>
+<details><summary><code>crates/agena-plugin-host/src/host.rs</code> — 949 lines; mod=5, struct=63, enum=1, type=1, impl=6, fn=30</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::host, crate::host::timeout_tests
@@ -44332,8 +44445,7 @@ use crate::sdk::host_api::{
     HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostImageExecuteRequest,
     HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatus,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatus,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
     HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
@@ -44357,15 +44469,15 @@ use crate::sdk::{
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
-    PermissionDecision, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
-    PluginError, PluginErrorCode, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
-    PluginTuiContentBlock, PluginUiAction, PostRunInput, PreRunInput, ProviderListInput,
-    ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    HostCapability, NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput,
+    PluginCommandOutput, PluginError, PluginErrorKind, PluginKey, PluginManifest,
+    PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostRunInput,
+    PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
+    SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
+    ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput,
+    ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolPermissionNetworksInput,
+    ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -44513,10 +44625,19 @@ pub struct PluginStudioViewCatalogItem {
     pub view: PluginStudioView,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginUiToolInvokeStatus {
+    Completed,
+    CapabilityUnavailable,
+    ToolUnavailable,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginUiToolInvokeResponse {
     pub plugin_id: PluginKey,
     pub tool: String,
+    pub status: PluginUiToolInvokeStatus,
     pub title: String,
     pub output_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44529,20 +44650,6 @@ pub struct ToolInvokeStream {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,
     pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd, PluginError>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum PermissionAskOutcome {
-    Decision {
-        plugin_id: String,
-        decision: PermissionDecision,
-        authority: PluginAuthoritySummary,
-    },
-    Advice {
-        plugin_id: String,
-        advice: PermissionAdvice,
-        authority: PluginAuthoritySummary,
-    },
 }
 
 pub struct PluginHost {
@@ -44580,8 +44687,6 @@ fn tool_hook_context(
     workspace_root: Option<String>,
 ) -> HostCallbackContext;
 
-fn plugin_has_capability(plugin: &LoadedPlugin, capability: HostCapability) -> bool;
-
 fn hook_registration_for_plugin(plugin: &LoadedPlugin) -> HostHookRegistration;
 
 fn plugin_source_summary(configured_plugin: &ConfiguredPlugin) -> (String, Option<String>);
@@ -44593,18 +44698,6 @@ fn manifest_hash(manifest: &PluginManifest) -> Option<String>;
 fn unix_timestamp_ms() -> i64;
 
 fn transport_to_plugin_error(e: TransportError) -> PluginError;
-
-async fn call_permission_ask_hook(
-    plugin: &LoadedPlugin,
-    params: serde_json::Value,
-    timeout: Duration,
-) -> Result<serde_json::Value, PluginError>;
-
-async fn dispatch_permission_ask_transport(
-    transport: Arc<dyn PluginTransport>,
-    context: HostCallbackContext,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, PluginError>;
 
 fn merge_json(into: &mut serde_json::Value, from: serde_json::Value);
 
@@ -44655,8 +44748,6 @@ pub struct HostHandle {
     themes: Arc<RwLock<BTreeMap<(PluginKey, String), HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
 
-    permission_handler: tokio::sync::RwLock<Option<String>>,
-
     plugin_transports: tokio::sync::RwLock<HashMap<PluginKey, Arc<dyn PluginTransport>>>,
 }
 
@@ -44680,20 +44771,6 @@ struct HostSubscribeParams {
 #[derive(serde::Deserialize)]
 struct HostUnsubscribeParams {
     subscription_id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct HostPermissionCheckPathParams {
-    request: HostPathPermissionCheckRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostPermissionCheckNetworkParams {
-    request: HostNetworkPermissionCheckRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
@@ -45014,7 +45091,7 @@ struct ScopedHostClient {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/lib.rs</code> — 55 lines; mod=11</summary>
+<details><summary><code>crates/agena-plugin-host/src/lib.rs</code> — 53 lines; mod=11</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate
@@ -45043,34 +45120,32 @@ pub use host::{
     LoadedPlugin, PluginCommandCatalogItem, PluginHost, PluginHostBuildConfig, PluginInspect,
     PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
     PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiCatalog,
-    PluginUiToolInvokeResponse, StaticPluginRegistration, ToolInvokeStream,
+    PluginUiToolInvokeResponse, PluginUiToolInvokeStatus, StaticPluginRegistration,
+    ToolInvokeStream,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
 pub use logs::{PluginLogRecord, PluginLogStore};
 pub use registry::PluginToolRegistry;
-pub use sdk::host_api::{
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostStatuslineSegment, HostThemePalette,
-};
+pub use sdk::host_api::{HostStatuslineSegment, HostThemePalette};
 pub use sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatDirection, ChatHeadersInput,
     ChatHeadersPatch, ChatMessage, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforePatch, CommandBeforeResponse, ConfigInput, ConfigPatch,
-    EventEnvelope, EventFilter, HookSubscription, NotificationInput, PermissionAskDecision,
-    PermissionAskInput, PermissionDecision, PluginCommandDefinition, PluginCommandInvokeInput,
-    PluginCommandOutput, PluginError, PluginKey, PluginKeyParseError, PluginManifest,
-    PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
-    PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
-    PluginUiContributions, PluginUiThemePalette, PostRunInput, PreRunInput, ProviderDescriptor,
-    ProviderKind, ProviderListInput, ProviderListPatch, SessionEndInput, SessionEndReason,
-    SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinition,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolDescriptionMode, ToolFailureInput,
-    ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolKeyParseError, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, UserPromptSubmitInput, UserPromptSubmitPatch,
+    EventEnvelope, EventFilter, HookSubscription, NotificationInput, PluginCommandDefinition,
+    PluginCommandInvokeInput, PluginCommandOutput, PluginError, PluginKey, PluginKeyParseError,
+    PluginManifest, PluginStudioControl, PluginStudioControlOption, PluginStudioUiContributions,
+    PluginStudioView, PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions,
+    PluginUiAction, PluginUiContributions, PluginUiThemePalette, PostRunInput, PreRunInput,
+    ProviderDescriptor, ProviderKind, ProviderListInput, ProviderListPatch, SessionEndInput,
+    SessionEndReason, SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput,
+    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinition, ToolDefinitionInput, ToolDefinitionPatch, ToolDescriptionMode,
+    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolKeyParseError,
+    ToolPermissionNetworksInput, ToolPermissionPathsInput, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };
 `````
 
@@ -45626,10 +45701,10 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/status.rs</code> — 184 lines; struct=2, enum=1, impl=5, fn=15</summary>
+<details><summary><code>crates/agena-plugin-host/src/status.rs</code> — 236 lines; mod=1, struct=2, enum=1, impl=6, fn=17</summary>
 
 - Package：`agena-plugin-host`
-- Target/module：agena_plugin_host: crate::status
+- Target/module：agena_plugin_host: crate::status, crate::status::tests
 
 `````rust
 use std::sync::RwLock;
@@ -45666,7 +45741,7 @@ pub struct PluginStatus {
     pub restart_count: u32,
     pub last_exit_code: Option<i32>,
     pub last_restart_at_ms: Option<i64>,
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
 }
 
 impl PluginStatus {
@@ -45699,7 +45774,7 @@ impl StatusRegistry {
 
     pub fn record_started(&self, plugin_id: &PluginKey, pid: Option<u32>, is_restart: bool);
 
-    pub fn record_spawn_failure(&self, plugin_id: &PluginKey, message: impl Into<String>);
+    pub fn record_spawn_failure(&self, plugin_id: &PluginKey, diagnostic: impl fmt::Display);
 
     pub fn record_exit(
         &self,
@@ -45711,11 +45786,25 @@ impl StatusRegistry {
 
     pub fn record_stopped(&self, plugin_id: &PluginKey);
 }
+
+fn plugin_lifecycle_failure(
+    plugin_id: &PluginKey,
+    diagnostic: impl fmt::Display,
+) -> agena_failure::UserProblem;
+
+#[cfg(test)]
+mod tests {
+    use super::{PluginStatus, StatusRegistry};
+    use crate::sdk::PluginKey;
+
+    #[test]
+    fn plugin_diagnostic_never_enters_status_projection();
+}
 `````
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/transport/cdylib.rs</code> — 82 lines; struct=1, impl=4, fn=3</summary>
+<details><summary><code>crates/agena-plugin-host/src/transport/cdylib.rs</code> — 77 lines; struct=1, impl=4, fn=3</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::transport::cdylib
@@ -45757,7 +45846,7 @@ impl PluginTransport for CdylibTransport {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/transport/http.rs</code> — 328 lines; struct=2, enum=1, impl=2, fn=13</summary>
+<details><summary><code>crates/agena-plugin-host/src/transport/http.rs</code> — 324 lines; struct=2, enum=1, impl=2, fn=13</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::transport::http
@@ -45957,7 +46046,7 @@ pub trait PluginTransport: Send + Sync + 'static {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/transport/stdio.rs</code> — 810 lines; struct=6, enum=1, type=1, impl=8, fn=27</summary>
+<details><summary><code>crates/agena-plugin-host/src/transport/stdio.rs</code> — 803 lines; struct=6, enum=1, type=1, impl=8, fn=27</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::transport::stdio
@@ -46170,7 +46259,7 @@ impl PluginTransport for StdioTransport {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-host/src/transport/wasm.rs</code> — 168 lines; struct=2, impl=2, fn=4</summary>
+<details><summary><code>crates/agena-plugin-host/src/transport/wasm.rs</code> — 163 lines; struct=2, impl=2, fn=4</summary>
 
 - Package：`agena-plugin-host`
 - Target/module：agena_plugin_host: crate::transport::wasm
@@ -46223,7 +46312,7 @@ impl PluginTransport for WasmTransport {
 
 </details>
 
-### 8.23 `agena-plugin-marketplace`
+### 8.24 `agena-plugin-marketplace`
 
 <details><summary><code>crates/agena-plugin-marketplace/src/cache.rs</code> — 182 lines; struct=3, impl=2, fn=17</summary>
 
@@ -46740,7 +46829,7 @@ impl PluginKind {
 
 </details>
 
-### 8.24 `agena-plugin-sdk`
+### 8.25 `agena-plugin-sdk`
 
 <details><summary><code>crates/agena-plugin-sdk/src/attachment.rs</code> — 186 lines; struct=2, enum=2, impl=5, fn=5</summary>
 
@@ -46865,7 +46954,7 @@ impl RootModule for AgenaPluginCdylib_Ref {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/drivers/cdylib.rs</code> — 125 lines; fn=7</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/drivers/cdylib.rs</code> — 122 lines; fn=7</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::drivers::cdylib
@@ -46919,7 +47008,7 @@ macro_rules! export_cdylib {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/drivers/dispatch.rs</code> — 355 lines; struct=2, impl=2, fn=7</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/drivers/dispatch.rs</code> — 351 lines; struct=2, impl=2, fn=7</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::drivers::dispatch
@@ -46969,7 +47058,7 @@ fn _random_id() -> String;
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/drivers/http.rs</code> — 417 lines; struct=2, impl=2, fn=19</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/drivers/http.rs</code> — 376 lines; struct=2, impl=2, fn=16</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::drivers::http
@@ -46981,15 +47070,14 @@ use axum::{Json, Router, extract::State, routing::post};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::drivers::dispatch::PluginDispatcher;
-use crate::error::{PluginError, PluginErrorCode};
+use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
-    EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeInput,
-    ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
+    EventEnvelope, EventFilter, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStreamHandle,
+    ToolStreamError,
 };
 use crate::host_api::{
     EventSubscription, HostClient, HostConfigReloadResponse, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, LogLevel,
+    HostImageExecuteResponse, LogLevel,
 };
 use crate::plugin::{InitContext, Plugin};
 use crate::rpc::{
@@ -47030,21 +47118,6 @@ impl HostClient for HttpCallbackHostClient {
         &self,
         filter: EventFilter,
     ) -> crate::error::Result<EventSubscription>;
-
-    async fn ask_permission(
-        &self,
-        req: PermissionAskInput,
-    ) -> crate::error::Result<PermissionDecision>;
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse>;
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse>;
 
     async fn read_config(&self, path: Option<String>) -> crate::error::Result<serde_json::Value>;
 
@@ -47108,10 +47181,10 @@ pub mod http;
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/drivers/stdio.rs</code> — 1026 lines; struct=1, impl=2, fn=61</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/drivers/stdio.rs</code> — 1004 lines; mod=1, struct=1, impl=2, fn=59</summary>
 
 - Package：`agena-plugin-sdk`
-- Target/module：agena_plugin_sdk: crate::drivers::stdio
+- Target/module：agena_plugin_sdk: crate::drivers::stdio, crate::drivers::stdio::authorization_error_code_tests
 
 `````rust
 use std::collections::HashMap;
@@ -47121,10 +47194,9 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::drivers::dispatch::PluginDispatcher;
-use crate::error::{PluginError, PluginErrorCode};
+use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
-    EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
-    ToolInvokeStreamHandle, ToolStreamError,
+    EventEnvelope, EventFilter, ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostClient,
@@ -47133,7 +47205,6 @@ use crate::host_api::{
     HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
     HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
     HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
     HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
     HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
@@ -47198,21 +47269,6 @@ impl HostClient for StdioHostClient {
         &self,
         filter: EventFilter,
     ) -> crate::error::Result<EventSubscription>;
-
-    async fn ask_permission(
-        &self,
-        req: PermissionAskInput,
-    ) -> crate::error::Result<PermissionDecision>;
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse>;
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse>;
 
     async fn read_config(&self, path: Option<String>) -> crate::error::Result<serde_json::Value>;
 
@@ -47388,22 +47444,41 @@ impl HostClient for StdioHostClient {
 }
 
 fn error_object_from(e: PluginError) -> ErrorObject;
+
+#[cfg(test)]
+mod authorization_error_code_tests {
+    use super::error_object_from;
+    use crate::{PluginError, PluginErrorKind, rpc::codes};
+
+    #[test]
+    fn authorization_and_availability_outcomes_keep_distinct_json_rpc_codes();
+}
 `````
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/error.rs</code> — 104 lines; struct=2, enum=1, type=1, impl=10, fn=8</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/error.rs</code> — 299 lines; mod=1, struct=3, enum=1, type=1, impl=13, fn=14</summary>
 
 - Package：`agena-plugin-sdk`
-- Target/module：agena_plugin_sdk: crate::error
+- Target/module：agena_plugin_sdk: crate::error, crate::error::tests
 
 `````rust
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
+    RecoveryDirective, RetryDirective, UserPresentation,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PluginError {
-    pub code: PluginErrorCode,
+    pub kind: PluginErrorKind,
+    pub failure: Box<Failure>,
+    pub diagnostic: Box<PluginDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PluginDiagnostic {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook: Option<String>,
@@ -47413,41 +47488,60 @@ pub struct PluginError {
     pub data: Option<serde_json::Value>,
 }
 
+pub const CONFIGURATION_REQUIRED_MARKER: &str = "configuration_required";
+const PUBLIC_PROBLEM_DATA_KEY: &str = "agena_public_problem";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum PluginErrorCode {
-    Generic,
+pub enum PluginErrorKind {
+    Internal,
     NotImplemented,
     InvalidParams,
     Timeout,
     Disconnected,
     Panicked,
     HostUnavailable,
+    PolicyDenied,
+    UserDeclined,
+    CapabilityUnavailable,
+    ToolUnavailable,
 }
 
 impl PluginError {
-    pub fn new(message: impl Into<String>) -> Self;
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self;
 
     pub fn not_implemented(hook: impl Into<String>) -> Self;
 
-    pub fn invalid_params(message: impl Into<String>) -> Self;
+    pub fn invalid_params(diagnostic: impl std::fmt::Display) -> Self;
 
-    pub fn invalid_params_with_data(message: impl Into<String>, data: serde_json::Value) -> Self;
+    pub fn invalid_params_with_data(
+        diagnostic: impl std::fmt::Display,
+        data: serde_json::Value,
+    ) -> Self;
+
+    pub fn from_kind(kind: PluginErrorKind, diagnostic: impl std::fmt::Display) -> Self;
+
+    pub fn configuration_required(
+        component: impl AsRef<str>,
+        instruction: impl AsRef<str>,
+    ) -> Self;
+
+    pub fn with_public_problem(mut self, marker: &'static str) -> Self;
+
+    pub fn with_hook(mut self, hook: impl Into<String>) -> Self;
+
+    pub fn with_plugin(mut self, plugin: impl Into<String>) -> Self;
+
+    pub fn diagnostic_message(&self) -> &str;
 }
 
+fn failure_for_kind(kind: PluginErrorKind) -> Failure;
+
 impl std::fmt::Display for PluginError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
 }
 
 impl std::error::Error for PluginError {}
-
-impl From<&str> for PluginError {
-    fn from(value: &str) -> Self;
-}
-
-impl From<String> for PluginError {
-    fn from(value: String) -> Self;
-}
 
 impl From<serde_json::Error> for PluginError {
     fn from(value: serde_json::Error) -> Self;
@@ -47460,6 +47554,14 @@ pub struct TransportErrorRepr {
 }
 
 pub type Result<T> = std::result::Result<T, PluginError>;
+
+#[cfg(test)]
+mod tests {
+    use super::PluginError;
+
+    #[test]
+    fn display_and_failure_exclude_plugin_diagnostics();
+}
 `````
 
 </details>
@@ -48012,7 +48114,7 @@ pub struct NotificationInput {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/hooks/permission.rs</code> — 501 lines; struct=4, enum=3, trait=6, impl=50, fn=56</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/hooks/permission.rs</code> — 455 lines; struct=2, trait=6, impl=50, fn=56</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::hooks::permission
@@ -48023,14 +48125,6 @@ use std::{borrow::Cow, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::PathKind;
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionDecision {
-    Allow,
-    Deny,
-    Prompt,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PathRequest {
@@ -48332,44 +48426,6 @@ where
 {
     fn into_network_requests(self) -> crate::Result<Vec<NetworkRequest>>;
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PermissionAskInput {
-    pub session_id: i64,
-    pub action: String,
-    #[serde(default)]
-    pub subject: serde_json::Value,
-    pub default_decision: PermissionDecision,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionRiskLevel {
-    Low,
-    #[default]
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PermissionAdvice {
-    pub decision: PermissionDecision,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub reason: String,
-    #[serde(default)]
-    pub risk: PermissionRiskLevel,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requested_scope: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "kind", content = "value")]
-pub enum PermissionAskDecision {
-    Decide(PermissionDecision),
-    Advise(PermissionAdvice),
-    Defer,
-}
 `````
 
 </details>
@@ -48554,7 +48610,7 @@ impl ShellEnvPatch {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/hooks/tool.rs</code> — 435 lines; struct=16, trait=2, impl=29, fn=29</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/hooks/tool.rs</code> — 466 lines; struct=16, trait=2, impl=32, fn=31</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::hooks::tool
@@ -48567,6 +48623,7 @@ use serde::{Deserialize, Serialize};
 use crate::attachment::AttachmentItem;
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::ToolTag;
+pub use agena_tool::ToolPresentationSection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolBeforeInput {
@@ -48646,10 +48703,8 @@ pub struct ToolFailureInput {
     pub call_id: i64,
     pub workspace_root: String,
     pub input: serde_json::Value,
-    pub error: String,
 
-    #[serde(default)]
-    pub is_interrupt: bool,
+    pub failure: agena_failure::UserProblem,
 }
 
 impl ToolFailureInput {
@@ -48725,7 +48780,11 @@ pub struct ToolPermissionNetworksInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolInvokeOutput {
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
     pub output_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -48744,6 +48803,10 @@ impl ToolInvokeOutput {
         metadata: BTreeMap<String, String>,
         attachments: Vec<AttachmentItem>,
     ) -> Self;
+
+    pub fn with_summary(mut self, summary: impl Into<String>) -> Self;
+
+    pub fn with_section(mut self, title: impl Into<String>, text: impl Into<String>) -> Self;
 }
 
 pub trait IntoToolInvokeOutput {
@@ -48800,7 +48863,11 @@ pub struct ToolStreamChunk {
 pub struct ToolStreamEnd {
     pub stream_id: String,
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
     pub output_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -48869,7 +48936,7 @@ pub struct ToolStreamError {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/host_api.rs</code> — 1537 lines; struct=93, enum=10, trait=1, impl=7, fn=78</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/host_api.rs</code> — 1412 lines; struct=90, enum=10, trait=1, impl=1, fn=64</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::host_api
@@ -48883,11 +48950,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
 use crate::error::{PluginError, Result};
-use crate::hooks::{
-    EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
-};
+use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::{PathKind, PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
+use crate::manifest::{PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -48898,25 +48963,6 @@ pub trait HostClient: Send + Sync + 'static {
     async fn subscribe_events(&self, filter: EventFilter) -> Result<EventSubscription>;
 
     async fn unsubscribe_events(&self, subscription_id: String) -> Result<()>;
-
-    async fn ask_permission(&self, req: PermissionAskInput) -> Result<PermissionDecision>;
-
-    async fn check_path_permission(
-        &self,
-        _req: HostPathPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse>;
-
-    async fn check_network_permission(
-        &self,
-        _req: HostNetworkPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse>;
-
-    async fn ensure_path_permission(&self, req: HostPathPermissionCheckRequest) -> Result<()>;
-
-    async fn ensure_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> Result<()>;
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
 
@@ -49099,44 +49145,6 @@ where
 
 pub fn current_host_callback_context() -> Option<HostCallbackContext>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostPathPermissionCheckRequest {
-    pub path: String,
-    pub kind: PathKind,
-}
-
-impl HostPathPermissionCheckRequest {
-    pub fn read(path: impl Into<String>) -> Self;
-
-    pub fn write(path: impl Into<String>) -> Self;
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostNetworkPermissionCheckRequest {
-    pub target: String,
-}
-
-impl HostNetworkPermissionCheckRequest {
-    pub fn connect(target: impl Into<String>) -> Self;
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostPermissionCheckResponse {
-    pub decision: PermissionDecision,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub explanation: String,
-}
-
-impl HostPermissionCheckResponse {
-    pub fn allowed() -> Self;
-
-    pub fn is_allowed(&self) -> bool;
-
-    pub fn ensure_allowed(&self) -> Result<()>;
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AskUserOption {
     pub label: String,
@@ -49278,7 +49286,9 @@ pub struct RunSubtaskResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub problem: Option<agena_failure::UserProblem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_feedback: Option<agena_failure::ModelFeedback>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -49797,7 +49807,7 @@ pub struct HostPluginStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_restart_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -50098,18 +50108,6 @@ impl HostClient for NoopHostClient {
 
     async fn subscribe_events(&self, _: EventFilter) -> Result<EventSubscription>;
 
-    async fn ask_permission(&self, _: PermissionAskInput) -> Result<PermissionDecision>;
-
-    async fn check_path_permission(
-        &self,
-        _: HostPathPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse>;
-
-    async fn check_network_permission(
-        &self,
-        _: HostNetworkPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse>;
-
     async fn read_config(&self, _: Option<String>) -> Result<serde_json::Value>;
 
     async fn invoke_tool(&self, _: String, _: serde_json::Value) -> Result<ToolInvokeOutput>;
@@ -50271,7 +50269,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/lib.rs</code> — 59 lines; mod=13</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/lib.rs</code> — 58 lines; mod=13</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate
@@ -50304,12 +50302,11 @@ pub mod drivers;
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
-pub use error::{PluginError, PluginErrorCode, Result};
+pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
 pub use hooks::*;
 pub use host_api::{
     HostClient, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,
-    HostImageOperation, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, NoopHostClient,
+    HostImageOperation, NoopHostClient,
 };
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text};
@@ -50466,7 +50463,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/macro_support/schema_metadata_support.rs</code> — 768 lines; fn=44</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/macro_support/schema_metadata_support.rs</code> — 769 lines; fn=44</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::macro_support::schema_metadata_support
@@ -50476,7 +50473,7 @@ use std::collections::BTreeSet;
 
 use serde_json::Value;
 
-use crate::{PluginErrorCode, Result};
+use crate::{PluginErrorKind, Result};
 
 use super::schema_support::{
     escape_json_pointer_segment, resolve_schema_ref, resolve_schema_value,
@@ -51013,7 +51010,7 @@ fn display_path(path: &str) -> &str;
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/macro_support.rs</code> — 308 lines; mod=5, fn=17</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/macro_support.rs</code> — 309 lines; mod=5, fn=17</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::macro_support
@@ -51133,7 +51130,7 @@ where
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/manifest.rs</code> — 1240 lines; mod=1, struct=27, enum=10, trait=1, type=3, impl=34, fn=73</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/manifest.rs</code> — 1221 lines; mod=1, struct=27, enum=10, trait=1, type=3, impl=33, fn=72</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::manifest, crate::manifest::tests
@@ -51200,7 +51197,7 @@ pub enum TransportKind {
     Http,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct PluginSkillDefinition {
 
@@ -51211,10 +51208,6 @@ pub struct PluginSkillDefinition {
     pub instructions: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
-}
-
-impl Default for PluginSkillDefinition {
-    fn default() -> Self;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -51546,9 +51539,6 @@ pub enum HostCapability {
     McpRegistry,
     Statusline,
     Theme,
-    PermissionUi,
-    PermissionDecision,
-    PermissionCheck,
     ImageGeneration,
 }
 
@@ -51860,7 +51850,6 @@ bitflags::bitflags! {
         const CHAT_SYSTEM_TRANSFORM     = 1 << 9;
         const AUTH                      = 1 << 10;
         const PROVIDER_LIST             = 1 << 11;
-        const PERMISSION_ASK            = 1 << 12;
         const COMMAND_BEFORE            = 1 << 13;
         const SHELL_ENV                 = 1 << 14;
         const CONFIG                    = 1 << 15;
@@ -51922,10 +51911,6 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ),
     ("auth", HookSubscription::AUTH),
     ("provider.list", HookSubscription::PROVIDER_LIST),
-    (
-        "permission.ask_permission",
-        HookSubscription::PERMISSION_ASK,
-    ),
     ("notification", HookSubscription::NOTIFICATION),
     ("command.execute.before", HookSubscription::COMMAND_BEFORE),
     ("command.execute.after", HookSubscription::COMMAND_AFTER),
@@ -51965,7 +51950,7 @@ pub type Metadata = BTreeMap<String, String>;
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/manifest_support.rs</code> — 186 lines; impl=1, fn=9</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/manifest_support.rs</code> — 182 lines; impl=1, fn=9</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::manifest_support
@@ -51999,7 +51984,7 @@ pub(crate) fn hook_subscription_for_name(name: &str) -> Option<HookSubscription>
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/plugin.rs</code> — 357 lines; struct=4, trait=2, impl=9, fn=45</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/plugin.rs</code> — 349 lines; struct=4, trait=2, impl=9, fn=44</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::plugin
@@ -52142,11 +52127,6 @@ pub trait Plugin: Send + Sync + 'static {
 
     async fn provider_list(&self, _input: ProviderListInput) -> Result<Option<ProviderListPatch>>;
 
-    async fn permission_ask(
-        &self,
-        _input: PermissionAskInput,
-    ) -> Result<Option<PermissionAskDecision>>;
-
     async fn notification(&self, _input: NotificationInput) -> Result<()>;
 
     async fn command_execute_before(
@@ -52211,7 +52191,7 @@ impl ToolStreamSink {
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/prelude.rs</code> — 54 lines; no counted items</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/prelude.rs</code> — 52 lines; no counted items</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::prelude
@@ -52223,7 +52203,7 @@ pub use serde::{Deserialize, Serialize};
 pub use serde_json::{Value, json};
 pub use std::sync::Arc;
 
-pub use crate::error::{PluginError, PluginErrorCode, Result};
+pub use crate::error::{PluginError, PluginErrorKind, Result};
 pub use crate::hooks::*;
 pub use crate::host_api::{
     EventSubscription, HostClient, HostGetSessionRequest, HostGetSessionResponse,
@@ -52231,22 +52211,20 @@ pub use crate::host_api::{
     HostImageExecuteResponse, HostImageInput, HostImageOperation, HostLspDiagnostic,
     HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
     HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
-    HostMcpRemoveServerResponse, HostMcpServerSpec, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatus,
-    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRenameSessionRequest,
-    HostRenameSessionResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
-    HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerJob,
-    HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
-    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
-    HostSnapshotListResponse, HostSnapshotSummary, HostStatuslineContributeRequest,
-    HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
-    HostStatuslineSegment, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageScope,
-    HostStorageSetRequest, HostStorageVisibility, HostThemeListResponse, HostThemePalette,
-    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, NoopHostClient, ToolRegistryChangeKind,
+    HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus, HostPluginStatusGetRequest,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolDescriptor,
+    HostRegisteredToolListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
+    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
+    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
+    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
+    HostSecretSetRequest, HostSession, HostSnapshotListResponse, HostSnapshotSummary,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
+    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageRecord, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
+    HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, NoopHostClient, ToolRegistryChangeKind,
     ToolRegistryChangedEvent,
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text};
@@ -52269,7 +52247,7 @@ pub use crate::cdylib_abi::{AgenaPluginCdylib, AgenaPluginCdylib_Ref};
 
 </details>
 
-<details><summary><code>crates/agena-plugin-sdk/src/rpc.rs</code> — 216 lines; mod=2, struct=5, enum=3, impl=4, fn=4</summary>
+<details><summary><code>crates/agena-plugin-sdk/src/rpc.rs</code> — 214 lines; mod=2, struct=5, enum=3, impl=4, fn=4</summary>
 
 - Package：`agena-plugin-sdk`
 - Target/module：agena_plugin_sdk: crate::rpc, crate::rpc::codes, crate::rpc::method
@@ -52278,7 +52256,7 @@ pub use crate::cdylib_abi::{AgenaPluginCdylib, AgenaPluginCdylib_Ref};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
@@ -52368,6 +52346,10 @@ pub mod codes {
     pub const PLUGIN_DISCONNECTED: i32 = -33005;
     pub const PLUGIN_PANICKED: i32 = -33006;
     pub const HOST_UNAVAILABLE: i32 = -33007;
+    pub const POLICY_DENIED: i32 = -33009;
+    pub const USER_DECLINED: i32 = -33010;
+    pub const CAPABILITY_UNAVAILABLE: i32 = -33011;
+    pub const TOOL_UNAVAILABLE: i32 = -33012;
 }
 
 pub mod method {
@@ -52397,7 +52379,6 @@ pub mod method {
     pub const HOOK_CHAT_SYSTEM_TRANSFORM: &str = "hooks/chat.system.transform";
     pub const HOOK_AUTH: &str = "hooks/auth";
     pub const HOOK_PROVIDER_LIST: &str = "hooks/provider.list";
-    pub const HOOK_PERMISSION_ASK: &str = "hooks/permission.ask_permission";
     pub const HOOK_NOTIFICATION: &str = "hooks/notification";
     pub const HOOK_COMMAND_BEFORE: &str = "hooks/command.execute.before";
     pub const HOOK_SHELL_ENV: &str = "hooks/shell.env";
@@ -52417,9 +52398,6 @@ pub mod method {
     pub const HOST_EVENT_PUBLISH: &str = "host/event.publish";
     pub const HOST_EVENT_SUBSCRIBE: &str = "host/event.subscribe";
     pub const HOST_EVENT_UNSUBSCRIBE: &str = "host/event.unsubscribe";
-    pub const HOST_PERMISSION_ASK: &str = "host/permission.ask_permission";
-    pub const HOST_PERMISSION_CHECK_PATH: &str = "host/permission.check_path";
-    pub const HOST_PERMISSION_CHECK_NETWORK: &str = "host/permission.check_network";
     pub const HOST_CONFIG_READ: &str = "host/config.read";
     pub const HOST_CONFIG_RELOAD: &str = "host/config.reload";
     pub const HOST_TOOL_INVOKE: &str = "host/tool.invoke";
@@ -52468,8 +52446,6 @@ pub mod method {
     pub const HOST_UI_THEME_REGISTER: &str = "host/ui.theme.register";
     pub const HOST_UI_THEME_LIST: &str = "host/ui.theme.list";
     pub const HOST_UI_THEME_REMOVE: &str = "host/ui.theme.remove";
-    pub const HOST_UI_PERMISSION_SET_HANDLER: &str = "host/ui.permission.set_handler";
-    pub const HOST_UI_PERMISSION_CLEAR_HANDLER: &str = "host/ui.permission.clear_handler";
 }
 `````
 
@@ -55405,7 +55381,7 @@ fn plugin_macro_ui();
 
 </details>
 
-### 8.25 `agena-provider`
+### 8.26 `agena-provider`
 
 <details><summary><code>crates/agena-provider/src/anthropic_thinking.rs</code> — 510 lines; mod=1, struct=2, impl=2, fn=28</summary>
 
@@ -56135,7 +56111,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-provider/src/catalog_contract.rs</code> — 487 lines; struct=19, enum=5, trait=2, impl=5, fn=20</summary>
+<details><summary><code>crates/agena-provider/src/catalog_contract.rs</code> — 473 lines; struct=17, enum=5, trait=2, impl=5, fn=20</summary>
 
 - Package：`agena-provider`
 - Target/module：agena_provider: crate::catalog_contract
@@ -56361,24 +56337,10 @@ pub enum ProviderConfiguredEditorAuth {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderNativeToolBindingSummary {
-    pub tool: String,
-    pub route: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderNativeToolsSummary {
-    pub active: bool,
-    pub model_count: usize,
-    pub bindings: Vec<ProviderNativeToolBindingSummary>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderCatalogEntry {
     pub provider_id: ProviderId,
     pub defaults: ProviderDefaults,
     pub adapters: Vec<ProviderAdapterSummary>,
-    pub provider_native_tools: Option<ProviderNativeToolsSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -56449,7 +56411,7 @@ pub struct ProviderAdapterModelsEntry {
     pub enabled: bool,
     pub resolved_base_url: Option<String>,
     pub models: Vec<Model>,
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56802,7 +56764,7 @@ pub struct ModelCatalogSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::Failure>,
     #[serde(default)]
     pub official: ModelCatalogDocument,
 }
@@ -56822,7 +56784,7 @@ pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_source: Option<ModelCatalogSnapshotSourceKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::Failure>,
     pub models: Vec<CatalogModelRecord>,
 }
 
@@ -57516,7 +57478,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-provider/src/config_patch_values.rs</code> — 510 lines; struct=19, enum=7, type=2, impl=5, fn=10</summary>
+<details><summary><code>crates/agena-provider/src/config_patch_values.rs</code> — 509 lines; struct=19, enum=7, type=2, impl=5, fn=10</summary>
 
 - Package：`agena-provider`
 - Target/module：agena_provider: crate::config_patch_values
@@ -57958,7 +57920,7 @@ pub fn provider_model_overlay_from_definition(
 
 </details>
 
-<details><summary><code>crates/agena-provider/src/configured_model_config.rs</code> — 107 lines; struct=1, impl=3, fn=4</summary>
+<details><summary><code>crates/agena-provider/src/configured_model_config.rs</code> — 96 lines; struct=1, impl=2, fn=3</summary>
 
 - Package：`agena-provider`
 - Target/module：agena_provider: crate::configured_model_config
@@ -57966,7 +57928,7 @@ pub fn provider_model_overlay_from_definition(
 `````rust
 use serde::{Deserialize, Serialize};
 
-use crate::{AgenaToolsConfig, ConfiguredModelDefinition, ProviderNativeToolBinding};
+use crate::{AgenaToolsConfig, ConfiguredModelDefinition};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedProviderModelConfig {
@@ -57990,11 +57952,6 @@ impl<'de> Deserialize<'de> for ResolvedProviderModelConfig {
 
 impl Default for ResolvedProviderModelConfig {
     fn default() -> Self;
-}
-
-impl ResolvedProviderModelConfig {
-
-    pub fn provider_native_tool_bindings(&self) -> Vec<ProviderNativeToolBinding>;
 }
 
 fn is_true(value: &bool) -> bool;
@@ -58092,7 +58049,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-provider/src/contract.rs</code> — 2413 lines; struct=44, enum=30, trait=2, type=2, impl=42, fn=91</summary>
+<details><summary><code>crates/agena-provider/src/contract.rs</code> — 2337 lines; struct=43, enum=30, trait=2, type=2, impl=41, fn=88</summary>
 
 - Package：`agena-provider`
 - Target/module：agena_provider: crate::contract
@@ -58124,9 +58081,6 @@ impl AgenaToolMode {
 pub struct AgenaToolsConfig {
     #[serde(default)]
     pub mode: AgenaToolMode,
-
-    #[serde(default, skip_serializing_if = "AgenaDirectToolsConfig::is_default")]
-    pub direct: AgenaDirectToolsConfig,
     #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]
     pub provider_native: ProviderNativeToolsConfig,
 }
@@ -58134,31 +58088,6 @@ pub struct AgenaToolsConfig {
 impl AgenaToolsConfig {
     pub fn is_default(&self) -> bool;
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct AgenaDirectToolsConfig {
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub include: Vec<String>,
-
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub exclude: Vec<String>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tools: Option<u16>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_schema_tokens: Option<u32>,
-}
-
-impl AgenaDirectToolsConfig {
-    pub fn is_default(&self) -> bool;
-
-    pub fn permits(&self, canonical_tool_name: &str) -> bool;
-}
-
-fn star_glob_matches(pattern: &str, value: &str) -> bool;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderCatalogError {
@@ -58172,8 +58101,18 @@ pub enum ProviderCatalogError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderErrorKind {
-    ApiError,
+    Authentication,
+    RateLimited,
+    QuotaExceeded,
     ContextOverflow,
+    InvalidRequest,
+    Unavailable,
+    Timeout,
+    Connection,
+    MalformedResponse,
+    ToolProtocolViolation,
+    Misconfiguration,
+    Internal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58727,6 +58666,7 @@ pub enum CompletionToolCall {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ToolApiDefinition {
     pub handler_key: String,
     pub plugin_name: String,
@@ -58736,9 +58676,6 @@ pub struct ToolApiDefinition {
     pub output_schema: serde_json::Value,
     pub strict: bool,
     pub definition_identity: String,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub execution_tool: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -60087,7 +60024,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-provider/src/lib.rs</code> — 598 lines; mod=60, fn=18</summary>
+<details><summary><code>crates/agena-provider/src/lib.rs</code> — 583 lines; mod=60, fn=17</summary>
 
 - Package：`agena-provider`
 - Target/module：agena_provider: crate, crate::tests
@@ -60340,10 +60277,9 @@ pub use catalog_model_decoration::{CatalogModelDecorationSource, decorate_provid
 #[cfg(test)]
 mod tests {
     use super::{
-        AgenaDirectToolsConfig, AgenaToolMode, AgenaToolsConfig, CatalogModelRecord,
-        ModelCapabilityPatch, ModelCatalogSnapshotSourceKind, OAuthCallback,
-        ProviderClientVersions, ProviderHttpClientConfig, ProviderModelPriorities,
-        SapAiCoreServiceKey,
+        AgenaToolMode, AgenaToolsConfig, CatalogModelRecord, ModelCapabilityPatch,
+        ModelCatalogSnapshotSourceKind, OAuthCallback, ProviderClientVersions,
+        ProviderHttpClientConfig, ProviderModelPriorities, SapAiCoreServiceKey,
     };
 
     #[test]
@@ -60360,9 +60296,6 @@ mod tests {
 
     #[test]
     fn tool_config_has_stable_default_and_wire_shape();
-
-    #[test]
-    fn direct_tool_policy_uses_canonical_star_globs_with_exclude_precedence();
 
     #[test]
     fn sap_ai_core_service_key_keeps_wire_field_names();
@@ -62171,7 +62104,7 @@ impl ResponsesToolEvent {
 
 </details>
 
-### 8.26 `agena-provider-bedrock-auth`
+### 8.27 `agena-provider-bedrock-auth`
 
 <details><summary><code>crates/agena-provider-bedrock-auth/src/lib.rs</code> — 59 lines; enum=1, fn=2</summary>
 
@@ -62207,7 +62140,7 @@ pub fn static_credentials(
 
 </details>
 
-### 8.27 `agena-provider-bedrock-signing`
+### 8.28 `agena-provider-bedrock-signing`
 
 <details><summary><code>crates/agena-provider-bedrock-signing/src/lib.rs</code> — 79 lines; enum=1, fn=1</summary>
 
@@ -62249,7 +62182,7 @@ pub fn signed_headers(
 
 </details>
 
-### 8.28 `agena-provider-bedrock-streaming`
+### 8.29 `agena-provider-bedrock-streaming`
 
 <details><summary><code>crates/agena-provider-bedrock-streaming/src/lib.rs</code> — 203 lines; mod=1, struct=2, enum=1, type=2, impl=4, fn=5</summary>
 
@@ -62329,7 +62262,7 @@ mod tests {
 
 </details>
 
-### 8.29 `agena-provider-google-auth`
+### 8.30 `agena-provider-google-auth`
 
 <details><summary><code>crates/agena-provider-google-auth/src/lib.rs</code> — 28 lines; enum=1, fn=1</summary>
 
@@ -62352,7 +62285,7 @@ pub async fn access_token() -> Result<String, GoogleAdcError>;
 
 </details>
 
-### 8.30 `agena-rollout`
+### 8.31 `agena-rollout`
 
 <details><summary><code>crates/agena-rollout/src/error.rs</code> — 18 lines; enum=1, type=1</summary>
 
@@ -62639,7 +62572,7 @@ pub fn summarize_directory(root: impl AsRef<Path>) -> Vec<SessionSummary>;
 
 </details>
 
-### 8.31 `agena-runtime`
+### 8.32 `agena-runtime`
 
 <details><summary><code>crates/agena-runtime/src/application_services.rs</code> — 116 lines; struct=3, fn=1</summary>
 
@@ -62779,7 +62712,7 @@ pub struct RuntimeBackgroundTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
     pub created_at: DateTime<Utc>,
     pub started_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62833,14 +62766,14 @@ pub enum RuntimeBackgroundTaskControlError {
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeBackgroundTaskCompletion {
     Succeeded { message: Option<String> },
-    Failed { error_message: String },
+    Failed { failure: agena_failure::Failure },
     Cancelled { message: Option<String> },
 }
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/background_task_registry.rs</code> — 213 lines; struct=1, impl=3, fn=8</summary>
+<details><summary><code>crates/agena-runtime/src/background_task_registry.rs</code> — 232 lines; struct=1, impl=3, fn=8</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::background_task_registry
@@ -63410,7 +63343,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/lib.rs</code> — 744 lines; mod=61, type=1, impl=1, fn=27</summary>
+<details><summary><code>crates/agena-runtime/src/lib.rs</code> — 787 lines; mod=59, type=1, impl=1, fn=28</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate, crate::plugins, crate::tests, crate::tool
@@ -63465,8 +63398,6 @@ mod oauth_callback;
 mod optional;
 mod output_format;
 mod periodic;
-mod permission_runtime;
-mod permission_store;
 mod plugin_composition;
 mod policy;
 mod process_state;
@@ -63494,10 +63425,6 @@ mod tracing_config;
 mod watch;
 mod watch_paths;
 
-pub use permission_runtime::{
-    PermissionRuntime, PermissionRuntimeDecision, PermissionRuntimeError,
-};
-pub use permission_store::{PermissionRuleStore, PermissionStoreError};
 pub use runtime::bootstrap_application_services;
 
 pub(crate) use agena_bundled_plugins::tool::{memory_plugin_id, new_memory_plugin};
@@ -63621,7 +63548,9 @@ pub use agena_runtime_session::{
 pub use agena_runtime_session::{
     SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
 };
-pub use agena_runtime_session::{SessionToolExecutionError, SessionToolExecutionService};
+pub use agena_runtime_session::{
+    SessionToolExecutionError, SessionToolExecutionOutcome, SessionToolExecutionService,
+};
 pub(crate) use agena_runtime_session::{
     estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,
     estimate_prompt_budget_threshold_tokens, estimate_session_context_usable_tokens,
@@ -63854,6 +63783,9 @@ mod tests {
 
     #[test]
     fn registry_runs_and_records_a_task();
+
+    #[test]
+    fn background_task_diagnostic_is_not_exposed_in_task_resource();
 
     #[test]
     fn periodic_wait_returns_when_shutdown_is_signaled();
@@ -65413,7 +65345,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/model_catalog_service.rs</code> — 279 lines; mod=1, struct=3, enum=1, trait=1, impl=4, fn=18</summary>
+<details><summary><code>crates/agena-runtime/src/model_catalog_service.rs</code> — 312 lines; mod=1, struct=3, enum=1, trait=1, impl=4, fn=19</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::model_catalog_service, crate::model_catalog_service::tests
@@ -65492,12 +65424,14 @@ impl ModelCatalogService {
         provider_priorities: Option<&ProviderModelPriorities>,
     ) -> Result<ModelCatalogSnapshot, ModelCatalogServiceError>;
 
-    pub fn record_refresh_failure(&self, error: impl Into<String>);
+    pub fn record_refresh_failure(&self, diagnostic: impl std::fmt::Display);
 
     fn snapshot_needs_startup_refresh(&self, snapshot: &ModelCatalogSnapshot) -> bool;
 
     fn replace_snapshot(&self, snapshot: ModelCatalogSnapshot);
 }
+
+fn catalog_refresh_failure() -> agena_failure::Failure;
 
 fn now_unix_ms() -> i64;
 
@@ -65892,137 +65826,6 @@ where
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/permission_runtime.rs</code> — 332 lines; struct=1, enum=2, impl=1, fn=9</summary>
-
-- Package：`agena-runtime`
-- Target/module：agena_runtime: crate::permission_runtime
-
-`````rust
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use chrono::Utc;
-use thiserror::Error;
-use uuid::Uuid;
-
-use crate::permission_store::{PermissionRuleStore, PermissionStoreError};
-use agena_domain::PermissionMode;
-use agena_domain::{
-    DecisionTraceStep, PendingPermission, PermissionAction, PermissionDecision, PermissionReply,
-    PermissionReplyKind, PermissionRequest, PermissionRiskLevel, PolicySourceKind,
-};
-use agena_plugin_host::host::PermissionAskOutcome as PluginPermissionAskOutcome;
-use agena_plugin_host::sdk::PermissionAdvice as PluginPermissionAdvice;
-use agena_plugin_host::{
-    PermissionAskInput as PluginPermissionAskInput, PermissionDecision as PluginPermissionDecision,
-    PluginHost,
-};
-
-#[derive(Debug, Error)]
-pub enum PermissionRuntimeError {
-    #[error("unknown permission request: {0}")]
-    UnknownRequest(String),
-    #[error("permission rule store failure: {0}")]
-    Store(#[from] PermissionStoreError),
-}
-
-#[derive(Debug)]
-#[allow(clippy::large_enum_variant)]
-pub enum PermissionRuntimeDecision {
-    Immediate(PermissionDecision),
-    Pending(PendingPermission),
-}
-
-#[derive(Debug)]
-pub struct PermissionRuntime<S>
-where
-    S: PermissionRuleStore,
-{
-    store: S,
-    pending: HashMap<String, PermissionRequest>,
-}
-
-impl<S> PermissionRuntime<S>
-where
-    S: PermissionRuleStore,
-{
-    pub fn new(store: S) -> Self;
-
-    pub fn decide_or_request(
-        &mut self,
-        session_id: Option<i64>,
-        action: PermissionAction,
-        base: PermissionDecision,
-    ) -> Result<PermissionRuntimeDecision, PermissionRuntimeError>;
-
-    #[tracing::instrument(skip_all, fields(session_id))]
-    pub fn decide_or_request_with_plugins(
-        &mut self,
-        session_id: Option<i64>,
-        action: PermissionAction,
-        base: PermissionDecision,
-        plugins: Option<&Arc<PluginHost>>,
-    ) -> Result<PermissionRuntimeDecision, PermissionRuntimeError>;
-
-    pub fn resolve_reply(
-        &mut self,
-        reply: PermissionReply,
-    ) -> Result<PermissionDecision, PermissionRuntimeError>;
-}
-
-fn permission_decision_from_mode(value: PermissionMode) -> PermissionDecision;
-
-fn apply_plugin_advice(
-    session_id: Option<i64>,
-    action: PermissionAction,
-    base: PermissionDecision,
-    advice: PluginPermissionAdvice,
-) -> PermissionRuntimeDecision;
-
-fn apply_advisory_permission_decision(
-    base: PermissionDecision,
-    advice: PluginPermissionDecision,
-    explanation: &str,
-) -> PermissionDecision;
-
-fn plugin_risk_to_core(risk: agena_plugin_host::sdk::PermissionRiskLevel) -> PermissionRiskLevel;
-
-fn permission_subject(action: &PermissionAction) -> serde_json::Value;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-runtime/src/permission_store.rs</code> — 21 lines; enum=1, trait=1, fn=2</summary>
-
-- Package：`agena-runtime`
-- Target/module：agena_runtime: crate::permission_store
-
-`````rust
-use agena_domain::{PermissionAction, PermissionMode};
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum PermissionStoreError {
-    #[error("permission store failure: {0}")]
-    Message(String),
-}
-
-pub trait PermissionRuleStore {
-    fn lookup(
-        &self,
-        action: &PermissionAction,
-    ) -> Result<Option<PermissionMode>, PermissionStoreError>;
-
-    fn save(
-        &mut self,
-        action: PermissionAction,
-        mode: PermissionMode,
-    ) -> Result<(), PermissionStoreError>;
-}
-`````
-
-</details>
-
 <details><summary><code>crates/agena-runtime/src/plugin_composition.rs</code> — 67 lines; impl=2, fn=3</summary>
 
 - Package：`agena-runtime`
@@ -66391,7 +66194,7 @@ pub(super) fn auth_copilot_deployment(domain: Option<String>) -> agena_provider:
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/runtime/builder/provider_catalog.rs</code> — 437 lines; impl=1, fn=13</summary>
+<details><summary><code>crates/agena-runtime/src/runtime/builder/provider_catalog.rs</code> — 401 lines; impl=1, fn=13</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::runtime::builder::provider_catalog
@@ -66455,7 +66258,7 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/runtime/builder.rs</code> — 1641 lines; mod=2, struct=1, type=1, impl=15, fn=85</summary>
+<details><summary><code>crates/agena-runtime/src/runtime/builder.rs</code> — 1646 lines; mod=2, struct=1, type=1, impl=15, fn=85</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::runtime::builder
@@ -66573,17 +66376,17 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
     ) -> Result<agena_plugin_host::sdk::rpc::Response, agena_runtime::PluginRuntimeRpcError>;
 }
 
+#[async_trait::async_trait]
 impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
     fn available_runtime_tools(&self) -> Vec<agena_runtime::RuntimeToolDescriptor>;
 
     fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition>;
 
-    fn execute_runtime_tool(
+    async fn execute_runtime_tool(
         &self,
         invocation: &agena_domain::ToolInvocation,
-        session_id: i64,
         call_id: i64,
-    ) -> Result<agena_tool::ToolExecutionSummary, agena_runtime::RuntimeToolExecutionError>;
+    ) -> Result<agena_runtime::SessionToolExecutionOutcome, agena_runtime::RuntimeToolExecutionError>;
 }
 
 #[async_trait::async_trait]
@@ -66928,7 +66731,7 @@ impl AgenaRuntime {
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/runtime/host_client/image.rs</code> — 434 lines; mod=1, fn=13</summary>
+<details><summary><code>crates/agena-runtime/src/runtime/host_client/image.rs</code> — 421 lines; mod=1, fn=12</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::runtime::host_client::image, crate::runtime::host_client::image::tests
@@ -66953,8 +66756,6 @@ pub(super) async fn prepare_provider_image_inputs(
     inputs: &[HostImageInput],
     capabilities: &ProviderImageCapabilities,
 ) -> Result<Vec<ProviderImageInput>, PluginError>;
-
-pub(super) fn local_path_for_host_image_input(input: &HostImageInput) -> Option<&str>;
 
 async fn prepare_attachment_image(
     executor: &ToolExecutor,
@@ -67021,7 +66822,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/runtime/host_client/mappers.rs</code> — 354 lines; impl=1, fn=18</summary>
+<details><summary><code>crates/agena-runtime/src/runtime/host_client/mappers.rs</code> — 294 lines; impl=1, fn=14</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::runtime::host_client::mappers
@@ -67034,18 +66835,6 @@ pub(super) fn tool_execution_to_invoke_output(
 ) -> ToolInvokeOutput;
 
 pub(super) fn map_storage_error(err: PluginStorageError) -> PluginError;
-
-pub(super) fn host_permission_check_response_from_resolution(
-    resolution: agena_domain::PermissionResolution,
-) -> HostPermissionCheckResponse;
-
-pub(super) fn host_permission_check_response_from_decision(
-    decision: agena_domain::PermissionDecision,
-) -> HostPermissionCheckResponse;
-
-pub(super) fn plugin_permission_decision_and_reason(
-    decision: agena_domain::PermissionDecision,
-) -> (PluginPermissionDecision, Option<String>);
 
 pub(super) fn render_tool_descriptor(
     tool: agena_plugin_host::registry::RegisteredTool,
@@ -67065,15 +66854,6 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
 
 pub(super) fn host_session_from_session(session: &crate::session::Session) -> HostSession;
 
-pub(super) fn workflow_tool_output(
-    executor: &crate::tool::ToolExecutor,
-    tool_name: &str,
-    input: serde_json::Value,
-    session_id: Option<i64>,
-    call_id: Option<i64>,
-    session_context: Option<&crate::session::model::SessionExecutionContext>,
-) -> Result<ToolInvokeOutput, PluginError>;
-
 pub(super) fn scheduler_job_to_sdk(job: agena_scheduler::ScheduledJob) -> HostSchedulerJob;
 
 pub(super) fn lsp_severity_string(
@@ -67085,10 +66865,9 @@ pub(super) fn host_status_to_sdk(
 ) -> HostPluginStatus;
 
 use super::{
-    AskUserRequest, AskUserToolInput, HostPermissionCheckResponse, HostPluginStatus,
-    HostSchedulerJob, HostSession, MonitorError, MonitorEvent, MonitorHandle, MonitorReadResponse,
-    PluginError, PluginPermissionDecision, PluginStorageError, ToolDescriptor, ToolInvokeOutput,
-    UserInputOption, UserInputQuestion,
+    AskUserRequest, AskUserToolInput, HostPluginStatus, HostSchedulerJob, HostSession,
+    MonitorError, MonitorEvent, MonitorHandle, MonitorReadResponse, PluginError,
+    PluginStorageError, ToolDescriptor, ToolInvokeOutput, UserInputOption, UserInputQuestion,
 };
 use agena_domain::{ProcessStatus, ProcessStream};
 use agena_plugin_sdk::ToolInput;
@@ -67096,7 +66875,7 @@ use agena_plugin_sdk::ToolInput;
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/runtime/host_client/mod.rs</code> — 1361 lines; mod=2, struct=1, impl=8, fn=70</summary>
+<details><summary><code>crates/agena-runtime/src/runtime/host_client/mod.rs</code> — 1340 lines; mod=2, struct=1, impl=8, fn=67</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::runtime::host_client
@@ -67122,25 +66901,23 @@ use agena_plugin_host::sdk::host_api::{
     HostGetSessionResponse, HostImageExecuteRequest, HostImageExecuteResponse, HostImageOperation,
     HostLspDiagnostic, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
-    HostPluginStatus, HostPluginStatusGetRequest, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
-    HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
-    HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
-    HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
-    HostSecretSetRequest, HostSession, HostSetSessionModelRequest, HostSetSessionModelResponse,
-    HostSnapshotListResponse, HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest,
-    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageRecord,
-    HostStorageSetRequest, LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle,
-    MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    RunSubtaskStatus, RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus,
+    HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
+    HostRenameSessionRequest, HostRenameSessionResponse, HostSchedulerCreateRequest,
+    HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
+    HostSchedulerJob, HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
+    HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest, HostSession,
+    HostSetSessionModelRequest, HostSetSessionModelResponse, HostSnapshotListResponse,
+    HostSnapshotSummary, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageSetRequest,
+    LogLevel, MessageSubtaskRequest, MonitorEvent, MonitorHandle, MonitorReadRequest,
+    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, ReadSubtaskOutputRequest,
+    ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse, RunSubtaskStatus,
+    RunSubtaskUsage, SubtaskControlResponse, SubtaskOutputChunk, ToolDescriptor,
     current_host_callback_context,
 };
 use agena_plugin_host::{
-    EventEnvelope, EventFilter as PluginEventFilter, PermissionAskInput,
-    PermissionDecision as PluginPermissionDecision, PluginError, ToolInvokeOutput,
+    EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
 };
 
 mod image;
@@ -67162,6 +66939,8 @@ async fn publish_tool_registry_changed_event(
 );
 
 fn plugin_error(error: impl ToString) -> PluginError;
+
+fn plugin_error_from_app(error: crate::AppError) -> PluginError;
 
 struct RuntimeHostClient {
     runtime: AgenaRuntime,
@@ -67240,11 +67019,6 @@ impl RuntimeHostClient {
         use_store: impl FnOnce(&dyn PluginSecretStore, &PluginKey) -> Result<T, PluginStorageError>,
     ) -> Result<T, PluginError>;
 
-    async fn resolve_permission_check(
-        &self,
-        check: agena_tool::ToolPermissionCheck,
-    ) -> Result<HostPermissionCheckResponse, PluginError>;
-
     fn callback_or_requested_session_id(
         &self,
         requested: Option<i64>,
@@ -67270,21 +67044,6 @@ impl HostClient for RuntimeHostClient {
         &self,
         _: PluginEventFilter,
     ) -> Result<EventSubscription, PluginError>;
-
-    async fn ask_permission(
-        &self,
-        _req: PermissionAskInput,
-    ) -> Result<PluginPermissionDecision, PluginError>;
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse, PluginError>;
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse, PluginError>;
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value, PluginError>;
 
@@ -67462,7 +67221,7 @@ pub(crate) async fn run(runtime: AgenaRuntime);
 
 </details>
 
-<details><summary><code>crates/agena-runtime/src/runtime/snapshot/builders.rs</code> — 493 lines; struct=2, type=2, impl=3, fn=12</summary>
+<details><summary><code>crates/agena-runtime/src/runtime/snapshot/builders.rs</code> — 530 lines; struct=2, type=2, impl=4, fn=14</summary>
 
 - Package：`agena-runtime`
 - Target/module：agena_runtime: crate::runtime::snapshot::builders
@@ -68224,12 +67983,12 @@ pub struct RuntimeMcpServerStatus {
     pub connected: bool,
     pub tool_count: usize,
     pub network_target: Option<String>,
-    pub last_error: Option<String>,
+    pub last_failure: Option<agena_failure::UserProblem>,
     pub instructions_present: bool,
     pub tool_generation: u64,
     pub resource_generation: u64,
     pub prompt_generation: u64,
-    pub last_refresh_error: Option<String>,
+    pub last_refresh_failure: Option<agena_failure::UserProblem>,
     pub reconnect_supervisor_running: bool,
 
     pub auth_mode: String,
@@ -68299,7 +68058,7 @@ pub trait RuntimeStatusService: Send + Sync {
 
 `````rust
 use agena_domain::ToolInvocation;
-use agena_tool::ToolExecutionSummary;
+use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeToolDescriptor {
@@ -68320,17 +68079,17 @@ impl RuntimeToolExecutionError {
     pub fn new(message: impl Into<String>) -> Self;
 }
 
+#[async_trait]
 pub trait RuntimeToolExecutionService: Send + Sync {
     fn available_runtime_tools(&self) -> Vec<RuntimeToolDescriptor>;
 
     fn available_tool_api_definitions(&self) -> Vec<agena_provider::ToolApiDefinition>;
 
-    fn execute_runtime_tool(
+    async fn execute_runtime_tool(
         &self,
         invocation: &ToolInvocation,
-        session_id: i64,
         call_id: i64,
-    ) -> Result<ToolExecutionSummary, RuntimeToolExecutionError>;
+    ) -> Result<crate::SessionToolExecutionOutcome, RuntimeToolExecutionError>;
 }
 `````
 
@@ -68693,7 +68452,7 @@ pub fn runtime_watch_paths(
 
 </details>
 
-### 8.32 `agena-runtime-config`
+### 8.33 `agena-runtime-config`
 
 <details><summary><code>crates/agena-runtime-config/src/config/edit.rs</code> — 828 lines; mod=1, struct=2, impl=20, fn=35</summary>
 
@@ -69031,7 +68790,7 @@ pub fn apply_config_override(override_value: &ConfigOverride, config: &mut RawCo
 
 </details>
 
-<details><summary><code>crates/agena-runtime-config/src/config/raw/raw_provider.rs</code> — 1356 lines; struct=1, trait=1, impl=3, fn=24</summary>
+<details><summary><code>crates/agena-runtime-config/src/config/raw/raw_provider.rs</code> — 1322 lines; struct=1, trait=1, impl=3, fn=23</summary>
 
 - Package：`agena-runtime-config`
 - Target/module：agena_runtime_config: crate::config::raw::raw_provider
@@ -69048,9 +68807,9 @@ use super::{
 };
 use crate::McpConfig;
 use agena_provider::{
-    AgenaDirectToolsConfig, OpenAiResponsesBackendConfig, ProviderAdapterOverlay,
-    ProviderApiSubtype, ProviderAuthMode, ProviderAuthOverlay, ProviderCapabilityFamilyConfig,
-    ProviderCredentialAuthConfig, ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
+    OpenAiResponsesBackendConfig, ProviderAdapterOverlay, ProviderApiSubtype, ProviderAuthMode,
+    ProviderAuthOverlay, ProviderCapabilityFamilyConfig, ProviderCredentialAuthConfig,
+    ProviderGitlabApiAccessConfig, ProviderGitlabApiAccessOverlay,
     ProviderGitlabCredentialAuthConfig, ProviderHostedToolConfigs,
     ProviderHttpCredentialAuthConfig, ProviderInlineCredentialAuthConfig,
     ProviderModelDiscoveryConfig, ProviderNativeToolKind, ProviderNativeToolRoute,
@@ -69090,12 +68849,6 @@ fn validate_provider_model_provider_native_tools(
     models: &BTreeMap<String, ResolvedProviderModelConfig>,
     harnesses: &HarnessesConfig,
     mcp: &McpConfig,
-) -> Result<(), ConfigError>;
-
-fn validate_direct_tool_policy(
-    provider_id: &str,
-    route_id: &str,
-    policy: &AgenaDirectToolsConfig,
 ) -> Result<(), ConfigError>;
 
 fn validate_provider_native_tools(
@@ -69210,7 +68963,7 @@ fn issuer_label(issuer: CredentialIssuer) -> &'static str;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-config/src/config/raw.rs</code> — 1544 lines; mod=2, struct=12, enum=1, trait=1, type=1, impl=13, fn=68</summary>
+<details><summary><code>crates/agena-runtime-config/src/config/raw.rs</code> — 1541 lines; mod=2, struct=12, enum=1, trait=1, type=1, impl=13, fn=68</summary>
 
 - Package：`agena-runtime-config`
 - Target/module：agena_runtime_config: crate::config::raw, crate::config::raw::openai_protocol_adapter_tests
@@ -69726,7 +69479,7 @@ impl ConfigEnvironment for ProcessEnvironment {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-config/src/config_error.rs</code> — 194 lines; mod=1, enum=1, fn=13</summary>
+<details><summary><code>crates/agena-runtime-config/src/config_error.rs</code> — 240 lines; mod=1, enum=1, fn=15</summary>
 
 - Package：`agena-runtime-config`
 - Target/module：agena_runtime_config: crate::config_error, crate::config_error::tests
@@ -69785,6 +69538,8 @@ pub enum ConfigError {
     Validation(String),
     #[error("failed to encode config as json: {0}")]
     SerializeJson(#[from] serde_json::Error),
+    #[error(transparent)]
+    Settings(#[from] crate::RuntimeConfigSettingsError),
 }
 
 pub fn parse_numeric<T>(value: &str, key: &str) -> Result<T, ConfigError>
@@ -69823,7 +69578,10 @@ pub fn settings_error_to_config_error(error: crate::RuntimeConfigSettingsError) 
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigError, parse_config_bool, parse_numeric};
+    use super::{
+        ConfigError, config_error_to_settings_error, parse_config_bool, parse_numeric,
+        settings_error_to_config_error,
+    };
 
     #[test]
     fn parses_permissive_environment_booleans();
@@ -69833,6 +69591,12 @@ mod tests {
 
     #[test]
     fn reports_json_parse_path_through_runtime_error_contract();
+
+    #[test]
+    fn internal_file_diagnostic_is_not_user_visible_or_serialized();
+
+    #[test]
+    fn settings_adapter_round_trip_preserves_structured_failure();
 }
 `````
 
@@ -70800,7 +70564,7 @@ pub fn mcp_config_from_plugins(plugins: &PluginsConfig) -> Result<McpConfig, Str
 
 </details>
 
-<details><summary><code>crates/agena-runtime-config/src/runtime_config_settings_service.rs</code> — 822 lines; mod=1, struct=15, enum=3, trait=1, type=1, impl=9, fn=40</summary>
+<details><summary><code>crates/agena-runtime-config/src/runtime_config_settings_service.rs</code> — 886 lines; mod=1, struct=15, enum=3, trait=1, type=1, impl=13, fn=43</summary>
 
 - Package：`agena-runtime-config`
 - Target/module：agena_runtime_config: crate::runtime_config_settings_service, crate::runtime_config_settings_service::tests
@@ -70970,22 +70734,35 @@ pub enum RuntimeConfigSettingsErrorKind {
     Internal,
 }
 
-#[derive(Debug, Clone, thiserror::Error)]
-#[error("runtime configuration settings operation failed: {message}")]
+#[derive(Debug, Clone)]
 pub struct RuntimeConfigSettingsError {
     kind: RuntimeConfigSettingsErrorKind,
-    message: String,
+    failure: Box<agena_failure::Failure>,
+    diagnostic: String,
 }
 
 impl RuntimeConfigSettingsError {
     pub fn invalid_input(message: impl Into<String>) -> Self;
 
-    pub fn internal(message: impl Into<String>) -> Self;
+    pub fn invalid_input_with_diagnostic(
+        message: impl AsRef<str>,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn internal(diagnostic: impl Into<String>) -> Self;
 
     pub fn kind(&self) -> RuntimeConfigSettingsErrorKind;
 
-    pub fn message(&self) -> &str;
+    pub fn failure(&self) -> &agena_failure::Failure;
+
+    pub fn diagnostic(&self) -> &str;
 }
+
+impl std::fmt::Display for RuntimeConfigSettingsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for RuntimeConfigSettingsError {}
 
 pub trait RuntimeConfigSettingsService: Send + Sync {
     fn read_file_settings(
@@ -71236,7 +71013,7 @@ pub trait RuntimeConfigurationService: Send + Sync {
 
 </details>
 
-### 8.33 `agena-runtime-contracts`
+### 8.34 `agena-runtime-contracts`
 
 <details><summary><code>crates/agena-runtime-contracts/src/authorization/mod.rs</code> — 612 lines; mod=1, struct=1, impl=1, fn=27</summary>
 
@@ -71530,7 +71307,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-contracts/src/lib.rs</code> — 64 lines; mod=4, struct=5, trait=1, impl=2, fn=6</summary>
+<details><summary><code>crates/agena-runtime-contracts/src/lib.rs</code> — 65 lines; mod=4, struct=5, trait=1, impl=2, fn=7</summary>
 
 - Package：`agena-runtime-contracts`
 - Target/module：agena_runtime_contracts: crate
@@ -71549,6 +71326,7 @@ pub trait ToolSessionContext {
     fn effective_workspace_root(&self) -> Option<&std::path::Path>;
     fn effective_permission(&self) -> &authorization::PermissionConfig;
     fn permission_ceiling(&self) -> &authorization::PermissionConfig;
+    fn capability_denied_tool_names(&self) -> &std::collections::BTreeSet<String>;
     fn execution_access(&self) -> agena_domain::ExecutionAccess;
     fn selected_model(&self) -> Option<&str>;
 }
@@ -71592,7 +71370,7 @@ pub struct ConfigSnapshot {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-contracts/src/message/message.rs</code> — 174 lines; struct=1, impl=4, fn=8</summary>
+<details><summary><code>crates/agena-runtime-contracts/src/message/message.rs</code> — 173 lines; struct=1, impl=4, fn=8</summary>
 
 - Package：`agena-runtime-contracts`
 - Target/module：agena_runtime_contracts: crate::message::message
@@ -71650,7 +71428,7 @@ fn tool_text_lossy(tool: &OperationPart) -> Option<String>;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-contracts/src/message/metadata.rs</code> — 121 lines; mod=1, struct=2, impl=4, fn=5</summary>
+<details><summary><code>crates/agena-runtime-contracts/src/message/metadata.rs</code> — 127 lines; mod=1, struct=2, impl=4, fn=5</summary>
 
 - Package：`agena-runtime-contracts`
 - Target/module：agena_runtime_contracts: crate::message::metadata, crate::message::metadata::tests
@@ -71699,11 +71477,14 @@ pub struct MessageMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generated_by_call_id: Option<i64>,
+
+    #[serde(default)]
+    pub externally_initiated_tool: bool,
     pub model_provider_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_adapter_id: Option<String>,
@@ -71918,15 +71699,15 @@ impl InteractiveRequestPart<UserInputRequest, UserInputReply> {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-contracts/src/message/part/message_part.rs</code> — 296 lines; struct=1, impl=1, fn=21</summary>
+<details><summary><code>crates/agena-runtime-contracts/src/message/part/message_part.rs</code> — 449 lines; mod=1, struct=1, impl=1, fn=25</summary>
 
 - Package：`agena-runtime-contracts`
-- Target/module：agena_runtime_contracts: crate::message::part::message_part
+- Target/module：agena_runtime_contracts: crate::message::part::message_part, crate::message::part::message_part::tests
 
 `````rust
 use agena_domain::{
-    ActivityId, ExecutionStatus, ExecutionStatusTransitionError, PartKind, ResponseSegmentId,
-    ToolInvocation,
+    ActivityId, ExecutionStatus, ExecutionStatusTransitionError, PartKind, TextSegmentId,
+    ToolApiFunction, ToolInvocation,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -71952,7 +71733,7 @@ pub struct MessagePart {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<ActivityId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub segment_id: Option<ResponseSegmentId>,
+    pub segment_id: Option<TextSegmentId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -71981,6 +71762,8 @@ impl MessagePart {
     pub fn without_detail(&self) -> Self;
 
     pub fn bind_activity(&mut self, activity_id: ActivityId);
+
+    pub fn awaits_user_reply(&self) -> bool;
 
     pub const fn kind(&self) -> PartKind;
 
@@ -72014,9 +71797,23 @@ fn summary_from_content(content: &PartContent) -> Option<String>;
 
 fn attachment_part_summary(part: &AttachmentPart) -> Option<String>;
 
-fn tool_name(invocation: &ToolInvocation) -> String;
+fn operation_header_title(operation: &super::OperationPart) -> String;
+
+fn operation_presentation_title(operation: &super::OperationPart) -> &str;
+
+fn operation_input_summary(invocation: &ToolInvocation) -> Option<String>;
 
 fn truncate_summary(value: &str) -> Option<String>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{OperationPart, PartContent};
+    use agena_domain::{StructuredObject, TimeRange, ToolOutput};
+
+    #[test]
+    fn operation_headers_name_the_real_tools_call_target_and_compact_input_output();
+}
 `````
 
 </details>
@@ -72100,7 +71897,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-contracts/src/message/part/tool.rs</code> — 1269 lines; struct=30, enum=5, impl=13, fn=34</summary>
+<details><summary><code>crates/agena-runtime-contracts/src/message/part/tool.rs</code> — 1437 lines; struct=30, enum=5, impl=16, fn=42</summary>
 
 - Package：`agena-runtime-contracts`
 - Target/module：agena_runtime_contracts: crate::message::part::tool
@@ -72115,7 +71912,8 @@ use serde::{Deserialize, Serialize};
 use agena_domain::{
     ArtifactRef, ExecutionStatus, FilesystemEffect, InteractionNotificationLevel, NetworkEffect,
     OperationError, ProcessShell, SearchResultItem, TableColumn, TodoItem, ToolInvocation,
-    ToolManagedOutput, ToolOutput, ToolResultDisplay, ToolResultState, UserInputQuestion,
+    ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState,
+    UserInputQuestion,
 };
 use agena_tool::{ReadMode, TaskModelSelection};
 
@@ -72795,10 +72593,16 @@ impl ToolResultEnvelope {
     ) -> Self;
 
     pub fn failed(
-        error_message: String,
-        output_text: String,
+        failure: agena_failure::Failure,
         blocks: Vec<OperationBlock>,
         attachments: Vec<AttachmentItem>,
+        details: &ToolOutput,
+    ) -> Self;
+
+    fn non_execution(
+        state: ToolResultState,
+        output_text: String,
+        blocks: Vec<OperationBlock>,
         details: &ToolOutput,
     ) -> Self;
 }
@@ -72860,15 +72664,64 @@ impl OperationPart {
     pub fn failed(
         call_id: i64,
         invocation: ToolInvocation,
-        error_message: impl Into<String>,
-        output_text: impl Into<String>,
+        failure: agena_failure::Failure,
         blocks: Vec<OperationBlock>,
         attachments: Vec<AttachmentItem>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self;
 
+    pub fn policy_denied(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self;
+
+    pub fn user_declined(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self;
+
+    pub fn capability_unavailable(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self;
+
+    pub fn tool_unavailable(
+        call_id: i64,
+        invocation: ToolInvocation,
+        output_text: impl Into<String>,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self;
+
+    fn non_execution(
+        call_id: i64,
+        invocation: ToolInvocation,
+        state: ToolResultState,
+        output_text: String,
+        blocks: Vec<OperationBlock>,
+        details: ToolOutput,
+        lifecycle: TimeRange,
+    ) -> Self;
+
     pub fn set_title(&mut self, title: impl Into<String>);
+
+    pub fn set_summary(&mut self, summary: impl Into<String>);
+
+    pub fn set_presentation_sections(&mut self, sections: Vec<ToolPresentationSection>);
 
     pub fn set_provider_only(&mut self, value: bool);
 
@@ -73263,7 +73116,7 @@ fn normalize_path_string(path: &Path) -> String;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-contracts/src/permission/resolver.rs</code> — 126 lines; fn=6</summary>
+<details><summary><code>crates/agena-runtime-contracts/src/permission/resolver.rs</code> — 128 lines; fn=6</summary>
 
 - Package：`agena-runtime-contracts`
 - Target/module：agena_runtime_contracts: crate::permission::resolver
@@ -73295,7 +73148,7 @@ fn static_policy_explanation(base: &PermissionDecision) -> String;
 
 </details>
 
-### 8.34 `agena-runtime-plugins`
+### 8.35 `agena-runtime-plugins`
 
 <details><summary><code>crates/agena-runtime-plugins/src/callback_guard.rs</code> — 27 lines; struct=1, impl=3, fn=2</summary>
 
@@ -73765,7 +73618,7 @@ impl PluginSecretStore for PluginKeyringSecretStore {
 
 </details>
 
-### 8.35 `agena-runtime-provider`
+### 8.36 `agena-runtime-provider`
 
 <details><summary><code>crates/agena-runtime-provider/src/codex_user_agent.rs</code> — 45 lines; fn=4</summary>
 
@@ -73809,7 +73662,7 @@ pub struct ProviderAdapterModelsResult {
     pub enabled: bool,
     pub resolved_base_url: Option<String>,
     pub models: Vec<agena_domain::Model>,
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 use super::{
@@ -74419,7 +74272,7 @@ pub use openai::{
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/auth/oauth/openai.rs</code> — 332 lines; struct=4, fn=11</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/auth/oauth/openai.rs</code> — 342 lines; struct=4, fn=11</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::auth::oauth::openai
@@ -74499,7 +74352,7 @@ fn openai_refresh_failure_message(body: &str) -> Option<String>;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/auth/oauth/shared.rs</code> — 374 lines; type=2, impl=4, fn=17</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/auth/oauth/shared.rs</code> — 384 lines; type=2, impl=4, fn=17</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::auth::oauth::shared
@@ -74684,7 +74537,7 @@ impl agena_provider::CatalogModelDecorationSource for ModelRuntimeCatalogDecorat
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/cataloged_models.rs</code> — 504 lines; mod=1, struct=2, impl=5, fn=47</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/cataloged_models.rs</code> — 495 lines; mod=1, struct=2, impl=5, fn=46</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::cataloged_models, crate::provider::cataloged_models::tests
@@ -74823,12 +74676,6 @@ impl ModelRuntime for CatalogedModelsProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> ProviderNativeToolsConfig;
-
-    fn agena_direct_tools_config_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> agena_provider::AgenaDirectToolsConfig;
 
     fn image_capabilities_for_adapter(
         &self,
@@ -75135,10 +74982,10 @@ fn assistant_content_and_tool_calls(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/core.rs</code> — 685 lines; trait=2, type=1, fn=50</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/core.rs</code> — 798 lines; mod=1, struct=1, trait=2, type=1, impl=1, fn=53</summary>
 
 - Package：`agena-runtime-provider`
-- Target/module：agena_runtime_provider: crate::provider::core
+- Target/module：agena_runtime_provider: crate::provider::core, crate::provider::core::tests
 
 `````rust
 use agena_provider::{
@@ -75156,7 +75003,7 @@ use agena_domain::{
     AdapterId, Model, ModelCapabilities, ModelId, ModelMetadata, ModelSpeedMode, ModelThinkingMode,
     ProviderId,
 };
-use agena_provider::{AgenaDirectToolsConfig, AgenaToolMode};
+use agena_provider::AgenaToolMode;
 
 use super::{CompletionResponse, chat_wire};
 use agena_provider::CompletionRequest;
@@ -75236,14 +75083,6 @@ pub trait ModelRuntime: Send + Sync {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> AgenaToolMode;
-
-    fn agena_direct_tools_config(&self, model: &ModelId) -> AgenaDirectToolsConfig;
-
-    fn agena_direct_tools_config_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> AgenaDirectToolsConfig;
 
     fn native_compaction_enabled(&self, model: &ModelId) -> bool;
 
@@ -75427,6 +75266,33 @@ pub fn remap_stream_event_provider_and_model(
     model: &ModelId,
     event: CompletionStreamEvent,
 ) -> CompletionStreamEvent;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+
+    struct NonStreamingToolProvider {
+        model: ModelId,
+    }
+
+    #[async_trait]
+    impl ModelRuntime for NonStreamingToolProvider {
+        fn id(&self) -> &str;
+
+        fn default_model(&self) -> &ModelId;
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError>;
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError>;
+    }
+
+    #[tokio::test]
+    async fn default_stream_bridge_preserves_every_non_streaming_tool_call();
+}
 `````
 
 </details>
@@ -75686,7 +75552,7 @@ pub use wire_message::{
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/multi_adapter.rs</code> — 1649 lines; mod=1, struct=6, impl=10, fn=82</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/multi_adapter.rs</code> — 1631 lines; mod=1, struct=6, impl=10, fn=81</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::multi_adapter, crate::provider::multi_adapter::tests
@@ -75719,9 +75585,8 @@ use super::{CompletionResponse, ModelRuntime, prompt_tool_transport, tool_mode};
 use agena_provider::CompletionRequest;
 use agena_provider::ProviderNativeToolsConfig;
 use agena_provider::{
-    AgenaDirectToolsConfig, AgenaToolMode, ProviderHostedImageGenerationConfig,
-    ProviderImageCapabilities, ProviderImageRequest, ProviderImageResponse, ProviderNativeToolKind,
-    ProviderNativeToolRoute,
+    AgenaToolMode, ProviderHostedImageGenerationConfig, ProviderImageCapabilities,
+    ProviderImageRequest, ProviderImageResponse, ProviderNativeToolKind, ProviderNativeToolRoute,
 };
 
 #[derive(Debug, Clone)]
@@ -75729,7 +75594,6 @@ pub struct ProviderModelRoute {
     pub enabled: bool,
     pub native_compaction: bool,
     pub agena_tool_mode: AgenaToolMode,
-    pub agena_direct_tools: AgenaDirectToolsConfig,
     pub provider_native_tools: ProviderNativeToolsConfig,
     pub definition: ConfiguredModelDefinition,
 }
@@ -75876,12 +75740,6 @@ impl ModelRuntime for MultiAdapterProvider {
         adapter_id: Option<&AdapterId>,
         model: &ModelId,
     ) -> AgenaToolMode;
-
-    fn agena_direct_tools_config_for_adapter(
-        &self,
-        adapter_id: Option<&AdapterId>,
-        model: &ModelId,
-    ) -> AgenaDirectToolsConfig;
 
     fn stream_resume_policy(&self) -> StreamResumePolicy;
 
@@ -76154,7 +76012,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/prompt_tool_transport.rs</code> — 1774 lines; mod=1, struct=4, fn=63</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/prompt_tool_transport.rs</code> — 1797 lines; mod=1, struct=4, fn=63</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::prompt_tool_transport, crate::provider::prompt_tool_transport::tests
@@ -76432,7 +76290,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/registry/completion.rs</code> — 1733 lines; mod=1, struct=3, impl=3, fn=50</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/registry/completion.rs</code> — 1717 lines; mod=1, struct=3, impl=3, fn=50</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::registry::completion, crate::provider::registry::completion::tool_api_function_validation_tests
@@ -76679,7 +76537,7 @@ mod tool_api_function_validation_tests {
     fn only_tool_api_definitions_are_subject_to_provider_schema_rules();
 
     #[test]
-    fn provider_declarations_require_gateway_or_explicit_direct_binding();
+    fn provider_declarations_require_gateway_functions();
 
     #[test]
     fn returned_tool_api_arguments_must_be_one_complete_json_object();
@@ -76709,7 +76567,7 @@ mod tool_api_function_validation_tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/registry/listing.rs</code> — 104 lines; impl=2, fn=10</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/registry/listing.rs</code> — 83 lines; impl=2, fn=8</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::registry::listing
@@ -76719,9 +76577,7 @@ use super::{
     BTreeMap, Model, ModelCapabilities, ModelMetadata, ModelRef, ModelSpeedMode, ModelThinkingMode,
     ProviderError, ProviderRegistry, prepare_listed_model,
 };
-use agena_provider::{
-    AgenaDirectToolsConfig, AgenaToolMode, ProviderModelSource, ProviderNativeToolsConfig,
-};
+use agena_provider::{AgenaToolMode, ProviderModelSource};
 
 impl ProviderRegistry {
     pub async fn list_models(&self, provider_id: &str) -> Result<Vec<Model>, ProviderError>;
@@ -76730,17 +76586,7 @@ impl ProviderRegistry {
 
     pub fn model_metadata(&self, model: &ModelRef) -> Result<ModelMetadata, ProviderError>;
 
-    pub fn provider_native_tools_config(
-        &self,
-        _model: &ModelRef,
-    ) -> Result<ProviderNativeToolsConfig, ProviderError>;
-
     pub fn agena_tool_mode(&self, model: &ModelRef) -> Result<AgenaToolMode, ProviderError>;
-
-    pub fn agena_direct_tools_config(
-        &self,
-        _model: &ModelRef,
-    ) -> Result<AgenaDirectToolsConfig, ProviderError>;
 
     pub fn model_thinking_modes(
         &self,
@@ -76766,7 +76612,7 @@ impl ProviderModelSource for ProviderRegistry {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/registry/mod.rs</code> — 651 lines; mod=4, struct=5, impl=9, fn=39</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/registry/mod.rs</code> — 661 lines; mod=4, struct=5, impl=9, fn=39</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::registry, crate::provider::registry::tests
@@ -77074,7 +76920,7 @@ fn disabled_tool_response_error(provider_id: &str, model: &ModelId, reason: &str
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/utils.rs</code> — 1396 lines; mod=1, struct=8, trait=1, impl=1, fn=57</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/utils.rs</code> — 1476 lines; mod=1, struct=8, trait=1, impl=1, fn=58</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::utils, crate::provider::utils::tests
@@ -77415,6 +77261,9 @@ mod tests {
     fn classified_message(error: ProviderError) -> String;
 
     #[test]
+    fn provider_failures_have_stable_semantic_kinds();
+
+    #[test]
     fn responses_failed_reads_nested_response_error();
 
     #[test]
@@ -77442,7 +77291,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider/src/provider/wire_message.rs</code> — 1070 lines; mod=1, struct=2, enum=1, impl=1, fn=46</summary>
+<details><summary><code>crates/agena-runtime-provider/src/provider/wire_message.rs</code> — 1111 lines; mod=1, struct=2, enum=1, impl=1, fn=46</summary>
 
 - Package：`agena-runtime-provider`
 - Target/module：agena_runtime_provider: crate::provider::wire_message, crate::provider::wire_message::tests
@@ -77609,12 +77458,12 @@ fn parse_data_url(url: &str) -> Option<(String, String)>;
 #[cfg(test)]
 mod tests {
     use super::{
-        WirePart, project_completion_input, project_persisted,
+        WirePart, completion_input_result_status, project_completion_input, project_persisted,
         validate_provider_native_tool_history,
     };
-    use agena_domain::ToolApiFunction;
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
+    use agena_domain::{ExecutionStatus, ToolApiFunction};
     use agena_domain::{Role, StructuredObject, TimeRange};
     use agena_runtime_contracts::message::{
         Message, MessageProviderState, OperationPart, PartContent, SkillReference,
@@ -77627,6 +77476,9 @@ mod tests {
     fn completion_input_projection_keeps_role_parts_and_replay_state();
 
     #[test]
+    fn every_structured_non_execution_outcome_reaches_the_model_as_completed();
+
+    #[test]
     fn selected_skill_reference_enters_provider_history_as_message_scoped_guidance();
 
     #[test]
@@ -77637,9 +77489,6 @@ mod tests {
 
     #[test]
     fn dotted_legacy_tool_api_handler_is_rejected_during_replay();
-
-    #[test]
-    fn direct_execution_tool_replays_its_provider_function_name();
 
     #[test]
     fn unadvertised_execution_tool_operation_is_rejected_as_provider_history();
@@ -77895,7 +77744,7 @@ mod tests {
 
 </details>
 
-### 8.36 `agena-runtime-provider-adapters`
+### 8.37 `agena-runtime-provider-adapters`
 
 <details><summary><code>crates/agena-runtime-provider-adapters/src/config_support/mod.rs</code> — 5 lines; mod=1</summary>
 
@@ -78115,10 +77964,10 @@ where
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider-adapters/src/config_support/registry/model_listing.rs</code> — 239 lines; fn=3</summary>
+<details><summary><code>crates/agena-runtime-provider-adapters/src/config_support/registry/model_listing.rs</code> — 392 lines; mod=1, fn=7</summary>
 
 - Package：`agena-runtime-provider-adapters`
-- Target/module：agena_runtime_provider_adapters: crate::config_support::registry::model_listing
+- Target/module：agena_runtime_provider_adapters: crate::config_support::registry::model_listing, crate::config_support::registry::model_listing::tests
 
 `````rust
 use agena_domain::{AdapterId, ProviderId};
@@ -78139,6 +77988,18 @@ pub async fn list_provider_adapter_models(
     env: &dyn ConfigEnvironment,
 ) -> Vec<ProviderAdapterModelsResult>;
 
+fn adapter_models_config_failure(
+    provider_id: &str,
+    adapter_id: &str,
+    error: &ConfigError,
+) -> agena_failure::Failure;
+
+fn adapter_models_failure(
+    provider_id: &str,
+    adapter_id: &str,
+    error: &agena_runtime_provider::ProviderError,
+) -> agena_failure::Failure;
+
 pub(crate) fn resolve_adapter_default_models(
     provider_id: &str,
     resolved: &ResolvedProviderConfig,
@@ -78149,11 +78010,23 @@ pub(crate) fn resolved_adapter_models_base_url(
     auth: &ProviderAuthConfig,
     definition: &ProviderAdapterDefinition,
 ) -> Result<Option<String>, ConfigError>;
+
+#[cfg(test)]
+mod tests {
+    use super::{adapter_models_config_failure, adapter_models_failure};
+    use agena_provider::ProviderErrorKind;
+
+    #[test]
+    fn adapter_model_listing_never_serializes_provider_diagnostics();
+
+    #[test]
+    fn adapter_model_setup_never_serializes_config_diagnostics();
+}
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime-provider-adapters/src/config_support/registry/provider_registry.rs</code> — 916 lines; struct=1, fn=6</summary>
+<details><summary><code>crates/agena-runtime-provider-adapters/src/config_support/registry/provider_registry.rs</code> — 915 lines; struct=1, fn=6</summary>
 
 - Package：`agena-runtime-provider-adapters`
 - Target/module：agena_runtime_provider_adapters: crate::config_support::registry::provider_registry
@@ -78292,7 +78165,7 @@ pub struct ProviderAdapterModelsResult {
     pub enabled: bool,
     pub resolved_base_url: Option<String>,
     pub models: Vec<Model>,
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81823,7 +81696,7 @@ mod tests {
 
 </details>
 
-### 8.37 `agena-runtime-session`
+### 8.38 `agena-runtime-session`
 
 <details><summary><code>crates/agena-runtime-session/src/compaction_policy.rs</code> — 15 lines; no counted items</summary>
 
@@ -81844,24 +81717,20 @@ pub const MAX_COMPACTION_FAILURES: u8 = 3;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/completion_request.rs</code> — 53 lines; struct=1, fn=1</summary>
+<details><summary><code>crates/agena-runtime-session/src/completion_request.rs</code> — 45 lines; struct=1, fn=1</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::completion_request
 
 `````rust
 use agena_domain::{ModelId, ModelSpeedModeRequestOverride, ThinkingRequest};
-use agena_provider::{
-    CompletionInputMessage, CompletionRequest, ProviderNativeToolsConfig, ToolApiDefinition,
-};
+use agena_provider::{CompletionInputMessage, CompletionRequest, ToolApiDefinition};
 
 pub struct CompletionRequestInputs {
     pub model: ModelId,
     pub system: Option<String>,
     pub messages: Vec<CompletionInputMessage>,
     pub tool_api_functions: Vec<ToolApiDefinition>,
-
-    pub provider_native_tools: ProviderNativeToolsConfig,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
     pub prompt_cache_key: Option<String>,
@@ -81950,10 +81819,10 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/error.rs</code> — 107 lines; enum=1, impl=6, fn=7</summary>
+<details><summary><code>crates/agena-runtime-session/src/error.rs</code> — 459 lines; mod=1, enum=1, impl=6, fn=12</summary>
 
 - Package：`agena-runtime-session`
-- Target/module：agena_runtime_session: crate::error
+- Target/module：agena_runtime_session: crate::error, crate::error::tests
 
 `````rust
 use agena_provider::ProviderErrorKind;
@@ -82005,6 +81874,16 @@ pub enum AppError {
     },
     #[error("execution cancelled")]
     Cancelled,
+    #[error("operation blocked by permission policy: {}", .0.reason)]
+    PolicyDenied(Box<agena_domain::PolicyDeniedResult>),
+    #[error("permission request declined by user")]
+    UserDeclined(Box<agena_domain::UserDeclinedResult>),
+    #[error("required execution capability is unavailable: {}", .0.reason)]
+    CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
+    #[error("tool is unavailable: {}", .0.reason)]
+    ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
+    #[error("tool execution error: {0}")]
+    Tool(Box<crate::tool::ToolError>),
     #[error("subtask usage budget exceeded: {0}")]
     SubtaskBudgetExceeded(String),
     #[error("session {0} already has an active execution")]
@@ -82016,6 +81895,11 @@ pub enum AppError {
 }
 
 impl AppError {
+
+    pub fn public_message(&self) -> &'static str;
+
+    pub fn failure(&self) -> agena_failure::Failure;
+
     pub fn retryable(&self) -> bool;
 
     pub fn provider_error_kind(&self) -> Option<ProviderErrorKind>;
@@ -82039,6 +81923,20 @@ impl From<agena_runtime_provider::ProviderJsonStreamError> for AppError {
 
 impl From<agena_runtime_config::ConfigError> for AppError {
     fn from(value: agena_runtime_config::ConfigError) -> Self;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppError;
+
+    #[test]
+    fn provider_body_is_diagnostic_only();
+
+    #[test]
+    fn context_overflow_has_actionable_public_message();
+
+    #[test]
+    fn execution_command_failure_excludes_internal_source_chain();
 }
 `````
 
@@ -82171,7 +82069,7 @@ pub struct MessagePartCheckpointedEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<agena_domain::TurnId>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_id: Option<agena_domain::ResponseId>,
+    pub reply_id: Option<agena_domain::AssistantReplyId>,
     pub message_id: i64,
     pub message_role: Role,
     pub message_state: ExecutionStatus,
@@ -82186,7 +82084,7 @@ pub struct TranscriptPartUpsertedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
     pub turn_id: agena_domain::TurnId,
-    pub response_id: agena_domain::ResponseId,
+    pub reply_id: agena_domain::AssistantReplyId,
     pub message_role: Role,
     pub part: MessagePart,
     pub ts_ms: i64,
@@ -82220,7 +82118,7 @@ pub enum PublishError {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/event/kind.rs</code> — 230 lines; mod=1, struct=1, enum=1, type=3, impl=3, fn=6</summary>
+<details><summary><code>crates/agena-runtime-session/src/event/kind.rs</code> — 239 lines; mod=1, struct=1, enum=1, type=3, impl=3, fn=6</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::event::kind, crate::event::kind::tests
@@ -82231,6 +82129,7 @@ use agena_domain::{
     ExecutionFinishedEvent, ExecutionStartedEvent, KindMatcher, KindPersistence,
     PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
     PromptCompactionCompletedEvent, StreamErrorEvent, SubtaskStatusChangedEvent,
+    ToolPolicyDeniedEvent, ToolUserDeclinedEvent,
 };
 use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
@@ -82263,6 +82162,8 @@ pub enum EventKind {
     PermissionRuleCreated(PermissionRuleEvent),
     PermissionRuleUpdated(PermissionRuleEvent),
     PermissionRuleRevoked(PermissionRuleEvent),
+    ToolPolicyDenied(ToolPolicyDeniedEvent),
+    ToolUserDeclined(ToolUserDeclinedEvent),
 
     RunStarted(RunStarted),
     RunCompleted(RunCompleted),
@@ -82312,6 +82213,8 @@ pub const HISTORY_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
+    "tool_policy_denied",
+    "tool_user_declined",
     "run_started",
     "run_completed",
     "run_aborted",
@@ -82340,6 +82243,8 @@ pub const ALL_KINDS: &[&str] = &[
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
+    "tool_policy_denied",
+    "tool_user_declined",
     "run_started",
     "run_completed",
     "run_aborted",
@@ -82542,14 +82447,13 @@ where
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/event_publish_service.rs</code> — 38 lines; struct=1, enum=1, trait=1, impl=2, fn=2</summary>
+<details><summary><code>crates/agena-runtime-session/src/event_publish_service.rs</code> — 48 lines; struct=1, enum=1, trait=1, impl=4, fn=3</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::event_publish_service
 
 `````rust
 use async_trait::async_trait;
-use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum RuntimeEventPublishRequest {
@@ -82563,15 +82467,20 @@ pub enum RuntimeEventPublishRequest {
     },
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("event publication failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeEventPublishError {
-    message: String,
+    pub failure: agena_failure::Failure,
 }
 
 impl RuntimeEventPublishError {
-    pub fn new(message: impl Into<String>) -> Self;
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self;
 }
+
+impl std::fmt::Display for RuntimeEventPublishError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for RuntimeEventPublishError {}
 
 #[async_trait]
 pub trait RuntimeEventPublishService: Send + Sync {
@@ -82584,14 +82493,13 @@ pub trait RuntimeEventPublishService: Send + Sync {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/event_query_service.rs</code> — 117 lines; struct=6, enum=1, trait=3, impl=2, fn=7</summary>
+<details><summary><code>crates/agena-runtime-session/src/event_query_service.rs</code> — 127 lines; struct=6, enum=1, trait=3, impl=4, fn=8</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::event_query_service
 
 `````rust
 use async_trait::async_trait;
-use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeEvent {
@@ -82629,15 +82537,20 @@ pub struct RuntimeReverseEventRange {
     pub limit: usize,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("event query failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeEventQueryError {
-    message: String,
+    pub failure: Box<agena_failure::Failure>,
 }
 
 impl RuntimeEventQueryError {
-    pub fn new(message: impl Into<String>) -> Self;
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self;
 }
+
+impl std::fmt::Display for RuntimeEventQueryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for RuntimeEventQueryError {}
 
 #[async_trait]
 pub trait RuntimeEventQueryService: Send + Sync {
@@ -82686,7 +82599,7 @@ pub trait RuntimeEventStreamService: Send + Sync {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/execution_registry.rs</code> — 293 lines; mod=1, struct=2, enum=1, impl=3, fn=25</summary>
+<details><summary><code>crates/agena-runtime-session/src/execution_registry.rs</code> — 347 lines; mod=1, struct=2, enum=1, impl=3, fn=25</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::execution_registry, crate::execution_registry::tests
@@ -82716,7 +82629,7 @@ pub enum ExecutionControlError {
 pub struct ExecutionControl<T> {
     execution_id: ExecutionId,
     turn_id: agena_domain::TurnId,
-    response_id: agena_domain::ResponseId,
+    reply_id: agena_domain::AssistantReplyId,
     pub cancel: CancellationToken,
     pub steer_tx: mpsc::UnboundedSender<Vec<T>>,
     lifecycle: Mutex<ExecutionLifecycle>,
@@ -82726,13 +82639,17 @@ pub struct ExecutionControl<T> {
 const OPERATION_CANCELLATION_GRACE: Duration = Duration::from_millis(500);
 
 impl<T> ExecutionControl<T> {
-    fn new(steer_tx: mpsc::UnboundedSender<Vec<T>>) -> Self;
+    fn new(
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
+        steer_tx: mpsc::UnboundedSender<Vec<T>>,
+    ) -> Self;
 
     pub fn execution_id(&self) -> ExecutionId;
 
     pub fn turn_id(&self) -> agena_domain::TurnId;
 
-    pub fn response_id(&self) -> agena_domain::ResponseId;
+    pub fn reply_id(&self) -> agena_domain::AssistantReplyId;
 
     pub async fn transition(&self, phase: ExecutionPhase) -> Result<(), ExecutionControlError>;
 
@@ -82762,6 +82679,8 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
     pub async fn register(
         &self,
         session_id: i64,
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
     ) -> Result<(Arc<ExecutionControl<T>>, mpsc::UnboundedReceiver<Vec<T>>), ExecutionControlError>;
 
     pub async fn unregister_if_matches(
@@ -82878,7 +82797,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/lib.rs</code> — 87 lines; mod=31</summary>
+<details><summary><code>crates/agena-runtime-session/src/lib.rs</code> — 88 lines; mod=32</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate, crate::tool
@@ -82912,6 +82831,7 @@ mod periodic;
 mod presentation_event;
 mod prompt_budget;
 mod prompt_merge;
+mod service_failure;
 pub mod session;
 mod session_cache;
 mod session_cache_policy;
@@ -83128,6 +83048,37 @@ mod tests {
 
 </details>
 
+<details><summary><code>crates/agena-runtime-session/src/service_failure.rs</code> — 54 lines; mod=1, impl=1, fn=3</summary>
+
+- Package：`agena-runtime-session`
+- Target/module：agena_runtime_session: crate::service_failure, crate::service_failure::tests
+
+`````rust
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
+    RetryDirective, UserPresentation,
+};
+
+pub(crate) fn unexpected_service_failure(
+    code: &'static str,
+    fallback: &'static str,
+    diagnostic: impl std::fmt::Display,
+) -> Failure;
+
+pub(crate) fn display_service_failure(
+    failure: &Failure,
+    formatter: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn service_diagnostic_is_not_part_of_the_public_failure();
+}
+`````
+
+</details>
+
 <details><summary><code>crates/agena-runtime-session/src/session/cache.rs</code> — 15 lines; type=1, impl=1, fn=2</summary>
 
 - Package：`agena-runtime-session`
@@ -83245,7 +83196,7 @@ pub struct RunAborted {
     pub run_id: RunId,
     pub reason: RunAbortReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -83503,7 +83454,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/history/store/mod.rs</code> — 2146 lines; mod=1, struct=5, trait=3, impl=9, fn=61</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/history/store/mod.rs</code> — 2454 lines; mod=1, struct=5, trait=3, impl=9, fn=65</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::history::store
@@ -83523,14 +83474,14 @@ use sea_orm::{
 };
 
 use crate::{
-    db::entities::{transcript_message, transcript_part, transcript_projection_state},
+    db::entities::{model_message, model_message_part, model_projection_state},
     event::{DomainEvent, EventKind, EventPublisher, MessagePartCheckpointedEvent, PublishContext},
     message::{Message, MessagePart, PartContent},
     session::SessionRuntimeState,
 };
 use agena_storage::{
-    MessageProjectionHeaderRecord, MessageProjectionPartRecord, MessageProjectionPartWrite,
-    MessageProjectionRepository, MessageProjectionTransactionWriter, StoreRange,
+    ModelMessageHeaderRecord, ModelMessagePartRecord, ModelMessagePartWrite,
+    ModelMessageRepository, ModelMessageTransactionWriter, StoreRange,
 };
 #[cfg(test)]
 use agena_storage_sqlite::StoredRole;
@@ -83538,13 +83489,14 @@ use agena_storage_sqlite::{StoredExecutionStatus, StoredPartKind};
 
 use super::{RunAborted, RunId, RunStarted};
 use agena_domain::{
-    EventFilter, EventScope, ExecutionFailureKind, ExecutionFinishedEvent, ExecutionOutcome,
-    ExecutionStartedEvent, ExecutionStatus, MessageSource, PromptCompactionCompletedEvent, Role,
-    RunAbortReason,
+    EventFilter, EventScope, ExecutionFinishedEvent, ExecutionOutcome, ExecutionStartedEvent,
+    ExecutionStatus, MessageSource, PromptCompactionCompletedEvent, Role, RunAbortReason,
 };
 
 #[cfg(test)]
 mod tests;
+
+fn run_abort_problem(reason: RunAbortReason) -> Option<agena_failure::UserProblem>;
 
 #[derive(Debug, Clone)]
 pub struct ProjectedMessageHeader {
@@ -83561,18 +83513,21 @@ pub struct ProjectedMessageHeader {
 pub(crate) struct SessionHistoryStore {
     publisher: Arc<EventPublisher>,
     db: DatabaseConnection,
-    message_projection_repository: Arc<dyn MessageProjectionRepository>,
+
+    projection_locks:
+        Arc<std::sync::Mutex<std::collections::HashMap<i64, Arc<tokio::sync::Mutex<()>>>>>,
+    message_projection_repository: Arc<dyn ModelMessageRepository>,
     message_projection_transaction_writer:
-        Arc<dyn MessageProjectionTransactionWriter<DatabaseTransaction>>,
+        Arc<dyn ModelMessageTransactionWriter<DatabaseTransaction>>,
 }
 
 impl SessionHistoryStore {
     pub(crate) fn new(
         publisher: Arc<EventPublisher>,
         db: DatabaseConnection,
-        message_projection_repository: Arc<dyn MessageProjectionRepository>,
+        message_projection_repository: Arc<dyn ModelMessageRepository>,
         message_projection_transaction_writer: Arc<
-            dyn MessageProjectionTransactionWriter<DatabaseTransaction>,
+            dyn ModelMessageTransactionWriter<DatabaseTransaction>,
         >,
     ) -> Self;
 
@@ -83591,7 +83546,6 @@ impl SessionHistoryStore {
         &self,
         session_id: i64,
         reason: RunAbortReason,
-        message: String,
     ) -> Result<(), DbErr>;
 
     pub(crate) async fn list_projected_messages(
@@ -83646,11 +83600,18 @@ impl SessionHistoryStore {
     async fn rebuild_projection_from_history(&self, session_id: i64) -> Result<(), DbErr>;
 }
 
+fn interrupted_execution_problem() -> agena_failure::UserProblem;
+
+async fn acquire_projection_fence(
+    transaction: &DatabaseTransaction,
+    session_id: i64,
+) -> Result<(), DbErr>;
+
 fn unmatched_lifecycles(
     events: &[DomainEvent],
 ) -> (
     std::collections::BTreeSet<RunId>,
-    std::collections::BTreeMap<agena_domain::ExecutionId, agena_domain::ResponseId>,
+    std::collections::BTreeMap<agena_domain::ExecutionId, agena_domain::AssistantReplyId>,
 );
 
 #[derive(Debug, Clone, Default)]
@@ -83662,23 +83623,23 @@ pub(crate) struct LoadedSessionProjection {
 fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<chrono::DateTime<Utc>, DbErr>;
 
 fn projected_message_from_record(
-    record: MessageProjectionHeaderRecord,
+    record: ModelMessageHeaderRecord,
     parts: Vec<MessagePart>,
 ) -> Result<Message, DbErr>;
 
 fn projected_message_header_from_record(
-    record: MessageProjectionHeaderRecord,
+    record: ModelMessageHeaderRecord,
 ) -> Result<ProjectedMessageHeader, DbErr>;
 
-fn projected_part_from_record(record: MessageProjectionPartRecord) -> Result<MessagePart, DbErr>;
+fn projected_part_from_record(record: ModelMessagePartRecord) -> Result<MessagePart, DbErr>;
 
 fn projected_message_records_needing_part_repair(
-    records: &[MessageProjectionHeaderRecord],
+    records: &[ModelMessageHeaderRecord],
     parts_by_message: &std::collections::BTreeMap<i64, Vec<MessagePart>>,
 ) -> Vec<i64>;
 
 fn projected_message_record_needs_part_repair(
-    record: &MessageProjectionHeaderRecord,
+    record: &ModelMessageHeaderRecord,
     loaded_part_count: usize,
 ) -> bool;
 
@@ -83706,6 +83667,14 @@ async fn project_execution_finished<C, W>(
 where
     C: ConnectionTrait,
     W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>;
+
+async fn terminalize_execution_activities<C>(
+    db: &C,
+    payload: &ExecutionFinishedEvent,
+    revision_seq: i64,
+) -> Result<(), DbErr>
+where
+    C: ConnectionTrait;
 
 pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::ActivityPayload>;
 
@@ -83754,7 +83723,7 @@ where
     async fn upsert_message(
         &self,
         connection: &C,
-        message: transcript_message::Model,
+        message: model_message::Model,
     ) -> Result<(), DbErr>;
 }
 
@@ -83767,7 +83736,7 @@ where
         &self,
         connection: &C,
         session_id: i64,
-        identity: agena_storage::MessageProjectionOpenIdentity,
+        identity: agena_storage::ModelMessageOpenIdentity,
         status: ExecutionStatus,
         updated_at_ms: i64,
     ) -> Result<(), DbErr>;
@@ -83809,7 +83778,7 @@ where
     async fn upsert_message(
         &self,
         connection: &C,
-        message: transcript_message::Model,
+        message: model_message::Model,
     ) -> Result<(), DbErr>;
 }
 
@@ -83823,7 +83792,7 @@ where
         &self,
         connection: &C,
         session_id: i64,
-        identity: agena_storage::MessageProjectionOpenIdentity,
+        identity: agena_storage::ModelMessageOpenIdentity,
         status: ExecutionStatus,
         _updated_at_ms: i64,
     ) -> Result<(), DbErr>;
@@ -83840,11 +83809,11 @@ where
 }
 
 struct TransactionProjectionPartWriter {
-    writer: Arc<dyn MessageProjectionTransactionWriter<DatabaseTransaction>>,
+    writer: Arc<dyn ModelMessageTransactionWriter<DatabaseTransaction>>,
 }
 
 impl TransactionProjectionPartWriter {
-    fn new(writer: Arc<dyn MessageProjectionTransactionWriter<DatabaseTransaction>>) -> Self;
+    fn new(writer: Arc<dyn ModelMessageTransactionWriter<DatabaseTransaction>>) -> Self;
 }
 
 #[async_trait::async_trait]
@@ -83862,7 +83831,7 @@ impl ProjectionMessageWriter<DatabaseTransaction> for TransactionProjectionPartW
     async fn upsert_message(
         &self,
         transaction: &DatabaseTransaction,
-        message: transcript_message::Model,
+        message: model_message::Model,
     ) -> Result<(), DbErr>;
 }
 
@@ -83872,7 +83841,7 @@ impl ProjectionLifecycleWriter<DatabaseTransaction> for TransactionProjectionPar
         &self,
         transaction: &DatabaseTransaction,
         session_id: i64,
-        identity: agena_storage::MessageProjectionOpenIdentity,
+        identity: agena_storage::ModelMessageOpenIdentity,
         status: ExecutionStatus,
         updated_at_ms: i64,
     ) -> Result<(), DbErr>;
@@ -83893,7 +83862,7 @@ impl ProjectionLifecycleWriter<DatabaseTransaction> for TransactionProjectionPar
 }
 
 #[cfg(test)]
-async fn upsert_message_projection<C>(db: &C, row: transcript_message::Model) -> Result<(), DbErr>
+async fn upsert_message_projection<C>(db: &C, row: model_message::Model) -> Result<(), DbErr>
 where
     C: ConnectionTrait;
 
@@ -83937,6 +83906,7 @@ async fn update_tool_result_projection<C, W>(
     part_writer: &W,
     session_id: i64,
     payload: &super::ToolCallCompleted,
+    revision_seq: i64,
 ) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
@@ -83952,7 +83922,7 @@ impl SessionHistoryStore {
     async fn load_projection_state(
         &self,
         session_id: i64,
-    ) -> Result<Option<transcript_projection_state::Model>, DbErr>;
+    ) -> Result<Option<model_projection_state::Model>, DbErr>;
 }
 
 async fn apply_projection_events_on_connection<C, W>(
@@ -83975,7 +83945,7 @@ async fn apply_message_part_update_on_connection<C, W>(
     db: &C,
     part_writer: &W,
     update: &MessagePartCheckpointedEvent,
-) -> Result<(), DbErr>
+) -> Result<Option<agena_domain::ExecutionId>, DbErr>
 where
     C: ConnectionTrait,
     W: ProjectionPartWriter<C> + ProjectionMessageWriter<C>;
@@ -84010,7 +83980,7 @@ where
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/history/store/tests.rs</code> — 946 lines; mod=1, fn=9</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/history/store/tests.rs</code> — 1358 lines; mod=1, fn=12</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::history::store::tests, crate::session::history::store::tests::tests
@@ -84027,6 +83997,11 @@ mod tests {
     use agena_storage::WorkspaceRepository;
     use sea_orm::{ActiveModelTrait, Database, EntityTrait, PaginatorTrait, Set};
 
+    fn provider_execution_problem() -> agena_failure::UserProblem;
+
+    #[tokio::test]
+    async fn database_projection_fence_serializes_independent_callers();
+
     #[test]
     fn projected_header_decodes_storage_record_and_rejects_inconsistent_turn();
 
@@ -84034,10 +84009,13 @@ mod tests {
     async fn executions_project_owned_responses_without_system_messages();
 
     #[tokio::test]
+    async fn permission_continuation_reuses_one_turn_and_one_assistant_reply();
+
+    #[tokio::test]
     async fn mixed_user_content_projects_to_one_canonical_ordered_document();
 
     #[tokio::test]
-    async fn compaction_is_one_runtime_activity_in_the_owning_response_document();
+    async fn compaction_is_one_runtime_activity_in_the_owning_assistant_reply();
 
     #[tokio::test]
     async fn message_turn_and_execution_identity_are_persisted_and_immutable();
@@ -84195,16 +84173,16 @@ fn hash_opt_str(hasher: &mut blake3::Hasher, value: Option<&str>);
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/compact.rs</code> — 900 lines; mod=1, struct=1, impl=1, fn=23</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/compact.rs</code> — 927 lines; mod=1, struct=1, impl=1, fn=25</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::compact, crate::session::manager::compact::tests
 
 `````rust
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, Message,
-    MessageSource, PromptCompactionRuntime, Role, SessionExecutionRequest, SessionManager,
-    SessionManagerState, SessionRunOptions, Utc,
+    AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
+    ExecutionStatus, Message, MessageSource, PromptCompactionRuntime, Role,
+    SessionExecutionRequest, SessionManager, SessionManagerState, SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
@@ -84251,6 +84229,17 @@ impl SessionManager {
     pub async fn compact_session(
         &self,
         request: SessionExecutionRequest,
+    ) -> Result<Session, AppError>;
+
+    pub async fn start_compact_session(
+        &self,
+        request: SessionExecutionRequest,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>;
+
+    async fn compact_session_inner(
+        &self,
+        request: SessionExecutionRequest,
+        control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError>;
 
     pub(super) async fn auto_compact_session(
@@ -84373,16 +84362,15 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/helpers.rs</code> — 757 lines; struct=4, fn=37</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/helpers.rs</code> — 626 lines; struct=4, fn=29</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::helpers
 
 `````rust
 use super::{
-    AppError, AttachmentItem, ExecutionControlError, ExecutionFailureKind, ExecutionStatus,
-    HOST_PERMISSION_REQUEST_SEQUENCE, HashSet, HistoryToolCallId, IpAddr, Message, MessageMetadata,
-    MessagePart, OperationBlock, Ordering, PartContent, PermissionAction, PermissionDecision,
+    AppError, AttachmentItem, ExecutionControlError, ExecutionStatus, HashSet, HistoryToolCallId,
+    Message, MessageMetadata, MessagePart, OperationBlock, PartContent, PermissionAction,
     PermissionMode, PermissionReplyKind, PermissionRiskLevel, PermissionScope,
     PersistedPermissionRule, RequestPart, ReservedMessageIds, ResolvedPendingTool, Role,
     RunAbortReason, SessionPendingTool, SessionStore, TimeRange, ToolError, ToolInvocation,
@@ -84391,18 +84379,7 @@ use super::{
 use crate::session::Session;
 use agena_domain::{PermissionReply, UserInputReply, UserInputRequest};
 
-pub(super) fn host_permission_grant_matches_action(
-    granted_actions: &[PermissionAction],
-    requested_action: &PermissionAction,
-) -> bool;
-
-pub(super) fn is_public_network_access(action: &PermissionAction) -> bool;
-
-pub(super) fn permission_subject(action: &PermissionAction) -> serde_json::Value;
-
 pub(super) fn execution_control_to_app_error(err: ExecutionControlError) -> AppError;
-
-pub(super) fn execution_failure_kind(error: &AppError) -> ExecutionFailureKind;
 
 pub(super) fn run_abort_reason(error: &AppError) -> RunAbortReason;
 
@@ -84510,18 +84487,6 @@ pub(super) fn permission_action_key(action: &PermissionAction) -> Result<String,
 
 pub(super) fn tool_error_to_app_error(err: ToolError) -> AppError;
 
-pub(super) fn apply_advisory_permission_decision(
-    base: PermissionDecision,
-    advice: agena_plugin_host::PermissionDecision,
-    explanation: &str,
-) -> PermissionDecision;
-
-pub(super) fn risk_for_permission_decision(decision: &PermissionDecision) -> PermissionRiskLevel;
-
-pub(super) fn plugin_risk_to_core(
-    risk: agena_plugin_host::sdk::PermissionRiskLevel,
-) -> PermissionRiskLevel;
-
 pub(super) fn max_permission_risk(
     left: PermissionRiskLevel,
     right: PermissionRiskLevel,
@@ -84536,8 +84501,6 @@ pub(super) fn host_user_input_request_id(
     call_id: i64,
     sequence_index: usize,
 ) -> String;
-
-pub(super) fn host_permission_request_id(session_id: i64, call_id: i64) -> String;
 
 pub(super) fn user_input_execution(
     request: &UserInputRequest,
@@ -84557,7 +84520,7 @@ pub(super) fn validate_user_input_reply(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/history.rs</code> — 1488 lines; mod=1, struct=2, impl=8, fn=51</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/history.rs</code> — 1519 lines; mod=1, struct=2, impl=8, fn=52</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::history, crate::session::manager::history::tests
@@ -84577,8 +84540,6 @@ fn uuid_value<T>(value: String, wrap: impl FnOnce(uuid::Uuid) -> T) -> Result<T,
 
 async fn transcript_document_for_role(
     db: &sea_orm::DatabaseConnection,
-    _execution_id: agena_domain::ExecutionId,
-    _role: agena_domain::Role,
     owner: agena_domain::ActivityOwner,
 ) -> Result<agena_domain::ContentDocument, AppError>;
 
@@ -84619,7 +84580,7 @@ fn transcript_part_patch(
     seq_session: i64,
     role: Role,
     turn_id: agena_domain::TurnId,
-    response_id: agena_domain::ResponseId,
+    reply_id: agena_domain::AssistantReplyId,
     part: &MessagePart,
 ) -> Option<agena_domain::TranscriptPatch>;
 
@@ -84681,6 +84642,12 @@ impl SessionManager {
     ) -> Result<(), AppError>;
 
     pub async fn rewind_session(&self, request: SessionRewindRequest) -> Result<Session, AppError>;
+
+    async fn model_user_message_id_for_turn(
+        &self,
+        session_id: i64,
+        turn_id: agena_domain::TurnId,
+    ) -> Result<i64, AppError>;
 
     pub async fn export_session_jsonl(&self, session_id: i64) -> Result<String, AppError>;
 
@@ -84831,7 +84798,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/mod.rs</code> — 1723 lines; mod=8, struct=18, enum=1, type=1, impl=14, fn=61</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/mod.rs</code> — 1545 lines; mod=8, struct=15, enum=1, type=1, impl=11, fn=54</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager
@@ -84840,16 +84807,13 @@ mod tests {
 use std::{
     collections::{HashMap, HashSet},
     future::Future,
-    net::IpAddr,
-    sync::{
-        Arc, Mutex as StdMutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
 use arc_swap::ArcSwap;
 use chrono::Utc;
+use sea_orm::{ConnectionTrait, Statement};
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
@@ -84864,14 +84828,13 @@ use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::UserInputReply;
 use agena_domain::{
-    DecisionTraceStep, ExecutionFailureKind, ExecutionFinishedEvent, ExecutionOutcome,
-    ExecutionSource, ExecutionStartedEvent, FinishReason, PermissionAction, PermissionDecision,
-    PermissionMode, PermissionRepliedEvent, PermissionReply, PermissionReplyKind,
-    PermissionRiskLevel, PermissionScope, Role, RunAbortReason, TimeRange, UserInputReplyKind,
+    DecisionTraceStep, ExecutionFinishedEvent, ExecutionOutcome, ExecutionSource,
+    ExecutionStartedEvent, FinishReason, PermissionAction, PermissionMode, PermissionRepliedEvent,
+    PermissionReplyKind, PermissionRiskLevel, PermissionScope, Role, RunAbortReason, TimeRange,
+    UserInputReplyKind,
 };
 use agena_domain::{ExecutionStatus, MessageSource};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
-use agena_provider::ProviderNativeToolsConfig;
 use agena_storage::PersistedPermissionRule;
 use agena_tool::PreparedShellCommand;
 use std::path::PathBuf;
@@ -84901,7 +84864,6 @@ fn completion_request(
     system: Option<String>,
     messages: Vec<Message>,
     tool_api_functions: Vec<crate::tool::ToolApiBinding>,
-    provider_native_tools: ProviderNativeToolsConfig,
     prompt_cache_key: Option<String>,
     previous_response_id: Option<String>,
     prompt_window_generation: Option<u64>,
@@ -84953,7 +84915,7 @@ pub struct SessionSubtaskResponse {
     pub status: agena_domain::SubtaskStatus,
     pub resumed: bool,
     pub final_text: Option<String>,
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
     pub usage: agena_provider::CompletionUsage,
     pub model_provider_id: Option<String>,
     pub model_adapter_id: Option<String>,
@@ -84984,6 +84946,19 @@ struct PromptTurnBudget {
     model_context_window_tokens: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConversationIdentity {
+    turn_id: agena_domain::TurnId,
+    reply_id: agena_domain::AssistantReplyId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionConversationTarget {
+    NewTurn,
+    LatestReply,
+    ExistingReply(ConversationIdentity),
+}
+
 #[derive(Debug, Clone)]
 struct ResolvedPendingTool {
     pending: SessionPendingTool,
@@ -85000,41 +84975,6 @@ struct PendingHostUserInput {
     session_id: i64,
     response: oneshot::Sender<agena_plugin_host::sdk::host_api::AskUserResponse>,
 }
-
-struct PendingHostPermission {
-    session_id: i64,
-    response: oneshot::Sender<PermissionReply>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct HostPermissionGrantKey {
-    session_id: i64,
-    call_id: i64,
-    plugin_id: String,
-    tool_name: String,
-}
-
-struct HostPermissionGrantGuard {
-    grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
-    key: HostPermissionGrantKey,
-}
-
-impl HostPermissionGrantGuard {
-    fn install(
-        grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
-        session_id: i64,
-        call_id: i64,
-        plugin_id: String,
-        tool_name: String,
-        actions: Vec<PermissionAction>,
-    ) -> Self;
-}
-
-impl Drop for HostPermissionGrantGuard {
-    fn drop(&mut self);
-}
-
-static HOST_PERMISSION_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 type HostUserInputSequenceKey = (i64, i64);
 
@@ -85066,7 +85006,7 @@ struct SessionManagerState {
 struct StableRunContext {
     allow_goal_continuation: bool,
     base_run_source: ExecutionSource,
-    active_turn_id: Option<i64>,
+    active_model_turn_id: Option<i64>,
     state: Arc<SessionManagerState>,
     control: Arc<ExecutionControl>,
     steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
@@ -85113,7 +85053,6 @@ mod stats;
 mod tests;
 
 use self::helpers::*;
-use self::replies::{AggregatedPermissionOutcome, AggregatedPermissionRequest};
 
 impl SessionManagerState {
     fn new(
@@ -85134,24 +85073,6 @@ pub struct SessionManager {
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
     host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
-    host_permission_waiters: Arc<Mutex<HashMap<String, PendingHostPermission>>>,
-    host_permission_grants: Arc<StdMutex<HashMap<HostPermissionGrantKey, Vec<PermissionAction>>>>,
-}
-
-pub(crate) struct AuthorizedToolInvocation {
-    executor: ToolExecutor,
-    invocation: ToolInvocation,
-    session_id: i64,
-}
-
-impl AuthorizedToolInvocation {
-    pub(crate) fn execute(self, call_id: i64) -> Result<ToolInvocationExecution, ToolError>;
-}
-
-pub(crate) enum ToolInvocationAuthorization {
-    Allowed(Box<AuthorizedToolInvocation>),
-    Ask { reason: String },
-    Deny { reason: String },
 }
 
 #[async_trait::async_trait]
@@ -85160,19 +85081,7 @@ impl agena_runtime::SessionToolExecutionService for SessionManager {
         &self,
         session_id: i64,
         invocation: ToolInvocation,
-    ) -> Result<agena_tool::ToolExecutionSummary, agena_runtime::SessionToolExecutionError>;
-
-    async fn execute_session_tool_with_user_approval(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<agena_tool::ToolExecutionSummary, agena_runtime::SessionToolExecutionError>;
-
-    fn render_session_tool_output(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<String, agena_runtime::SessionToolExecutionError>;
+    ) -> Result<agena_runtime::SessionToolExecutionOutcome, agena_runtime::SessionToolExecutionError>;
 }
 
 #[async_trait::async_trait]
@@ -85182,6 +85091,8 @@ impl agena_runtime::SessionPluginCommandService for SessionManager {
         request: agena_runtime::SessionPluginCommandRequest,
     ) -> Result<agena_plugin_host::sdk::PluginCommandOutput, agena_runtime::SessionPluginCommandError>;
 }
+
+fn session_execution_command_error(error: AppError) -> agena_runtime::SessionExecutionCommandError;
 
 #[async_trait::async_trait]
 impl agena_runtime::SessionExecutionCommandService for SessionManager {
@@ -85287,6 +85198,19 @@ fn part_contents_from_composer_document(
 ) -> Result<Vec<UserInputPart>, AppError>;
 
 impl SessionManager {
+    async fn conversation_identity_for_execution(
+        &self,
+        session_id: i64,
+        source: ExecutionSource,
+        target: ExecutionConversationTarget,
+    ) -> Result<ConversationIdentity, AppError>;
+
+    async fn conversation_identity_for_activity(
+        &self,
+        session_id: i64,
+        activity_id: agena_domain::ActivityId,
+    ) -> Result<ConversationIdentity, AppError>;
+
     async fn begin_execution(
         &self,
         session_id: i64,
@@ -85310,7 +85234,46 @@ impl SessionManager {
         &self,
         session_id: i64,
         source: ExecutionSource,
+        conversation_target: ExecutionConversationTarget,
         task_name: &'static str,
+        operation: F,
+    ) -> Result<T, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(
+                SessionManager,
+                Arc<ExecutionControl>,
+                mpsc::UnboundedReceiver<Vec<PartContent>>,
+            ) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<T, AppError>> + Send + 'static;
+
+    async fn start_registered<T, F, Fut>(
+        &self,
+        session_id: i64,
+        source: ExecutionSource,
+        conversation_target: ExecutionConversationTarget,
+        task_name: &'static str,
+        operation: F,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>
+    where
+        T: Send + 'static,
+        F: FnOnce(
+                SessionManager,
+                Arc<ExecutionControl>,
+                mpsc::UnboundedReceiver<Vec<PartContent>>,
+            ) -> Fut
+            + Send
+            + 'static,
+        Fut: Future<Output = Result<T, AppError>> + Send + 'static;
+
+    async fn drive_registered<T, F, Fut>(
+        &self,
+        session_id: i64,
+        task_name: &'static str,
+        control: Arc<ExecutionControl>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
         operation: F,
     ) -> Result<T, AppError>
     where
@@ -85341,24 +85304,11 @@ impl SessionManager {
 
     pub fn tool_executor(&self) -> ToolExecutor;
 
-    pub(crate) async fn authorize_session_tool_invocation(
+    pub async fn execute_unscoped_tool(
         &self,
-        session_id: i64,
         invocation: ToolInvocation,
-    ) -> Result<ToolInvocationAuthorization, AppError>;
-
-    pub(crate) async fn authorize_session_tool_invocation_with_user_approval(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<ToolInvocationAuthorization, AppError>;
-
-    async fn authorize_session_tool_invocation_inner(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-        user_approved: bool,
-    ) -> Result<ToolInvocationAuthorization, AppError>;
+        call_id: i64,
+    ) -> Result<agena_runtime::SessionToolExecutionOutcome, AppError>;
 
     pub async fn request_host_user_input(
         &self,
@@ -85373,14 +85323,6 @@ impl SessionManager {
         call_id: i64,
         invocation: ToolInvocation,
     ) -> Result<ToolInvocationExecution, AppError>;
-
-    async fn request_host_invoked_tool_permission(
-        &self,
-        session_id: i64,
-        call_id: i64,
-        request: AggregatedPermissionRequest,
-        state: Arc<SessionManagerState>,
-    ) -> Result<PermissionReply, AppError>;
 
     fn next_host_user_input_sequence(&self, session_id: i64, call_id: i64) -> usize;
 
@@ -85405,36 +85347,7 @@ impl SessionManager {
         mut response_rx: oneshot::Receiver<agena_plugin_host::sdk::host_api::AskUserResponse>,
     ) -> Result<agena_plugin_host::sdk::host_api::AskUserResponse, AppError>;
 
-    async fn install_host_permission_waiter(
-        &self,
-        session_id: i64,
-        request_id: String,
-    ) -> oneshot::Receiver<PermissionReply>;
-
     async fn cancel_host_interactive_waiters(&self, session_id: i64);
-
-    async fn await_host_permission_reply(
-        &self,
-        request_id: &str,
-        response_rx: oneshot::Receiver<PermissionReply>,
-    ) -> Result<PermissionReply, AppError>;
-
-    pub fn has_host_permission_grant(
-        &self,
-        session_id: i64,
-        call_id: i64,
-        plugin_id: &str,
-        tool_name: &str,
-        action: &PermissionAction,
-    ) -> bool;
-
-    fn install_host_permission_grant_for_pending_tool(
-        &self,
-        state: &SessionManagerState,
-        session_id: i64,
-        pending_tool: &ResolvedPendingTool,
-        actions: Vec<PermissionAction>,
-    ) -> Option<HostPermissionGrantGuard>;
 
     pub fn reconfigure(
         &self,
@@ -85451,7 +85364,7 @@ impl SessionManager {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/replies/replies_execution.rs</code> — 2024 lines; impl=1, fn=19</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/replies/replies_execution.rs</code> — 2130 lines; impl=1, fn=20</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::replies::replies_execution
@@ -85464,14 +85377,13 @@ use super::{
     ProviderPromptAnchor, RequestPart, ResolvedPendingTool, RunAborted, RunCompleted, RunStarted,
     SessionManager, SessionManagerState, SessionPendingTool, SessionRunOptions, SessionRunRequest,
     SessionRunTermination, StreamingToolExecution, ToolError, ToolInvocationExecution,
-    ToolPermissionCheck, Utc, append_resolved_message_part, apply_advisory_permission_decision,
-    ask_user_title, assistant_message_for_part, build_message, build_request_part,
-    completed_lifecycle, execution_control_to_app_error, max_permission_risk,
+    ToolPermissionCheck, Utc, append_resolved_message_part, ask_user_title,
+    assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
+    execution_control_to_app_error, matching_request_part_refs, max_permission_risk,
     operation_blocks_from_tool_output, pending_operation_for_resolved,
     pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
-    permission_subject, plugin_risk_to_core, push_unique_permission_action, resolve_pending_tool,
-    resolve_permission_with_persisted_rules, responses_api_request_metadata,
-    risk_for_permission_decision, run_abort_reason, should_execute_pending_tools_concurrently,
+    push_unique_permission_action, resolve_pending_tool, resolve_permission_with_persisted_rules,
+    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
     tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
@@ -85480,7 +85392,7 @@ use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionRiskLevel,
-    PermissionScope, PolicySourceKind, Role, RunAbortReason, WorkflowState,
+    PermissionScope, PolicySourceKind, Role, RunAbortReason,
 };
 use tracing::Instrument;
 
@@ -85499,7 +85411,7 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         run_source: ExecutionSource,
-        turn_id: Option<i64>,
+        model_turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
     ) -> Result<Session, AppError>;
@@ -85540,6 +85452,14 @@ impl SessionManager {
         &self,
         mut session: Session,
         pending_tool: SessionPendingTool,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError>;
+
+    pub(in crate::session::manager) async fn apply_tool_execution_result(
+        &self,
+        session: Session,
+        pending_tool: &SessionPendingTool,
+        execution: Result<ToolInvocationExecution, ToolError>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError>;
 
@@ -85661,7 +85581,7 @@ impl SessionManager {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/replies/replies_state.rs</code> — 553 lines; impl=1, fn=18</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/replies/replies_state.rs</code> — 558 lines; impl=1, fn=18</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::replies::replies_state
@@ -85802,35 +85722,95 @@ impl SessionManager {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/replies/tool_failure.rs</code> — 85 lines; impl=1, fn=2</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/replies/tool_failure.rs</code> — 430 lines; mod=1, impl=1, fn=14</summary>
 
 - Package：`agena-runtime-session`
-- Target/module：agena_runtime_session: crate::session::manager::replies::tool_failure
+- Target/module：agena_runtime_session: crate::session::manager::replies::tool_failure, crate::session::manager::replies::tool_failure::tests
 
 `````rust
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PartContent, PersistedPermissionRule,
-    SessionManager, SessionManagerState, SessionPendingTool, completed_lifecycle,
+    SessionManager, SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
     resolve_pending_tool, text_result_blocks, tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
-use agena_domain::ToolOutput;
+use agena_domain::{ToolApiFunction, ToolInvocation, ToolOutput};
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
+    RecoveryDirective, RetryDirective, UserPresentation,
+};
+
+fn internal_tool_failure() -> Failure;
+
+fn actionable_tool_presentation(
+    error: &ToolError,
+    key: &'static str,
+    fallback: &'static str,
+) -> UserPresentation;
+
+fn tool_error_failure(error: &ToolError) -> Failure;
+
+fn operation_title(invocation: &ToolInvocation) -> String;
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod tests {
+    use super::{operation_title, tool_error_failure};
+    use crate::tool::ToolError;
+    use agena_domain::{StructuredObject, ToolInvocation};
+    use agena_failure::{FailureCategory, RetryDirective};
+
+    #[test]
+    fn sensitive_plugin_diagnostics_are_redacted_from_user_and_model_channels();
+
+    #[test]
+    fn actionable_plugin_error_is_preserved_verbatim();
+
+    #[test]
+    fn legacy_invalid_input_text_is_diagnostic_only();
+
+    #[test]
+    fn structured_field_issue_guides_model_without_parser_diagnostic();
+
+    #[test]
+    fn failed_tools_call_uses_the_execution_tool_as_its_title();
+}
+
+fn permission_denied_failure() -> (
+    &'static str,
+    FailureCategory,
+    FailureResponsibility,
+    RetryDirective,
+    RecoveryDirective,
+    UserPresentation,
+    ModelFeedback,
+);
+
+fn user_declined_failure() -> Failure;
 
 impl SessionManager {
-    pub(in crate::session::manager) async fn apply_tool_failure(
+    pub(in crate::session::manager) async fn apply_tool_error(
         &self,
         session: Session,
         pending_tool: &SessionPendingTool,
-        reason: String,
+        error: ToolError,
         persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError>;
 
-    pub(in crate::session::manager) async fn apply_tool_failure_with_rules(
+    pub(in crate::session::manager) async fn apply_user_declined(
+        &self,
+        session: Session,
+        pending_tool: &SessionPendingTool,
+        diagnostic: String,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError>;
+
+    async fn persist_tool_failure(
         &self,
         mut session: Session,
         pending_tool: &SessionPendingTool,
-        reason: String,
+        failure: Failure,
         persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError>;
@@ -85839,7 +85819,63 @@ impl SessionManager {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/replies.rs</code> — 1084 lines; mod=4, struct=2, enum=2, impl=6, fn=34</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/replies/tool_non_execution.rs</code> — 247 lines; impl=1, fn=4</summary>
+
+- Package：`agena-runtime-session`
+- Target/module：agena_runtime_session: crate::session::manager::replies::tool_non_execution
+
+`````rust
+use super::{
+    AppError, Arc, ExecutionStatus, OperationPart, PartContent, PersistedPermissionRule,
+    SessionManager, SessionManagerState, SessionPendingTool, completed_lifecycle,
+    resolve_pending_tool, text_result_blocks, tool_name, update_resolved_tool_message,
+};
+use crate::session::Session;
+use agena_domain::{
+    CapabilityUnavailableResult, PolicyDeniedResult, ToolOutput, ToolUnavailableResult,
+    UserDeclinedResult,
+};
+use chrono::Utc;
+
+impl SessionManager {
+    pub(in crate::session::manager) async fn apply_tool_capability_unavailable(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        unavailable: CapabilityUnavailableResult,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError>;
+
+    pub(in crate::session::manager) async fn apply_tool_unavailable(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        unavailable: ToolUnavailableResult,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError>;
+
+    pub(in crate::session::manager) async fn apply_tool_policy_denied(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        denial: PolicyDeniedResult,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError>;
+
+    pub(in crate::session::manager) async fn apply_tool_user_declined(
+        &self,
+        mut session: Session,
+        pending_tool: &SessionPendingTool,
+        decline: UserDeclinedResult,
+        persisted_rules: Vec<PersistedPermissionRule>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError>;
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-runtime-session/src/session/manager/replies.rs</code> — 1175 lines; mod=5, struct=3, enum=4, impl=6, fn=38</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::replies, crate::session::manager::replies::tests
@@ -85847,7 +85883,7 @@ impl SessionManager {
 `````rust
 use std::path::Path;
 
-use super::StableRunContext;
+use super::{ConversationIdentity, ExecutionConversationTarget, StableRunContext};
 use crate::session::Session;
 use crate::session::model::SessionPartRef;
 use agena_domain::UserInputReply;
@@ -85857,6 +85893,7 @@ use agena_tool::ToolPermissionCheck;
 mod replies_execution;
 mod replies_state;
 mod tool_failure;
+mod tool_non_execution;
 
 #[derive(Debug, Clone)]
 pub(super) struct AggregatedPermissionRequest {
@@ -85875,7 +85912,7 @@ pub(super) struct AggregatedPermissionRequest {
 pub(super) enum AggregatedPermissionOutcome {
     Allow,
     Request(Box<AggregatedPermissionRequest>),
-    Deny { reason: String },
+    Deny(Box<agena_domain::PolicyDeniedResult>),
 }
 
 enum PendingReplyLookup<P> {
@@ -85883,14 +85920,35 @@ enum PendingReplyLookup<P> {
     Duplicate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplyExecutionMode {
+    Await,
+    Start,
+}
+
+enum ReplyDispatch {
+    Completed(Box<Session>),
+    Accepted(crate::SessionExecutionCommandOutcome),
+}
+
 struct ApprovedPermissionContinuation {
     session_id: i64,
+    conversation_identity: ConversationIdentity,
     options: SessionRunOptions,
-    turn_id: i64,
+    model_turn_id: i64,
     state: Arc<SessionManagerState>,
     pending_tool: SessionPendingTool,
     resolved_tool: ResolvedPendingTool,
-    granted_actions: Vec<PermissionAction>,
+    continue_model: bool,
+}
+
+struct ReplySessionContinuation {
+    session_id: i64,
+    conversation_identity: ConversationIdentity,
+    options: SessionRunOptions,
+    run_source: ExecutionSource,
+    model_turn_id: i64,
+    state: Arc<SessionManagerState>,
 }
 
 fn pending_reply_not_found_error(request_kind: &str, request_id: &str) -> AppError;
@@ -85905,6 +85963,11 @@ fn assistant_message_for_part(
     session: &Session,
     part_ref: &SessionPartRef,
 ) -> Result<Message, AppError>;
+
+fn activity_id_for_part(
+    session: &Session,
+    part_ref: &SessionPartRef,
+) -> Result<agena_domain::ActivityId, AppError>;
 
 fn update_resolved_tool_message(
     session: &mut Session,
@@ -85922,7 +85985,7 @@ fn pending_operation_for_resolved(
 fn append_resolved_message_part(
     session: &mut Session,
     resolved: &ResolvedPendingTool,
-    part: MessagePart,
+    mut part: MessagePart,
 ) -> Result<Message, AppError>;
 
 fn interactive_request_kind_label(
@@ -85955,9 +86018,9 @@ fn should_execute_pending_tools_concurrently(
     request_override: &ModelSpeedModeRequestOverride,
 ) -> bool;
 
-fn continuation_turn_for_model(
+fn matching_model_turn_id(
     session: &Session,
-    turn_id: i64,
+    model_turn_id: i64,
     options: &SessionRunOptions,
 ) -> Option<i64>;
 
@@ -86003,22 +86066,19 @@ impl SessionManager {
         session_id: i64,
     ) -> Result<(Arc<SessionManagerState>, Session), AppError>;
 
-    async fn continue_reply_session(
+    async fn dispatch_reply_session(
         &self,
         mut session: Session,
-        session_id: i64,
-        options: SessionRunOptions,
-        run_source: ExecutionSource,
-        turn_id: i64,
-        state: Arc<SessionManagerState>,
-        task_error_context: &str,
-    ) -> Result<Session, AppError>;
+        continuation: ReplySessionContinuation,
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError>;
 
-    async fn continue_approved_permission_session(
+    async fn dispatch_approved_permission_session(
         &self,
         mut session: Session,
         continuation: ApprovedPermissionContinuation,
-    ) -> Result<Session, AppError>;
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError>;
 
     async fn persist_tool_completion(
         &self,
@@ -86026,28 +86086,41 @@ impl SessionManager {
         assistant_message: Message,
         resolved: &ResolvedPendingTool,
         persisted_rules: Vec<PersistedPermissionRule>,
+        mut terminal_events: Vec<EventKind>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError>;
+
+    async fn reply_permission_dispatch(
+        &self,
+        request: SessionPermissionReplyRequest,
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError>;
 
     pub async fn reply_permission(
         &self,
         request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError>;
 
+    pub async fn start_reply_permission(
+        &self,
+        request: SessionPermissionReplyRequest,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>;
+
+    async fn reply_user_input_dispatch(
+        &self,
+        request: SessionExecutionReplyRequest<UserInputReply>,
+        mode: ReplyExecutionMode,
+    ) -> Result<ReplyDispatch, AppError>;
+
     pub async fn reply_user_input(
         &self,
         request: SessionExecutionReplyRequest<UserInputReply>,
     ) -> Result<Session, AppError>;
 
-    async fn run_until_stable_for(
+    pub async fn start_reply_user_input(
         &self,
-        session: Session,
-        session_id: i64,
-        options: &SessionRunOptions,
-        run_source: ExecutionSource,
-        turn_id: Option<i64>,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError>;
+        request: SessionExecutionReplyRequest<UserInputReply>,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>;
 
     pub(super) fn execution_state(&self) -> Arc<SessionManagerState>;
 }
@@ -86067,7 +86140,7 @@ fn managed_project_state_permission(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{continuation_turn_for_model, should_execute_pending_tools_concurrently};
+    use super::{matching_model_turn_id, should_execute_pending_tools_concurrently};
     use crate::{message::Message, session::Session};
     use agena_domain::{ModelRef, ModelSpeedModeRequestOverride, Role};
     use agena_runtime::SessionRunOptions;
@@ -86096,33 +86169,36 @@ use super::{
     SessionManager, SessionManagerState, SessionPendingTool, SessionPermissionReplyRequest,
     SessionRunOptions, SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange,
     ToolCallCompleted, ToolError, ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc,
-    apply_advisory_permission_decision, ask_user_title, build_message, build_request_part,
-    completed_lifecycle, custom_payload_value, execution_control_to_app_error,
-    host_user_input_response, max_permission_risk, merge_system_prompts, mpsc,
-    operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
-    permission_scope_label, permission_subject, persisted_rules_for_reply, plugin_risk_to_core,
-    resolve_pending_tool, resolve_permission_with_persisted_rules, risk_for_permission_decision,
+    ask_user_title, build_message, build_request_part, completed_lifecycle, custom_payload_value,
+    execution_control_to_app_error, host_user_input_response, max_permission_risk,
+    merge_system_prompts, mpsc, operation_blocks_from_tool_output,
+    payload_tool_name_for_invocation, permission_action_key, permission_scope_label,
+    persisted_rules_for_reply, resolve_pending_tool, resolve_permission_with_persisted_rules,
     run_abort_reason, text_result_blocks, tool_call_id_for, tool_name, user_input_execution,
 };
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/runs.rs</code> — 710 lines; mod=1, impl=1, fn=12</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/runs.rs</code> — 729 lines; mod=1, impl=1, fn=13</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::runs, crate::session::manager::runs::tests
 
 `````rust
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, FinishReason,
-    HistoryMessageId, HistoryRunId, MessageMetadata, MessageSource, PartContent, Role,
-    RunCompleted, RunStarted, SessionExecutionRequest, SessionManager, SessionSubtaskRequest,
-    SessionSubtaskResponse, SessionUserMessageRequest, StableRunContext, TranscriptContent,
-    UserInputPart, UserMessageAppended, build_message, mpsc,
+    AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
+    ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId, MessageMetadata, MessageSource,
+    PartContent, Role, RunCompleted, RunStarted, SessionExecutionRequest, SessionManager,
+    SessionSubtaskRequest, SessionSubtaskResponse, SessionUserMessageRequest, StableRunContext,
+    TranscriptContent, UserInputPart, UserMessageAppended, build_message, mpsc,
 };
 use crate::session::Session;
 use agena_domain::SubtaskStatusChangedEvent;
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
+    RetryDirective, UserPresentation,
+};
 
 impl SessionManager {
     async fn require_subtask_session(
@@ -86153,10 +86229,10 @@ impl SessionManager {
     ) -> Result<crate::SessionSubtaskOutput, AppError>;
 
     #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
-    pub(in crate::session::manager) async fn submit_user_message_parts(
+    pub(in crate::session::manager) async fn start_user_message_parts(
         &self,
         request: SessionUserMessageRequest,
-    ) -> Result<Session, AppError>;
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>;
 
     async fn submit_user_message_inner(
         &self,
@@ -86177,6 +86253,11 @@ impl SessionManager {
         request: SessionExecutionRequest,
     ) -> Result<Session, AppError>;
 
+    pub async fn start_continue_session(
+        &self,
+        request: SessionExecutionRequest,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError>;
+
     async fn continue_session_inner(
         &self,
         request: SessionExecutionRequest,
@@ -86190,13 +86271,12 @@ impl SessionManager {
     ) -> Result<SessionSubtaskResponse, AppError>;
 }
 
-pub(in crate::session::manager) fn non_recursive_subtask_permission_ceiling()
--> crate::authorization::PermissionConfig;
+pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
+-> std::collections::BTreeSet<String>;
 
 #[cfg(test)]
 mod tests {
-    use super::non_recursive_subtask_permission_ceiling;
-    use agena_domain::PermissionMode;
+    use super::non_recursive_subtask_capability_denials;
 
     #[test]
     fn delegated_instances_cannot_recursively_run_tasks();
@@ -86205,7 +86285,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/sessions.rs</code> — 616 lines; impl=2, fn=28</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/sessions.rs</code> — 622 lines; impl=2, fn=29</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::sessions
@@ -86308,6 +86388,8 @@ impl SessionManager {
     ) -> Result<Vec<crate::event::DomainEvent>, AppError>;
 }
 
+fn interrupted_subtask_failure() -> agena_failure::Failure;
+
 #[async_trait::async_trait]
 impl agena_runtime::SessionExecutionControl for SessionManager {
     async fn active_execution(&self, session_id: i64) -> Option<agena_domain::ExecutionLifecycle>;
@@ -86353,7 +86435,7 @@ impl SessionManager {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/manager/tests.rs</code> — 902 lines; mod=1, struct=4, impl=4, fn=21</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/manager/tests.rs</code> — 1828 lines; mod=1, struct=7, impl=7, fn=33</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::manager::tests, crate::session::manager::tests::tests
@@ -86365,7 +86447,7 @@ use super::*;
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::RuntimeSessionManagerConfig;
+    use crate::{AppError, RuntimeSessionManagerConfig};
     use std::{
         collections::{HashMap, HashSet},
         sync::Arc,
@@ -86376,12 +86458,11 @@ mod tests {
         ExecutionStatus, FinishReason, PermissionAction, PermissionReplyKind, PermissionRiskLevel,
         StructuredObject, TimeRange,
     };
-    use sea_orm::Database;
+    use chrono::Utc;
+    use sea_orm::{ConnectionTrait, Database, Statement};
     use tokio::sync::Notify;
 
-    use super::{
-        SessionManager, build_message, host_permission_grant_matches_action, merge_system_prompts,
-    };
+    use super::{ExecutionConversationTarget, SessionManager, build_message, merge_system_prompts};
     use crate::session::history::{
         AssistantMessageFinished, RunCompleted, RunStarted, TranscriptContent, UserMessageAppended,
     };
@@ -86433,10 +86514,15 @@ mod tests {
         async fn emit(&self) -> String;
 
         async fn emit_stream(&self, sink: ToolStreamSink) -> String;
+
+        #[tool(name = "object", summary = "Return a structured object.", read_only)]
+        async fn object(&self) -> serde_json::Value;
     }
 
     static REPLY_PROBE_STARTED: Notify = Notify::const_new();
     static REPLY_PROBE_CONTINUE: Notify = Notify::const_new();
+    static REPLY_PROBE_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
 
     #[derive(Default)]
     struct ReplyLockProbeTool;
@@ -86450,6 +86536,66 @@ mod tests {
     impl ReplyLockProbeTool {
         #[tool(name = "run", summary = "Wait until the reply-lock test releases it.")]
         async fn run(&self) -> String;
+    }
+
+    #[derive(Default)]
+    struct ApprovedFailureTool;
+
+    static APPROVED_SUCCESS_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static BATCH_SLOW_STARTED: Notify = Notify::const_new();
+    static BATCH_SLOW_RELEASE: Notify = Notify::const_new();
+
+    #[derive(Default)]
+    struct ApprovedSuccessTool;
+
+    #[derive(Default)]
+    struct BatchBarrierTool;
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "batch_barrier",
+        version = "0.1.0",
+        summary = "Concurrent tool-batch barrier regression fixture."
+    )]
+    impl BatchBarrierTool {
+        #[tool(
+            name = "fast",
+            summary = "Complete immediately.",
+            read_only,
+            concurrency_safe
+        )]
+        async fn fast(&self) -> serde_json::Value;
+
+        #[tool(
+            name = "slow",
+            summary = "Wait for the batch-barrier test.",
+            read_only,
+            concurrency_safe
+        )]
+        async fn slow(&self) -> serde_json::Value;
+    }
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "approved_success",
+        version = "0.1.0",
+        summary = "Approved execution success regression fixture."
+    )]
+    impl ApprovedSuccessTool {
+        #[tool(name = "run", summary = "Complete after approval.", read_only)]
+        async fn run(&self) -> serde_json::Value;
+    }
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "approved_failure",
+        version = "0.1.0",
+        summary = "Approved execution failure regression fixture."
+    )]
+    impl ApprovedFailureTool {
+        #[tool(name = "run", summary = "Fail after approval.")]
+        async fn run(&self) -> agena_plugin_host::sdk::Result<String>;
     }
 
     #[derive(Default)]
@@ -86487,8 +86633,47 @@ mod tests {
 
     async fn test_manager_with_tool_policy(tool_policy: ToolPermissionPolicy) -> SessionManager;
 
+    async fn seed_canonical_assistant_reply(
+        manager: &SessionManager,
+        session_id: i64,
+    ) -> (
+        agena_domain::ExecutionId,
+        agena_domain::TurnId,
+        agena_domain::AssistantReplyId,
+    );
+
+    async fn checkpoint_seeded_assistant_message(
+        manager: &SessionManager,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
+        message: &crate::message::Message,
+    );
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn approved_execution_failure_terminalizes_the_original_permission_once();
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn approved_provider_tool_executes_once_then_continues_the_same_turn();
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn accepted_execution_returns_before_terminal_outcome_and_cancels_cleanly();
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_tool_batch_resolution_waits_for_every_tool();
+
     #[tokio::test(flavor = "multi_thread")]
     async fn explicit_plugin_command_does_not_consult_tool_permission_policy();
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn explicit_application_tool_does_not_consult_model_permission_policy();
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn unavailable_tool_is_a_normal_structured_outcome();
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sessionless_application_tool_does_not_consult_model_permission_policy();
 
     async fn append_completed_text_message(
         manager: &SessionManager,
@@ -86497,13 +86682,10 @@ mod tests {
         text: &str,
         turn_id: Option<i64>,
         parent_message_id: Option<i64>,
-    ) -> (Session, i64);
+    ) -> (Session, i64, agena_domain::TurnId);
 
-    async fn install_pending_tool_api_operation(
-        manager: &SessionManager,
-        mut session: Session,
-        call_id: i64,
-    ) -> Session;
+    #[tokio::test]
+    async fn process_restart_terminalizes_hanging_tool_batch_without_resuming_the_model();
 
     #[tokio::test]
     async fn updating_model_selection_is_immediate_and_session_local();
@@ -86515,13 +86697,7 @@ mod tests {
     async fn session_export_uses_one_current_unversioned_format();
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn host_invoked_streaming_tool_updates_outer_tool_api_operation();
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn permission_reply_releases_session_lock_before_tool_continuation();
-
-    #[test]
-    fn host_permission_grant_covers_only_public_dns_resolution();
 }
 `````
 
@@ -86753,21 +86929,20 @@ impl SessionProcessor {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/processor/run.rs</code> — 644 lines; impl=2, fn=12</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/processor/run.rs</code> — 648 lines; impl=2, fn=12</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::processor::run
 
 `````rust
 use super::{
-    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor, ErrorInfo,
-    EventKind, ExecutionStatus, FinishReason, FixedAssistantId, Message, MessageMetadata,
-    MessageSource, ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall,
-    ProviderRegistry, REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest,
-    SessionRunResult, SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts,
-    complete_part_status, fail_nonterminal_parts, map_finish_reason,
-    message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
-    sync_assistant_completion_event,
+    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor, EventKind,
+    ExecutionStatus, FinishReason, FixedAssistantId, Message, MessageMetadata, MessageSource,
+    ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall, ProviderRegistry,
+    REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest, SessionRunResult,
+    SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts, complete_part_status,
+    fail_nonterminal_parts, map_finish_reason, message_provider_state_from_provider_metadata,
+    pending_tool_call_stream_key, sync_assistant_completion_event,
 };
 use agena_provider::{
     ProviderNativeToolArtifact, ProviderNativeToolOutputBlock, ProviderNativeToolSearchResult,
@@ -86837,14 +87012,14 @@ fn provider_native_artifact_to_operation_block(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/processor/tool_call_helpers.rs</code> — 250 lines; mod=1, fn=15</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/processor/tool_call_helpers.rs</code> — 287 lines; mod=1, fn=16</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::processor::tool_call_helpers, crate::session::processor::tool_call_helpers::tests
 
 `````rust
 use super::{AppError, StructuredObject, ToolInvocation};
-use agena_domain::ToolApiFunction;
+use agena_domain::{ToolApiCall, ToolApiFunction};
 use agena_provider::ToolApiDefinition;
 
 pub(crate) fn tool_execution_title(name: Option<&str>) -> String;
@@ -86906,20 +87081,22 @@ mod tests {
 
     fn tools_help() -> agena_provider::ToolApiDefinition;
 
+    fn tools_call() -> agena_provider::ToolApiDefinition;
+
     #[test]
     fn provider_function_names_are_matched_exactly();
 
     #[test]
-    fn direct_provider_function_maps_to_execution_tool_and_keeps_replay_name();
+    fn tool_arguments_reject_trailing_non_json_content();
 
     #[test]
-    fn tool_arguments_reject_trailing_non_json_content();
+    fn tools_call_resolves_to_the_real_execution_invocation();
 }
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/processor/tool_calls.rs</code> — 391 lines; impl=1, fn=4</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/processor/tool_calls.rs</code> — 396 lines; impl=1, fn=4</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::processor::tool_calls
@@ -87000,8 +87177,8 @@ use crate::message::{
 use crate::provider::ProviderRegistry;
 use agena_domain::ModelRef;
 use agena_domain::{
-    AssistantReasoningField, ErrorInfo, ExecutionStatus, FinishReason, MessageSource, Role,
-    StreamErrorEvent, StructuredObject, TimeRange, ToolInvocation,
+    AssistantReasoningField, ExecutionStatus, FinishReason, MessageSource, Role, StreamErrorEvent,
+    StructuredObject, TimeRange, ToolInvocation,
 };
 use agena_provider::CompletionFinishReason;
 use agena_provider::CompletionRequest;
@@ -87016,11 +87193,11 @@ const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 pub(crate) struct SessionRunRequest {
     pub run_id: RunId,
     pub execution_id: agena_domain::ExecutionId,
-    pub turn_uuid: agena_domain::TurnId,
-    pub response_id: agena_domain::ResponseId,
+    pub turn_id: agena_domain::TurnId,
+    pub reply_id: agena_domain::AssistantReplyId,
     pub session_id: i64,
 
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
 
     pub completion_parent_message_id: Option<i64>,
     pub model: ModelRef,
@@ -87096,7 +87273,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/prompt_window.rs</code> — 1281 lines; mod=1, struct=6, enum=2, impl=3, fn=51</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/prompt_window.rs</code> — 1325 lines; mod=1, struct=6, enum=2, impl=3, fn=51</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::prompt_window, crate::session::prompt_window::compaction_tests
@@ -87411,7 +87588,7 @@ mod compaction_tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/store/core.rs</code> — 1059 lines; impl=1, fn=27</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/store/core.rs</code> — 1070 lines; impl=1, fn=27</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::store::core
@@ -87457,7 +87634,6 @@ impl SessionStore {
         &self,
         session_id: i64,
         reason: agena_domain::RunAbortReason,
-        message: String,
     ) -> Result<(), AppError>;
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
@@ -87473,9 +87649,9 @@ impl SessionStore {
         usage_repository: Arc<dyn agena_storage::UsageRepository>,
         session_mutation_repository: Arc<dyn agena_storage::SessionMutationRepository>,
         projection_lookup_repository: Arc<dyn agena_storage::ProjectionLookupRepository>,
-        message_projection_repository: Arc<dyn agena_storage::MessageProjectionRepository>,
+        message_projection_repository: Arc<dyn agena_storage::ModelMessageRepository>,
         message_projection_transaction_writer: Arc<
-            dyn agena_storage::MessageProjectionTransactionWriter<sea_orm::DatabaseTransaction>,
+            dyn agena_storage::ModelMessageTransactionWriter<sea_orm::DatabaseTransaction>,
         >,
         session_summary_repository: Arc<dyn agena_storage::SessionSummaryRepository>,
     ) -> Self;
@@ -87628,7 +87804,7 @@ fn remap_prompt_window_for_fork(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/store/event_rewrite.rs</code> — 471 lines; mod=1, struct=1, impl=6, fn=20</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/store/event_rewrite.rs</code> — 484 lines; mod=1, struct=1, impl=6, fn=20</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::store::event_rewrite, crate::session::store::event_rewrite::tests
@@ -87686,7 +87862,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/store/helpers.rs</code> — 179 lines; impl=1, fn=11</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/store/helpers.rs</code> — 186 lines; impl=1, fn=11</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::store::helpers
@@ -87726,7 +87902,7 @@ fn subtask_state_from_columns(
     status: Option<&str>,
     started_at_ms: Option<i64>,
     finished_at_ms: Option<i64>,
-    error: Option<String>,
+    failure_json: Option<String>,
 ) -> Result<crate::session::SubtaskRuntimeState, AppError>;
 
 fn subtask_state_from_columns_db(
@@ -87735,7 +87911,7 @@ fn subtask_state_from_columns_db(
     status: Option<&str>,
     started_at_ms: Option<i64>,
     finished_at_ms: Option<i64>,
-    error: Option<String>,
+    failure_json: Option<String>,
 ) -> Result<crate::session::SubtaskRuntimeState, DbErr>;
 
 fn subtask_state_from_columns_inner(
@@ -87744,7 +87920,7 @@ fn subtask_state_from_columns_inner(
     status: Option<&str>,
     started_at_ms: Option<i64>,
     finished_at_ms: Option<i64>,
-    error: Option<String>,
+    failure_json: Option<String>,
 ) -> Result<crate::session::SubtaskRuntimeState, String>;
 
 pub(crate) fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError>;
@@ -87754,7 +87930,7 @@ pub(crate) fn timestamp_millis_to_utc_db(timestamp_ms: i64) -> Result<DateTime<U
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session/store/history.rs</code> — 326 lines; mod=1, impl=1, fn=11</summary>
+<details><summary><code>crates/agena-runtime-session/src/session/store/history.rs</code> — 329 lines; mod=1, impl=1, fn=11</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session::store::history, crate::session::store::history::tests
@@ -88169,7 +88345,7 @@ impl RuntimeSessionManagerConfig {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session_execution_control.rs</code> — 170 lines; mod=1, struct=5, trait=1, impl=3, fn=16</summary>
+<details><summary><code>crates/agena-runtime-session/src/session_execution_control.rs</code> — 180 lines; mod=1, struct=5, trait=1, impl=5, fn=17</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session_execution_control, crate::session_execution_control::tests
@@ -88178,22 +88354,26 @@ impl RuntimeSessionManagerConfig {
 use std::path::Path;
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 use agena_domain::{
     CancellationResult, ExecutionId, ExecutionLifecycle, ModelRef, SessionCacheStats,
 };
 use agena_tool::SnapshotBackend;
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("session execution control failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionExecutionControlError {
-    message: String,
+    pub failure: agena_failure::Failure,
 }
 
 impl SessionExecutionControlError {
-    pub fn new(message: impl Into<String>) -> Self;
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self;
 }
+
+impl std::fmt::Display for SessionExecutionControlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for SessionExecutionControlError {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeActiveSnapshot {
@@ -88290,14 +88470,13 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session_execution_service.rs</code> — 220 lines; mod=1, struct=3, trait=1, impl=3, fn=26</summary>
+<details><summary><code>crates/agena-runtime-session/src/session_execution_service.rs</code> — 261 lines; mod=1, struct=4, trait=1, impl=5, fn=29</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session_execution_service, crate::session_execution_service::tests
 
 `````rust
 use async_trait::async_trait;
-use thiserror::Error;
 
 use crate::{
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
@@ -88308,17 +88487,41 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionExecutionCommandOutcome {
     pub session_id: i64,
+    pub receipt: Option<SessionExecutionReceipt>,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("session execution command failed: {message}")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionExecutionReceipt {
+    pub execution_id: agena_domain::ExecutionId,
+    pub turn_id: agena_domain::TurnId,
+    pub reply_id: agena_domain::AssistantReplyId,
+}
+
+impl SessionExecutionCommandOutcome {
+    pub fn completed(session_id: i64) -> Self;
+
+    pub fn accepted(
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
+    ) -> Self;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionExecutionCommandError {
-    message: String,
+    pub failure: agena_failure::Failure,
 }
 
 impl SessionExecutionCommandError {
-    pub fn new(message: impl Into<String>) -> Self;
+    pub fn from_failure(failure: agena_failure::Failure) -> Self;
 }
+
+impl std::fmt::Display for SessionExecutionCommandError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for SessionExecutionCommandError {}
 
 #[async_trait]
 pub trait SessionExecutionCommandService: Send + Sync {
@@ -88540,7 +88743,7 @@ pub trait SessionPluginCommandService: Send + Sync {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session_query_service.rs</code> — 544 lines; mod=1, struct=10, enum=2, trait=1, impl=3, fn=33</summary>
+<details><summary><code>crates/agena-runtime-session/src/session_query_service.rs</code> — 553 lines; mod=1, struct=10, enum=2, trait=1, impl=5, fn=34</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session_query_service, crate::session_query_service::tests
@@ -88549,7 +88752,6 @@ pub trait SessionPluginCommandService: Send + Sync {
 use std::collections::BTreeMap;
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 use agena_domain::{
     PendingInteractiveRequestContext, PermissionConfig, SessionCostSummary, SessionSummary,
@@ -88603,7 +88805,7 @@ pub struct SessionProjectedMessagePart {
     pub summary: Option<String>,
     pub has_detail: bool,
     pub activity_id: Option<agena_domain::ActivityId>,
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     pub operation_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub detail: Option<SessionProjectedPartDetail>,
@@ -88750,8 +88952,7 @@ pub enum SessionProjectedPartDetail {
         encrypted_content: Option<String>,
     },
     Error {
-        code: String,
-        message: String,
+        problem: agena_failure::UserProblem,
     },
     Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
     SkillReference(crate::message::SkillReferencePart),
@@ -88787,18 +88988,23 @@ pub struct SessionExecutionContext {
     pub subtask_status: Option<SubtaskStatus>,
     pub subtask_started_at: Option<DateTime<Utc>>,
     pub subtask_finished_at: Option<DateTime<Utc>>,
-    pub subtask_error: Option<String>,
+    pub subtask_failure: Option<agena_failure::Failure>,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-#[error("session query failed: {message}")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionQueryError {
-    message: String,
+    pub failure: Box<agena_failure::Failure>,
 }
 
 impl SessionQueryError {
-    pub fn new(message: impl Into<String>) -> Self;
+    pub fn internal(diagnostic: impl std::fmt::Display) -> Self;
 }
+
+impl std::fmt::Display for SessionQueryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for SessionQueryError {}
 
 #[async_trait]
 pub trait SessionQueryService: Send + Sync {
@@ -89051,7 +89257,7 @@ pub struct SessionForkRequest {
 #[derive(Debug, Clone)]
 pub struct SessionRewindRequest {
     pub session_id: i64,
-    pub message_id: i64,
+    pub turn_id: agena_domain::TurnId,
     #[doc(hidden)]
     pub expected_version: Option<i64>,
 }
@@ -89059,7 +89265,7 @@ pub struct SessionRewindRequest {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session/src/session_tool_execution.rs</code> — 47 lines; enum=1, trait=1, fn=3</summary>
+<details><summary><code>crates/agena-runtime-session/src/session_tool_execution.rs</code> — 82 lines; enum=2, trait=1, impl=1, fn=2</summary>
 
 - Package：`agena-runtime-session`
 - Target/module：agena_runtime_session: crate::session_tool_execution
@@ -89071,12 +89277,20 @@ use async_trait::async_trait;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SessionToolExecutionError {
-    #[error("tool invocation requires approval: {0}")]
-    ApprovalRequired(String),
-    #[error("tool invocation denied: {0}")]
-    Denied(String),
     #[error("tool invocation failed: {0}")]
     Execution(String),
+}
+
+#[derive(Debug)]
+pub enum SessionToolExecutionOutcome {
+    Completed(ToolExecutionSummary),
+    CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
+    ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
+}
+
+impl SessionToolExecutionOutcome {
+
+    pub fn into_summary(self) -> ToolExecutionSummary;
 }
 
 #[async_trait]
@@ -89085,19 +89299,7 @@ pub trait SessionToolExecutionService: Send + Sync {
         &self,
         session_id: i64,
         invocation: ToolInvocation,
-    ) -> Result<ToolExecutionSummary, SessionToolExecutionError>;
-
-    async fn execute_session_tool_with_user_approval(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<ToolExecutionSummary, SessionToolExecutionError>;
-
-    fn render_session_tool_output(
-        &self,
-        session_id: i64,
-        invocation: ToolInvocation,
-    ) -> Result<String, SessionToolExecutionError>;
+    ) -> Result<SessionToolExecutionOutcome, SessionToolExecutionError>;
 }
 `````
 
@@ -89258,7 +89460,7 @@ mod tests {
 
 </details>
 
-### 8.38 `agena-runtime-session-core`
+### 8.39 `agena-runtime-session-core`
 
 <details><summary><code>crates/agena-runtime-session-core/src/db/crud/mod.rs</code> — 1 lines; mod=1</summary>
 
@@ -89271,7 +89473,7 @@ pub mod session;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session-core/src/db/crud/session.rs</code> — 1132 lines; mod=1, struct=6, enum=1, impl=5, fn=25</summary>
+<details><summary><code>crates/agena-runtime-session-core/src/db/crud/session.rs</code> — 1250 lines; mod=1, struct=6, enum=1, impl=5, fn=28</summary>
 
 - Package：`agena-runtime-session-core`
 - Target/module：agena_runtime_session_core: crate::db::crud::session, crate::db::crud::session::tests
@@ -89305,7 +89507,7 @@ pub struct SessionRecord {
     pub title: String,
     pub version: i64,
     pub lifecycle_state: SessionLifecycleState,
-    pub creation_error: Option<String>,
+    pub creation_failure: Option<agena_failure::Failure>,
     pub relation_kind: SessionRelationKind,
     pub source_cutoff_seq_global: Option<i64>,
     pub source_message_id: Option<i64>,
@@ -89313,7 +89515,7 @@ pub struct SessionRecord {
     pub subtask_status: Option<String>,
     pub subtask_started_at_ms: Option<i64>,
     pub subtask_finished_at_ms: Option<i64>,
-    pub subtask_error: Option<String>,
+    pub subtask_failure_json: Option<String>,
     pub runtime_state: Option<SessionRuntimeState>,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -89359,12 +89561,20 @@ struct SessionTouchRow {
     subtask_status: Option<String>,
     subtask_started_at_ms: Option<i64>,
     subtask_finished_at_ms: Option<i64>,
-    subtask_error: Option<String>,
+    subtask_failure_json: Option<String>,
 }
 
 impl SessionTouchRow {
     fn subtask_state(&self) -> Result<SubtaskRuntimeState, DbErr>;
 }
+
+fn decode_subtask_state(
+    session_id: i64,
+    status: Option<&str>,
+    started_at_ms: Option<i64>,
+    finished_at_ms: Option<i64>,
+    failure_json: Option<&str>,
+) -> Result<SubtaskRuntimeState, DbErr>;
 
 async fn get_session_touch_row<C>(db: &C, session_id: i64) -> Result<Option<SessionTouchRow>, DbErr>
 where
@@ -89462,7 +89672,7 @@ pub async fn set_session_lifecycle<C>(
     db: &C,
     session_id: i64,
     lifecycle_state: SessionLifecycleState,
-    creation_error: Option<String>,
+    creation_failure: Option<agena_failure::Failure>,
 ) -> Result<Option<SessionRecord>, DbErr>
 where
     C: ConnectionTrait;
@@ -89507,6 +89717,8 @@ mod tests {
 
     use super::*;
 
+    fn test_subtask_failure() -> agena_failure::Failure;
+
     async fn insert_event(
         db: &sea_orm::DatabaseConnection,
         session_id: i64,
@@ -89530,6 +89742,9 @@ mod tests {
 
     #[tokio::test]
     async fn late_runtime_write_cannot_revert_terminal_subtask_state();
+
+    #[tokio::test]
+    async fn cancelled_subtask_is_a_terminal_outcome_without_failure_payload();
 }
 `````
 
@@ -89541,13 +89756,167 @@ mod tests {
 - Target/module：agena_runtime_session_core: crate::db::entities
 
 `````rust
+pub mod model_message;
+pub mod model_message_part;
+pub mod model_projection_state;
 pub mod permission_rule;
 pub mod session;
 pub mod session_lineage;
-pub mod transcript_message;
-pub mod transcript_part;
-pub mod transcript_projection_state;
 pub mod workspace;
+`````
+
+</details>
+
+<details><summary><code>crates/agena-runtime-session-core/src/db/entities/model_message.rs</code> — 50 lines; struct=1, enum=1, impl=2, fn=1</summary>
+
+- Package：`agena-runtime-session-core`
+- Target/module：agena_runtime_session_core: crate::db::entities::model_message
+
+`````rust
+use sea_orm::entity::prelude::*;
+
+use crate::message::{MessageMetadata, MessageProviderState};
+use agena_storage_sqlite::{StoredExecutionStatus, StoredRole};
+
+use super::session;
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "agena_model_messages")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub message_id: i64,
+    pub session_id: i64,
+
+    pub model_turn_id: Option<i64>,
+    pub execution_id: Option<String>,
+    pub run_id: Option<String>,
+    pub role: StoredRole,
+    pub state: StoredExecutionStatus,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    #[sea_orm(column_type = "JsonBinary")]
+    pub metadata: MessageMetadata,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub provider_state: Option<MessageProviderState>,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub usage: Option<agena_storage_sqlite::PersistedCompletionUsage>,
+    pub part_count: i64,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "session::Entity",
+        from = "Column::SessionId",
+        to = "session::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    Session,
+}
+
+impl Related<session::Entity> for Entity {
+    fn to() -> RelationDef;
+}
+
+impl ActiveModelBehavior for ActiveModel {}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-runtime-session-core/src/db/entities/model_message_part.rs</code> — 49 lines; struct=1, enum=1, impl=2, fn=1</summary>
+
+- Package：`agena-runtime-session-core`
+- Target/module：agena_runtime_session_core: crate::db::entities::model_message_part
+
+`````rust
+use sea_orm::entity::prelude::*;
+
+use crate::message::PartContent;
+use agena_storage_sqlite::{StoredExecutionStatus, StoredPartKind};
+
+use super::model_message;
+
+#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+#[sea_orm(table_name = "agena_model_message_parts")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub part_id: i64,
+    pub message_id: i64,
+    pub part_index: i32,
+    pub status: StoredExecutionStatus,
+    pub kind: StoredPartKind,
+    pub name: Option<String>,
+    pub summary: Option<String>,
+    #[sea_orm(default_value = false)]
+    pub has_detail: bool,
+    #[sea_orm(default_value = false)]
+    pub awaits_user_reply: bool,
+    pub activity_id: Option<String>,
+    pub segment_id: Option<String>,
+    pub operation_id: Option<String>,
+    pub created_at_ms: i64,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub content: Option<PartContent>,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "model_message::Entity",
+        from = "Column::MessageId",
+        to = "model_message::Column::MessageId",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    Message,
+}
+
+impl Related<model_message::Entity> for Entity {
+    fn to() -> RelationDef;
+}
+
+impl ActiveModelBehavior for ActiveModel {}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-runtime-session-core/src/db/entities/model_projection_state.rs</code> — 39 lines; struct=1, enum=1, impl=2, fn=1</summary>
+
+- Package：`agena-runtime-session-core`
+- Target/module：agena_runtime_session_core: crate::db::entities::model_projection_state
+
+`````rust
+use sea_orm::entity::prelude::*;
+
+use super::session;
+
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[sea_orm(table_name = "agena_model_projection_states")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
+    pub session_id: i64,
+    pub last_seq_global: i64,
+    pub updated_at_ms: i64,
+}
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {
+    #[sea_orm(
+        belongs_to = "session::Entity",
+        from = "Column::SessionId",
+        to = "session::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    Session,
+}
+
+impl Related<session::Entity> for Entity {
+    fn to() -> RelationDef;
+}
+
+impl ActiveModelBehavior for ActiveModel {}
 `````
 
 </details>
@@ -89613,7 +89982,7 @@ pub struct Model {
     pub version: i64,
 
     pub lifecycle_state: String,
-    pub creation_error: Option<String>,
+    pub creation_failure_json: Option<String>,
     #[sea_orm(column_name = "runtime_state_json", column_type = "JsonBinary")]
     pub runtime_state: Option<crate::session::SessionRuntimeState>,
     pub created_at_ms: i64,
@@ -89672,160 +90041,8 @@ pub struct Model {
     pub subtask_status: Option<String>,
     pub subtask_started_at_ms: Option<i64>,
     pub subtask_finished_at_ms: Option<i64>,
-    pub subtask_error: Option<String>,
+    pub subtask_failure_json: Option<String>,
     pub created_at_ms: i64,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(
-        belongs_to = "session::Entity",
-        from = "Column::SessionId",
-        to = "session::Column::Id",
-        on_update = "Cascade",
-        on_delete = "Cascade"
-    )]
-    Session,
-}
-
-impl Related<session::Entity> for Entity {
-    fn to() -> RelationDef;
-}
-
-impl ActiveModelBehavior for ActiveModel {}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-runtime-session-core/src/db/entities/transcript_message.rs</code> — 50 lines; struct=1, enum=1, impl=2, fn=1</summary>
-
-- Package：`agena-runtime-session-core`
-- Target/module：agena_runtime_session_core: crate::db::entities::transcript_message
-
-`````rust
-use sea_orm::entity::prelude::*;
-
-use crate::message::{MessageMetadata, MessageProviderState};
-use agena_storage_sqlite::{StoredExecutionStatus, StoredRole};
-
-use super::session;
-
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_transcript_messages")]
-pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub message_id: i64,
-    pub session_id: i64,
-
-    pub turn_id: Option<i64>,
-    pub execution_id: Option<String>,
-    pub run_id: Option<String>,
-    pub role: StoredRole,
-    pub state: StoredExecutionStatus,
-    pub created_at_ms: i64,
-    pub updated_at_ms: i64,
-    #[sea_orm(column_type = "JsonBinary")]
-    pub metadata: MessageMetadata,
-    #[sea_orm(column_type = "JsonBinary", nullable)]
-    pub provider_state: Option<MessageProviderState>,
-    #[sea_orm(column_type = "JsonBinary", nullable)]
-    pub usage: Option<agena_storage_sqlite::PersistedCompletionUsage>,
-    pub part_count: i64,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(
-        belongs_to = "session::Entity",
-        from = "Column::SessionId",
-        to = "session::Column::Id",
-        on_update = "Cascade",
-        on_delete = "Cascade"
-    )]
-    Session,
-}
-
-impl Related<session::Entity> for Entity {
-    fn to() -> RelationDef;
-}
-
-impl ActiveModelBehavior for ActiveModel {}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-runtime-session-core/src/db/entities/transcript_part.rs</code> — 47 lines; struct=1, enum=1, impl=2, fn=1</summary>
-
-- Package：`agena-runtime-session-core`
-- Target/module：agena_runtime_session_core: crate::db::entities::transcript_part
-
-`````rust
-use sea_orm::entity::prelude::*;
-
-use crate::message::PartContent;
-use agena_storage_sqlite::{StoredExecutionStatus, StoredPartKind};
-
-use super::transcript_message;
-
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_transcript_parts")]
-pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub part_id: i64,
-    pub message_id: i64,
-    pub part_index: i32,
-    pub status: StoredExecutionStatus,
-    pub kind: StoredPartKind,
-    pub name: Option<String>,
-    pub summary: Option<String>,
-    #[sea_orm(default_value = false)]
-    pub has_detail: bool,
-    pub activity_id: Option<String>,
-    pub segment_id: Option<String>,
-    pub operation_id: Option<String>,
-    pub created_at_ms: i64,
-    #[sea_orm(column_type = "JsonBinary", nullable)]
-    pub content: Option<PartContent>,
-}
-
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {
-    #[sea_orm(
-        belongs_to = "transcript_message::Entity",
-        from = "Column::MessageId",
-        to = "transcript_message::Column::MessageId",
-        on_update = "Cascade",
-        on_delete = "Cascade"
-    )]
-    Message,
-}
-
-impl Related<transcript_message::Entity> for Entity {
-    fn to() -> RelationDef;
-}
-
-impl ActiveModelBehavior for ActiveModel {}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-runtime-session-core/src/db/entities/transcript_projection_state.rs</code> — 39 lines; struct=1, enum=1, impl=2, fn=1</summary>
-
-- Package：`agena-runtime-session-core`
-- Target/module：agena_runtime_session_core: crate::db::entities::transcript_projection_state
-
-`````rust
-use sea_orm::entity::prelude::*;
-
-use super::session;
-
-#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
-#[sea_orm(table_name = "agena_transcript_projection_states")]
-pub struct Model {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub session_id: i64,
-    pub last_seq_global: i64,
-    pub updated_at_ms: i64,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -90032,7 +90249,7 @@ pub mod db;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-session-core/src/model.rs</code> — 1497 lines; mod=1, struct=16, enum=3, impl=17, fn=91</summary>
+<details><summary><code>crates/agena-runtime-session-core/src/model.rs</code> — 1363 lines; mod=1, struct=16, enum=3, impl=17, fn=89</summary>
 
 - Package：`agena-runtime-session-core`
 - Target/module：agena_runtime_session_core: crate::model, crate::model::prompt_window_runtime_tests
@@ -90049,7 +90266,7 @@ use crate::message::{
     InteractiveRequestPart, Message, MessagePart, PartContent, RequestPart, RuntimeActivity,
 };
 use agena_domain::{
-    ExecutionSelection, ExecutionSource, ExecutionStatus, ModelRef, PendingInteractiveRequest,
+    ExecutionSelection, ExecutionStatus, ModelRef, PendingInteractiveRequest,
     PendingInteractiveRequestKind, PromptCompactionActivity, PromptTokenUsageSnapshot, Role,
     SessionLifecycleState, SessionRelationKind, SubtaskStatus, TimeRange, ToolInvocation,
     UserInputRequest, WorkflowState,
@@ -90063,7 +90280,7 @@ pub struct SubtaskRuntimeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 impl SubtaskRuntimeState {
@@ -90149,28 +90366,6 @@ pub struct WorkflowRuntimeState {
     pub pending_operations: Vec<SessionPendingOperation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_tool_calls: Vec<PendingToolCallRuntime>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_provider_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_adapter_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_thinking_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_speed_mode: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_verbosity: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_parallel_tool_calls: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<ExecutionSource>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_cache_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt_window_generation: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latest_event_seq: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90183,21 +90378,6 @@ pub struct PendingToolCallRuntime {
 
 impl WorkflowRuntimeState {
     pub fn is_empty(&self) -> bool;
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_model_request(
-        &mut self,
-        source: ExecutionSource,
-        provider_id: String,
-        adapter_id: Option<String>,
-        model_id: String,
-        model_thinking_mode: Option<String>,
-        model_speed_mode: Option<String>,
-        model_verbosity: Option<String>,
-        model_parallel_tool_calls: Option<bool>,
-        prompt_cache_key: String,
-        prompt_window_generation: u64,
-    );
 }
 
 use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger};
@@ -90383,6 +90563,9 @@ pub struct SessionExecutionContext {
         skip_serializing_if = "crate::authorization::PermissionConfig::is_empty"
     )]
     pub permission_ceiling: crate::authorization::PermissionConfig,
+
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub capability_denied_tool_names: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_workspace_root: Option<PathBuf>,
 }
@@ -90397,6 +90580,8 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     fn effective_permission(&self) -> &agena_runtime_contracts::authorization::PermissionConfig;
 
     fn permission_ceiling(&self) -> &agena_runtime_contracts::authorization::PermissionConfig;
+
+    fn capability_denied_tool_names(&self) -> &BTreeSet<String>;
 
     fn execution_access(&self) -> agena_domain::ExecutionAccess;
 
@@ -90506,7 +90691,7 @@ impl Session {
 
     pub fn sync_workflow_state(&mut self);
 
-    fn workflow_runtime_snapshot(&self, previous: WorkflowRuntimeState) -> WorkflowRuntimeState;
+    fn workflow_runtime_snapshot(&self) -> WorkflowRuntimeState;
 
     fn pending_tool_runtime_snapshots(&self) -> Vec<PendingToolCallRuntime>;
 
@@ -90562,8 +90747,6 @@ impl Session {
 
     fn compute_approx_bytes(&self) -> usize;
 
-    fn should_run_model(&self) -> bool;
-
     pub fn last_conversation_message(&self) -> Option<&Message>;
 
     pub fn last_assistant_text(&self) -> Option<String>;
@@ -90611,8 +90794,6 @@ impl Session {
     fn completed_tool_operations(&self) -> HashSet<&str>;
 }
 
-fn message_has_completed_operation(message: &Message) -> bool;
-
 fn tool_invocation_name(invocation: &ToolInvocation) -> String;
 
 fn extract_call_id(part: &MessagePart) -> Option<i64>;
@@ -90620,7 +90801,7 @@ fn extract_call_id(part: &MessagePart) -> Option<i64>;
 
 </details>
 
-### 8.39 `agena-runtime-tools`
+### 8.40 `agena-runtime-tools`
 
 <details><summary><code>crates/agena-runtime-tools/src/lib.rs</code> — 45 lines; mod=8, struct=1</summary>
 
@@ -91236,7 +91417,7 @@ pub fn list_active_snapshots(registry: &SnapshotRegistry) -> Vec<ActiveSnapshot>
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/apply_patch.rs</code> — 511 lines; struct=1, enum=1, fn=16</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/apply_patch.rs</code> — 507 lines; struct=1, enum=1, fn=16</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::apply_patch
@@ -91356,7 +91537,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/bash.rs</code> — 273 lines; fn=2</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/bash.rs</code> — 298 lines; fn=2</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::bash
@@ -91521,7 +91702,7 @@ where
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_core.rs</code> — 331 lines; impl=2, fn=28</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_core.rs</code> — 383 lines; impl=2, fn=27</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::executor::executor_core
@@ -91582,7 +91763,7 @@ impl ToolExecutor {
 
     pub(crate) fn available_registered_tools(&self) -> Vec<RegisteredTool>;
 
-    fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool;
+    pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool;
 
     fn has_execution_tool_capability(&self) -> bool;
 
@@ -91598,44 +91779,28 @@ impl ToolExecutor {
 
     pub fn available_tool_api_bindings(&self) -> Vec<ToolApiBinding>;
 
-    pub fn available_model_tool_bindings(
-        &self,
-        _provider_protocol: bool,
-        _direct_policy: &agena_provider::AgenaDirectToolsConfig,
-    ) -> Vec<ToolApiBinding>;
-
     pub(crate) fn suggested_tool_names(&self, requested: &str) -> Vec<String>;
 
     pub(crate) fn unknown_tool_error(&self, requested: &str) -> ToolError;
 }
 
 use super::{
-    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PermissionDecision,
-    PermissionEnforcementMode, PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError,
-    ToolExecutor, ToolOutputTruncator, present_registered_tool, present_registered_tool_detailed,
-    suggest_tool_names, tool_summary, unknown_tool_hint,
+    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PluginHost,
+    PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor, present_registered_tool,
+    present_registered_tool_detailed, suggest_tool_names, tool_summary, unknown_tool_hint,
 };
 use crate::tool::ToolApiBinding;
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_execution.rs</code> — 522 lines; impl=1, fn=15</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_execution.rs</code> — 465 lines; impl=1, fn=10</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::executor::executor_execution
 
 `````rust
 impl ToolExecutor {
-    pub fn execute_tool_payload_for_host(
-        &self,
-        tool_name: &str,
-        input: serde_json::Value,
-        session_id: Option<i64>,
-        call_id: Option<i64>,
-        session_context: Option<&dyn crate::ToolSessionContext>,
-    ) -> Result<agena_plugin_host::ToolInvokeOutput, ToolError>;
-
     pub fn prepare_shell_command(
         &self,
         input: &crate::message::ShellCommandInput,
@@ -91676,19 +91841,20 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<Option<StreamingToolExecution>, ToolError>;
 
-    pub async fn execute_invocation_streaming_after_authorization(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-    ) -> Result<Option<StreamingToolExecution>, ToolError>;
-
     pub(crate) async fn execute_invocation_streaming_inner(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
     ) -> Result<Option<StreamingToolExecution>, ToolError>;
+
+    pub(crate) fn execute_invocation_detailed_inner(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        prepared_shell_command: Option<PreparedShellCommand>,
+    ) -> Result<ToolInvocationExecution, ToolError>;
 
     pub fn execute_invocation_detailed(
         &self,
@@ -91697,37 +91863,7 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError>;
 
-    pub fn execute_invocation_summary(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-    ) -> Result<agena_tool::ToolExecutionSummary, ToolError>;
-
     pub fn execute_invocation_detailed_with_prepared_shell(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-        prepared_shell_command: Option<PreparedShellCommand>,
-    ) -> Result<ToolInvocationExecution, ToolError>;
-
-    pub(crate) fn execute_invocation_detailed_inner(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-        _prepared_shell_command: Option<PreparedShellCommand>,
-    ) -> Result<ToolInvocationExecution, ToolError>;
-
-    pub fn execute_invocation_detailed_bypassing_permissions(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-    ) -> Result<ToolInvocationExecution, ToolError>;
-
-    pub fn execute_invocation_detailed_bypassing_permissions_with_prepared_shell(
         &self,
         invocation: &ToolInvocation,
         session_id: i64,
@@ -91738,33 +91874,25 @@ impl ToolExecutor {
 use agena_domain::{PluginInvocation, StructuredObject};
 
 use super::{
-    PermissionEnforcementMode, PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand,
-    PreparedToolInvocation, SdkToolStreamingMode, StreamingToolExecution, ToolError,
-    ToolExecutionView, ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput,
-    ToolPayloadInput, ToolPermissionCheck, ToolRuntimeContext,
-    apply_patch_execution_from_tool_output, bash, in_process_router, invocation_effective_tags,
-    invocation_input_json, invocation_name, orchestrator, parse_invocation_from_json,
-    plugin_invocation_name, resolved_plugin_invocation_input_value, resolved_tool_input_value,
+    PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation,
+    SdkToolStreamingMode, StreamingToolExecution, ToolError, ToolExecutionView, ToolExecutor,
+    ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput, ToolPermissionCheck,
+    apply_patch_execution_from_tool_output, bash, invocation_effective_tags, invocation_input_json,
+    invocation_name, parse_invocation_from_json, plugin_invocation_name,
+    resolved_plugin_invocation_input_value, resolved_tool_input_value,
     shell_command_from_invocation,
 };
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_hooks.rs</code> — 348 lines; impl=4, fn=8</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_hooks.rs</code> — 321 lines; impl=4, fn=7</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::executor::executor_hooks
 
 `````rust
 impl ToolExecutor {
-
-    pub(crate) fn enforce_invocation_permissions(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: Option<i64>,
-    ) -> Result<(), ToolError>;
-
     pub fn shell_env_overrides(
         &self,
         cwd: &Path,
@@ -91810,7 +91938,7 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
-        error: &str,
+        failure: &agena_failure::Failure,
     );
 
     pub fn broadcast_notification(
@@ -91823,18 +91951,18 @@ impl ToolExecutor {
     );
 }
 use super::{
-    Arc, Path, PermissionDecision, PermissionEnforcementMode, PluginShellEnvInput,
-    PluginToolAfterInput, PluginToolFailureInput, SdkToolResultPolicy, TOOL_MODEL_OUTPUT_MAX_BYTES,
-    TOOL_MODEL_OUTPUT_MAX_LINES, ToolError, ToolExecutor, ToolInvocation, ToolInvocationExecution,
-    ToolOutput, bounded_model_output_preview, compact_tool_output_payload_for_model,
-    invocation_input_json, invocation_name, line_count, model_output_boundary_context,
-    model_output_exceeds_boundary, persist_tool_result_output, truncate_to_char_count,
+    Arc, Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput,
+    SdkToolResultPolicy, TOOL_MODEL_OUTPUT_MAX_BYTES, TOOL_MODEL_OUTPUT_MAX_LINES, ToolError,
+    ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput,
+    bounded_model_output_preview, compact_tool_output_payload_for_model, invocation_input_json,
+    invocation_name, line_count, model_output_boundary_context, model_output_exceeds_boundary,
+    persist_tool_result_output, truncate_to_char_count,
 };
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_paths.rs</code> — 217 lines; impl=1, fn=17</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_paths.rs</code> — 138 lines; impl=1, fn=11</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::executor::executor_paths
@@ -91875,32 +92003,6 @@ impl ToolExecutor {
         session_context: Option<&dyn crate::ToolSessionContext>,
     ) -> String;
 
-    pub fn ensure_read_permission(&self, target_path: &Path) -> Result<(), ToolError>;
-
-    pub(crate) fn ensure_edit_permission(&self, target_path: &Path) -> Result<(), ToolError>;
-
-    pub(crate) fn ensure_filesystem_effects_permission(
-        &self,
-        effects: &[FilesystemEffect],
-        base_path: &Path,
-    ) -> Result<(), ToolError>;
-
-    pub(crate) fn ensure_network_effects_permission(
-        &self,
-        effects: &[NetworkEffect],
-    ) -> Result<(), ToolError>;
-
-    pub(crate) fn ensure_network_permission(
-        &self,
-        target: &NetworkTarget,
-    ) -> Result<(), ToolError>;
-
-    pub(crate) fn ensure_access_permission(
-        &self,
-        access: AccessKind,
-        target_path: &Path,
-    ) -> Result<(), ToolError>;
-
     pub(crate) fn push_path_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
@@ -91917,18 +92019,16 @@ impl ToolExecutor {
     pub fn network_permission_check(&self, target: &str) -> Result<ToolPermissionCheck, ToolError>;
 }
 use super::{
-    AccessKind, NetworkTarget, Path, PathBuf, PermissionDecision, PermissionEnforcementMode,
-    ShellOutput, ShellRequest, ToolError, ToolExecutor, ToolPermissionCheck, access_kind_name,
-    canonicalize_path_for_execution, normalize_path_for_display,
-    resolve_managed_project_path_alias, shell,
+    AccessKind, NetworkTarget, Path, PathBuf, ShellOutput, ShellRequest, ToolError, ToolExecutor,
+    ToolPermissionCheck, access_kind_name, canonicalize_path_for_execution,
+    normalize_path_for_display, resolve_managed_project_path_alias, shell,
 };
 use agena_domain::PermissionAction;
-use agena_domain::{FilesystemEffect, NetworkEffect};
 `````
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_permissions.rs</code> — 366 lines; impl=1, fn=19</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/executor/executor_permissions.rs</code> — 388 lines; impl=1, fn=19</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::executor::executor_permissions
@@ -92056,7 +92156,7 @@ use agena_domain::FilesystemEffect;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/executor/mod.rs</code> — 29 lines; mod=5</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/executor/mod.rs</code> — 28 lines; mod=5</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::executor
@@ -92069,21 +92169,20 @@ mod executor_paths;
 mod executor_permissions;
 use super::{
     AccessKind, Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, NetworkTarget, Path,
-    PathBuf, PermissionDecision, PermissionEnforcementMode, PluginHost, PluginShellEnvInput,
-    PluginToolAfterInput, PluginToolBeforeInput, PluginToolDefinitionInput, PluginToolFailureInput,
+    PathBuf, PermissionDecision, PluginHost, PluginShellEnvInput, PluginToolAfterInput,
+    PluginToolBeforeInput, PluginToolDefinitionInput, PluginToolFailureInput,
     PluginToolInvokeInput, PluginToolPermissionNetworksInput, PluginToolPermissionPathsInput,
     PreparedShellCommand, PreparedToolInvocation, RegisteredTool, SdkInputNetworkSpec,
     SdkInputPathSpec, SdkNetworkAccessSpec, SdkPathAccessSpec, SdkPathKind, SdkToolResultPolicy,
     SdkToolStreamingMode, ShellOutput, ShellRequest, StreamingToolExecution,
     TOOL_MODEL_OUTPUT_MAX_BYTES, TOOL_MODEL_OUTPUT_MAX_LINES, ToolError, ToolExecutionView,
-    ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput, ToolOutputTruncator,
-    ToolPayloadInput, ToolPermissionCheck, ToolRuntimeContext, access_kind_name,
-    apply_patch_execution_from_tool_output, bash, bounded_model_output_preview,
-    canonical_tool_name, canonicalize_path_for_execution, compact_tool_output_payload_for_model,
-    extract_input_network_requests, extract_input_path_requests, filesystem_effects_from_input,
-    in_process_router, invocation_effective_tags, invocation_input_json, invocation_name,
-    is_concurrency_safe_tool_invocation, line_count, model_output_boundary_context,
-    model_output_exceeds_boundary, normalize_path_for_display, orchestrator,
+    ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput,
+    ToolPermissionCheck, access_kind_name, apply_patch_execution_from_tool_output, bash,
+    bounded_model_output_preview, canonical_tool_name, canonicalize_path_for_execution,
+    compact_tool_output_payload_for_model, extract_input_network_requests,
+    extract_input_path_requests, filesystem_effects_from_input, invocation_effective_tags,
+    invocation_input_json, invocation_name, is_concurrency_safe_tool_invocation, line_count,
+    model_output_boundary_context, model_output_exceeds_boundary, normalize_path_for_display,
     parse_invocation_from_json, persist_tool_result_output, plugin_invocation_name,
     present_registered_tool, present_registered_tool_detailed, resolve_managed_project_path_alias,
     resolved_plugin_invocation_input_value, resolved_tool_input_value,
@@ -92095,7 +92194,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/file_attachment.rs</code> — 239 lines; struct=1, impl=1, fn=11</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/file_attachment.rs</code> — 238 lines; struct=1, impl=1, fn=11</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::file_attachment
@@ -92173,7 +92272,7 @@ fn looks_like_utf8_text(bytes: &[u8]) -> bool;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/glob.rs</code> — 230 lines; mod=1, fn=6</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/glob.rs</code> — 239 lines; mod=1, fn=6</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::glob, crate::tool::glob::tests
@@ -92240,7 +92339,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/grep.rs</code> — 128 lines; fn=1</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/grep.rs</code> — 133 lines; fn=1</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::grep
@@ -92269,7 +92368,7 @@ pub(super) fn execute(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/lsp.rs</code> — 324 lines; fn=17</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/lsp.rs</code> — 320 lines; fn=17</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::lsp
@@ -92370,7 +92469,7 @@ where
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/mod.rs</code> — 90 lines; mod=28</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/mod.rs</code> — 87 lines; mod=27</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool
@@ -92402,7 +92501,6 @@ pub(crate) mod snapshot;
 pub(crate) mod task;
 pub mod tool_registry;
 pub(crate) mod tool_search;
-pub(crate) mod truncation;
 
 use std::ffi::OsString;
 use std::fs;
@@ -92447,7 +92545,6 @@ const TOOL_MODEL_STRUCTURED_MAX_FIELDS: usize = 32;
 const TOOL_MODEL_STRUCTURED_MAX_ITEMS: usize = 32;
 const TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES: usize = 768;
 use self::output_helpers::*;
-pub(crate) use self::router as in_process_router;
 pub use self::tool_registry::*;
 
 pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStartParams};
@@ -92458,7 +92555,6 @@ pub use snapshot::registry_for_executor as snapshot_registry_for_executor;
 pub use tool_registry::{
     ExecutionPermissionInspector, ExecutionTool, ToolApiBinding, ToolError, ToolExecutor,
 };
-pub(crate) use truncation::ToolOutputTruncator;
 
 #[cfg(test)]
 mod tests;
@@ -92466,7 +92562,7 @@ mod tests;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/orchestrator.rs</code> — 167 lines; fn=4</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/orchestrator.rs</code> — 161 lines; fn=4</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::orchestrator
@@ -92527,7 +92623,7 @@ fn parse_shape_input<T: ToolInput>(input: JsonValue) -> Result<T, ToolError>;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/output_helpers.rs</code> — 677 lines; enum=1, fn=36</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/output_helpers.rs</code> — 676 lines; enum=1, fn=36</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::output_helpers
@@ -92678,7 +92774,7 @@ use agena_tool::{AppliedFileChange, ApplyPatchExecution, PatchOpKind};
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/payload.rs</code> — 668 lines; mod=1, struct=1, enum=2, impl=2, fn=16</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/payload.rs</code> — 794 lines; mod=1, struct=1, enum=2, impl=2, fn=19</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::payload, crate::tool::payload::tests
@@ -92702,6 +92798,7 @@ use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
 };
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessSummary};
+use agena_plugin_host::registry::RegisteredTool;
 
 fn is_false(value: &bool) -> bool;
 
@@ -92746,6 +92843,11 @@ impl ToolPayloadInput {
     pub fn into_invocation(self) -> ToolInvocation;
 
     pub fn from_invocation(invocation: &ToolInvocation) -> Option<Self>;
+
+    pub(crate) fn from_executor_backed_invocation(
+        registered: &RegisteredTool,
+        invocation: &ToolInvocation,
+    ) -> Option<Result<Self, serde_json::Error>>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -92822,7 +92924,7 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         final_text: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        model_feedback: Option<agena_failure::ModelFeedback>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model_provider_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93000,6 +93102,11 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String>;
 mod tests {
     use super::*;
 
+    fn registered_tool(plugin: &str, name: &str) -> RegisteredTool;
+
+    #[test]
+    fn executor_backed_dispatch_is_an_explicit_registry_identity_set();
+
     #[test]
     fn shell_payloads_emit_shell_invocations();
 
@@ -93013,7 +93120,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/powershell.rs</code> — 104 lines; fn=1</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/powershell.rs</code> — 102 lines; fn=1</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::powershell
@@ -93043,7 +93150,7 @@ pub(super) fn execute(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/process_tool.rs</code> — 506 lines; fn=12</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/process_tool.rs</code> — 504 lines; fn=12</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::process_tool
@@ -93126,7 +93233,7 @@ fn insert_summary_metadata(view: &mut ToolExecutionView, summary: &ProcessSummar
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/read.rs</code> — 208 lines; fn=7</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/read.rs</code> — 220 lines; fn=7</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::read
@@ -93175,7 +93282,7 @@ fn truncate_line_chars(input: &str) -> String;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/result.rs</code> — 211 lines; mod=1, struct=3, impl=10, fn=14</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/result.rs</code> — 230 lines; mod=1, struct=3, impl=10, fn=14</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::result, crate::tool::result::tests
@@ -93185,6 +93292,7 @@ use std::collections::BTreeMap;
 
 use crate::message::AttachmentItem;
 use agena_domain::ToolOutput;
+use agena_tool::ToolPresentationSection;
 
 use super::ToolPayloadOutput;
 use agena_tool::ApplyPatchExecution;
@@ -93192,7 +93300,9 @@ use agena_tool::ApplyPatchExecution;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolExecutionView {
     pub title: String,
+    pub summary: String,
     pub output_text: String,
+    pub sections: Vec<ToolPresentationSection>,
     pub metadata: BTreeMap<String, String>,
     pub attachments: Vec<AttachmentItem>,
 }
@@ -93205,6 +93315,7 @@ impl ToolExecutionView {
     pub fn apply_neutral_fields(
         &mut self,
         title: String,
+        summary: String,
         output_text: String,
         metadata: impl IntoIterator<Item = (String, String)>,
     );
@@ -93250,6 +93361,7 @@ impl ToolInvocationExecution {
 #[cfg(test)]
 mod tests {
     use super::ToolExecutionView;
+    use agena_tool::ToolPresentationSection;
 
     #[test]
     fn view_projects_stable_fields_into_tool_contract();
@@ -93267,64 +93379,20 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/router.rs</code> — 257 lines; struct=2, impl=1, fn=11</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/router.rs</code> — 115 lines; fn=6</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::router
 
 `````rust
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-
 use serde_json::Value as JsonValue;
 
 use crate::message::{ApplyPatchToolInput, ShellToolInput};
+use crate::tool::ToolPayloadOutput;
 use crate::tool::result::ToolPayloadExecution;
-use crate::tool::{ToolExecutor, ToolPayloadOutput, ToolRuntimeContext, orchestrator};
 use agena_domain::NetworkEffect;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInput, ToolInvokeOutput};
-
-thread_local! {
-    static IN_PROCESS_TOOL_CTX: RefCell<Option<ToolExecutor>> = const { RefCell::new(None) };
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct InProcessContextKey {
-    session_id: i64,
-    call_id: i64,
-    tool_name: String,
-}
-
-static IN_PROCESS_TOOL_CTX_BY_CALL: LazyLock<Mutex<HashMap<InProcessContextKey, ToolExecutor>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-pub struct ExecutorContextGuard {
-    keys: Vec<InProcessContextKey>,
-    previous: Option<ToolExecutor>,
-}
-
-impl Drop for ExecutorContextGuard {
-    fn drop(&mut self);
-}
-
-pub fn install_executor_context(
-    executor: &ToolExecutor,
-    session_id: i64,
-    call_id: i64,
-    tool_name: String,
-) -> ExecutorContextGuard;
-
-fn current_executor(
-    session_id: i64,
-    call_id: i64,
-    tool_name: &str,
-) -> Result<ToolExecutor, PluginError>;
-
-fn routed_tool_name(tool_name: &str) -> Option<&'static str>;
-
-fn routed_internal_tool_names(tool_name: &str) -> &'static [&'static str];
 
 pub fn invoke_tool(
     tool_name: &str,
@@ -93423,7 +93491,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/shell_tools.rs</code> — 36 lines; fn=3</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/shell_tools.rs</code> — 35 lines; fn=3</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::shell_tools
@@ -93452,7 +93520,7 @@ pub(crate) fn validate_declared_filesystem_effects(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/snapshot.rs</code> — 133 lines; fn=4</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/snapshot.rs</code> — 130 lines; fn=4</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::snapshot
@@ -93481,7 +93549,6 @@ pub(super) fn execute_exit(
 ) -> Result<ToolPayloadExecution, ToolError>;
 
 fn remove_created_workspace(
-    executor: &ToolExecutor,
     session: &SnapshotSession,
     discard_changes: bool,
 ) -> Result<(), ToolError>;
@@ -93507,7 +93574,7 @@ pub(super) fn execute(
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/tests.rs</code> — 407 lines; struct=4, impl=4, fn=19</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/tests.rs</code> — 515 lines; struct=6, impl=6, fn=21</summary>
 
 - Package：`agena-runtime-tools`
 - Target/module：agena_runtime_tools: crate::tool::tests
@@ -93539,6 +93606,34 @@ struct ToolApiFixture;
 #[derive(Default)]
 struct ExecutionAccessFixture;
 
+#[derive(Default)]
+struct ExecutorBackedShellAdapter;
+
+#[derive(Default)]
+struct ExecutorBackedFsAdapter;
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "shell",
+    version = "test",
+    summary = "Definition-only shell adapter regression fixture."
+)]
+impl ExecutorBackedShellAdapter {
+    #[tool(name = "run", summary = "Run a shell command.", mutating, shell)]
+    async fn run(&self, _input: &crate::message::ShellCommandInput) -> String;
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "fs",
+    version = "test",
+    summary = "Definition-only filesystem adapter regression fixture."
+)]
+impl ExecutorBackedFsAdapter {
+    #[tool(name = "read", summary = "Read a file.", read_only, filesystem_read)]
+    async fn read(&self, _input: &crate::message::ReadToolInput) -> String;
+}
+
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "test",
     name = "access",
@@ -93564,6 +93659,8 @@ impl crate::ToolSessionContext for TestSessionContext {
 
     fn permission_ceiling(&self) -> &crate::authorization::PermissionConfig;
 
+    fn capability_denied_tool_names(&self) -> &std::collections::BTreeSet<String>;
+
     fn execution_access(&self) -> agena_domain::ExecutionAccess;
 
     fn selected_model(&self) -> Option<&str>;
@@ -93587,9 +93684,6 @@ impl ToolApiFixture {
 
     #[tool(name = "tags", summary = "List tool tags.")]
     async fn tags(&self, _input: &crate::message::AskUserToolInput) -> String;
-
-    #[tool(name = "call", summary = "Call a tool.")]
-    async fn call(&self, _input: &crate::message::AskUserToolInput) -> String;
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -93604,7 +93698,7 @@ impl ChokePointPlugin {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn detailed_execution_enforces_permissions_without_caller_preflight();
+async fn compact_builtin_targets_execute_through_the_orchestrator();
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_five_gateway_functions_are_provider_visible();
@@ -93625,10 +93719,10 @@ fn compact_tool_payload_preserves_patch_changes_without_the_full_diff();
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/tool_registry.rs</code> — 430 lines; struct=5, enum=2, trait=1, type=1, impl=5, fn=30</summary>
+<details><summary><code>crates/agena-runtime-tools/src/tool/tool_registry.rs</code> — 694 lines; mod=1, struct=7, enum=1, trait=1, type=1, impl=13, fn=44</summary>
 
 - Package：`agena-runtime-tools`
-- Target/module：agena_runtime_tools: crate::tool::tool_registry
+- Target/module：agena_runtime_tools: crate::tool::tool_registry, crate::tool::tool_registry::failure_tests
 
 `````rust
 use agena_domain::ToolInvocation;
@@ -93668,7 +93762,8 @@ fn tool_api_function_for_registered(tool: &RegisteredTool) -> Option<ToolApiFunc
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolApiBinding {
     function: ToolApiFunction,
-    handler: RegisteredTool,
+    definition: agena_provider::ToolApiDefinition,
+    handler: Option<RegisteredTool>,
 }
 
 impl serde::Serialize for ToolApiBinding {
@@ -93680,15 +93775,15 @@ impl serde::Serialize for ToolApiBinding {
 impl ToolApiBinding {
     pub fn from_registered_tool(handler: RegisteredTool) -> Option<Self>;
 
+    pub fn call_gateway() -> Self;
+
     pub const fn function(&self) -> ToolApiFunction;
 
     pub const fn gateway_function(&self) -> Option<ToolApiFunction>;
 
     pub fn function_name(&self) -> &str;
 
-    pub const fn execution_tool_name(&self) -> Option<&str>;
-
-    pub(crate) fn handler(&self) -> &RegisteredTool;
+    pub(crate) fn handler(&self) -> Option<&RegisteredTool>;
 
     pub fn definition(&self) -> agena_provider::ToolApiDefinition;
 }
@@ -93713,12 +93808,6 @@ pub(crate) fn unique_registered_tool_match(
     name: &str,
 ) -> Option<RegisteredTool>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PermissionEnforcementMode {
-    Enforced,
-    Bypassed,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ToolRuntimeContext {
     pub session_id: Option<i64>,
@@ -93730,7 +93819,23 @@ pub struct StreamingToolExecution {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<agena_plugin_host::sdk::ToolStreamChunk>,
     pub end: tokio::sync::oneshot::Receiver<Result<ToolInvocationExecution, ToolError>>,
-    pub(super) _executor_guard: Option<in_process_router::ExecutorContextGuard>,
+}
+
+#[derive(Debug)]
+pub struct ToolDiagnostic(String);
+
+impl std::fmt::Display for ToolDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+#[derive(Debug)]
+pub struct PluginToolFailure {
+    pub public: agena_failure::Failure,
+    diagnostic: ToolDiagnostic,
+}
+
+impl std::fmt::Display for PluginToolFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -93738,16 +93843,23 @@ pub struct StreamingToolExecution {
 pub enum ToolError {
     #[error("tool execution cancelled")]
     Cancelled,
-    #[error("permission denied: {0}")]
-    PermissionDenied(String),
-    #[error("permission confirmation required: {0}")]
-    PermissionAsk(String),
+    #[error("operation blocked by permission policy: {}", .0.reason)]
+    PolicyDenied(Box<agena_domain::PolicyDeniedResult>),
+    #[error("permission request declined by user")]
+    UserDeclined(Box<agena_domain::UserDeclinedResult>),
+    #[error("required execution capability is unavailable: {}", .0.reason)]
+    CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
+    #[error("tool is unavailable: {}", .0.reason)]
+    ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
     #[error("user input required")]
     UserInputRequired(Box<AskUserToolInput>),
     #[error("invalid patch: {0}")]
-    InvalidPatch(String),
-    #[error("invalid tool input: {0}")]
-    InvalidInput(String),
+    InvalidPatch(ToolDiagnostic),
+    #[error("invalid tool input: {diagnostic}")]
+    InvalidInput {
+        diagnostic: ToolDiagnostic,
+        fields: Vec<agena_failure::FieldIssue>,
+    },
     #[error("invalid glob pattern: {0}")]
     InvalidGlobPattern(#[from] globset::Error),
     #[error("invalid regex pattern: {0}")]
@@ -93756,19 +93868,37 @@ pub enum ToolError {
     Shell(#[from] ShellError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
     #[error("plugin error: {0}")]
-    Plugin(String),
-    #[error("unknown tool: {tool}")]
-    UnknownTool { tool: String },
-    #[error("{suggestion_text}")]
-    UnknownToolHint {
-        tool: String,
-        suggestions: Vec<String>,
-        suggestion_text: String,
-    },
+    Plugin(Box<PluginToolFailure>),
+
     #[error("stale tool call: {tool}")]
     StaleToolCall { tool: String },
 }
+
+impl ToolError {
+    pub fn actionable_message(&self) -> Option<String>;
+
+    pub fn invalid_patch(diagnostic: impl std::fmt::Display) -> Self;
+
+    pub fn invalid_input(diagnostic: impl std::fmt::Display) -> Self;
+
+    pub fn invalid_field(
+        field: impl AsRef<str>,
+        kind: agena_failure::FieldIssueKind,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+
+    pub fn plugin(diagnostic: impl std::fmt::Display) -> Self;
+
+    pub fn from_plugin_error(error: agena_plugin_host::sdk::PluginError) -> Self;
+
+    pub fn into_plugin_error(self) -> agena_plugin_host::sdk::PluginError;
+}
+
+fn configuration_required_failure() -> agena_failure::Failure;
+
+fn bounded_plugin_diagnostic(message: String) -> String;
 
 pub(super) fn present_registered_tool(
     mut registered_tool: RegisteredTool,
@@ -93794,12 +93924,10 @@ pub struct ToolExecutor {
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
     pub(super) model_id: Option<String>,
     pub(super) monitor_registry: Option<Arc<dyn MonitorService>>,
-    pub(super) truncator: ToolOutputTruncator,
     pub(super) plugins: Arc<PluginHost>,
     pub(super) snapshot_registry: Option<crate::SnapshotRegistry>,
     pub(super) scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
-    pub(super) permission_mode: PermissionEnforcementMode,
     pub(super) tool_presentation: agena_plugin_host::ToolPresentationConfig,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
@@ -93815,10 +93943,24 @@ pub trait ExecutionPermissionInspector: Send + Sync {
 
 use super::{
     Arc, AskUserToolInput, Error, ExecutionPrincipal, MonitorService, PathBuf, PluginHost,
-    RegisteredTool, ShellError, ToolInvocationExecution, ToolOutputTruncator, in_process_router,
+    RegisteredTool, ShellError, ToolInvocationExecution,
 };
 use agena_domain::ToolApiFunction;
 use agena_tool::PreparedShellCommand;
+
+#[cfg(test)]
+mod failure_tests {
+    use super::ToolError;
+
+    #[test]
+    fn untrusted_plugin_failure_is_reprojected_by_the_host();
+
+    #[test]
+    fn configuration_problem_keeps_a_safe_actionable_public_failure();
+
+    #[test]
+    fn gateway_round_trip_preserves_known_public_problem_semantics();
+}
 `````
 
 </details>
@@ -93865,33 +94007,6 @@ fn tags_summary(definition: &ToolSearchDocument) -> String;
 
 </details>
 
-<details><summary><code>crates/agena-runtime-tools/src/tool/truncation.rs</code> — 74 lines; struct=1, impl=2, fn=3</summary>
-
-- Package：`agena-runtime-tools`
-- Target/module：agena_runtime_tools: crate::tool::truncation
-
-`````rust
-use super::{ToolPayloadOutput, result::ToolPayloadExecution};
-use agena_tool::ToolOutputTruncationPolicy;
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ToolOutputTruncator {
-    policy: ToolOutputTruncationPolicy,
-}
-
-impl Default for ToolOutputTruncator {
-    fn default() -> Self;
-}
-
-impl ToolOutputTruncator {
-    pub(crate) fn new(policy: ToolOutputTruncationPolicy) -> Self;
-
-    pub(crate) fn apply(&self, mut execution: ToolPayloadExecution) -> ToolPayloadExecution;
-}
-`````
-
-</details>
-
 <details><summary><code>crates/agena-runtime-tools/src/tool_output.rs</code> — 27 lines; mod=1, fn=3</summary>
 
 - Package：`agena-runtime-tools`
@@ -93914,7 +94029,7 @@ mod tests {
 
 </details>
 
-### 8.40 `agena-scheduler`
+### 8.41 `agena-scheduler`
 
 <details><summary><code>crates/agena-scheduler/src/error.rs</code> — 25 lines; enum=1, type=1</summary>
 
@@ -93951,7 +94066,7 @@ pub type SchedulerResult<T> = Result<T, SchedulerError>;
 
 </details>
 
-<details><summary><code>crates/agena-scheduler/src/job.rs</code> — 736 lines; mod=1, struct=6, enum=5, trait=1, impl=9, fn=28</summary>
+<details><summary><code>crates/agena-scheduler/src/job.rs</code> — 779 lines; mod=1, struct=6, enum=5, trait=1, impl=8, fn=29</summary>
 
 - Package：`agena-scheduler`
 - Target/module：agena_scheduler: crate::job, crate::job::tests
@@ -93964,6 +94079,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::error::{SchedulerError, SchedulerResult};
+
+fn scheduler_outcome_failure(
+    code: &'static str,
+    category: agena_failure::FailureCategory,
+    diagnostic: impl std::fmt::Display,
+) -> agena_failure::Failure;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -94039,7 +94160,7 @@ pub struct JobRunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -94054,15 +94175,15 @@ pub struct JobDeliveryResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::Failure>,
 }
 
 impl JobDeliveryResult {
     pub fn submitted(session_id: Option<i64>) -> Self;
 
-    pub fn skipped(session_id: Option<i64>, reason: impl Into<String>) -> Self;
+    pub fn skipped(session_id: Option<i64>, failure: agena_failure::Failure) -> Self;
 
-    pub fn failed(session_id: Option<i64>, error: impl Into<String>) -> Self;
+    pub fn failed(session_id: Option<i64>, failure: agena_failure::Failure) -> Self;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94199,6 +94320,7 @@ mod tests {
 
     use super::{
         ClaimDueDelivery, JobDeliveryResult, JobOutcome, JobRunStatus, MisfirePolicy, ScheduledJob,
+        scheduler_outcome_failure,
     };
 
     #[test]
@@ -94458,7 +94580,7 @@ mod tests {
 
 </details>
 
-### 8.41 `agena-skills`
+### 8.42 `agena-skills`
 
 <details><summary><code>crates/agena-skills/src/bundled/batch.rs</code> — 14 lines; fn=1</summary>
 
@@ -94499,7 +94621,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/imagegen.rs</code> — 18 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/imagegen.rs</code> — 17 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::imagegen
@@ -94512,7 +94634,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/init.rs</code> — 24 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/init.rs</code> — 23 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::init
@@ -94561,7 +94683,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/plugin_creator.rs</code> — 19 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/plugin_creator.rs</code> — 18 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::plugin_creator
@@ -94587,7 +94709,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/run.rs</code> — 16 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/run.rs</code> — 15 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::run
@@ -94600,7 +94722,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/run_skill_generator.rs</code> — 18 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/run_skill_generator.rs</code> — 17 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::run_skill_generator
@@ -94613,7 +94735,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/security_review.rs</code> — 26 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/security_review.rs</code> — 25 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::security_review
@@ -94639,7 +94761,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/skill_creator.rs</code> — 20 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/skill_creator.rs</code> — 19 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::skill_creator
@@ -94652,7 +94774,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/skill_installer.rs</code> — 20 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/skill_installer.rs</code> — 19 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::skill_installer
@@ -94665,7 +94787,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/bundled/verify.rs</code> — 19 lines; fn=1</summary>
+<details><summary><code>crates/agena-skills/src/bundled/verify.rs</code> — 18 lines; fn=1</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::bundled::verify
@@ -94678,7 +94800,7 @@ pub(super) fn skill() -> Skill;
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/discovery.rs</code> — 201 lines; mod=1, struct=2, impl=2, fn=12</summary>
+<details><summary><code>crates/agena-skills/src/discovery.rs</code> — 224 lines; mod=1, struct=2, impl=2, fn=13</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::discovery, crate::discovery::tests
@@ -94686,16 +94808,16 @@ pub(super) fn skill() -> Skill;
 `````rust
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::error::SkillResult;
 use crate::skill::Skill;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryDiagnostic {
     pub path: PathBuf,
-    pub error: String,
+    pub diagnostic: String,
+    pub failure: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -94731,6 +94853,8 @@ fn scan_matching(
     matches_file: impl Fn(&Path) -> bool,
     load: impl Fn(&Path) -> SkillResult<Skill>,
 ) -> DiscoveryReport;
+
+fn discovery_diagnostic(path: PathBuf, diagnostic: String) -> DiscoveryDiagnostic;
 
 #[cfg(test)]
 mod tests {
@@ -94801,7 +94925,7 @@ pub use skill::{Skill, SkillFrontmatter};
 
 </details>
 
-<details><summary><code>crates/agena-skills/src/skill.rs</code> — 216 lines; mod=1, struct=2, impl=5, fn=13</summary>
+<details><summary><code>crates/agena-skills/src/skill.rs</code> — 206 lines; mod=1, struct=2, impl=4, fn=12</summary>
 
 - Package：`agena-skills`
 - Target/module：agena_skills: crate::skill, crate::skill::tests
@@ -94814,7 +94938,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{SkillError, SkillResult};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct SkillFrontmatter {
     #[serde(default)]
@@ -94824,10 +94948,6 @@ pub struct SkillFrontmatter {
 
     #[serde(default)]
     pub aliases: Vec<String>,
-}
-
-impl Default for SkillFrontmatter {
-    fn default() -> Self;
 }
 
 #[derive(Debug, Clone)]
@@ -94876,9 +94996,9 @@ mod tests {
 
 </details>
 
-### 8.42 `agena-storage`
+### 8.43 `agena-storage`
 
-<details><summary><code>crates/agena-storage/src/lib.rs</code> — 1043 lines; mod=3, struct=27, enum=14, trait=14, type=2, impl=9, fn=88</summary>
+<details><summary><code>crates/agena-storage/src/lib.rs</code> — 1048 lines; mod=3, struct=27, enum=14, trait=14, type=2, impl=9, fn=88</summary>
 
 - Package：`agena-storage`
 - Target/module：agena_storage: crate, crate::storage_config_tests, crate::tests
@@ -95001,6 +95121,9 @@ impl Default for SequenceAllocator {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedPermissionRule {
+    pub id: Option<i64>,
+    pub created_at_ms: Option<i64>,
+    pub updated_at_ms: Option<i64>,
     pub action_key: String,
     pub mode: PermissionMode,
     pub scope: PermissionScope,
@@ -95328,9 +95451,9 @@ pub trait ProjectionLookupRepository: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionHeaderRecord {
+pub struct ModelMessageHeaderRecord {
     pub message_id: i64,
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
     pub role: agena_domain::Role,
     pub state: agena_domain::ExecutionStatus,
     pub created_at_ms: i64,
@@ -95341,7 +95464,7 @@ pub struct MessageProjectionHeaderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionPartRecord {
+pub struct ModelMessagePartRecord {
     pub part_id: i64,
     pub message_id: i64,
     pub part_index: i32,
@@ -95350,25 +95473,26 @@ pub struct MessageProjectionPartRecord {
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,
+    pub awaits_user_reply: bool,
     pub activity_id: Option<agena_domain::ActivityId>,
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     pub operation_id: Option<String>,
     pub created_at_ms: i64,
     pub content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum MessageProjectionRepositoryError {
+pub enum ModelMessageRepositoryError {
     #[error("message projection repository backend error: {0}")]
     Backend(String),
 }
 
 #[async_trait]
-pub trait MessageProjectionRepository: Send + Sync {
+pub trait ModelMessageRepository: Send + Sync {
     async fn list_headers(
         &self,
         session_id: i64,
-    ) -> Result<Vec<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Vec<ModelMessageHeaderRecord>, ModelMessageRepositoryError>;
 
     async fn list_headers_page(
         &self,
@@ -95376,33 +95500,33 @@ pub trait MessageProjectionRepository: Send + Sync {
         cursor: Option<(i64, i64)>,
         limit: u64,
     ) -> Result<
-        (Vec<MessageProjectionHeaderRecord>, bool, Option<(i64, i64)>),
-        MessageProjectionRepositoryError,
+        (Vec<ModelMessageHeaderRecord>, bool, Option<(i64, i64)>),
+        ModelMessageRepositoryError,
     >;
 
     async fn get_header(
         &self,
         session_id: i64,
         message_id: i64,
-    ) -> Result<Option<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Option<ModelMessageHeaderRecord>, ModelMessageRepositoryError>;
 
     async fn list_parts(
         &self,
         message_ids: &[i64],
         include_content: bool,
-    ) -> Result<Vec<MessageProjectionPartRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Vec<ModelMessagePartRecord>, ModelMessageRepositoryError>;
 
     async fn get_part(
         &self,
         part_id: i64,
-    ) -> Result<Option<MessageProjectionPartRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Option<ModelMessagePartRecord>, ModelMessageRepositoryError>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionMessageWrite {
+pub struct ModelMessageWrite {
     pub message_id: i64,
     pub session_id: i64,
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
     pub execution_id: Option<String>,
     pub run_id: Option<String>,
     pub role: agena_domain::Role,
@@ -95416,7 +95540,7 @@ pub struct MessageProjectionMessageWrite {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionPartWrite {
+pub struct ModelMessagePartWrite {
     pub session_id: i64,
     pub part_id: i64,
     pub message_id: i64,
@@ -95426,35 +95550,36 @@ pub struct MessageProjectionPartWrite {
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,
+    pub awaits_user_reply: bool,
     pub activity_id: Option<agena_domain::ActivityId>,
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     pub operation_id: Option<String>,
     pub created_at_ms: i64,
     pub content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MessageProjectionOpenIdentity {
+pub enum ModelMessageOpenIdentity {
     RunId(String),
     ExecutionId(String),
 }
 
 #[async_trait]
-pub trait MessageProjectionTransactionWriter<Transaction>: Send + Sync {
+pub trait ModelMessageTransactionWriter<Transaction>: Send + Sync {
     async fn terminalize_open_messages_in_transaction(
         &self,
         transaction: &Transaction,
         session_id: i64,
-        identity: &MessageProjectionOpenIdentity,
+        identity: &ModelMessageOpenIdentity,
         status: agena_domain::ExecutionStatus,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn clear_session_projection_in_transaction(
         &self,
         transaction: &Transaction,
         session_id: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn upsert_projection_watermark_in_transaction(
         &self,
@@ -95462,19 +95587,19 @@ pub trait MessageProjectionTransactionWriter<Transaction>: Send + Sync {
         session_id: i64,
         last_seq_global: i64,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn upsert_message_in_transaction(
         &self,
         transaction: &Transaction,
-        message: &MessageProjectionMessageWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+        message: &ModelMessageWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn upsert_part_in_transaction(
         &self,
         transaction: &Transaction,
-        part: &MessageProjectionPartWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+        part: &ModelMessagePartWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95756,7 +95881,7 @@ mod tests {
 
 </details>
 
-### 8.43 `agena-storage-sqlite`
+### 8.44 `agena-storage-sqlite`
 
 <details><summary><code>crates/agena-storage-sqlite/src/event_store.rs</code> — 222 lines; struct=1, impl=4, fn=12</summary>
 
@@ -95830,8 +95955,8 @@ fn backend_error(error: impl std::fmt::Display) -> EventStoreError;
 
 `````rust
 mod event_store;
-mod message_projection_repository;
 mod model_catalog_repository;
+mod model_message_repository;
 mod permission_rule_repository;
 mod projection_lookup_repository;
 mod schema;
@@ -95845,10 +95970,10 @@ mod usage_repository;
 mod workspace_repository;
 
 pub use event_store::SeaEventStore;
-pub use message_projection_repository::{
-    PersistedCompletionUsage, SeaMessageProjectionRepository, SeaMessageProjectionTransactionWriter,
-};
 pub use model_catalog_repository::SeaModelCatalogRepository;
+pub use model_message_repository::{
+    PersistedCompletionUsage, SeaModelMessageRepository, SeaModelMessageTransactionWriter,
+};
 pub use permission_rule_repository::{
     SeaPermissionRuleRepository, SeaPermissionRuleTransactionWriter,
 };
@@ -95864,201 +95989,6 @@ pub use stored_values::{StoredExecutionStatus, StoredPartKind, StoredRole};
 pub use transaction::{run_transaction_app_effects, run_transaction_effects};
 pub use usage_repository::SeaUsageRepository;
 pub use workspace_repository::SeaWorkspaceRepository;
-`````
-
-</details>
-
-<details><summary><code>crates/agena-storage-sqlite/src/message_projection_repository.rs</code> — 953 lines; mod=1, struct=3, impl=8, fn=27</summary>
-
-- Package：`agena-storage-sqlite`
-- Target/module：agena_storage_sqlite: crate::message_projection_repository, crate::message_projection_repository::tests
-
-`````rust
-use std::sync::Arc;
-
-use agena_storage::{
-    MessageProjectionHeaderRecord, MessageProjectionMessageWrite, MessageProjectionOpenIdentity,
-    MessageProjectionPartRecord, MessageProjectionPartWrite, MessageProjectionRepository,
-    MessageProjectionRepositoryError, MessageProjectionTransactionWriter,
-};
-use async_trait::async_trait;
-use sea_orm::{
-    ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, FromJsonQueryResult,
-    Statement, Value,
-};
-use serde::{Deserialize, Serialize};
-
-use crate::{StoredExecutionStatus, StoredPartKind, StoredRole};
-
-const TABLE: &str = "agena_transcript_messages";
-const COLUMNS: &str =
-    "message_id, turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count";
-const PART_TABLE: &str = "agena_transcript_parts";
-const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, activity_id, segment_id, operation_id, created_at_ms, content";
-const PROJECTION_STATE_TABLE: &str = "agena_transcript_projection_states";
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, FromJsonQueryResult)]
-#[serde(transparent)]
-pub struct PersistedCompletionUsage(pub agena_provider::CompletionUsage);
-
-impl From<agena_provider::CompletionUsage> for PersistedCompletionUsage {
-    fn from(value: agena_provider::CompletionUsage) -> Self;
-}
-
-impl From<PersistedCompletionUsage> for agena_provider::CompletionUsage {
-    fn from(value: PersistedCompletionUsage) -> Self;
-}
-
-pub struct SeaMessageProjectionRepository {
-    db: Arc<DatabaseConnection>,
-}
-
-pub struct SeaMessageProjectionTransactionWriter;
-
-impl SeaMessageProjectionRepository {
-    pub fn new(db: Arc<DatabaseConnection>) -> Self;
-}
-
-impl SeaMessageProjectionTransactionWriter {
-    pub async fn terminalize_open_messages_in_transaction(
-        transaction: &DatabaseTransaction,
-        session_id: i64,
-        identity: &MessageProjectionOpenIdentity,
-        status: agena_domain::ExecutionStatus,
-        updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    pub async fn clear_session_projection_in_transaction(
-        transaction: &DatabaseTransaction,
-        session_id: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    pub async fn upsert_projection_watermark_in_transaction(
-        transaction: &DatabaseTransaction,
-        session_id: i64,
-        last_seq_global: i64,
-        updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    pub async fn upsert_message_in_transaction(
-        transaction: &DatabaseTransaction,
-        message: &MessageProjectionMessageWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    pub async fn upsert_part_in_transaction(
-        transaction: &DatabaseTransaction,
-        part: &MessageProjectionPartWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-}
-
-#[async_trait]
-impl MessageProjectionTransactionWriter<DatabaseTransaction>
-    for SeaMessageProjectionTransactionWriter
-{
-    async fn terminalize_open_messages_in_transaction(
-        &self,
-        transaction: &DatabaseTransaction,
-        session_id: i64,
-        identity: &MessageProjectionOpenIdentity,
-        status: agena_domain::ExecutionStatus,
-        updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    async fn clear_session_projection_in_transaction(
-        &self,
-        transaction: &DatabaseTransaction,
-        session_id: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    async fn upsert_projection_watermark_in_transaction(
-        &self,
-        transaction: &DatabaseTransaction,
-        session_id: i64,
-        last_seq_global: i64,
-        updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    async fn upsert_message_in_transaction(
-        &self,
-        transaction: &DatabaseTransaction,
-        message: &MessageProjectionMessageWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-
-    async fn upsert_part_in_transaction(
-        &self,
-        transaction: &DatabaseTransaction,
-        part: &MessageProjectionPartWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
-}
-
-#[async_trait]
-impl MessageProjectionRepository for SeaMessageProjectionRepository {
-    async fn list_headers(
-        &self,
-        session_id: i64,
-    ) -> Result<Vec<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError>;
-
-    async fn list_headers_page(
-        &self,
-        session_id: i64,
-        cursor: Option<(i64, i64)>,
-        limit: u64,
-    ) -> Result<
-        (Vec<MessageProjectionHeaderRecord>, bool, Option<(i64, i64)>),
-        MessageProjectionRepositoryError,
-    >;
-
-    async fn get_header(
-        &self,
-        session_id: i64,
-        message_id: i64,
-    ) -> Result<Option<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError>;
-
-    async fn list_parts(
-        &self,
-        message_ids: &[i64],
-        include_content: bool,
-    ) -> Result<Vec<MessageProjectionPartRecord>, MessageProjectionRepositoryError>;
-
-    async fn get_part(
-        &self,
-        part_id: i64,
-    ) -> Result<Option<MessageProjectionPartRecord>, MessageProjectionRepositoryError>;
-}
-
-fn statement(sql: String, values: impl IntoIterator<Item = Value>) -> Statement;
-
-fn header_from_row(
-    row: sea_orm::QueryResult,
-) -> Result<MessageProjectionHeaderRecord, MessageProjectionRepositoryError>;
-
-fn part_from_row(
-    row: sea_orm::QueryResult,
-    include_content: bool,
-) -> Result<MessageProjectionPartRecord, MessageProjectionRepositoryError>;
-
-fn map_error(error: impl std::fmt::Display) -> MessageProjectionRepositoryError;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use agena_domain::{ExecutionStatus, PartKind, Role};
-    use sea_orm::{ConnectionTrait, Database, TransactionTrait};
-
-    async fn repository() -> SeaMessageProjectionRepository;
-
-    #[tokio::test]
-    async fn reads_visible_headers_with_stable_order_and_cursor();
-
-    #[tokio::test]
-    async fn transaction_writer_keeps_part_write_inside_caller_transaction();
-
-    #[tokio::test]
-    async fn transaction_writer_keeps_message_write_inside_caller_transaction();
-
-    #[tokio::test]
-    async fn transaction_writer_terminalizes_projection_and_updates_watermark_atomically();
-}
 `````
 
 </details>
@@ -96162,7 +96092,199 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-storage-sqlite/src/permission_rule_repository.rs</code> — 453 lines; mod=1, struct=2, impl=6, fn=24</summary>
+<details><summary><code>crates/agena-storage-sqlite/src/model_message_repository.rs</code> — 957 lines; mod=1, struct=3, impl=8, fn=27</summary>
+
+- Package：`agena-storage-sqlite`
+- Target/module：agena_storage_sqlite: crate::model_message_repository, crate::model_message_repository::tests
+
+`````rust
+use std::sync::Arc;
+
+use agena_storage::{
+    ModelMessageHeaderRecord, ModelMessageOpenIdentity, ModelMessagePartRecord,
+    ModelMessagePartWrite, ModelMessageRepository, ModelMessageRepositoryError,
+    ModelMessageTransactionWriter, ModelMessageWrite,
+};
+use async_trait::async_trait;
+use sea_orm::{
+    ConnectionTrait, DatabaseBackend, DatabaseConnection, DatabaseTransaction, FromJsonQueryResult,
+    Statement, Value,
+};
+use serde::{Deserialize, Serialize};
+
+use crate::{StoredExecutionStatus, StoredPartKind, StoredRole};
+
+const TABLE: &str = "agena_model_messages";
+const COLUMNS: &str = "message_id, model_turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count";
+const PART_TABLE: &str = "agena_model_message_parts";
+const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, awaits_user_reply, activity_id, segment_id, operation_id, created_at_ms, content";
+const PROJECTION_STATE_TABLE: &str = "agena_model_projection_states";
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, FromJsonQueryResult)]
+#[serde(transparent)]
+pub struct PersistedCompletionUsage(pub agena_provider::CompletionUsage);
+
+impl From<agena_provider::CompletionUsage> for PersistedCompletionUsage {
+    fn from(value: agena_provider::CompletionUsage) -> Self;
+}
+
+impl From<PersistedCompletionUsage> for agena_provider::CompletionUsage {
+    fn from(value: PersistedCompletionUsage) -> Self;
+}
+
+pub struct SeaModelMessageRepository {
+    db: Arc<DatabaseConnection>,
+}
+
+pub struct SeaModelMessageTransactionWriter;
+
+impl SeaModelMessageRepository {
+    pub fn new(db: Arc<DatabaseConnection>) -> Self;
+}
+
+impl SeaModelMessageTransactionWriter {
+    pub async fn terminalize_open_messages_in_transaction(
+        transaction: &DatabaseTransaction,
+        session_id: i64,
+        identity: &ModelMessageOpenIdentity,
+        status: agena_domain::ExecutionStatus,
+        updated_at_ms: i64,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    pub async fn clear_session_projection_in_transaction(
+        transaction: &DatabaseTransaction,
+        session_id: i64,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    pub async fn upsert_projection_watermark_in_transaction(
+        transaction: &DatabaseTransaction,
+        session_id: i64,
+        last_seq_global: i64,
+        updated_at_ms: i64,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    pub async fn upsert_message_in_transaction(
+        transaction: &DatabaseTransaction,
+        message: &ModelMessageWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    pub async fn upsert_part_in_transaction(
+        transaction: &DatabaseTransaction,
+        part: &ModelMessagePartWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
+}
+
+#[async_trait]
+impl ModelMessageTransactionWriter<DatabaseTransaction> for SeaModelMessageTransactionWriter {
+    async fn terminalize_open_messages_in_transaction(
+        &self,
+        transaction: &DatabaseTransaction,
+        session_id: i64,
+        identity: &ModelMessageOpenIdentity,
+        status: agena_domain::ExecutionStatus,
+        updated_at_ms: i64,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    async fn clear_session_projection_in_transaction(
+        &self,
+        transaction: &DatabaseTransaction,
+        session_id: i64,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    async fn upsert_projection_watermark_in_transaction(
+        &self,
+        transaction: &DatabaseTransaction,
+        session_id: i64,
+        last_seq_global: i64,
+        updated_at_ms: i64,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    async fn upsert_message_in_transaction(
+        &self,
+        transaction: &DatabaseTransaction,
+        message: &ModelMessageWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
+
+    async fn upsert_part_in_transaction(
+        &self,
+        transaction: &DatabaseTransaction,
+        part: &ModelMessagePartWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
+}
+
+#[async_trait]
+impl ModelMessageRepository for SeaModelMessageRepository {
+    async fn list_headers(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<ModelMessageHeaderRecord>, ModelMessageRepositoryError>;
+
+    async fn list_headers_page(
+        &self,
+        session_id: i64,
+        cursor: Option<(i64, i64)>,
+        limit: u64,
+    ) -> Result<
+        (Vec<ModelMessageHeaderRecord>, bool, Option<(i64, i64)>),
+        ModelMessageRepositoryError,
+    >;
+
+    async fn get_header(
+        &self,
+        session_id: i64,
+        message_id: i64,
+    ) -> Result<Option<ModelMessageHeaderRecord>, ModelMessageRepositoryError>;
+
+    async fn list_parts(
+        &self,
+        message_ids: &[i64],
+        include_content: bool,
+    ) -> Result<Vec<ModelMessagePartRecord>, ModelMessageRepositoryError>;
+
+    async fn get_part(
+        &self,
+        part_id: i64,
+    ) -> Result<Option<ModelMessagePartRecord>, ModelMessageRepositoryError>;
+}
+
+fn statement(sql: String, values: impl IntoIterator<Item = Value>) -> Statement;
+
+fn header_from_row(
+    row: sea_orm::QueryResult,
+) -> Result<ModelMessageHeaderRecord, ModelMessageRepositoryError>;
+
+fn part_from_row(
+    row: sea_orm::QueryResult,
+    include_content: bool,
+) -> Result<ModelMessagePartRecord, ModelMessageRepositoryError>;
+
+fn map_error(error: impl std::fmt::Display) -> ModelMessageRepositoryError;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_domain::{ExecutionStatus, PartKind, Role};
+    use sea_orm::{ConnectionTrait, Database, TransactionTrait};
+
+    async fn repository() -> SeaModelMessageRepository;
+
+    #[tokio::test]
+    async fn reads_visible_headers_with_stable_order_and_cursor();
+
+    #[tokio::test]
+    async fn transaction_writer_keeps_part_write_inside_caller_transaction();
+
+    #[tokio::test]
+    async fn transaction_writer_keeps_message_write_inside_caller_transaction();
+
+    #[tokio::test]
+    async fn transaction_writer_terminalizes_projection_and_updates_watermark_atomically();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-storage-sqlite/src/permission_rule_repository.rs</code> — 459 lines; mod=1, struct=2, impl=6, fn=24</summary>
 
 - Package：`agena-storage-sqlite`
 - Target/module：agena_storage_sqlite: crate::permission_rule_repository, crate::permission_rule_repository::tests
@@ -96307,8 +96429,8 @@ use agena_storage::{ProjectionLookupRepository, ProjectionLookupRepositoryError}
 use async_trait::async_trait;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
-const MESSAGE_TABLE: &str = "agena_transcript_messages";
-const PART_TABLE: &str = "agena_transcript_parts";
+const MESSAGE_TABLE: &str = "agena_model_messages";
+const PART_TABLE: &str = "agena_model_message_parts";
 
 pub struct SeaProjectionLookupRepository {
     db: Arc<DatabaseConnection>,
@@ -96352,7 +96474,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-storage-sqlite/src/schema.rs</code> — 314 lines; mod=1, fn=7</summary>
+<details><summary><code>crates/agena-storage-sqlite/src/schema.rs</code> — 432 lines; mod=1, fn=8</summary>
 
 - Package：`agena-storage-sqlite`
 - Target/module：agena_storage_sqlite: crate::schema, crate::schema::tests
@@ -96368,17 +96490,18 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr>;
 
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, depth INTEGER NOT NULL, root_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, title TEXT NOT NULL, version INTEGER NOT NULL, lifecycle_state TEXT NOT NULL, creation_error TEXT NULL, runtime_state_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_session_lineage (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL, source_cutoff_seq_global INTEGER NULL, source_message_id INTEGER NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_error TEXT NULL, created_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, depth INTEGER NOT NULL, root_id INTEGER NOT NULL, workspace_id INTEGER NOT NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, title TEXT NOT NULL, version INTEGER NOT NULL, lifecycle_state TEXT NOT NULL, creation_failure_json JSON NULL, runtime_state_json JSON NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_session_lineage (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, relation_kind TEXT NOT NULL, source_cutoff_seq_global INTEGER NULL, source_message_id INTEGER NULL, task_id TEXT NULL, subtask_status TEXT NULL, subtask_started_at_ms INTEGER NULL, subtask_finished_at_ms INTEGER NULL, subtask_failure_json TEXT NULL, created_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_permission_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, action_key TEXT NOT NULL, mode TEXT NOT NULL, scope TEXT NOT NULL, session_id INTEGER NULL, workspace_id INTEGER NULL, source TEXT NOT NULL, reason TEXT NULL, operator TEXT NULL, revoked_at_ms INTEGER NULL, revoked_reason TEXT NULL, revoked_by TEXT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_events (id INTEGER PRIMARY KEY AUTOINCREMENT, event_uuid TEXT NOT NULL UNIQUE, seq_global INTEGER NOT NULL UNIQUE, seq_session INTEGER NULL, session_id INTEGER NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, workspace_id INTEGER NULL REFERENCES agena_workspaces(id) ON UPDATE CASCADE ON DELETE CASCADE, kind_tag TEXT NOT NULL, envelope_schema INTEGER NOT NULL, payload_json JSON NOT NULL, causation_uuid TEXT NULL, correlation_uuid TEXT NULL, created_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_turns (turn_id TEXT PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, turn_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, UNIQUE(session_id, turn_seq))",
-    "CREATE TABLE IF NOT EXISTS agena_responses (response_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL REFERENCES agena_turns(turn_id) ON UPDATE CASCADE ON DELETE CASCADE, execution_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, revision_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_assistant_replies (reply_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL UNIQUE REFERENCES agena_turns(turn_id) ON UPDATE CASCADE ON DELETE CASCADE, status TEXT NOT NULL, revision_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_reply_executions (execution_id TEXT PRIMARY KEY, reply_id TEXT NOT NULL REFERENCES agena_assistant_replies(reply_id) ON UPDATE CASCADE ON DELETE CASCADE, source TEXT NOT NULL, status TEXT NOT NULL, revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
     "CREATE TABLE IF NOT EXISTS agena_activities (activity_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, actor TEXT NOT NULL, payload_json JSON NOT NULL, state TEXT NOT NULL, position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
     "CREATE TABLE IF NOT EXISTS agena_text_segments (segment_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, text TEXT NOT NULL, position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_transcript_messages (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_transcript_parts (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES agena_transcript_messages(message_id) ON UPDATE CASCADE ON DELETE CASCADE, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL DEFAULT 0, activity_id TEXT NULL UNIQUE, segment_id TEXT NULL UNIQUE, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL, CHECK ((activity_id IS NULL) OR (segment_id IS NULL)))",
-    "CREATE TABLE IF NOT EXISTS agena_transcript_projection_states (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, last_seq_global INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_model_messages (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, model_turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_model_message_parts (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES agena_model_messages(message_id) ON UPDATE CASCADE ON DELETE CASCADE, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL DEFAULT 0, awaits_user_reply BOOLEAN NOT NULL DEFAULT 0, activity_id TEXT NULL UNIQUE, segment_id TEXT NULL UNIQUE, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL, CHECK ((activity_id IS NULL) OR (segment_id IS NULL)))",
+    "CREATE TABLE IF NOT EXISTS agena_model_projection_states (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, last_seq_global INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_state (id INTEGER PRIMARY KEY, fetched_at_unix_ms INTEGER NULL, source TEXT NULL, last_error TEXT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)",
@@ -96401,12 +96524,13 @@ const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_events_workspace_seq ON agena_events(workspace_id, seq_global)",
     "CREATE INDEX IF NOT EXISTS idx_agena_events_kind_seq ON agena_events(kind_tag, seq_global)",
     "CREATE INDEX IF NOT EXISTS idx_agena_turns_session_seq ON agena_turns(session_id, turn_seq)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_responses_turn ON agena_responses(turn_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_agena_assistant_replies_turn ON agena_assistant_replies(turn_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_reply_executions_reply ON agena_reply_executions(reply_id, started_at_ms)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_activities_owner_position ON agena_activities(owner_kind, owner_id, position)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_text_segments_owner_position ON agena_text_segments(owner_kind, owner_id, position)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_transcript_messages_session_created ON agena_transcript_messages(session_id, created_at_ms, message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_transcript_messages_session_turn ON agena_transcript_messages(session_id, turn_id, message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_transcript_parts_message_index ON agena_transcript_parts(message_id, part_index)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_model_messages_session_created ON agena_model_messages(session_id, created_at_ms, message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_model_messages_session_turn ON agena_model_messages(session_id, model_turn_id, message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_model_message_parts_message_index ON agena_model_message_parts(message_id, part_index)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_model_catalog_kind_model ON agena_model_catalog_entries(kind, model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_model_id ON agena_model_catalog_entries(model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_kind ON agena_model_catalog_entries(kind)",
@@ -96434,13 +96558,16 @@ mod tests {
     async fn text_and_activity_share_one_owner_position_namespace();
 
     #[tokio::test]
-    async fn deleting_response_turn_and_session_leaves_no_canonical_orphans();
+    async fn deleting_reply_turn_and_session_leaves_no_canonical_orphans();
+
+    #[tokio::test]
+    async fn canonical_reply_and_execution_lifecycles_are_database_invariants();
 }
 `````
 
 </details>
 
-<details><summary><code>crates/agena-storage-sqlite/src/schema_invariants.rs</code> — 201 lines; fn=1</summary>
+<details><summary><code>crates/agena-storage-sqlite/src/schema_invariants.rs</code> — 300 lines; fn=1</summary>
 
 - Package：`agena-storage-sqlite`
 - Target/module：agena_storage_sqlite: crate::schema_invariants
@@ -96466,7 +96593,7 @@ use sea_orm::{
     TransactionTrait,
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 pub async fn begin_schema_initialization(
     db: &DatabaseConnection,
@@ -96661,7 +96788,7 @@ fn map_mutation_error(error: impl std::fmt::Display) -> SessionMutationRepositor
 
 </details>
 
-<details><summary><code>crates/agena-storage-sqlite/src/stored_values.rs</code> — 115 lines; mod=1, enum=3, impl=6, fn=7</summary>
+<details><summary><code>crates/agena-storage-sqlite/src/stored_values.rs</code> — 131 lines; mod=1, enum=3, impl=6, fn=7</summary>
 
 - Package：`agena-storage-sqlite`
 - Target/module：agena_storage_sqlite: crate::stored_values, crate::stored_values::tests
@@ -96702,6 +96829,14 @@ pub enum StoredExecutionStatus {
     Failed,
     #[sea_orm(num_value = 5)]
     Cancelled,
+    #[sea_orm(num_value = 6)]
+    PolicyDenied,
+    #[sea_orm(num_value = 7)]
+    UserDeclined,
+    #[sea_orm(num_value = 8)]
+    CapabilityUnavailable,
+    #[sea_orm(num_value = 9)]
+    ToolUnavailable,
 }
 impl From<ExecutionStatus> for StoredExecutionStatus {
     fn from(value: ExecutionStatus) -> Self;
@@ -96798,7 +96933,7 @@ use serde::Deserialize;
 
 const SESSION_TABLE: &str = "agena_sessions";
 const LINEAGE_TABLE: &str = "agena_session_lineage";
-const MESSAGE_TABLE: &str = "agena_transcript_messages";
+const MESSAGE_TABLE: &str = "agena_model_messages";
 
 pub struct SeaUsageRepository {
     db: Arc<DatabaseConnection>,
@@ -96914,7 +97049,7 @@ mod tests {
 
 </details>
 
-### 8.44 `agena-tool`
+### 8.45 `agena-tool`
 
 <details><summary><code>crates/agena-tool/src/code_search.rs</code> — 464 lines; mod=1, struct=6, enum=2, impl=1, fn=16</summary>
 
@@ -97107,7 +97242,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tool/src/lib.rs</code> — 412 lines; mod=5, struct=16, enum=5, impl=5, fn=13</summary>
+<details><summary><code>crates/agena-tool/src/lib.rs</code> — 422 lines; mod=5, struct=16, enum=5, impl=5, fn=13</summary>
 
 - Package：`agena-tool`
 - Target/module：agena_tool: crate, crate::tests
@@ -97116,6 +97251,7 @@ mod tests {
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+pub use agena_domain::ToolPresentationSection;
 use agena_domain::{PermissionAction, PermissionDecision, ToolInvocation};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -97234,7 +97370,11 @@ pub struct ToolAvailability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ToolExecutionSummary {
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
     pub output_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -97278,7 +97418,7 @@ pub struct CronJobSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_run_error: Option<String>,
+    pub last_run_failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97296,7 +97436,7 @@ pub struct CronRunSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97364,7 +97504,7 @@ mod tests {
     use super::{
         BuiltinToolProfile, PreparedShellCommand, SnapshotBackend, SnapshotBackendCapabilities,
         SnapshotBackendSupport, ToolAttachmentSummary, ToolAvailability, ToolExecutionSummary,
-        ToolOutputTruncationPolicy,
+        ToolOutputTruncationPolicy, ToolPresentationSection,
     };
 
     #[test]
@@ -97630,7 +97770,7 @@ mod tests {
 
 </details>
 
-### 8.45 `agena-tui`
+### 8.46 `agena-tui`
 
 <details><summary><code>crates/agena-tui/src/choice.rs</code> — 445 lines; mod=1, struct=3, enum=4, type=1, impl=3, fn=28</summary>
 
@@ -98169,51 +98309,6 @@ mod tests {
 
     #[test]
     fn selection_emits_only_the_stable_path_map_key();
-}
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui/src/flash.rs</code> — 52 lines; mod=1, struct=1, enum=1, impl=3, fn=4</summary>
-
-- Package：`agena-tui`
-- Target/module：agena_tui: crate::flash, crate::flash::tests
-
-`````rust
-use std::time::{Duration, Instant};
-
-pub const DEFAULT_FLASH_DURATION: Duration = Duration::from_secs(5);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlashLevel {
-    Success,
-    Warning,
-    Error,
-    Info,
-}
-
-#[derive(Debug, Clone)]
-pub struct FlashMessage {
-    pub text: String,
-    pub level: FlashLevel,
-    pub expires_at: Instant,
-}
-
-impl FlashMessage {
-    pub fn new(level: FlashLevel, text: impl Into<String>) -> Self;
-
-    pub fn with_lifetime(level: FlashLevel, text: impl Into<String>, lifetime: Duration) -> Self;
-
-    pub fn is_expired_at(&self, now: Instant) -> bool;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{FlashLevel, FlashMessage};
-    use std::time::Duration;
-
-    #[test]
-    fn flash_expiration_is_a_presentation_policy();
 }
 `````
 
@@ -98821,7 +98916,6 @@ pub mod command_palette;
 pub mod composer;
 pub mod file_attach;
 pub mod file_mentions;
-pub mod flash;
 pub mod help;
 pub mod i18n;
 pub mod input;
@@ -98830,6 +98924,7 @@ pub mod link;
 pub mod main_focus;
 pub mod model_catalog;
 pub mod model_chooser;
+pub mod notice;
 pub mod path_browser;
 pub mod permission_prompt;
 pub mod presentation_config;
@@ -99200,6 +99295,92 @@ mod tests {
 
     #[test]
     fn selected_row_emits_a_pure_identity_intent();
+}
+`````
+
+</details>
+
+<details><summary><code>crates/agena-tui/src/notice.rs</code> — 139 lines; mod=1, struct=2, enum=2, impl=3, fn=9</summary>
+
+- Package：`agena-tui`
+- Target/module：agena_tui: crate::notice, crate::notice::tests
+
+`````rust
+use std::time::{Duration, Instant};
+
+pub const DEFAULT_NOTICE_DURATION: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeSeverity {
+    Success,
+    Warning,
+    Error,
+    Info,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NoticeScope {
+    #[default]
+    Global,
+    Composer,
+    Field,
+    Form,
+    Session,
+    ToolCall,
+    Provider,
+    Plugin,
+    Settings,
+    BackgroundTask,
+    Startup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoticeAction {
+    pub label: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UiNotice {
+    pub summary: String,
+    pub detail: Option<String>,
+    pub severity: NoticeSeverity,
+    pub scope: NoticeScope,
+    pub action: Option<NoticeAction>,
+    pub failure_id: Option<agena_failure::FailureId>,
+    pub expires_at: Instant,
+}
+
+impl UiNotice {
+    pub fn message(severity: NoticeSeverity, summary: impl Into<String>) -> Self;
+
+    pub fn with_lifetime(
+        severity: NoticeSeverity,
+        summary: impl Into<String>,
+        lifetime: Duration,
+    ) -> Self;
+
+    pub fn from_failure(failure: &agena_failure::Failure) -> Self;
+
+    pub fn from_problem(problem: &agena_failure::UserProblem) -> Self;
+
+    pub fn display_summary(&self) -> String;
+
+    pub fn is_expired_at(&self, now: Instant) -> bool;
+}
+
+fn recovery_action(recovery: agena_failure::RecoveryDirective) -> Option<NoticeAction>;
+
+#[cfg(test)]
+mod tests {
+    use super::{NoticeSeverity, UiNotice};
+    use std::time::Duration;
+
+    #[test]
+    fn notice_expiration_is_a_presentation_policy();
+
+    #[test]
+    fn unexpected_failure_shows_reference_but_not_machine_code();
 }
 `````
 
@@ -101550,7 +101731,7 @@ mod tests {
 
 </details>
 
-### 8.46 `agena-tui-app`
+### 8.47 `agena-tui-app`
 
 <details><summary><code>crates/agena-tui-app/src/app_choice_helpers.rs</code> — 718 lines; mod=1, impl=5, fn=32</summary>
 
@@ -101740,7 +101921,7 @@ impl App {
 
 fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool;
 use crate::{
-    App, AppMessage, CommandId, CommandSpec, ComposerDraft, Path, PermissionReplyKind,
+    App, AppMessage, CommandId, CommandSpec, ComposerDraft, NoticeScope, Path, PermissionReplyKind,
     TIMELINE_EVENT_LIMIT, UiAction, derive_session_title, non_empty_owned, parse_pr_command_args,
     ui_text,
 };
@@ -101999,7 +102180,7 @@ use crate::{ComposerDraft, PathBuf, PermissionMode, env};
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_composer_state.rs</code> — 785 lines; mod=1, impl=1, fn=39</summary>
+<details><summary><code>crates/agena-tui-app/src/app_composer_state.rs</code> — 779 lines; mod=1, impl=1, fn=39</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_composer_state, crate::app_composer_state::tests
@@ -102060,11 +102241,11 @@ impl App {
 
     pub(crate) fn persist_draft_store_with_feedback(&mut self, force: bool);
 
-    pub(crate) fn report_draft_store_error(&mut self, error: String);
+    pub(crate) fn report_draft_store_error(&mut self, error: crate::UiFailure);
 
     pub(crate) fn record_prompt_history_from_draft(&mut self, draft: &ComposerDraft);
 
-    pub(crate) fn report_prompt_history_error(&mut self, error: String);
+    pub(crate) fn report_prompt_history_error(&mut self, error: crate::UiFailure);
 
     pub(crate) fn reset_prompt_history_recall(&mut self);
 
@@ -102300,7 +102481,7 @@ use agena_tui::main_focus::Focus;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_lifecycle.rs</code> — 522 lines; mod=1, impl=1, fn=15</summary>
+<details><summary><code>crates/agena-tui-app/src/app_lifecycle.rs</code> — 510 lines; mod=1, impl=1, fn=15</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_lifecycle, crate::app_lifecycle::tests
@@ -102342,10 +102523,10 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
 use crate::Result;
 use crate::{
     App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
-    DraftStore, Duration, Editor, Event, I18n, Instant, LaunchOptions, LayoutCache, PromptHistory,
-    REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState, SessionComposerState,
-    SessionListLoadState, TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
-    default_draft_store_path, default_prompt_history_path, interval,
+    DraftStore, Duration, Editor, Event, HashSet, I18n, Instant, LaunchOptions, LayoutCache,
+    PromptHistory, REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState,
+    SessionComposerState, SessionListLoadState, TerminalRuntime, TranscriptDetailDefaults,
+    TranscriptState, UI_TICK_MS, default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
 use agena_tui::main_focus::Focus;
@@ -102477,7 +102658,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_navigation.rs</code> — 479 lines; impl=1, fn=24</summary>
+<details><summary><code>crates/agena-tui-app/src/app_navigation.rs</code> — 489 lines; impl=1, fn=24</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_navigation
@@ -102489,7 +102670,7 @@ impl App {
     pub(crate) fn open_rewind_confirm_overlay(
         &mut self,
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     );
@@ -102505,10 +102686,10 @@ impl App {
 
     pub(crate) fn session_search_item(&self, session: SessionResource) -> SessionSearchItem;
 
-    pub(crate) fn rewind_message_navigation_item(
+    pub(crate) fn rewind_turn_navigation_item(
         &self,
         session_id: i64,
-        message: MessageResource,
+        turn: agena_domain::TurnSnapshot,
     ) -> (
         agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
@@ -102561,11 +102742,10 @@ impl App {
     pub(crate) fn handle_confirm_action(&mut self, action: ConfirmAction);
 }
 use crate::{
-    App, ConfirmAction, MessageResource, ModelRef, Overlay, PendingInteractiveKind, Route,
-    RunActivityTarget, RunOperation, SessionActivity, SessionNavigationCommand,
-    SessionNavigationQuery, SessionResource, SessionSearchItem, TimelineOverlay, format_timestamp,
-    pending_interactive_kind_for_execution, preferred_visible_session_selection,
-    rewind_message_composer_text, rewind_message_preview, ui_text,
+    App, ConfirmAction, ModelRef, Overlay, PendingInteractiveKind, Route, RunActivityTarget,
+    RunOperation, SessionActivity, SessionNavigationCommand, SessionNavigationQuery,
+    SessionResource, SessionSearchItem, TimelineOverlay, format_timestamp,
+    pending_interactive_kind_for_execution, preferred_visible_session_selection, ui_text,
 };
 use agena_tui::main_focus::Focus;
 `````
@@ -102827,7 +103007,7 @@ fn permission_trace_step_label(i18n: &I18n, step: &agena_domain::DecisionTraceSt
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_permission_helpers/editor.rs</code> — 860 lines; mod=1, fn=12</summary>
+<details><summary><code>crates/agena-tui-app/src/app_permission_helpers/editor.rs</code> — 862 lines; mod=1, fn=12</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_permission_helpers::editor, crate::app_permission_helpers::editor::tests
@@ -103370,7 +103550,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_permissions/permission_studio.rs</code> — 352 lines; impl=1, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_permissions/permission_studio.rs</code> — 358 lines; impl=1, fn=7</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_permissions::permission_studio
@@ -103434,7 +103614,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_permissions/rule_actions.rs</code> — 224 lines; impl=1, fn=6</summary>
+<details><summary><code>crates/agena-tui-app/src/app_permissions/rule_actions.rs</code> — 227 lines; impl=1, fn=6</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_permissions::rule_actions
@@ -103486,7 +103666,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/catalog.rs</code> — 406 lines; impl=1, fn=13</summary>
+<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/catalog.rs</code> — 408 lines; impl=1, fn=13</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_provider_runtime::catalog
@@ -103555,7 +103735,7 @@ use agena_tui::model_catalog::ModelCatalogPresentation;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/fields.rs</code> — 209 lines; impl=1, fn=4</summary>
+<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/fields.rs</code> — 221 lines; impl=1, fn=4</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_provider_runtime::fields
@@ -103607,7 +103787,7 @@ mod state_sync;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/model_page.rs</code> — 260 lines; impl=1, fn=8</summary>
+<details><summary><code>crates/agena-tui-app/src/app_provider_runtime/model_page.rs</code> — 263 lines; impl=1, fn=8</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_provider_runtime::model_page
@@ -103860,7 +104040,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_provider_text.rs</code> — 520 lines; fn=26</summary>
+<details><summary><code>crates/agena-tui-app/src/app_provider_text.rs</code> — 536 lines; fn=26</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_provider_text
@@ -103981,7 +104161,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_events/dispatch.rs</code> — 481 lines; impl=1, fn=13</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_events/dispatch.rs</code> — 480 lines; impl=1, fn=13</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_events::dispatch
@@ -104068,7 +104248,7 @@ use agena_tui::main_focus::Focus;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_events/handlers.rs</code> — 785 lines; impl=1, fn=16</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_events/handlers.rs</code> — 781 lines; impl=1, fn=16</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_events::handlers
@@ -104118,7 +104298,7 @@ impl App {
     pub(crate) fn handle_rewind_messages_loaded(
         &mut self,
         session_id: i64,
-        result: UiResult<Vec<MessageResource>>,
+        result: UiResult<Vec<agena_domain::TurnSnapshot>>,
     );
 
     pub(crate) fn handle_model_catalog_loaded(
@@ -104178,21 +104358,21 @@ impl App {
 }
 use crate::view::model_catalog_presentation_item;
 use crate::{
-    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, MessageResource,
-    ModelCatalogListResponse, PaginatedResponse, ProviderAdapterModelsResponse,
-    ProviderPickerPurpose, ProviderStudioFocus, ProviderSummaryResource, Route, RunActivityTarget,
-    RunOperation, SelectableListState, SelectionPickerCommand, SelectionPickerQuery,
-    SessionExecutionResource, SessionNavigationCommand, SessionNavigationQuery, SessionResource,
-    UiResult, build_timeline_item, i18n_provider_list_detail, is_rewind_target_message,
-    provider_draft_auth_action_message, provider_draft_auth_error_message,
-    provider_draft_auth_message_is_pending, provider_list_create_item,
-    provider_studio_available_model_keys, provider_studio_ensure_default_selection,
-    provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,
-    provider_studio_new_default_selected_model_keys, provider_studio_preferred_detail_field_index,
-    provider_studio_provider_rows, provider_studio_restore_model_selection,
-    provider_studio_save_error_message, provider_studio_save_result_message,
-    provider_studio_selected_adapter_id, restore_provider_studio_adapter_selection,
-    settings_choice_adapter_fallback, settings_choice_default_provider_detail, ui_text,
+    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, ModelCatalogListResponse,
+    PaginatedResponse, ProviderAdapterModelsResponse, ProviderPickerPurpose, ProviderStudioFocus,
+    ProviderSummaryResource, Route, RunActivityTarget, RunOperation, SelectableListState,
+    SelectionPickerCommand, SelectionPickerQuery, SessionExecutionResource,
+    SessionNavigationCommand, SessionNavigationQuery, SessionResource, UiResult,
+    build_timeline_item, i18n_provider_list_detail, provider_draft_auth_action_message,
+    provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
+    provider_list_create_item, provider_studio_available_model_keys,
+    provider_studio_ensure_default_selection, provider_studio_merge_refreshed_adapter_models,
+    provider_studio_model_key, provider_studio_new_default_selected_model_keys,
+    provider_studio_preferred_detail_field_index, provider_studio_provider_rows,
+    provider_studio_restore_model_selection, provider_studio_save_error_message,
+    provider_studio_save_result_message, provider_studio_selected_adapter_id,
+    restore_provider_studio_adapter_selection, settings_choice_adapter_fallback,
+    settings_choice_default_provider_detail, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;
@@ -104200,7 +104380,7 @@ use agena_tui_session::session_view::SessionViewMode;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_events/interactive.rs</code> — 183 lines; impl=1, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_events/interactive.rs</code> — 182 lines; impl=1, fn=7</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_events::interactive
@@ -104250,7 +104430,7 @@ mod requests;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_events/requests.rs</code> — 479 lines; impl=1, fn=21</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_events/requests.rs</code> — 480 lines; impl=1, fn=21</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_events::requests
@@ -104284,7 +104464,7 @@ impl App {
     pub(crate) fn request_session_rewind(
         &mut self,
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     );
@@ -104339,7 +104519,7 @@ use agena_tui_session::session_view::SessionViewMode;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_helpers.rs</code> — 190 lines; mod=1, fn=19</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_helpers.rs</code> — 186 lines; mod=1, fn=18</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_helpers, crate::app_session_helpers::tests
@@ -104354,8 +104534,6 @@ pub(crate) fn execution_model_status_label(
 pub(crate) fn execution_model_name_status_label(
     execution: &SessionExecutionContextResource,
 ) -> Option<String>;
-
-pub(crate) fn is_rewind_target_message(message: &MessageResource) -> bool;
 
 pub(crate) fn derive_session_title(i18n: &I18n, text: &str) -> String;
 
@@ -104409,8 +104587,8 @@ pub(crate) fn find_placeholder_occurrence(
     occupied: &[Range<usize>],
 ) -> Option<Range<usize>>;
 use crate::{
-    AttachmentKind, Command, ComposerDraft, ComposerItem, I18n, MessageResource, ModelRef, Path,
-    Range, SessionExecutionContextResource, Stdio, UnicodeWidthChar, UserInputQuestion,
+    AttachmentKind, Command, ComposerDraft, ComposerItem, I18n, ModelRef, Path, Range,
+    SessionExecutionContextResource, Stdio, UnicodeWidthChar, UserInputQuestion,
     sanitize_terminal_text, ui_text,
 };
 use agena_tui::user_input::UserInputAnswerDraft;
@@ -104443,7 +104621,7 @@ use agena_tui_session::session_view::SessionViewMode;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_session_interactive/execution.rs</code> — 326 lines; impl=1, fn=13</summary>
+<details><summary><code>crates/agena-tui-app/src/app_session_interactive/execution.rs</code> — 262 lines; impl=1, fn=12</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_session_interactive::execution
@@ -104483,18 +104661,13 @@ impl App {
         label: String,
     );
 
-    pub(crate) fn maybe_auto_reply_duplicate_permission_request(
-        &mut self,
-        _session_id: i64,
-    ) -> bool;
-
-    pub(crate) fn sync_pending_interactive_after_execution(&mut self, session_id: i64);
+    pub(crate) fn sync_pending_interactive_after_execution(&mut self, _session_id: i64);
 }
 use crate::{
-    App, AppMessage, ComposerDraft, Instant, PermissionReplayState, PermissionReplyKind,
-    PermissionRequest, PermissionScope, RunActivityTarget, RunOperation, commands,
+    App, AppMessage, ComposerDraft, Instant, PermissionReplyKind, PermissionRequest,
+    PermissionScope, RunActivityTarget, RunOperation, commands,
     composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
-    permission_request_fingerprint, plugin_command_matches_name, run_status_line_command, ui_text,
+    plugin_command_matches_name, run_status_line_command, ui_text,
 };
 `````
 
@@ -104802,7 +104975,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_settings_choices/fields.rs</code> — 446 lines; mod=1, impl=1, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_settings_choices/fields.rs</code> — 401 lines; mod=1, impl=1, fn=7</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_settings_choices::fields, crate::app_settings_choices::fields::tests
@@ -104830,7 +105003,7 @@ impl App {
 
     pub(crate) fn provider_model_config_field_choice_items(
         &self,
-        dialog: &ProviderStudioOverlay,
+        _dialog: &ProviderStudioOverlay,
         field: ProviderModelConfigField,
     ) -> Option<Vec<ChoiceItem>>;
 
@@ -104840,10 +105013,9 @@ impl App {
 }
 use crate::{
     AWS_REGION_CHOICES, App, ChoiceItem, CredentialIssuer, ProviderDraftAuthKind,
-    ProviderDraftSecretSourceKind, ProviderModelConfigField, ProviderNativeToolsPreset,
-    ProviderStudioField, ProviderStudioOverlay, SUPPORTED_LOCALES, SettingsFieldSpec,
-    boolean_choice_items, choice_item, choice_item_with_value,
-    provider_native_tools_available_preset_for_adapter, provider_studio_api_key_env_choice_items,
+    ProviderDraftSecretSourceKind, ProviderModelConfigField, ProviderStudioField,
+    ProviderStudioOverlay, SUPPORTED_LOCALES, SettingsFieldSpec, boolean_choice_items, choice_item,
+    choice_item_with_value, provider_studio_api_key_env_choice_items,
     provider_studio_profile_choice_items, settings_choice_adapter_fallback,
     settings_choice_default_provider_detail, ui_text,
 };
@@ -105246,7 +105418,7 @@ pub(crate) fn app_detail_plain_line(text: impl Into<String>) -> DetailTextLine<'
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_skill_picker.rs</code> — 331 lines; mod=1, struct=2, impl=1, fn=13</summary>
+<details><summary><code>crates/agena-tui-app/src/app_skill_picker.rs</code> — 333 lines; mod=1, struct=2, impl=1, fn=13</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_skill_picker, crate::app_skill_picker::tests
@@ -105318,7 +105490,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_skill_studio.rs</code> — 634 lines; mod=1, struct=1, impl=1, fn=21</summary>
+<details><summary><code>crates/agena-tui-app/src/app_skill_studio.rs</code> — 643 lines; mod=1, struct=1, impl=1, fn=21</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_skill_studio, crate::app_skill_studio::tests
@@ -105428,7 +105600,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_status_context.rs</code> — 298 lines; impl=1, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_status_context.rs</code> — 297 lines; impl=1, fn=7</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_status_context
@@ -105442,7 +105614,7 @@ impl App {
     pub(crate) fn block_on_async<F, T, E>(&self, fut: F) -> UiResult<T>
     where
         F: std::future::Future<Output = std::result::Result<T, E>>,
-        E: ToString;
+        E: std::fmt::Display;
 
     pub(crate) fn current_runtime_status_summary(&self) -> String;
 
@@ -105466,7 +105638,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_studio_overlays.rs</code> — 238 lines; impl=1, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_studio_overlays.rs</code> — 237 lines; impl=1, fn=7</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_studio_overlays
@@ -105613,7 +105785,7 @@ mod transcript_navigation_tests {
     fn transcript_search_starts_after_or_before_the_cursor_and_wraps();
 
     #[test]
-    fn whole_message_highlight_excludes_the_role_header();
+    fn whole_message_highlight_includes_the_role_header();
 
     #[test]
     fn horizontal_navigation_only_visits_complete_messages();
@@ -105628,10 +105800,10 @@ mod transcript_navigation_tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_tests.rs</code> — 2298 lines; mod=8, fn=34</summary>
+<details><summary><code>crates/agena-tui-app/src/app_tests.rs</code> — 2622 lines; mod=7, fn=39</summary>
 
 - Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::app_tests, crate::app_tests::live_transcript_tests, crate::app_tests::pending_message_tests, crate::app_tests::prompt_history_tests, crate::app_tests::rewind_message_tests, crate::app_tests::transcript_character_cursor_tests, crate::app_tests::transcript_expansion_tests, crate::app_tests::transcript_mouse_scroll_tests
+- Target/module：agena_tui_app: crate::app_tests, crate::app_tests::live_transcript_tests, crate::app_tests::pending_message_tests, crate::app_tests::prompt_history_tests, crate::app_tests::transcript_character_cursor_tests, crate::app_tests::transcript_expansion_tests, crate::app_tests::transcript_mouse_scroll_tests
 
 `````rust
 use super::{
@@ -105684,8 +105856,8 @@ mod transcript_character_cursor_tests {
     fn snapshot_turn(
         sequence: i64,
         input: &str,
-        response: &str,
-        status: agena_domain::ResponseStatus,
+        reply: &str,
+        status: agena_domain::AssistantReplyStatus,
     ) -> agena_domain::TurnSnapshot;
 
     fn display_column_before(text: &str, marker: &str) -> usize;
@@ -105706,10 +105878,10 @@ mod transcript_character_cursor_tests {
     fn markdown_and_message_text_objects_select_semantic_ranges();
 
     #[test]
-    fn cancelled_response_activity_is_rendered_after_its_user_turn_as_an_assistant_outcome();
+    fn cancelled_reply_activity_is_rendered_after_its_user_turn_as_an_assistant_outcome();
 
     #[test]
-    fn cancelled_response_activity_never_moves_across_a_later_user_turn();
+    fn cancelled_reply_activity_never_moves_across_a_later_user_turn();
 
     #[test]
     fn delayed_cancellations_stay_with_their_original_user_turns();
@@ -105727,17 +105899,29 @@ mod prompt_history_tests {
 mod pending_message_tests {
     use super::super::{PendingUserMessage, TranscriptState};
     use agena_domain::{
-        ContentDocument, ContentNode, ExecutionId, ResponseId, ResponseSnapshot, ResponseStatus,
-        TranscriptSnapshot, TurnId, TurnSnapshot,
+        ActivityId, ActivityPayload, ActivityProvenance, AssistantReplyId, AssistantReplySnapshot,
+        AssistantReplyStatus, ComposerActivity, ComposerDocument, ComposerNode, ContentDocument,
+        ContentNode, SkillReferenceActivity, TranscriptSnapshot, TurnId, TurnSnapshot,
     };
 
     #[test]
+    fn optimistic_user_document_uses_the_same_activity_and_placeholder_projection();
+
+    #[test]
     fn confirmed_optimistic_message_is_atomically_replaced_by_its_persisted_message();
+
+    #[test]
+    fn empty_continuation_turn_does_not_consume_an_optimistic_user_message();
+
+    #[test]
+    fn input_materializing_on_an_existing_turn_replaces_the_optimistic_message();
 }
 
 #[cfg(test)]
 mod transcript_mouse_scroll_tests {
-    use agena_domain::ExecutionStatus;
+    use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus};
+
+    fn pending_document(text: String) -> ComposerDocument;
 
     use super::super::{
         MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptMoveDirection,
@@ -105765,14 +105949,22 @@ mod transcript_mouse_scroll_tests {
 
 #[cfg(test)]
 mod transcript_expansion_tests {
-    use agena_domain::ExecutionStatus;
-    use agena_domain::ReasoningPart;
+    use agena_domain::{
+        ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
+        ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
+        AssistantReplyStatus, ContentDocument, ContentNode, ContentPosition, ExecutionStatus,
+        OperationActivity, ReasoningPart, StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
+        TranscriptSnapshot, TurnId, TurnSnapshot,
+    };
 
     use super::super::{
         MessageResource, MessageRole, MessageStatus, TranscriptMoveDirection, TranscriptNodeKey,
         TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
         transcript_text_selection_text,
     };
+
+    #[test]
+    fn canonical_tools_list_activity_toggles_open_through_transcript_state();
 
     #[test]
     fn collapsing_from_inside_an_activity_keeps_the_cursor_on_that_activity();
@@ -105800,35 +105992,22 @@ mod transcript_expansion_tests {
 }
 
 #[cfg(test)]
-mod rewind_message_tests {
-    use agena_domain::ExecutionStatus;
-    use agena_domain::TextPart;
-
-    use super::super::{
-        MessageResource, MessageRole, MessageStatus, Utc, rewind_message_composer_text,
-    };
-
-    #[test]
-    fn composer_text_restores_only_visible_user_text();
-}
-
-#[cfg(test)]
 mod live_transcript_tests {
     use agena_domain::{
-        ActivityOwner, ContentDocument, ContentNode, EventMeta, ExecutionId, ResponseId,
-        ResponseSegmentId, ResponseSnapshot, ResponseStatus, TranscriptPatch, TranscriptSnapshot,
-        TurnId, TurnSnapshot,
+        ActivityOwner, AssistantReplyId, AssistantReplySnapshot, AssistantReplyStatus,
+        ComposerDocument, ComposerNode, ContentDocument, ContentNode, EventMeta, TextSegmentId,
+        TranscriptPatch, TranscriptSnapshot, TurnId, TurnSnapshot,
     };
     use agena_runtime::{RuntimePresentationEvent, RuntimePresentationEventKind};
     use uuid::Uuid;
 
-    use super::super::{TranscriptState, Utc};
+    use super::super::{PendingUserMessage, TranscriptState, Utc};
 
     fn event(kind: RuntimePresentationEventKind, seq: i64) -> RuntimePresentationEvent;
 
     fn text_patch(
-        response_id: ResponseId,
-        segment_id: ResponseSegmentId,
+        response_id: AssistantReplyId,
+        segment_id: TextSegmentId,
         text: &str,
         seq: i64,
     ) -> RuntimePresentationEvent;
@@ -105840,6 +106019,9 @@ mod live_transcript_tests {
 
     #[test]
     fn repeated_live_upserts_replace_one_stable_segment();
+
+    #[test]
+    fn live_user_input_materialization_replaces_the_optimistic_entry();
 }
 `````
 
@@ -105874,7 +106056,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_transcript_actions.rs</code> — 285 lines; impl=6, fn=16</summary>
+<details><summary><code>crates/agena-tui-app/src/app_transcript_actions.rs</code> — 316 lines; impl=6, fn=18</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_transcript_actions
@@ -105910,11 +106092,15 @@ impl App {
 
     pub(crate) fn semantic_loaded_transcript_text(&mut self) -> String;
 
-    pub(crate) fn flash(&mut self, level: FlashLevel, text: impl Into<String>);
+    pub(crate) fn notify(&mut self, severity: NoticeSeverity, text: impl Into<String>);
 
-    pub(crate) fn flash_error(&mut self, text: impl Into<String>);
+    pub(crate) fn notify_failure(&mut self, failure: &agena_failure::Failure, scope: NoticeScope);
 
-    pub(crate) fn flash_warning(&mut self, text: impl Into<String>);
+    pub(crate) fn notify_ui_failure(&mut self, error: crate::UiFailure, scope: NoticeScope);
+
+    pub(crate) fn flash_error(&mut self, notice: impl Into<crate::app_types::UiErrorNotice>);
+
+    pub(crate) fn flash_warning(&mut self, notice: impl Into<crate::app_types::UiErrorNotice>);
 
     pub(crate) fn flash_success(&mut self, text: impl Into<String>);
 
@@ -105922,8 +106108,8 @@ impl App {
 }
 use crate::Result;
 use crate::{
-    App, FlashLevel, FlashMessage, Local, Path, PathBuf, TerminalRuntime, TranscriptDetailDefaults,
-    UiResult, min, open_path, page_text, render_entry_export,
+    App, Local, NoticeScope, NoticeSeverity, Path, PathBuf, TerminalRuntime,
+    TranscriptDetailDefaults, UiNotice, UiResult, min, open_path, page_text, render_entry_export,
     render_transcript_snapshot_export_markdown, transcript_entries, ui_text,
 };
 use agena_tui::terminal_lifecycle::SuspendReason;
@@ -105931,14 +106117,12 @@ use agena_tui::terminal_lifecycle::SuspendReason;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_transcript_helpers.rs</code> — 361 lines; fn=22</summary>
+<details><summary><code>crates/agena-tui-app/src/app_transcript_helpers.rs</code> — 326 lines; fn=20</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_transcript_helpers
 
 `````rust
-pub(crate) fn rewind_message_composer_text(message: &MessageResource) -> String;
-
 pub(crate) fn pending_interactive_kind_from_request(
     request: &PendingInteractiveRequestResource,
 ) -> PendingInteractiveKind;
@@ -106011,8 +106195,6 @@ pub(crate) fn preferred_visible_session_selection(
     visible_sessions: &[agena_tui_session::session_list::SessionListItem],
 ) -> Option<i64>;
 
-pub(crate) fn permission_request_fingerprint(request: &PermissionRequest) -> String;
-
 pub(crate) fn permission_overlay_choice(
     page: PermissionPromptPage,
     selected: usize,
@@ -106037,11 +106219,10 @@ pub(crate) fn permission_related_actions_for_display<'a>(
     requested: &'a [PermissionAction],
 ) -> Vec<&'a PermissionAction>;
 use crate::{
-    BTreeSet, I18n, MessagePartDetailResource, MessageResource, PendingInteractiveKind,
-    PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionAction,
-    PermissionOverlay, PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage,
-    PermissionReplyKind, PermissionRequest, PermissionScope, SessionExecutionResource,
-    SessionResource, UserInputOverlay, json, ui_text,
+    BTreeSet, I18n, PendingInteractiveKind, PendingInteractiveRequest,
+    PendingInteractiveRequestResource, PermissionAction, PermissionOverlay,
+    PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage, PermissionReplyKind,
+    PermissionScope, SessionExecutionResource, SessionResource, UserInputOverlay, ui_text,
 };
 use agena_tui::main_focus::Focus;
 `````
@@ -106190,7 +106371,7 @@ impl Default for PermissionRuleDraft {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_types/overlays.rs</code> — 516 lines; struct=18, enum=22, type=5, fn=1</summary>
+<details><summary><code>crates/agena-tui-app/src/app_types/overlays.rs</code> — 504 lines; struct=17, enum=22, type=5, fn=1</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::app_types::overlays
@@ -106210,7 +106391,7 @@ use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
 use agena_provider::AgenaToolMode;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
-use agena_tui_backend::{ProviderConfigDraft, ProviderNativeToolsPreset};
+use agena_tui_backend::ProviderConfigDraft;
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, EditorDialogState, InputDialogState,
     SectionedListState, SelectableListState, SelectionCursor,
@@ -106493,23 +106674,13 @@ pub(crate) enum PermissionOverlayChoice {
     Details,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PermissionReplayState {
-    pub(crate) session_id: i64,
-    pub(crate) fingerprint: String,
-    pub(crate) last_request_id: String,
-    pub(crate) kind: PermissionReplyKind,
-    pub(crate) scope: Option<PermissionScope>,
-    pub(crate) label: String,
-}
-
 pub(crate) type ConfirmOverlay = ConfirmDialogState<ConfirmAction>;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmAction {
     Rewind {
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     },
@@ -106676,8 +106847,6 @@ pub(crate) struct ProviderModelConfigDraft {
     pub(crate) supported_thinking_modes: BTreeSet<String>,
     pub(crate) supported_speed_modes: BTreeSet<String>,
     pub(crate) description: String,
-    pub(crate) provider_native_tools_preset: ProviderNativeToolsPreset,
-    pub(crate) provider_native_tools_custom: agena_provider::ProviderNativeToolsConfig,
     pub(crate) definition: agena_provider::ConfiguredModelDefinition,
 }
 
@@ -106712,13 +106881,13 @@ use std::collections::BTreeMap;
 
 use crate::commands::CommandSpec;
 
-#[cfg(test)]
-use super::MessageResource;
 use super::{
     ComposerDraft, I18n, MathRenderContext, ModelRef, RenderedTranscript, SessionExecutionResource,
     SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction, TranscriptNodeKey,
     TranscriptViewport,
 };
+#[cfg(test)]
+use agena_api::resource::MessageResource;
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
 #[derive(Debug, Clone)]
@@ -106792,7 +106961,7 @@ pub(crate) struct SkillStudioDetail {
 pub(crate) type SkillStudioEditor =
     agena_tui_components::EditorDialogState<SkillStudioEditorAction>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum SkillStudioEditorAction {
     Create,
     Update { name: String },
@@ -106819,7 +106988,7 @@ pub(crate) enum SessionNavigationCommand {
     },
     Rewind {
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     },
@@ -106841,7 +107010,7 @@ pub(crate) struct CurrentLineageState {
     pub(crate) summary: agena_tui_session::session_navigation::SessionLineageSummary,
 }
 
-pub(crate) use agena_tui::flash::{FlashLevel, FlashMessage};
+pub(crate) use agena_tui::notice::{NoticeScope, NoticeSeverity, UiNotice};
 
 #[derive(Default)]
 pub(crate) struct SessionListLoadState {
@@ -106877,10 +107046,10 @@ pub(crate) struct TranscriptState {
     pub(crate) rendered: Option<RenderedTranscript>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PendingUserMessage {
     pub(crate) id: u64,
-    pub(crate) text: String,
+    pub(crate) document: agena_domain::ComposerDocument,
     pub(crate) confirmed: bool,
 }
 
@@ -106911,14 +107080,14 @@ pub(crate) struct RunOptionsState {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/app_types.rs</code> — 624 lines; mod=3, struct=7, enum=8, type=2, impl=3, fn=7</summary>
+<details><summary><code>crates/agena-tui-app/src/app_types.rs</code> — 784 lines; mod=4, struct=8, enum=9, type=2, impl=12, fn=17</summary>
 
 - Package：`agena-tui-app`
-- Target/module：agena_tui_app: crate::app_types
+- Target/module：agena_tui_app: crate::app_types, crate::app_types::ui_failure_tests
 
 `````rust
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -106926,8 +107095,8 @@ use std::{
 use agena_api::{
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, ProviderAdapterModelsResponse, ProviderSummaryResource,
-        SessionExecutionResource, SessionResource,
+        ProviderAdapterModelsResponse, ProviderSummaryResource, SessionExecutionResource,
+        SessionResource,
     },
 };
 use agena_domain::ModelRef;
@@ -107202,8 +107371,8 @@ pub struct App {
     pub(super) context_help: Option<HelpOverlay>,
     pub(super) seen_permission_request_ids: BTreeSet<String>,
     pub(super) seen_user_input_request_ids: BTreeSet<String>,
-    pub(super) pending_permission_replay: Option<PermissionReplayState>,
-    pub(super) flash: Option<FlashMessage>,
+    pub(super) notice: Option<UiNotice>,
+    pub(super) seen_failure_ids: HashSet<agena_failure::FailureId>,
     pub(super) sessions: SessionListPresentation,
     pub(super) session_load: SessionListLoadState,
     pub(super) session_composer: SessionComposerState,
@@ -107225,11 +107394,11 @@ pub struct App {
     pub(super) draft_store_dirty: bool,
     pub(super) draft_store_last_persist_at: Instant,
     pub(super) draft_store_reported_error: Option<String>,
-    pub(super) pending_draft_store_error: Option<String>,
+    pub(super) pending_draft_store_error: Option<UiFailure>,
     pub(super) prompt_history: PromptHistory,
     pub(super) prompt_history_path: PathBuf,
     pub(super) prompt_history_reported_error: Option<String>,
-    pub(super) pending_prompt_history_error: Option<String>,
+    pub(super) pending_prompt_history_error: Option<UiFailure>,
     pub(super) run_activity: RunActivityTracker,
     pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
@@ -107345,7 +107514,7 @@ pub(super) enum AppMessage {
     },
     RewindMessagesLoaded {
         session_id: i64,
-        result: UiResult<Vec<MessageResource>>,
+        result: UiResult<Vec<agena_domain::TurnSnapshot>>,
     },
     ModelCatalogLoaded {
         query: String,
@@ -107419,7 +107588,50 @@ pub(super) enum UiAction {
     PageTranscript,
 }
 
-pub(super) type UiResult<T> = std::result::Result<T, String>;
+#[derive(Debug, Clone)]
+pub(super) struct UiFailure {
+    pub(super) failure: Box<agena_failure::Failure>,
+}
+
+impl UiFailure {
+    pub(super) fn from_backend(error: anyhow::Error) -> Self;
+
+    pub(super) fn from_failure(failure: agena_failure::Failure) -> Self;
+
+    pub(super) fn internal(diagnostic: impl std::fmt::Display) -> Self;
+
+    pub(super) fn message(message: impl Into<String>) -> Self;
+
+    pub(super) fn invalid_with_diagnostic(
+        message: &'static str,
+        diagnostic: impl std::fmt::Display,
+    ) -> Self;
+}
+
+impl std::fmt::Display for UiFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+}
+
+impl std::error::Error for UiFailure {}
+
+pub(crate) enum UiErrorNotice {
+    Message(String),
+    Failure(UiFailure),
+}
+
+impl From<String> for UiErrorNotice {
+    fn from(message: String) -> Self;
+}
+
+impl From<&str> for UiErrorNotice {
+    fn from(message: &str) -> Self;
+}
+
+impl From<UiFailure> for UiErrorNotice {
+    fn from(failure: UiFailure) -> Self;
+}
+
+pub(super) type UiResult<T> = std::result::Result<T, UiFailure>;
 
 #[derive(Debug, Clone)]
 pub(super) enum Overlay {
@@ -107486,6 +107698,14 @@ pub(super) use agena_tui::help::{HelpOverlay, HelpOverlayKind};
 pub(super) use agena_tui_components::{
     HelpDialogEntry as HelpEntry, HelpDialogSection as HelpSection,
 };
+
+#[cfg(test)]
+mod ui_failure_tests {
+    use super::UiFailure;
+
+    #[test]
+    fn backend_failure_survives_anyhow_context_without_ui_rewrapping();
+}
 `````
 
 </details>
@@ -108104,12 +108324,14 @@ fn visible_shortcut_hints_track_the_central_keymap();
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/lib.rs</code> — 327 lines; mod=50, struct=1, impl=3, fn=6</summary>
+<details><summary><code>crates/agena-tui-app/src/lib.rs</code> — 343 lines; mod=50, struct=1, impl=3, fn=6</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate, crate::tui_config_tests
 
 `````rust
+#![allow(clippy::items_after_test_module)]
+
 use std::{
     cmp::{max, min},
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -108122,17 +108344,19 @@ use std::{
 
 use agena_api::{
     commands::UpsertPermissionRuleParams,
-    message_part::MessagePartDetailResource,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, MessageRole, PendingInteractiveRequest, PendingInteractiveRequestResource,
-        PermissionRuleResource, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderModelResource, ProviderSummaryResource, RunOptions,
-        SessionExecutionContextResource, SessionExecutionResource, SessionResource,
+        PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionRuleResource,
+        ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderModelResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionContextResource,
+        SessionExecutionResource, SessionResource,
     },
 };
 #[cfg(test)]
-use agena_api::{message_part::MessagePartResource, resource::MessageStatus};
+use agena_api::{
+    message_part::MessagePartResource,
+    resource::{MessageResource, MessageStatus},
+};
 use agena_application::dto::{
     ConfigJsonSources, TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
 };
@@ -108166,17 +108390,19 @@ use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEvent, M
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
 };
-use serde_json::{Map as JsonMap, Value as JsonValue, json};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};
 use unicode_width::UnicodeWidthChar;
+
+#[cfg(test)]
+use agena_api::resource::MessageRole;
 
 use agena_tui_backend::{
     Backend, InspectorRow, LiveEvent, ProviderConfigDraft, ProviderDraftAdapterRule,
     ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
-    ProviderNativeToolsPreset, SessionPermissionStudioState, SessionRefresh,
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
+    SessionPermissionStudioState, SessionRefresh,
 };
 
 mod commands;
@@ -108311,7 +108537,6 @@ use self::provider_studio::provider_auth::*;
 use self::provider_studio::provider_fields::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
-use agena_tui_provider_studio::provider_model_helpers::*;
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{
@@ -108329,9 +108554,8 @@ use agena_tui_transcript::{
 };
 
 use self::transcript_view::{
-    current_spinner_millis, markdown_blocks, refresh_spinner_line, render_entry_detailed,
-    render_entry_export, render_markdown_block, render_transcript_snapshot_export_markdown,
-    rewind_message_preview, spinner_frame,
+    current_spinner_millis, refresh_spinner_line, render_entry_detailed, render_entry_export,
+    render_transcript_snapshot_export_markdown, spinner_frame,
 };
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 
@@ -108465,7 +108689,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_editor.rs</code> — 294 lines; impl=1, fn=2</summary>
+<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_editor.rs</code> — 310 lines; impl=1, fn=2</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::plugin_workbench::workbench_editor
@@ -108499,7 +108723,7 @@ use super::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_input.rs</code> — 703 lines; impl=1, fn=13</summary>
+<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_input.rs</code> — 712 lines; impl=1, fn=13</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::plugin_workbench::workbench_input
@@ -108591,7 +108815,7 @@ use agena_tui_plugin_workbench::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_navigation.rs</code> — 922 lines; impl=1, fn=22</summary>
+<details><summary><code>crates/agena-tui-app/src/plugin_workbench/workbench_navigation.rs</code> — 928 lines; impl=1, fn=22</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::plugin_workbench::workbench_navigation
@@ -109057,7 +109281,7 @@ pub(crate) use self::{fields::*, flow::*, summary::*};
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/provider_studio/provider_fields.rs</code> — 869 lines; mod=1, fn=25</summary>
+<details><summary><code>crates/agena-tui-app/src/provider_studio/provider_fields.rs</code> — 773 lines; mod=1, fn=24</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::provider_studio::provider_fields, crate::provider_studio::provider_fields::tests
@@ -109096,12 +109320,11 @@ pub(crate) fn remove_provider_studio_adapter_from_dialog(
     adapter_id: &str,
 );
 
-const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 16] = [
+const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 15] = [
     ProviderModelConfigField::ModelId,
     ProviderModelConfigField::Enabled,
     ProviderModelConfigField::NativeCompaction,
     ProviderModelConfigField::AgenaToolMode,
-    ProviderModelConfigField::ProviderNativeTools,
     ProviderModelConfigField::DisplayName,
     ProviderModelConfigField::Lifecycle,
     ProviderModelConfigField::ContextWindowTokens,
@@ -109120,7 +109343,7 @@ pub(crate) fn provider_model_config_fields() -> &'static [ProviderModelConfigFie
 pub(crate) fn provider_model_config_draft_from_value(
     model_id: &str,
     value: JsonValue,
-) -> std::result::Result<ProviderModelConfigDraft, String>;
+) -> crate::UiResult<ProviderModelConfigDraft>;
 
 pub(crate) fn provider_model_config_draft_from_overlay(
     model_id: &str,
@@ -109174,12 +109397,10 @@ pub(crate) fn commit_provider_model_config_field(
 use super::{
     CredentialIssuer, I18n, JsonValue, ProviderConfigDraft, ProviderDraftAuthKind,
     ProviderDraftInteractiveLoginKind, ProviderModelConfigDraft, ProviderModelConfigField,
-    ProviderNativeToolsPreset, ProviderStudioField, ProviderStudioOverlay, model_lifecycle_token,
-    parse_bool_token, parse_model_capability_feature, parse_model_capability_feature_set,
-    parse_model_input_modality, parse_model_input_modality_set, parse_optional_model_lifecycle,
-    parse_optional_u32_field, provider_model_config_field_label_key,
-    provider_model_overlay_to_json_local, provider_native_tools_config_for_preset,
-    provider_native_tools_preset_from_config, provider_native_tools_preset_label,
+    ProviderStudioField, ProviderStudioOverlay, model_lifecycle_token, parse_bool_token,
+    parse_model_capability_feature, parse_model_capability_feature_set, parse_model_input_modality,
+    parse_model_input_modality_set, parse_optional_model_lifecycle, parse_optional_u32_field,
+    provider_model_config_field_label_key, provider_model_overlay_to_json_local,
     provider_studio_auth_login_kind, provider_studio_available_login_kinds,
     provider_studio_detail_fields, split_csv_tokens, trimmed_owned_local,
 };
@@ -109188,10 +109409,9 @@ use crate::ui_text;
 #[cfg(test)]
 mod tests {
     use super::{
-        ProviderModelConfigField, ProviderNativeToolsPreset,
-        apply_provider_model_config_supported_modes, commit_provider_model_config_field,
-        provider_model_config_draft_from_overlay, provider_model_config_draft_to_model_value,
-        provider_model_config_fields,
+        ProviderModelConfigField, apply_provider_model_config_supported_modes,
+        commit_provider_model_config_field, provider_model_config_draft_from_overlay,
+        provider_model_config_draft_to_model_value, provider_model_config_fields,
     };
     use agena_provider::{AgenaToolMode, AgenaToolsConfig, ResolvedProviderModelConfig};
 
@@ -109203,9 +109423,6 @@ mod tests {
 
     #[test]
     fn all_agena_tool_modes_are_selectable_and_persisted();
-
-    #[test]
-    fn provider_native_tools_require_an_explicit_provider_protocol_mode();
 
     #[test]
     fn live_provider_modes_drive_the_model_detail();
@@ -109352,7 +109569,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/provider_studio.rs</code> — 48 lines; mod=3, fn=1</summary>
+<details><summary><code>crates/agena-tui-app/src/provider_studio.rs</code> — 46 lines; mod=3, fn=1</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::provider_studio
@@ -109374,9 +109591,7 @@ use crate::{
     BTreeSet, CredentialIssuer, Duration, I18n, JsonValue, ProviderAdapterModelsResource,
     ProviderConfigDraft, ProviderDraftAdapterRule, ProviderDraftAuthKind,
     ProviderDraftInteractiveLoginKind, ProviderModelConfigDraft, ProviderModelConfigField,
-    ProviderNativeToolsPreset, ProviderStudioField, ProviderStudioOverlay, join_inline_segments,
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
-    truncate_display_width,
+    ProviderStudioField, ProviderStudioOverlay, join_inline_segments, truncate_display_width,
 };
 pub(super) use agena_tui_provider_studio::provider_model_helpers::*;
 `````
@@ -109451,7 +109666,7 @@ mod persistence;
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/state_store_impls/persistence.rs</code> — 243 lines; mod=1, impl=2, fn=13</summary>
+<details><summary><code>crates/agena-tui-app/src/state_store_impls/persistence.rs</code> — 238 lines; mod=1, impl=2, fn=13</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::state_store_impls::persistence, crate::state_store_impls::persistence::tests
@@ -109502,7 +109717,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/transcript_state.rs</code> — 2661 lines; struct=1, enum=3, impl=2, fn=101</summary>
+<details><summary><code>crates/agena-tui-app/src/transcript_state.rs</code> — 2690 lines; struct=1, enum=3, impl=3, fn=103</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::transcript_state
@@ -109541,6 +109756,11 @@ impl TranscriptState {
     pub(crate) fn apply_execution(&mut self, execution: SessionExecutionResource);
 
     pub(crate) fn merge_snapshot(&mut self, snapshot: agena_domain::TranscriptSnapshot);
+
+    fn apply_snapshot_change(
+        &mut self,
+        change: impl FnOnce(&mut agena_domain::TranscriptSnapshot),
+    );
 
     pub(crate) fn add_pending_user_message(&mut self, message: PendingUserMessage);
 
@@ -109919,6 +110139,8 @@ impl TranscriptState {
     pub(crate) fn sync_follow_tail(&mut self, width: u16, height: u16);
 }
 
+fn transcript_patch_can_materialize_user_input(patch: &agena_domain::TranscriptPatch) -> bool;
+
 fn transcript_rendered_line_is_focusable(rendered: &RenderedTranscript, line: usize) -> bool;
 
 fn transcript_cursor_grapheme_ranges(line: &RenderedLine) -> Vec<Range<usize>>;
@@ -109955,18 +110177,17 @@ fn transcript_cursor_column_for_line(line: &RenderedLine, requested_column: usiz
 fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usize>;
 
 use super::TranscriptAction;
-use super::transcript_view::style_for_role;
 use crate::{
-    BTreeMap, I18n, MessageRole, Modifier, PendingUserMessage, Range, RenderedLine,
-    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    BTreeMap, BTreeSet, I18n, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
+    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
-    contains_case_insensitive, initial_search_match_index, markdown_blocks, min,
-    normalize_transcript_text_selection, render_entry_detailed, render_markdown_block,
-    transcript_entries, transcript_node_highlight_range, transcript_selection_scroll_position,
-    transcript_spinner_placeholder, transcript_text_selection_text, ui_text,
+    contains_case_insensitive, initial_search_match_index, min,
+    normalize_transcript_text_selection, render_entry_detailed, transcript_entries,
+    transcript_node_highlight_range, transcript_selection_scroll_position,
+    transcript_text_selection_text, ui_text,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -110107,7 +110328,7 @@ use super::{App, max, min};
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/view/view_main.rs</code> — 741 lines; mod=1, impl=1, fn=27</summary>
+<details><summary><code>crates/agena-tui-app/src/view/view_main.rs</code> — 743 lines; mod=1, impl=1, fn=27</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::view::view_main, crate::view::view_main::tests
@@ -110154,7 +110375,7 @@ impl App {
 
     pub(crate) fn has_composer_item_summary_row(&self) -> bool;
 
-    pub(crate) fn flash_style(&self, level: FlashLevel) -> Style;
+    pub(crate) fn notice_style(&self, severity: NoticeSeverity) -> Style;
 
     pub(crate) fn render_composer_status_row(&self, frame: &mut Frame, area: Rect);
 
@@ -110190,16 +110411,16 @@ mod tests {
     fn transcript_rendering_materializes_only_the_visible_viewport();
 }
 use super::{
-    App, ComposerEditorSurfaceSpec, ComposerItem, FlashLevel, Frame,
-    HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
-    Style, Text, VerticalSectionSize, Wrap, WrappedTextSpec, apply_block_highlight,
-    apply_cursor_cell_highlight, apply_line_cell_highlight, build_wrapped_text_lines,
-    composer_item_needs_summary_chip, find_search_ranges, inset_rect, layout_composer_surface,
-    layout_header_body_footer_surface, min, pane_header_height,
-    pending_interactive_counts_for_execution, render_composer_editor_surface,
-    render_header_body_footer_text_surface, render_wrapped_text, sanitize_display_text,
-    selection_highlight_style, split_vertical_sections,
+    App, ComposerEditorSurfaceSpec, ComposerItem, Frame, HeaderBodyFooterTextSurfaceSpec,
+    LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span, Style, Text, VerticalSectionSize,
+    Wrap, WrappedTextSpec, apply_block_highlight, apply_cursor_cell_highlight,
+    apply_line_cell_highlight, build_wrapped_text_lines, composer_item_needs_summary_chip,
+    find_search_ranges, inset_rect, layout_composer_surface, layout_header_body_footer_surface,
+    min, pane_header_height, pending_interactive_counts_for_execution,
+    render_composer_editor_surface, render_header_body_footer_text_surface, render_wrapped_text,
+    sanitize_display_text, selection_highlight_style, split_vertical_sections,
 };
+use crate::NoticeSeverity;
 use crate::ui_text;
 use crate::{current_spinner_millis, refresh_spinner_line, spinner_frame};
 use agena_tui::main_focus::Focus;
@@ -110436,7 +110657,7 @@ mod cell_highlight_tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-app/src/view/view_studio.rs</code> — 448 lines; impl=1, fn=2</summary>
+<details><summary><code>crates/agena-tui-app/src/view/view_studio.rs</code> — 453 lines; impl=1, fn=2</summary>
 
 - Package：`agena-tui-app`
 - Target/module：agena_tui_app: crate::view::view_studio
@@ -110605,15 +110826,15 @@ mod permission_overlay_presentation_tests {
     fn details_are_available_only_when_explicitly_requested();
 }
 use crate::{
-    App, CatalogModelResource, ConfirmOverlay, FlashLevel, Frame, LayoutCache,
-    ModelCatalogStudioOverlay, Overlay, PermissionRuleStudioOverlay, PermissionStudioAction,
-    PermissionStudioFocus, PermissionStudioItem, PermissionStudioModeTarget,
-    PermissionStudioOverlay, PermissionStudioPaneFocus, PermissionStudioSection,
-    PermissionStudioSectionId, ProviderDraftSecretSourceKind, ProviderStudioField,
-    ProviderStudioFocus, ProviderStudioOverlay, Rect, Route, SettingsPickerAction,
-    SettingsStudioFocus, SettingsStudioItem, SettingsStudioOverlay, build_detail_text,
-    find_search_ranges, max, min, pending_interactive_counts_for_execution,
-    permission_rule_draft_label, permission_rule_mode_label, permission_rule_studio_detail_text,
+    App, CatalogModelResource, ConfirmOverlay, Frame, LayoutCache, ModelCatalogStudioOverlay,
+    Overlay, PermissionRuleStudioOverlay, PermissionStudioAction, PermissionStudioFocus,
+    PermissionStudioItem, PermissionStudioModeTarget, PermissionStudioOverlay,
+    PermissionStudioPaneFocus, PermissionStudioSection, PermissionStudioSectionId,
+    ProviderDraftSecretSourceKind, ProviderStudioField, ProviderStudioFocus, ProviderStudioOverlay,
+    Rect, Route, SettingsPickerAction, SettingsStudioFocus, SettingsStudioItem,
+    SettingsStudioOverlay, build_detail_text, find_search_ranges, max, min,
+    pending_interactive_counts_for_execution, permission_rule_draft_label,
+    permission_rule_mode_label, permission_rule_studio_detail_text,
     permission_rule_subject_kind_name, provider_draft_auth_mode_label,
     provider_draft_auth_subtype_label, provider_model_config_field_display,
     provider_model_config_field_editable, provider_model_config_field_label,
@@ -110629,7 +110850,7 @@ use crate::{
 
 </details>
 
-### 8.47 `agena-tui-backend`
+### 8.48 `agena-tui-backend`
 
 <details><summary><code>crates/agena-tui-backend/src/backend_auth.rs</code> — 388 lines; fn=6</summary>
 
@@ -110906,10 +111127,10 @@ pub use self::provider_draft_config::*;
 
 </details>
 
-<details><summary><code>crates/agena-tui-backend/src/backend_drafts/provider_draft_auth.rs</code> — 683 lines; struct=10, enum=10, impl=11, fn=28</summary>
+<details><summary><code>crates/agena-tui-backend/src/backend_drafts/provider_draft_auth.rs</code> — 745 lines; mod=1, struct=10, enum=10, impl=12, fn=30</summary>
 
 - Package：`agena-tui-backend`
-- Target/module：agena_tui_backend: crate::backend_drafts::provider_draft_auth
+- Target/module：agena_tui_backend: crate::backend_drafts::provider_draft_auth, crate::backend_drafts::provider_draft_auth::failure_projection_tests
 
 `````rust
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111254,11 +111475,11 @@ pub enum ProviderDraftAuthError {
     StartBrowserAuthFirst,
     StartDeviceAuthFirst,
     RequiredField(ProviderDraftAuthField),
-    Other(String),
+    Other(agena_failure::UserProblem),
 }
 
 impl ProviderDraftAuthError {
-    pub(crate) fn other(error: impl ToString) -> Self;
+    pub(crate) fn other(error: impl std::fmt::Display) -> Self;
 }
 
 #[derive(Debug, Clone)]
@@ -111344,11 +111565,25 @@ pub enum ProviderStudioSaveError {
     ProviderModelConfigMustBeObject,
     ConfiguredProviderAdapterSettingsMustBeObject,
     ConfiguredProviderAdapterModelsMustBeObject,
-    Other(String),
+    Other(agena_failure::UserProblem),
 }
 
 impl ProviderStudioSaveError {
-    pub(crate) fn other(error: impl ToString) -> Self;
+    pub(crate) fn other(error: impl std::fmt::Display) -> Self;
+}
+
+fn provider_backend_problem(
+    code: &'static str,
+    fallback: &'static str,
+    diagnostic: impl std::fmt::Display,
+) -> agena_failure::UserProblem;
+
+#[cfg(test)]
+mod failure_projection_tests {
+    use super::{ProviderDraftAuthError, ProviderStudioSaveError};
+
+    #[test]
+    fn provider_backend_diagnostics_never_enter_tui_problem_projection();
 }
 
 #[derive(Debug, Clone, Default)]
@@ -111373,27 +111608,12 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-backend/src/backend_drafts/provider_draft_config.rs</code> — 825 lines; struct=1, enum=1, impl=2, fn=31</summary>
+<details><summary><code>crates/agena-tui-backend/src/backend_drafts/provider_draft_config.rs</code> — 793 lines; struct=1, impl=1, fn=29</summary>
 
 - Package：`agena-tui-backend`
 - Target/module：agena_tui_backend: crate::backend_drafts::provider_draft_config
 
 `````rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProviderNativeToolsPreset {
-    Disabled,
-    OpenAiHostedDefaults,
-    AnthropicHostedDefaults,
-    GeminiHostedDefaults,
-    Custom,
-}
-
-impl ProviderNativeToolsPreset {
-    pub fn token(self) -> &'static str;
-
-    pub fn parse(value: &str) -> Option<Self>;
-}
-
 #[derive(Debug, Clone)]
 pub struct ProviderConfigDraft {
     pub source_provider_id: Option<String>,
@@ -111547,21 +111767,19 @@ use std::hash::{Hash, Hasher};
 
 </details>
 
-<details><summary><code>crates/agena-tui-backend/src/backend_events.rs</code> — 89 lines; impl=1, fn=5</summary>
+<details><summary><code>crates/agena-tui-backend/src/backend_events.rs</code> — 87 lines; fn=5</summary>
 
 - Package：`agena-tui-backend`
 - Target/module：agena_tui_backend: crate::backend_events
 
 `````rust
-use anyhow::anyhow;
-
 pub(super) fn build_file_index(workspace_root: &Path) -> Vec<PathBuf>;
 
 pub(super) fn file_search_score(path: &Path, query_lower: &str) -> Option<(u8, usize, usize)>;
 
 pub(super) fn direct_path_candidate(workspace_root: &Path, query: &str) -> Option<PathBuf>;
 
-pub(super) fn api_error(error: impl std::fmt::Display) -> anyhow::Error;
+pub(super) fn api_error(error: agena_application::ApplicationError) -> anyhow::Error;
 
 pub(super) fn optional_non_empty(value: &str) -> Option<&str>;
 use crate::{Path, PathBuf, WalkBuilder};
@@ -111569,27 +111787,7 @@ use crate::{Path, PathBuf, WalkBuilder};
 
 </details>
 
-<details><summary><code>crates/agena-tui-backend/src/backend_helpers.rs</code> — 19 lines; fn=2</summary>
-
-- Package：`agena-tui-backend`
-- Target/module：agena_tui_backend: crate::backend_helpers
-
-`````rust
-pub fn provider_native_tools_config_for_preset(
-    _preset: ProviderNativeToolsPreset,
-    _custom: &ProviderNativeToolsConfig,
-) -> ProviderNativeToolsConfig;
-
-pub fn provider_native_tools_preset_from_config(
-    _config: &ProviderNativeToolsConfig,
-) -> ProviderNativeToolsPreset;
-
-use crate::{ProviderNativeToolsConfig, ProviderNativeToolsPreset};
-`````
-
-</details>
-
-<details><summary><code>crates/agena-tui-backend/src/backend_plugins.rs</code> — 617 lines; impl=1, fn=27</summary>
+<details><summary><code>crates/agena-tui-backend/src/backend_plugins.rs</code> — 640 lines; impl=1, fn=27</summary>
 
 - Package：`agena-tui-backend`
 - Target/module：agena_tui_backend: crate::backend_plugins
@@ -111683,16 +111881,14 @@ impl Backend {
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
-        user_approved: bool,
     ) -> Result<String>;
 
-    async fn invoke_plugin_ui_tool_with_approval(
+    async fn invoke_plugin_ui_tool_checked(
         &self,
         plugin_id: &str,
         tool_name: &str,
         input: serde_json::Value,
         session_id: Option<i64>,
-        user_approved: bool,
     ) -> Result<agena_plugin_host::PluginUiToolInvokeResponse>;
 
     pub async fn create_commit(&self, message: String) -> Result<(String, String)>;
@@ -111993,7 +112189,7 @@ mod settings;
 
 </details>
 
-<details><summary><code>crates/agena-tui-backend/src/backend_session.rs</code> — 663 lines; impl=1, fn=24</summary>
+<details><summary><code>crates/agena-tui-backend/src/backend_session.rs</code> — 601 lines; impl=1, fn=21</summary>
 
 - Package：`agena-tui-backend`
 - Target/module：agena_tui_backend: crate::backend_session
@@ -112019,29 +112215,12 @@ impl Backend {
         limit: u64,
     ) -> Result<Vec<agena_runtime::RuntimeTimelineEvent>>;
 
-    pub async fn list_all_messages(&self, session_id: i64) -> Result<Vec<MessageResource>>;
-
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource>;
 
     pub async fn get_session_permission_studio_state(
         &self,
         session_id: i64,
     ) -> Result<SessionPermissionStudioState>;
-
-    pub async fn list_messages(
-        &self,
-        session_id: i64,
-        cursor: Option<String>,
-        limit: u64,
-    ) -> Result<PaginatedResponse<MessageResource>>;
-
-    pub async fn list_messages_with_parts(
-        &self,
-        session_id: i64,
-        cursor: Option<String>,
-        limit: u64,
-        parts: PartLoadMode,
-    ) -> Result<PaginatedResponse<MessageResource>>;
 
     pub async fn refresh_session(
         &self,
@@ -112118,23 +112297,22 @@ impl Backend {
         request: RunOptions,
     ) -> Result<SessionExecutionResource>;
 
-    pub async fn rewind_session_to_message(
+    pub async fn rewind_session_to_turn(
         &self,
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
     ) -> Result<SessionExecutionResource>;
 }
 
 use crate::Result;
 use crate::{
     ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams, EventFilter,
-    GetSessionParams, HashSet, ListMessagesParams, ListSessionsParams, LiveEvent, MessageResource,
-    PaginatedResponse, PartLoadMode, Path, PathBuf, PermissionReply, PermissionReplyKind,
-    PermissionScope, Query, QueryResult, ReplyPermissionParams, ReplyUserInputParams,
-    RewindSessionParams, RunOptions, Scope, SessionExecutionResource, SessionPermissionStudioState,
-    SessionRefresh, SessionResource, SubmitMessageParams, UpdateSessionSelectionParams,
-    UserInputReply, api_error, build_file_index, direct_path_candidate, dispatch,
-    file_search_score, mpsc,
+    GetSessionParams, HashSet, ListSessionsParams, LiveEvent, Path, PathBuf, PermissionReply,
+    PermissionReplyKind, PermissionScope, Query, QueryResult, ReplyPermissionParams,
+    ReplyUserInputParams, RewindSessionParams, RunOptions, Scope, SessionExecutionResource,
+    SessionPermissionStudioState, SessionRefresh, SessionResource, SubmitMessageParams,
+    UpdateSessionSelectionParams, UserInputReply, api_error, build_file_index,
+    direct_path_candidate, dispatch, file_search_score, mpsc,
 };
 `````
 
@@ -112217,7 +112395,7 @@ use crate::Result;
 
 </details>
 
-<details><summary><code>crates/agena-tui-backend/src/backend_workspace.rs</code> — 413 lines; impl=1, fn=21</summary>
+<details><summary><code>crates/agena-tui-backend/src/backend_workspace.rs</code> — 396 lines; impl=1, fn=21</summary>
 
 - Package：`agena-tui-backend`
 - Target/module：agena_tui_backend: crate::backend_workspace
@@ -112329,7 +112507,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-backend/src/lib.rs</code> — 93 lines; mod=12, struct=2</summary>
+<details><summary><code>crates/agena-tui-backend/src/lib.rs</code> — 87 lines; mod=11, struct=2</summary>
 
 - Package：`agena-tui-backend`
 - Target/module：agena_tui_backend: crate
@@ -112351,13 +112529,12 @@ use agena_api::{
         UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
-    queries::{GetSessionParams, ListMessagesParams, ListSessionsParams, Query, QueryResult},
+    queries::{GetSessionParams, ListSessionsParams, Query, QueryResult},
     resource::{
-        MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
-        ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderModelResource,
-        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
-        WorkspaceResource,
+        PermissionReply, PermissionRuleResource, ProviderAdapterModelsResource,
+        ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderDefaultsResource,
+        ProviderModelResource, ProviderSummaryResource, RunOptions, SessionExecutionResource,
+        SessionResource, WorkspaceResource,
     },
 };
 use agena_application::dto::{CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse};
@@ -112368,7 +112545,6 @@ use agena_domain::ToolInvocation;
 use agena_domain::{EventFilter, EventScope as Scope};
 use agena_domain::{ModelRef, ProviderId};
 use agena_domain::{PermissionReplyKind, UserInputReply};
-use agena_provider::ProviderNativeToolsConfig;
 use agena_provider::{
     AuthData, CatalogModelDefinition, CredentialIssuer, OpenAiResponsesBackendConfig,
     ProviderAdapterOverlay, ProviderCapabilityFamilyConfig, ProviderOverlay,
@@ -112387,7 +112563,6 @@ mod backend_catalog;
 mod backend_config;
 mod backend_drafts;
 mod backend_events;
-mod backend_helpers;
 mod backend_plugins;
 mod backend_provider;
 mod backend_session;
@@ -112400,9 +112575,6 @@ use self::backend_catalog::*;
 use self::backend_config::*;
 pub use self::backend_drafts::*;
 use self::backend_events::*;
-pub use self::backend_helpers::{
-    provider_native_tools_config_for_preset, provider_native_tools_preset_from_config,
-};
 pub use self::backend_types::*;
 use self::backend_util::*;
 
@@ -112426,7 +112598,7 @@ pub struct Backend {
 
 </details>
 
-### 8.48 `agena-tui-components`
+### 8.49 `agena-tui-components`
 
 <details><summary><code>crates/agena-tui-components/src/confirm_dialog.rs</code> — 142 lines; mod=1, fn=5</summary>
 
@@ -116212,7 +116384,7 @@ mod tests {
 
 </details>
 
-### 8.49 `agena-tui-media`
+### 8.50 `agena-tui-media`
 
 <details><summary><code>crates/agena-tui-media/src/lib.rs</code> — 1426 lines; mod=5, struct=11, impl=10, fn=64</summary>
 
@@ -116880,7 +117052,7 @@ mod tests {
 
 </details>
 
-### 8.50 `agena-tui-permission-studio`
+### 8.51 `agena-tui-permission-studio`
 
 <details><summary><code>crates/agena-tui-permission-studio/src/lib.rs</code> — 58 lines; mod=3, enum=3</summary>
 
@@ -117170,7 +117342,7 @@ mod tests {
 
 </details>
 
-### 8.51 `agena-tui-platform`
+### 8.52 `agena-tui-platform`
 
 <details><summary><code>crates/agena-tui-platform/src/attachment_source.rs</code> — 488 lines; mod=1, struct=6, trait=1, impl=7, fn=40</summary>
 
@@ -118242,7 +118414,7 @@ pub fn request_download(provider: DownloadProvider, path: &Path) -> Result<(), P
 
 </details>
 
-### 8.52 `agena-tui-plugin-workbench`
+### 8.53 `agena-tui-plugin-workbench`
 
 <details><summary><code>crates/agena-tui-plugin-workbench/src/lib.rs</code> — 841 lines; mod=2, struct=6, enum=11, type=1, impl=9, fn=38</summary>
 
@@ -119662,7 +119834,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 </details>
 
-<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/config_rows.rs</code> — 318 lines; fn=19</summary>
+<details><summary><code>crates/agena-tui-plugin-workbench/src/model/workbench_schema_validation/config_rows.rs</code> — 319 lines; fn=19</summary>
 
 - Package：`agena-tui-plugin-workbench`
 - Target/module：agena_tui_plugin_workbench: crate::model::workbench_schema_validation::config_rows
@@ -120809,9 +120981,9 @@ mod tests {
 
 </details>
 
-### 8.53 `agena-tui-provider-studio`
+### 8.54 `agena-tui-provider-studio`
 
-<details><summary><code>crates/agena-tui-provider-studio/src/lib.rs</code> — 146 lines; mod=2, struct=3, enum=3, impl=1, fn=4</summary>
+<details><summary><code>crates/agena-tui-provider-studio/src/lib.rs</code> — 145 lines; mod=2, struct=3, enum=3, impl=1, fn=4</summary>
 
 - Package：`agena-tui-provider-studio`
 - Target/module：agena_tui_provider_studio: crate, crate::tests
@@ -120827,7 +120999,6 @@ pub enum ProviderModelConfigField {
     Enabled,
     NativeCompaction,
     AgenaToolMode,
-    ProviderNativeTools,
     DisplayName,
     Lifecycle,
     ContextWindowTokens,
@@ -120904,7 +121075,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-provider-studio/src/provider_model_helpers.rs</code> — 167 lines; fn=14</summary>
+<details><summary><code>crates/agena-tui-provider-studio/src/provider_model_helpers.rs</code> — 145 lines; fn=12</summary>
 
 - Package：`agena-tui-provider-studio`
 - Target/module：agena_tui_provider_studio: crate::provider_model_helpers
@@ -120912,22 +121083,11 @@ mod tests {
 `````rust
 use std::collections::BTreeSet;
 
-use agena_tui::i18n::I18n;
-use agena_tui_backend::ProviderNativeToolsPreset;
 use serde_json::Value as JsonValue;
 
 use crate::ProviderModelConfigField;
 
 pub fn provider_model_config_field_label_key(field: ProviderModelConfigField) -> &'static str;
-
-pub fn provider_native_tools_available_preset_for_adapter(
-    _adapter_id: &str,
-) -> Option<ProviderNativeToolsPreset>;
-
-pub fn provider_native_tools_preset_label(
-    i18n: &I18n,
-    _preset: ProviderNativeToolsPreset,
-) -> String;
 
 pub fn provider_model_overlay_to_json_local(
     overlay: agena_provider::ResolvedProviderModelConfig,
@@ -120967,7 +121127,7 @@ pub fn parse_model_capability_feature_set(
 
 </details>
 
-### 8.54 `agena-tui-session`
+### 8.55 `agena-tui-session`
 
 <details><summary><code>crates/agena-tui-session/src/lib.rs</code> — 257 lines; mod=6, struct=5, enum=6, impl=1, fn=4</summary>
 
@@ -121644,7 +121804,7 @@ mod tests {
 
 </details>
 
-### 8.55 `agena-tui-settings`
+### 8.56 `agena-tui-settings`
 
 <details><summary><code>crates/agena-tui-settings/src/lib.rs</code> — 384 lines; mod=1, struct=5, enum=4, type=2, impl=13, fn=22</summary>
 
@@ -121827,9 +121987,9 @@ mod tests {
 
 </details>
 
-### 8.56 `agena-tui-transcript`
+### 8.57 `agena-tui-transcript`
 
-<details><summary><code>crates/agena-tui-transcript/src/lib.rs</code> — 515 lines; mod=10, struct=8, enum=2, impl=7, fn=26</summary>
+<details><summary><code>crates/agena-tui-transcript/src/lib.rs</code> — 501 lines; mod=10, struct=8, enum=2, impl=7, fn=25</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate, crate::test_fixtures, crate::tests
@@ -121861,7 +122021,7 @@ pub use renderer::{
     rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
-pub use snapshot::transcript_entries;
+pub use snapshot::{pending_user_entry, transcript_entries};
 pub use text as ui_text;
 
 #[cfg(test)]
@@ -121873,8 +122033,8 @@ mod test_fixtures {
     use chrono::{DateTime, Utc};
 
     use super::{
-        MessageRequestPartResource, OperationPartResource, TranscriptActivityPresentation,
-        TranscriptContentId, TranscriptEntryPart, TranscriptPartContent,
+        OperationPartResource, TranscriptActivityContent, TranscriptContentId, TranscriptEntryPart,
+        TranscriptPartContent,
     };
 
     pub(crate) struct TranscriptFixture;
@@ -121913,20 +122073,12 @@ mod test_fixtures {
             operation: OperationPartResource,
         ) -> TranscriptEntryPart;
 
-        pub(crate) fn activity(
+        pub(crate) fn canonical_activity(
             id: i64,
             message_id: i64,
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
-            activity: TranscriptActivityPresentation,
-        ) -> TranscriptEntryPart;
-
-        pub(crate) fn permission_request_part(
-            id: i64,
-            message_id: i64,
-            created_at: DateTime<Utc>,
-            status: ExecutionStatus,
-            request: agena_api::resource::PermissionRequest,
+            payload: agena_domain::ActivityPayload,
         ) -> TranscriptEntryPart;
     }
 
@@ -122428,7 +122580,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/navigation.rs</code> — 544 lines; struct=2, enum=4, impl=3, fn=14</summary>
+<details><summary><code>crates/agena-tui-transcript/src/navigation.rs</code> — 529 lines; struct=2, enum=4, impl=3, fn=14</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::navigation
@@ -122589,7 +122741,7 @@ use crate::{RenderedLine, TranscriptMoveDirection};
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/render_model.rs</code> — 403 lines; struct=16, enum=7, impl=8, fn=10</summary>
+<details><summary><code>crates/agena-tui-transcript/src/render_model.rs</code> — 435 lines; struct=16, enum=9, impl=8, fn=10</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::render_model
@@ -122604,7 +122756,7 @@ use agena_api::{
     },
     resource::{MessageResource, MessageRole, MessageStatus},
 };
-use agena_domain::{ActivityId, ResponseId, ResponseSegmentId, TurnId};
+use agena_domain::{ActivityId, ActivityPayload, AssistantReplyId, TextSegmentId, TurnId};
 use agena_tui_components::ThemePalette;
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -122624,7 +122776,9 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TranscriptEntryId {
     TurnInput(TurnId),
-    Response(ResponseId),
+    PendingTurn(u64),
+
+    AssistantReply(AssistantReplyId),
     SessionActivity(ActivityId),
     StoredMessage(i64),
 }
@@ -122633,8 +122787,11 @@ pub enum TranscriptEntryId {
 pub enum TranscriptContentId {
 
     TurnDocument(TurnId),
-    Text(ResponseSegmentId),
+    PendingDocument(u64),
+    Text(TextSegmentId),
     Activity(ActivityId),
+
+    AssistantReplyLifecycle(AssistantReplyId),
     StoredPart(i64),
 }
 
@@ -122642,8 +122799,6 @@ pub enum TranscriptContentId {
 pub struct TranscriptEntryPart {
     pub id: TranscriptContentId,
     pub status: PartExecutionStatusResource,
-    pub name: Option<String>,
-    pub operation_id: Option<String>,
     pub content: TranscriptPartContent,
 }
 
@@ -122651,13 +122806,27 @@ pub struct TranscriptEntryPart {
 pub enum TranscriptPartContent {
     UserDocument(TranscriptUserDocument),
     Text(MessageTextPartResource),
+    Activity(TranscriptActivityContent),
+}
+
+#[derive(Debug, Clone)]
+pub enum TranscriptActivityContent {
+    Canonical(Box<ActivityPayload>),
     Reasoning(MessageReasoningPartResource),
     Attachment(MessageAttachmentPartResource),
     SkillReference(MessageSkillReferencePartResource),
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
-    Activity(TranscriptActivityPresentation),
+    AssistantReplyLifecycle(TranscriptAssistantReplyLifecycle),
     Request(Box<MessageRequestPartResource>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptAssistantReplyLifecycle {
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -122672,7 +122841,7 @@ impl TranscriptUserDocument {
 #[derive(Debug, Clone)]
 pub enum TranscriptUserDocumentNode {
     Text {
-        id: ResponseSegmentId,
+        id: Option<TextSegmentId>,
         text: String,
     },
     Activity {
@@ -122694,9 +122863,9 @@ pub enum TranscriptUserActivityStyle {
 pub struct TranscriptActivityPresentation {
     pub title: String,
     pub summary: String,
-    pub error: Option<String>,
-}
 
+    pub problem: Option<agena_failure::UserProblem>,
+}
 impl From<MessagePartDetailResource> for TranscriptPartContent {
     fn from(content: MessagePartDetailResource) -> Self;
 }
@@ -122704,7 +122873,8 @@ impl From<MessagePartDetailResource> for TranscriptPartContent {
 #[derive(Debug, Clone)]
 pub struct TranscriptEntry {
     pub id: TranscriptEntryId,
-    pub role: MessageRole,
+
+    pub role: Option<MessageRole>,
     pub state: MessageStatus,
     pub created_at: DateTime<Utc>,
     pub parts: Vec<TranscriptEntryPart>,
@@ -123592,7 +123762,7 @@ use crate::ui_text;
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/message_render.rs</code> — 902 lines; struct=4, fn=20</summary>
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/message_render.rs</code> — 1259 lines; struct=4, fn=21</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::renderer::transcript_render::message_render
@@ -123613,21 +123783,19 @@ use super::operation_render::render_tool_execution;
 use super::request_render::{
     preview_for_part, render_permission_request, render_user_input_request,
 };
+use crate::snapshot::activity_presentation;
 use crate::ui_text;
 use crate::{
-    MessageRequestPartResource, PartExecutionStatusResource, TranscriptEntryPart,
-    TranscriptPartContent,
+    MessageRequestPartResource, PartExecutionStatusResource, TranscriptActivityContent,
+    TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
-use agena_api::resource::MessageResource;
+use agena_api::resource::{
+    MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageResource,
+};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
 pub(crate) const TRANSCRIPT_EXPORT_WIDTH: u16 = 120;
-
-pub(crate) fn interactive_request_is_embedded_in_operation(
-    parts: &[TranscriptEntryPart],
-    index: usize,
-) -> bool;
 
 pub fn render_entry_export(
     message: &TranscriptEntry,
@@ -123673,11 +123841,19 @@ fn is_invisible_activity_run_bridge(parts: &[TranscriptEntryPart], index: usize)
 
 pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool;
 
-pub(crate) fn localized_activity_title(
-    _i18n: &I18n,
-    activity: &crate::TranscriptActivityPresentation,
-    _status: PartExecutionStatusResource,
+fn activity_headline(
+    title: &str,
+    status: PartExecutionStatusResource,
+    expanded: bool,
+    toggleable: bool,
 ) -> String;
+
+fn canonical_activity_details(
+    payload: &agena_domain::ActivityPayload,
+    summary: &str,
+) -> Vec<String>;
+
+fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> MessageAttachment;
 
 pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Option<String>;
 
@@ -123761,7 +123937,7 @@ pub(crate) fn thinking_collapsed_summary(
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/operation_render.rs</code> — 497 lines; fn=8</summary>
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/operation_render.rs</code> — 534 lines; fn=9</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::renderer::transcript_render::operation_render
@@ -123789,6 +123965,12 @@ pub(crate) fn render_tool_execution(
     width: u16,
     i18n: &I18n,
     expanded: bool,
+);
+
+fn render_presentation_sections(
+    tool: &OperationPartResource,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
 );
 
 fn render_operation_attachments(
@@ -123829,7 +124011,7 @@ fn nested_task_status_icon(status: PartExecutionStatusResource) -> &'static str;
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/request_render.rs</code> — 226 lines; fn=9</summary>
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_render/request_render.rs</code> — 258 lines; fn=9</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::renderer::transcript_render::request_render
@@ -123840,7 +124022,10 @@ use super::super::{
     push_multiline, push_section_heading, tool_execution_preview, transcript_part_content,
 };
 use crate::ui_text;
-use crate::{MessageRequestPartResource, TranscriptEntryPart, TranscriptPartContent};
+use crate::{
+    MessageRequestPartResource, TranscriptActivityContent, TranscriptAssistantReplyLifecycle,
+    TranscriptEntryPart, TranscriptPartContent,
+};
 
 pub(crate) fn render_file_changes(
     changes: &[agena_api::message_part::FileChangeRecordResource],
@@ -124007,7 +124192,7 @@ mod syntax_highlight_tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_tool_summary.rs</code> — 604 lines; fn=39</summary>
+<details><summary><code>crates/agena-tui-transcript/src/renderer/transcript_tool_summary.rs</code> — 638 lines; fn=39</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::renderer::transcript_tool_summary
@@ -124176,7 +124361,7 @@ use crate::{
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/renderer.rs</code> — 1417 lines; mod=7, fn=33</summary>
+<details><summary><code>crates/agena-tui-transcript/src/renderer.rs</code> — 1346 lines; mod=7, fn=32</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::renderer, crate::renderer::tests
@@ -124242,9 +124427,8 @@ mod tests {
     use super::{
         I18n, Line, MessageStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults,
         TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
-        activity_status_icon, collapsed_activity_run_end,
-        interactive_request_is_embedded_in_operation, markdown_blocks, refresh_spinner_line,
-        render_entry_detailed, render_entry_export, render_markdown_block, render_tool_execution,
+        activity_status_icon, markdown_blocks, refresh_spinner_line, render_entry_detailed,
+        render_entry_export, render_markdown_block, render_tool_execution,
         render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
         transcript_spinner_placeholder,
@@ -124323,9 +124507,6 @@ mod tests {
     fn folded_tool_makes_pending_permission_actionable();
 
     #[test]
-    fn permission_request_for_a_tool_is_rendered_as_part_of_that_tool_not_a_second_call();
-
-    #[test]
     fn code_blocks_render_as_bounded_numbered_cards_that_wrap_without_truncation();
 
     #[test]
@@ -124349,10 +124530,7 @@ mod tests {
     #[test]
     fn markdown_math_blocks_are_independently_navigable();
 }
-use self::{
-    activity_status_icon, interactive_request_is_embedded_in_operation,
-    should_suppress_markdown_block, tool_invocation_label,
-};
+use self::{activity_status_icon, should_suppress_markdown_block, tool_invocation_label};
 `````
 
 </details>
@@ -124439,32 +124617,28 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/snapshot.rs</code> — 646 lines; mod=1, fn=13</summary>
+<details><summary><code>crates/agena-tui-transcript/src/snapshot.rs</code> — 1258 lines; mod=1, fn=24</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::snapshot, crate::snapshot::tests
 
 `````rust
+use crate::TranscriptActivityPresentation;
 use agena_api::{
-    message_part::{
-        MessageAttachmentPartResource, MessageErrorPartResource, MessageReasoningPartResource,
-        MessageSkillReferencePartResource, MessageTextPartResource, PartExecutionStatusResource,
-    },
-    resource::{
-        MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageRole,
-        MessageSkillReference, MessageStatus,
-    },
+    message_part::{MessageTextPartResource, PartExecutionStatusResource},
+    resource::{MessageRole, MessageStatus},
 };
 use agena_domain::{
-    ActivityNode, ActivityPayload, ActivityState, ContentDocument, ContentNode,
-    MaintenanceActivity, ResourceKind, ResourceReference, ResponseStatus, TranscriptSnapshot,
+    ActivityNode, ActivityPayload, ActivityState, AssistantReplyStatus, ComposerDocument,
+    ComposerNode, ContentDocument, ContentNode, MaintenanceActivity, ResourceKind,
+    ResourceReference, TranscriptSnapshot,
 };
 use chrono::{DateTime, Utc};
 
 use crate::{
-    TranscriptActivityPresentation, TranscriptContentId, TranscriptEntry, TranscriptEntryId,
-    TranscriptEntryPart, TranscriptPartContent, TranscriptUserActivityStyle,
-    TranscriptUserDocument, TranscriptUserDocumentNode,
+    TranscriptActivityContent, TranscriptAssistantReplyLifecycle, TranscriptContentId,
+    TranscriptEntry, TranscriptEntryId, TranscriptEntryPart, TranscriptPartContent,
+    TranscriptUserActivityStyle, TranscriptUserDocument, TranscriptUserDocumentNode,
 };
 
 pub fn transcript_entries(snapshot: &TranscriptSnapshot) -> Vec<TranscriptEntry>;
@@ -124475,11 +124649,26 @@ fn user_document_entry(
     document: &ContentDocument,
 ) -> TranscriptEntry;
 
-fn response_document_entry(
-    response_id: agena_domain::ResponseId,
+fn assistant_reply_document_entry(
+    reply_id: agena_domain::AssistantReplyId,
     state: MessageStatus,
     created_at_ms: i64,
     document: &ContentDocument,
+) -> TranscriptEntry;
+
+fn assistant_reply_document_parts(document: &ContentDocument) -> Vec<TranscriptEntryPart>;
+
+const fn assistant_reply_state_requires_outcome(state: MessageStatus) -> bool;
+
+fn assistant_reply_lifecycle_part(
+    response_id: agena_domain::AssistantReplyId,
+    state: MessageStatus,
+) -> TranscriptEntryPart;
+
+pub fn pending_user_entry(
+    pending_id: u64,
+    confirmed: bool,
+    document: &ComposerDocument,
 ) -> TranscriptEntry;
 
 const fn user_activity_style(payload: &ActivityPayload) -> TranscriptUserActivityStyle;
@@ -124488,12 +124677,13 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String;
 
 fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart;
 
-fn activity_detail(
-    activity: &ActivityNode,
-    generic: TranscriptActivityPresentation,
-) -> TranscriptPartContent;
+pub(crate) fn activity_presentation(
+    payload: &ActivityPayload,
+) -> (String, String, String, Option<agena_failure::UserProblem>);
 
-fn activity_presentation(payload: &ActivityPayload) -> (String, String, String, Option<String>);
+fn operation_activity_title(operation: &agena_domain::OperationActivity) -> String;
+
+fn operation_presentation_title(operation: &agena_domain::OperationActivity) -> &str;
 
 fn timestamp(value: i64) -> DateTime<Utc>;
 
@@ -124501,16 +124691,35 @@ const fn activity_status(state: ActivityState) -> PartExecutionStatusResource;
 
 const fn activity_entry_status(state: ActivityState) -> MessageStatus;
 
-const fn response_status(status: ResponseStatus) -> MessageStatus;
+const fn assistant_reply_status(status: AssistantReplyStatus) -> MessageStatus;
 
 #[cfg(test)]
 mod tests {
     use agena_domain::{
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
-        ResourceActivity, SkillReferenceActivity,
+        CustomActivity, OperationActivity, ResourceActivity, SkillReferenceActivity,
+        StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
     };
 
     use super::*;
+
+    #[test]
+    fn empty_running_reply_projects_lifecycle_as_activity_not_empty_message();
+
+    #[test]
+    fn one_canonical_assistant_reply_projects_all_permission_continuation_content_once();
+
+    #[test]
+    fn session_activity_is_a_top_level_activity_without_a_fake_system_message();
+
+    #[test]
+    fn canonical_tools_list_activity_retains_expandable_structured_output();
+
+    #[test]
+    fn canonical_operation_renders_named_sections_without_repeating_raw_result();
+
+    #[test]
+    fn operation_activity_titles_describe_the_action_instead_of_the_gateway_function();
 
     #[test]
     fn user_entry_keeps_editor_like_inline_activity_placeholders();
@@ -124519,7 +124728,7 @@ mod tests {
 
 </details>
 
-<details><summary><code>crates/agena-tui-transcript/src/text.rs</code> — 523 lines; mod=1, fn=52</summary>
+<details><summary><code>crates/agena-tui-transcript/src/text.rs</code> — 531 lines; mod=1, fn=52</summary>
 
 - Package：`agena-tui-transcript`
 - Target/module：agena_tui_transcript: crate::text, crate::text::tests
@@ -124682,7 +124891,7 @@ fn snapshot_action_label(i18n: &I18n, action: Option<&str>) -> String;
 
 </details>
 
-### 8.57 `agena-web`
+### 8.58 `agena-web`
 
 <details><summary><code>crates/agena-web/src/browser.rs</code> — 226 lines; struct=2, impl=3, fn=10</summary>
 
@@ -125263,7 +125472,7 @@ impl CrawlDir {
 
 </details>
 
-<details><summary><code>crates/agena-web/src/run.rs</code> — 276 lines; struct=2, trait=1, impl=2, fn=10</summary>
+<details><summary><code>crates/agena-web/src/run.rs</code> — 312 lines; struct=2, trait=1, impl=2, fn=11</summary>
 
 - Package：`agena-web`
 - Target/module：agena_web: crate::run
@@ -125313,7 +125522,7 @@ pub struct CrawlRunReport {
     pub total_documents: usize,
     pub documents: Vec<CrawlDocumentSummary>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failures: Vec<String>,
+    pub failures: Vec<agena_failure::UserProblem>,
 }
 
 pub trait CrawlPageFetcher {
@@ -125333,6 +125542,8 @@ pub async fn crawl_site(
     options: &CrawlRunOptions,
     fetcher: &impl CrawlPageFetcher,
 ) -> Result<CrawlRunReport, CrawlError>;
+
+fn crawl_page_failure() -> agena_failure::Failure;
 
 pub fn ensure_index_exists(store: &CrawlStore) -> Result<(), CrawlError>;
 
@@ -125660,17 +125871,17 @@ impl CrawlStore {
 
 | 指标 | 结果 |
 | --- | ---: |
-| Workspace packages | 57 |
-| Cargo Rust targets | 62 |
+| Workspace packages | 58 |
+| Cargo Rust targets | 63 |
 | Binary targets | 6 |
-| 扫描 `.rs` 文件 | 1139 |
-| 至少被一个 target module tree 触达的文件 | 1119 |
+| 扫描 `.rs` 文件 | 1137 |
+| 至少被一个 target module tree 触达的文件 | 1117 |
 | 辅助/fixture/未触达 `.rs` 文件 | 20 |
 | 模块声明未解析项 | 0 |
 | Lexer 结构告警 | 0 |
-| 函数/方法签名 | 13675 |
-| 已省略的函数体 | 13213 |
-| Struct / enum / trait / impl | 2676 / 812 / 107 / 2264 |
+| 函数/方法签名 | 13733 |
+| 已省略的函数体 | 13273 |
+| Struct / enum / trait / impl | 2670 / 816 / 106 / 2322 |
 
 未被 target module tree 触达的文件（仍已在源码骨架附录中覆盖）：
 

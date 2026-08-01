@@ -30,12 +30,11 @@ pub mod drivers;
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
-pub use error::{PluginError, PluginErrorKind, Result};
+pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
 pub use hooks::*;
 pub use host_api::{
     HostClient, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,
-    HostImageOperation, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, HostPermissionOutcome, NoopHostClient,
+    HostImageOperation, NoopHostClient,
 };
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text};

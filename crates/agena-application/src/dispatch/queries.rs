@@ -62,56 +62,6 @@ pub async fn dispatch_query(
             })
             .await?,
         )),
-        Query::ListMessages(ListMessagesParams {
-            session_id,
-            cursor,
-            limit,
-            parts,
-        }) => {
-            let queries = state.session_query_service()?;
-            Ok(QueryResult::Messages(
-                http_page_result(state.service().list_messages(
-                    queries.as_ref(),
-                    session_id,
-                    MessageListQuery {
-                        pagination: cursor_pagination(cursor, limit),
-                        parts,
-                    },
-                ))
-                .await?,
-            ))
-        }
-        Query::GetMessage(GetMessageParams { message_id, parts }) => {
-            let queries = state.session_query_service()?;
-            Ok(QueryResult::Message(
-                http_optional_result(
-                    state
-                        .service()
-                        .get_message(queries.as_ref(), message_id, parts),
-                    || format!("message {message_id} not found"),
-                )
-                .await?,
-            ))
-        }
-        Query::ListMessageParts(ListMessagePartsParams { message_id, mode }) => {
-            let queries = state.session_query_service()?;
-            Ok(QueryResult::MessageParts(
-                state
-                    .service()
-                    .list_message_parts(queries.as_ref(), message_id, mode)
-                    .await?,
-            ))
-        }
-        Query::GetMessagePart(GetMessagePartParams { part_id }) => {
-            let queries = state.session_query_service()?;
-            Ok(QueryResult::MessagePart(
-                http_optional_result(
-                    state.service().get_message_part(queries.as_ref(), part_id),
-                    || format!("message part not found: {part_id}"),
-                )
-                .await?,
-            ))
-        }
         Query::ListEvents(ListEventsParams {
             scope,
             kinds,
@@ -237,12 +187,11 @@ pub async fn dispatch_query(
     }
 }
 use super::{
-    Application, ApplicationError, CursorPaginationQuery, GetMessageParams, GetMessagePartParams,
-    GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
-    ListMessagePartsParams, ListMessagesParams, ListPermissionRulesParams,
+    Application, ApplicationError, CursorPaginationQuery, GetPermissionRuleParams,
+    GetSessionParams, GetWorkspaceParams, ListEventsParams, ListPermissionRulesParams,
     ListProviderAdapterModelsParams, ListProviderModelsParams,
-    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-    MessageListQuery, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
-    SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
+    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, PageInfo,
+    PaginatedEvents, Query, QueryResult, SearchPaginationQuery, SessionListQuery,
+    WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
     runtime_status_response,
 };

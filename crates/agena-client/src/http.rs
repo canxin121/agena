@@ -13,14 +13,13 @@ use agena_api::{
     },
     notifications::Notification,
     queries::{
-        GetMessageParams, GetMessagePartParams, GetPermissionRuleParams, GetSessionParams,
-        GetWorkspaceParams, ListEventsParams, ListMessagePartsParams, ListMessagesParams,
+        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
         ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
         PaginatedEvents, Query, QueryResult,
     },
     resource::{
-        HealthResponse, PartLoadMode, PermissionRuleResource, ProviderAdapterModelsRequest,
+        HealthResponse, PermissionRuleResource, ProviderAdapterModelsRequest,
         ProviderAdapterModelsResponse, RunOptions, SavedProviderAdapterModelsRequest,
         SessionExecutionResource, SessionResource, WorkspaceResource,
     },
@@ -532,12 +531,12 @@ impl AgenaClient {
             }
             Command::RewindSession(RewindSessionParams {
                 session_id,
-                message_id,
+                turn_id,
                 ..
             }) => Ok(CommandResult::Execution(
                 self.post_json(
                     &format!("/api/v1/sessions/{session_id}/rewind"),
-                    serde_json::json!({ "message_id": message_id }),
+                    serde_json::json!({ "turn_id": turn_id }),
                 )
                 .await?,
             )),
@@ -853,68 +852,6 @@ impl AgenaClient {
             Query::GetSessionState(GetSessionParams { session_id }) => {
                 Ok(QueryResult::SessionState(
                     self.get_json(&format!("/api/v1/sessions/{session_id}/state"))
-                        .await?,
-                ))
-            }
-            Query::ListMessages(ListMessagesParams {
-                session_id,
-                cursor,
-                limit,
-                parts,
-            }) => {
-                let mut url = self.endpoint(&format!("/api/v1/sessions/{session_id}/messages"));
-                {
-                    let mut q = url.query_pairs_mut();
-                    if let Some(cursor) = cursor {
-                        q.append_pair("cursor", &cursor);
-                    }
-                    if let Some(limit) = limit {
-                        q.append_pair("limit", &limit.to_string());
-                    }
-                    q.append_pair(
-                        "parts",
-                        match parts {
-                            PartLoadMode::None => "none",
-                            PartLoadMode::Summary => "summary",
-                            PartLoadMode::Full => "full",
-                        },
-                    );
-                }
-                Ok(QueryResult::Messages(
-                    self.parse_json(self.http.get(url).send().await?).await?,
-                ))
-            }
-            Query::GetMessage(GetMessageParams { message_id, parts }) => {
-                let mut url = self.endpoint(&format!("/api/v1/messages/{message_id}"));
-                url.query_pairs_mut().append_pair(
-                    "parts",
-                    match parts {
-                        PartLoadMode::None => "none",
-                        PartLoadMode::Summary => "summary",
-                        PartLoadMode::Full => "full",
-                    },
-                );
-                Ok(QueryResult::Message(
-                    self.parse_json(self.http.get(url).send().await?).await?,
-                ))
-            }
-            Query::ListMessageParts(ListMessagePartsParams { message_id, mode }) => {
-                let mut url = self.endpoint(&format!("/api/v1/messages/{message_id}/parts"));
-                url.query_pairs_mut().append_pair(
-                    "mode",
-                    match mode {
-                        PartLoadMode::None => "none",
-                        PartLoadMode::Summary => "summary",
-                        PartLoadMode::Full => "full",
-                    },
-                );
-                Ok(QueryResult::MessageParts(
-                    self.parse_json(self.http.get(url).send().await?).await?,
-                ))
-            }
-            Query::GetMessagePart(GetMessagePartParams { part_id }) => {
-                Ok(QueryResult::MessagePart(
-                    self.get_json(&format!("/api/v1/message-parts/{part_id}"))
                         .await?,
                 ))
             }

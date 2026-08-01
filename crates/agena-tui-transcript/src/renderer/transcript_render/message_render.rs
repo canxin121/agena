@@ -17,7 +17,7 @@ use crate::snapshot::activity_presentation;
 use crate::ui_text;
 use crate::{
     MessageRequestPartResource, PartExecutionStatusResource, TranscriptActivityContent,
-    TranscriptEntryPart, TranscriptPartContent, TranscriptResponseLifecycle,
+    TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
 use agena_api::resource::{
     MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageResource,
@@ -147,25 +147,55 @@ fn canonical_activity_details(
                     operation.invocation.input.clone(),
                 ))
             {
-                details.push(input);
+                details.push(format!("Input\n{input}"));
             }
             if !operation.model_output_text.trim().is_empty()
                 && operation.model_output_text.trim() != summary.trim()
             {
-                details.push(operation.model_output_text.clone());
+                details.push(format!("Result\n{}", operation.model_output_text));
             }
-            if let Some(output) = operation.details.to_json_payload()
+            // Named sections are the tool's explicit expanded presentation.
+            // Keep them structured through the domain projection and render
+            // each one exactly once, rather than reconstructing them from a
+            // raw JSON payload or a duplicate Markdown block.
+            for section in &operation.sections {
+                let title = section.title.trim();
+                let text = section.text.trim();
+                if title.is_empty()
+                    || text.is_empty()
+                    || text == summary.trim()
+                    || text == operation.model_output_text.trim()
+                {
+                    continue;
+                }
+                let detail = format!("{title}\n{text}");
+                if !details.iter().any(|existing| existing == &detail) {
+                    details.push(detail);
+                }
+            }
+            // The model-visible result is the primary human-facing section.
+            // Retain raw structured data only if there is neither a primary
+            // result nor an explicit named section. Otherwise tools_list,
+            // search and plugin tools show the same payload in multiple forms.
+            if operation.model_output_text.trim().is_empty()
+                && operation.sections.is_empty()
+                && let Some(output) = operation.details.to_json_payload()
                 && let Ok(output) = serde_json::to_string_pretty(&output)
             {
-                details.push(output);
+                details.push(format!("Structured result\n{output}"));
             }
-            details.extend(
-                operation
-                    .details
-                    .managed_outputs
-                    .iter()
-                    .map(|output| output.path.clone()),
-            );
+            if !operation.details.managed_outputs.is_empty() {
+                details.push(format!(
+                    "Managed outputs\n{}",
+                    operation
+                        .details
+                        .managed_outputs
+                        .iter()
+                        .map(|output| output.path.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ));
+            }
             details
         }
         agena_domain::ActivityPayload::SkillReference(skill) => [
@@ -221,7 +251,11 @@ fn canonical_activity_details(
         }
         agena_domain::ActivityPayload::Error(error) => {
             let fallback = error.problem.user.fallback.clone();
-            if !fallback.is_empty() { vec![fallback] } else { Vec::new() }
+            if !fallback.is_empty() {
+                vec![fallback]
+            } else {
+                Vec::new()
+            }
         }
         agena_domain::ActivityPayload::Custom(custom) => {
             let mut details = vec![format!("schema version {}", custom.schema_version)];
@@ -372,17 +406,21 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
             };
             Some(text)
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
-            Some(ui_text::t(
-                i18n,
-                match status {
-                    TranscriptResponseLifecycle::Running => "message-activity-response-running",
-                    TranscriptResponseLifecycle::Completed => "message-activity-response-completed",
-                    TranscriptResponseLifecycle::Failed => "message-activity-response-failed",
-                    TranscriptResponseLifecycle::Cancelled => "message-activity-response-cancelled",
-                },
-            ))
-        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
+            status,
+        )) => Some(ui_text::t(
+            i18n,
+            match status {
+                TranscriptAssistantReplyLifecycle::Running => "message-activity-response-running",
+                TranscriptAssistantReplyLifecycle::Completed => {
+                    "message-activity-response-completed"
+                }
+                TranscriptAssistantReplyLifecycle::Failed => "message-activity-response-failed",
+                TranscriptAssistantReplyLifecycle::Cancelled => {
+                    "message-activity-response-cancelled"
+                }
+            },
+        )),
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             Some(match request.as_ref() {
                 MessageRequestPartResource::Permission { request, .. } => request.reason.clone(),
@@ -692,10 +730,23 @@ pub(crate) fn render_part_node(
             let (_, title, summary, error) = activity_presentation(payload);
             let details = canonical_activity_details(payload, summary.as_str());
             let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
+            // A persisted Activity header consists of title + compact summary.
+            // The collapsed transcript must consume both, while avoiding a
+            // second copy when a specialised title (for example tools_list)
+            // already incorporates that same summary.
+            let headline_title = if summary.trim().is_empty()
+                || title.contains(summary.trim())
+                || title.contains('→')
+            {
+                title.clone()
+            } else {
+                format!("{title} · {}", concise_text(summary.as_str(), 72))
+            };
             push_single_line(
                 out,
                 "  ",
-                activity_headline(title.as_str(), part.status, expanded, toggleable).as_str(),
+                activity_headline(headline_title.as_str(), part.status, expanded, toggleable)
+                    .as_str(),
                 Style::default()
                     .fg(match part.status {
                         PartExecutionStatusResource::Failed => {
@@ -709,10 +760,34 @@ pub(crate) fn render_part_node(
                     .add_modifier(Modifier::BOLD),
                 width,
             );
+            if expanded
+                && matches!(
+                    payload.as_ref(),
+                    agena_domain::ActivityPayload::Operation(_)
+                )
+                && !summary.trim().is_empty()
+            {
+                push_single_line(
+                    out,
+                    "    ",
+                    "Result",
+                    Style::default()
+                        .fg(agena_tui_components::theme::muted_color())
+                        .add_modifier(Modifier::BOLD),
+                    width,
+                );
+            }
             if expanded && !summary.trim().is_empty() {
                 push_multiline(
                     out,
-                    "    ",
+                    if matches!(
+                        payload.as_ref(),
+                        agena_domain::ActivityPayload::Operation(_)
+                    ) {
+                        "      "
+                    } else {
+                        "    "
+                    },
                     summary.as_str(),
                     Style::default().fg(agena_tui_components::theme::muted_color()),
                     width,
@@ -852,14 +927,22 @@ pub(crate) fn render_part_node(
                 expanded: true,
             }
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
+            status,
+        )) => {
             let title = ui_text::t(
                 i18n,
                 match status {
-                    TranscriptResponseLifecycle::Running => "message-activity-response-running",
-                    TranscriptResponseLifecycle::Completed => "message-activity-response-completed",
-                    TranscriptResponseLifecycle::Failed => "message-activity-response-failed",
-                    TranscriptResponseLifecycle::Cancelled => "message-activity-response-cancelled",
+                    TranscriptAssistantReplyLifecycle::Running => {
+                        "message-activity-response-running"
+                    }
+                    TranscriptAssistantReplyLifecycle::Completed => {
+                        "message-activity-response-completed"
+                    }
+                    TranscriptAssistantReplyLifecycle::Failed => "message-activity-response-failed",
+                    TranscriptAssistantReplyLifecycle::Cancelled => {
+                        "message-activity-response-cancelled"
+                    }
                 },
             );
             push_single_line(
@@ -868,14 +951,14 @@ pub(crate) fn render_part_node(
                 format!("▸ {title}").as_str(),
                 Style::default()
                     .fg(match status {
-                        TranscriptResponseLifecycle::Running => {
+                        TranscriptAssistantReplyLifecycle::Running => {
                             agena_tui_components::theme::special_color()
                         }
-                        TranscriptResponseLifecycle::Completed => {
+                        TranscriptAssistantReplyLifecycle::Completed => {
                             agena_tui_components::theme::success_color()
                         }
-                        TranscriptResponseLifecycle::Failed
-                        | TranscriptResponseLifecycle::Cancelled => {
+                        TranscriptAssistantReplyLifecycle::Failed
+                        | TranscriptAssistantReplyLifecycle::Cancelled => {
                             agena_tui_components::theme::danger_color()
                         }
                     })

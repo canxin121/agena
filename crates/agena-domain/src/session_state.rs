@@ -121,7 +121,6 @@ impl SessionLifecycleState {
 pub enum WorkflowState {
     #[default]
     Quiescent,
-    ReadyForModel,
     ToolPending,
     Blocked,
 }
@@ -162,9 +161,6 @@ mod tests {
             serde_json::to_string(&WorkflowState::Blocked).unwrap(),
             "\"blocked\""
         );
-        assert_eq!(
-            serde_json::from_str::<WorkflowState>("\"ready_for_model\"").unwrap(),
-            WorkflowState::ReadyForModel
-        );
+        assert!(serde_json::from_str::<WorkflowState>("\"ready_for_model\"").is_err());
     }
 }

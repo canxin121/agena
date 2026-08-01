@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use crate::plugins::provided::workflow::{
-    ToolApiCallInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
-    WorkflowPlanConfig, WorkflowPlugin, WorkflowPluginConfig, tool_discovery_config_schema,
+    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, WorkflowPlanConfig,
+    WorkflowPlugin, WorkflowPluginConfig, tool_discovery_config_schema,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
@@ -19,7 +19,7 @@ pub(crate) struct ToolApiPlugin {
     namespace = "agena",
     name = "tools",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "The five Tool API functions for discovering and running Agena execution tools.",
+    summary = "Tool API discovery functions. The runtime resolves tools_call directly to its execution target.",
     config_schema = tool_discovery_config_schema(),
     display = brief_detailed
 )]
@@ -99,19 +99,6 @@ impl ToolApiPlugin {
     async fn tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_tool_api_tags(input).await
     }
-
-    #[tool(
-        summary = "Run one Agena execution tool with complete input; validation errors include tool help for a direct retry.",
-        discovery,
-        ui_display = detailed,
-        capabilities(
-            HostCapability::ListTools,
-            HostCapability::InvokeTool
-        )
-    )]
-    async fn call(&self, input: &ToolApiCallInput) -> SdkResult<ToolInvokeOutput> {
-        self.inner.invoke_tool_api_call(input).await
-    }
 }
 
 #[cfg(test)]
@@ -133,16 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn help_and_call_declare_every_host_capability_they_use() {
+    fn help_declares_every_host_capability_it_uses() {
         let help = capabilities_for("help");
         assert!(help.contains(&HostCapability::ListTools));
         assert!(help.contains(&HostCapability::ToolRegistry));
         assert!(!help.contains(&HostCapability::PluginStorage));
-
-        let call = capabilities_for("call");
-        assert!(call.contains(&HostCapability::ListTools));
-        assert!(call.contains(&HostCapability::InvokeTool));
-        assert!(!call.contains(&HostCapability::PluginStorage));
     }
 
     #[test]
@@ -162,49 +144,5 @@ mod tests {
             .expect("help tool-name description");
         assert!(help_tool_description.contains("Exact name"));
         assert!(help_tool_description.contains("`tools_list` or `tools_search`"));
-
-        let call = definition_for("call");
-        assert!(
-            call.docs
-                .summary
-                .as_deref()
-                .is_some_and(|summary| summary.contains("Run one Agena execution tool"))
-        );
-        let call_tool_description = call
-            .contract
-            .input_schema
-            .pointer("/properties/tool/description")
-            .and_then(serde_json::Value::as_str)
-            .expect("call tool-name description");
-        assert!(call_tool_description.contains("`tools_call`"));
-        assert!(call_tool_description.contains("execution tool"));
-        assert!(call_tool_description.contains("never invent"));
-        let call_input_schema = call
-            .contract
-            .input_schema
-            .pointer("/properties/input")
-            .expect("execution-tool input schema");
-        assert_eq!(
-            call_input_schema
-                .get("additionalProperties")
-                .and_then(serde_json::Value::as_bool),
-            Some(true)
-        );
-        let call_input_description = call_input_schema
-            .get("description")
-            .and_then(serde_json::Value::as_str)
-            .expect("tools_call input description");
-        let call_input_description = call_input_description
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(
-            call_input_description.contains("openness is not permission to guess"),
-            "{call_input_description}"
-        );
-        assert!(
-            call_input_description.contains("reusable embedded validation help"),
-            "{call_input_description}"
-        );
     }
 }

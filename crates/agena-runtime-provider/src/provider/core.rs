@@ -375,6 +375,25 @@ pub trait ModelRuntime: Send + Sync {
                 delta: reasoning,
             }));
         }
+        for (index, call) in response.tool_calls.into_iter().enumerate() {
+            let agena_provider::CompletionToolCall::Function {
+                id,
+                name,
+                arguments_json,
+            } = call;
+            events.push(Ok(CompletionStreamEvent::ToolCallSnapshot {
+                provider_id: response.provider_id.clone(),
+                model: response.model.clone(),
+                stream_key: if id.is_empty() {
+                    format!("index:{index}")
+                } else {
+                    format!("id:{id}")
+                },
+                id: (!id.is_empty()).then_some(id),
+                name: (!name.is_empty()).then_some(name),
+                arguments_json,
+            }));
+        }
         events.push(Ok(CompletionStreamEvent::TextDelta {
             provider_id: response.provider_id.clone(),
             model: response.model.clone(),
@@ -667,5 +686,113 @@ pub fn remap_stream_event_provider_and_model(
             usage,
             provider_metadata,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+
+    struct NonStreamingToolProvider {
+        model: ModelId,
+    }
+
+    #[async_trait]
+    impl ModelRuntime for NonStreamingToolProvider {
+        fn id(&self) -> &str {
+            "non-streaming-tool-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            Ok(CompletionResponse {
+                provider_id: ProviderId::new(self.id()),
+                model: self.model.clone(),
+                text: String::new(),
+                reasoning_text: None,
+                finish_reason: Some(agena_provider::CompletionFinishReason::ToolCalls),
+                tool_calls: vec![
+                    agena_provider::CompletionToolCall::Function {
+                        id: "call-fast".to_owned(),
+                        name: "tools_call".to_owned(),
+                        arguments_json: "{\"tool\":\"fs.read\",\"input\":{}}".to_owned(),
+                    },
+                    agena_provider::CompletionToolCall::Function {
+                        id: "call-slow".to_owned(),
+                        name: "tools_call".to_owned(),
+                        arguments_json: "{\"tool\":\"shell.run\",\"input\":{}}".to_owned(),
+                    },
+                ],
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn default_stream_bridge_preserves_every_non_streaming_tool_call() {
+        let provider = NonStreamingToolProvider {
+            model: ModelId::new("test-model"),
+        };
+        let request: CompletionRequest = serde_json::from_value(serde_json::json!({
+            "model": "test-model",
+            "messages": []
+        }))
+        .expect("minimal completion request");
+        let events = provider
+            .complete_stream(request)
+            .await
+            .expect("create default stream")
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("collect default stream");
+
+        let calls = events
+            .iter()
+            .filter_map(|event| match event {
+                CompletionStreamEvent::ToolCallSnapshot {
+                    id,
+                    name,
+                    arguments_json,
+                    ..
+                } => Some((id.as_deref(), name.as_deref(), arguments_json.as_str())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            calls,
+            vec![
+                (
+                    Some("call-fast"),
+                    Some("tools_call"),
+                    "{\"tool\":\"fs.read\",\"input\":{}}"
+                ),
+                (
+                    Some("call-slow"),
+                    Some("tools_call"),
+                    "{\"tool\":\"shell.run\",\"input\":{}}"
+                ),
+            ]
+        );
+        assert!(matches!(
+            events.last(),
+            Some(CompletionStreamEvent::Completed {
+                finish_reason: Some(agena_provider::CompletionFinishReason::ToolCalls),
+                ..
+            })
+        ));
     }
 }

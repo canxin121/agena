@@ -93,7 +93,7 @@ pub(super) fn execute_exit(
     let action = input.action.trim();
     if action == "remove"
         && session.created_here
-        && let Err(error) = remove_created_workspace(executor, &session, input.discard_changes)
+        && let Err(error) = remove_created_workspace(&session, input.discard_changes)
     {
         registry.write().insert(session_id, session.clone());
         return Err(error);
@@ -117,12 +117,9 @@ pub(super) fn execute_exit(
 }
 
 fn remove_created_workspace(
-    executor: &ToolExecutor,
     session: &SnapshotSession,
     discard_changes: bool,
 ) -> Result<(), ToolError> {
-    executor.ensure_read_permission(&session.path)?;
-    executor.ensure_edit_permission(&session.path)?;
     if !discard_changes && snapshot_has_local_changes(&session.path) {
         return Err(ToolError::plugin(
             "snapshot.exit: snapshot has local changes; re-call with `discard_changes: true` to force removal"

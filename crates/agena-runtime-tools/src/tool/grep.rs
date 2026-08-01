@@ -22,7 +22,6 @@ pub(super) fn execute(
         .as_deref()
         .map(|path| executor.resolve_target_path(path))
         .unwrap_or_else(|| executor.workspace_root().to_path_buf());
-    executor.ensure_read_permission(&base_path)?;
 
     if !base_path.exists() {
         return Err(ToolError::invalid_field(
@@ -78,8 +77,6 @@ pub(super) fn execute(
         {
             continue;
         }
-
-        executor.ensure_read_permission(entry.path())?;
 
         let Ok(text) = fs::read_to_string(entry.path()) else {
             continue;

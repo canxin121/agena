@@ -111,11 +111,11 @@ pub struct SessionForkRequest {
     pub expected_version: Option<i64>,
 }
 
-/// Input for rewinding a session to a message boundary.
+/// Input for rewinding a session to a canonical user turn boundary.
 #[derive(Debug, Clone)]
 pub struct SessionRewindRequest {
     pub session_id: i64,
-    pub message_id: i64,
+    pub turn_id: agena_domain::TurnId,
     #[doc(hidden)]
     pub expected_version: Option<i64>,
 }

@@ -4,8 +4,8 @@ use super::super::{
 };
 use crate::ui_text;
 use crate::{
-    MessageRequestPartResource, TranscriptActivityContent, TranscriptEntryPart,
-    TranscriptPartContent, TranscriptResponseLifecycle,
+    MessageRequestPartResource, TranscriptActivityContent, TranscriptAssistantReplyLifecycle,
+    TranscriptEntryPart, TranscriptPartContent,
 };
 
 pub(crate) fn render_file_changes(
@@ -213,17 +213,21 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             };
             Some(text)
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::ResponseLifecycle(status)) => {
-            Some(ui_text::t(
-                i18n,
-                match status {
-                    TranscriptResponseLifecycle::Running => "message-activity-response-running",
-                    TranscriptResponseLifecycle::Completed => "message-activity-response-completed",
-                    TranscriptResponseLifecycle::Failed => "message-activity-response-failed",
-                    TranscriptResponseLifecycle::Cancelled => "message-activity-response-cancelled",
-                },
-            ))
-        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
+            status,
+        )) => Some(ui_text::t(
+            i18n,
+            match status {
+                TranscriptAssistantReplyLifecycle::Running => "message-activity-response-running",
+                TranscriptAssistantReplyLifecycle::Completed => {
+                    "message-activity-response-completed"
+                }
+                TranscriptAssistantReplyLifecycle::Failed => "message-activity-response-failed",
+                TranscriptAssistantReplyLifecycle::Cancelled => {
+                    "message-activity-response-cancelled"
+                }
+            },
+        )),
         TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
             attachment.attachments.first().map(|item| {
                 item.title

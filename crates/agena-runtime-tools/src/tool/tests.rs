@@ -24,6 +24,38 @@ struct ToolApiFixture;
 #[derive(Default)]
 struct ExecutionAccessFixture;
 
+#[derive(Default)]
+struct ExecutorBackedShellAdapter;
+
+#[derive(Default)]
+struct ExecutorBackedFsAdapter;
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "shell",
+    version = "test",
+    summary = "Definition-only shell adapter regression fixture."
+)]
+impl ExecutorBackedShellAdapter {
+    #[tool(name = "run", summary = "Run a shell command.", mutating, shell)]
+    async fn run(&self, _input: &crate::message::ShellCommandInput) -> String {
+        "plugin adapter must not execute".to_owned()
+    }
+}
+
+#[agena_plugin_host::sdk::agena_plugin(
+    namespace = "agena",
+    name = "fs",
+    version = "test",
+    summary = "Definition-only filesystem adapter regression fixture."
+)]
+impl ExecutorBackedFsAdapter {
+    #[tool(name = "read", summary = "Read a file.", read_only, filesystem_read)]
+    async fn read(&self, _input: &crate::message::ReadToolInput) -> String {
+        "plugin adapter must not execute".to_owned()
+    }
+}
+
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "test",
     name = "access",
@@ -102,11 +134,6 @@ impl ToolApiFixture {
     async fn tags(&self, _input: &crate::message::AskUserToolInput) -> String {
         String::new()
     }
-
-    #[tool(name = "call", summary = "Call a tool.")]
-    async fn call(&self, _input: &crate::message::AskUserToolInput) -> String {
-        String::new()
-    }
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -123,75 +150,124 @@ impl ChokePointPlugin {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn detailed_execution_enforces_permissions_without_caller_preflight() {
-    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+async fn compact_builtin_targets_execute_through_the_orchestrator() {
+    let workspace_root = std::env::temp_dir().join(format!(
+        "agena-direct-builtin-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&workspace_root).expect("create direct builtin workspace");
+    std::fs::write(workspace_root.join("fixture.txt"), "direct fs dispatch\n")
+        .expect("write direct read fixture");
+
     let mut plugins_config = PluginsConfig::default();
     plugins_config
         .list
-        .insert("test.choke".to_string(), ConfiguredPlugin::static_default());
+        .insert("agena.shell".to_owned(), ConfiguredPlugin::static_default());
+    plugins_config
+        .list
+        .insert("agena.fs".to_owned(), ConfiguredPlugin::static_default());
     let plugins = PluginHost::new(PluginHostBuildConfig {
-        static_plugins: vec![StaticPluginRegistration::new(
-            "test.choke".parse().expect("valid test plugin key"),
-            ChokePointPlugin,
-        )],
+        static_plugins: vec![
+            StaticPluginRegistration::new(
+                "agena.shell".parse().expect("valid shell plugin key"),
+                ExecutorBackedShellAdapter,
+            ),
+            StaticPluginRegistration::new(
+                "agena.fs".parse().expect("valid fs plugin key"),
+                ExecutorBackedFsAdapter,
+            ),
+        ],
         config: plugins_config,
         workspace_root: workspace_root.clone(),
-        agena_version: "test".to_string(),
+        agena_version: "test".to_owned(),
         callback_base_url: None,
         host_client: None,
         previous: None,
         previous_plugins: HashMap::new(),
     })
     .await
-    .expect("build test plugin host");
+    .expect("build direct builtin plugin host");
     let executor = ToolExecutor::new(
-        workspace_root,
+        workspace_root.clone(),
         ExecutionPrincipal::new(
             PermissionPolicy::allow_all(),
-            ToolPermissionPolicy::new(PermissionMode::Ask),
+            ToolPermissionPolicy::allow_all(),
         ),
-        Arc::clone(&plugins),
+        plugins,
         None,
         None,
         None,
         ToolPresentationConfig::default(),
     );
-    let tool_name = plugins
-        .registered_tools()
-        .into_iter()
-        .next()
-        .expect("test plugin registers one tool")
-        .canonical_name()
-        .to_string();
-    let invocation = ToolInvocation::new(tool_name, StructuredObject::default());
 
-    let checks = executor
-        .collect_permission_checks_for_invocation_in_session(&invocation, Some(1))
-        .expect("collect permission checks");
-    assert!(matches!(
-        checks[0].decision,
-        agena_domain::PermissionDecision::Ask { .. }
-    ));
-    let error = executor
-        .issue_execution_grant(&invocation, 1, 1, None, Vec::new())
-        .expect_err("an incomplete authorization cannot mint an execution grant");
+    let shell_input = StructuredObject::try_from(serde_json::json!({
+        "shell": "bash",
+        "command": "python3 --version",
+        "description": "Check Python version",
+        "filesystem_effects": [{"access": "read", "path": "/usr/bin"}],
+        "network_effects": []
+    }))
+    .expect("valid shell input");
+    let shell_invocation = ToolInvocation {
+        tool_api_call: Some(agena_domain::ToolApiCall {
+            function: agena_domain::ToolApiFunction::Call,
+            arguments: StructuredObject::try_from(serde_json::json!({
+                "tool": "shell.run",
+                "input": serde_json::Value::from(shell_input.clone())
+            }))
+            .expect("valid tools_call envelope"),
+        }),
+        name: "shell.run".to_owned(),
+        plugin_name: None,
+        input: shell_input,
+    };
+    let prepared = executor
+        .prepare_invocation(&shell_invocation, 1, 1)
+        .expect("prepare compact shell invocation");
+    let (prepared_shell_invocation, prepared_shell) = executor
+        .prepare_shell_invocation(&prepared.invocation, 1, 1)
+        .expect("prepare compact shell command");
+    let shell_execution = executor
+        .execute_invocation_detailed_with_prepared_shell(
+            &prepared_shell_invocation,
+            1,
+            1,
+            prepared_shell,
+        )
+        .expect("execute compact shell target");
+    assert!(shell_execution.view.output_text.contains("Python"));
     assert!(
-        matches!(error, ToolError::InvalidExecutionGrant(_)),
-        "expected exact-grant rejection, got: {error}"
+        !shell_execution
+            .view
+            .output_text
+            .contains("plugin adapter must not execute")
     );
-    let mut excessive_actions = checks
-        .iter()
-        .map(|check| check.action.clone())
-        .collect::<Vec<_>>();
-    excessive_actions.push(agena_domain::PermissionAction::NetworkAccess {
-        target: "unrelated.example:443".to_owned(),
-        host: "unrelated.example".to_owned(),
-        port: Some(443),
-    });
-    let error = executor
-        .issue_execution_grant(&invocation, 1, 1, None, excessive_actions)
-        .expect_err("an over-broad authorization cannot mint an execution grant");
-    assert!(matches!(error, ToolError::InvalidExecutionGrant(_)));
+
+    let read_invocation = ToolInvocation::new(
+        "fs.read",
+        StructuredObject::try_from(serde_json::json!({"path": "fixture.txt"}))
+            .expect("valid read input"),
+    );
+    let prepared_read = executor
+        .prepare_invocation(&read_invocation, 1, 2)
+        .expect("prepare compact read invocation");
+    let read_execution = executor
+        .execute_invocation_detailed(&prepared_read.invocation, 1, 2)
+        .expect("execute compact read target");
+    assert!(
+        read_execution
+            .view
+            .output_text
+            .contains("direct fs dispatch")
+    );
+    assert!(
+        !read_execution
+            .view
+            .output_text
+            .contains("plugin adapter must not execute")
+    );
+
+    std::fs::remove_dir_all(workspace_root).expect("remove direct builtin workspace");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -256,10 +332,16 @@ async fn only_five_gateway_functions_are_provider_visible() {
         .description;
     assert!(call_description.contains("Never invent the tool name"));
     assert!(call_description.contains("complete object"));
-    for binding in bindings {
+    for binding in bindings
+        .iter()
+        .filter(|binding| binding.function() != agena_domain::ToolApiFunction::Call)
+    {
         let mut invocation =
             ToolInvocation::new(binding.function_name(), StructuredObject::default());
-        invocation.tool_api_function = Some(binding.function());
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: binding.function(),
+            arguments: invocation.input.clone(),
+        });
         assert!(
             executor
                 .collect_permission_checks_for_invocation(&invocation)
@@ -273,11 +355,21 @@ async fn only_five_gateway_functions_are_provider_visible() {
     let execution_tool = plugins
         .lookup_tool("test.choke.run")
         .expect("execution tool is registered");
+    let invocation = ToolInvocation {
+        tool_api_call: Some(agena_domain::ToolApiCall {
+            function: agena_domain::ToolApiFunction::Call,
+            arguments: StructuredObject::try_from(serde_json::json!({
+                "tool": execution_tool.canonical_name(),
+                "input": {}
+            }))
+            .expect("tools_call provider envelope"),
+        }),
+        name: execution_tool.canonical_name().to_string(),
+        plugin_name: None,
+        input: StructuredObject::default(),
+    };
     let checks = executor
-        .collect_permission_checks_for_invocation(&ToolInvocation::new(
-            execution_tool.canonical_name(),
-            StructuredObject::default(),
-        ))
+        .collect_permission_checks_for_invocation(&invocation)
         .expect("collect execution-tool permission checks");
     assert_eq!(checks.len(), 1);
     assert!(matches!(

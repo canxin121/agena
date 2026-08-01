@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 const SESSION_TABLE: &str = "agena_sessions";
 const LINEAGE_TABLE: &str = "agena_session_lineage";
-const MESSAGE_TABLE: &str = "agena_transcript_messages";
+const MESSAGE_TABLE: &str = "agena_model_messages";
 
 /// SQLite implementation of usage aggregation input reads.
 ///

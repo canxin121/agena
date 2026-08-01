@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 
-import type { MessagePart, MessageResource } from '@/agena/lib/agenaApi'
+import type { MessagePart, MessageResource, TranscriptSnapshot } from '@/agena/lib/agenaApi'
 
-import { partBlocks, rewindMessageComposerText } from './chatRenderModel'
+import { partBlocks, rewindMessageComposerText, transcriptMessages } from './chatRenderModel'
 
 function userMessage(parts: MessagePart[]): MessageResource {
   return {
@@ -55,6 +55,85 @@ describe('rewindMessageComposerText', () => {
     ])
 
     expect(rewindMessageComposerText(message)).toBe('visible')
+  })
+})
+
+describe('canonical transcript projection', () => {
+  test('creates exactly one user entry and one assistant entry per canonical turn', () => {
+    const transcript: TranscriptSnapshot = {
+      session_id: 7,
+      seq_session: 9,
+      turns: [
+        {
+          id: '00000000-0000-0000-0000-000000000001',
+          session_id: 7,
+          sequence: 1,
+          created_at_ms: 1_800_000_000_000,
+          input: [
+            {
+              type: 'activity',
+              activity: {
+                id: '00000000-0000-0000-0000-000000000002',
+                owner: { type: 'turn_input', turn_id: '00000000-0000-0000-0000-000000000001' },
+                actor: 'user',
+                state: 'completed',
+                position: { index: 0 },
+                revision_seq: 1,
+                lifecycle: { started_at_ms: 1_800_000_000_000, finished_at_ms: 1_800_000_000_000 },
+                payload: {
+                  activity_type: 'skill_reference',
+                  name: 'batch',
+                  description: 'Run independent tasks.',
+                  instructions: 'Use isolated snapshots.',
+                  content_hash: 'sha256:test',
+                  source: 'test',
+                  aliases: [],
+                },
+              },
+            },
+            {
+              type: 'text',
+              segment: {
+                id: '00000000-0000-0000-0000-000000000003',
+                text: 'Fix the tool barrier.',
+                position: { index: 1 },
+                revision_seq: 2,
+              },
+            },
+          ],
+          reply: {
+            id: '00000000-0000-0000-0000-000000000004',
+            turn_id: '00000000-0000-0000-0000-000000000001',
+            status: 'completed',
+            content: [
+              {
+                type: 'text',
+                segment: {
+                  id: '00000000-0000-0000-0000-000000000005',
+                  text: 'Done.',
+                  position: { index: 0 },
+                  revision_seq: 3,
+                },
+              },
+            ],
+            revision_seq: 4,
+            created_at_ms: 1_800_000_000_001,
+            finished_at_ms: 1_800_000_000_002,
+          },
+        },
+      ],
+    }
+
+    const messages = transcriptMessages(transcript)
+
+    expect(messages.length).toBe(2)
+    expect(messages.map((message) => message.id)).toEqual([
+      'turn:00000000-0000-0000-0000-000000000001:input',
+      'reply:00000000-0000-0000-0000-000000000004',
+    ])
+    expect(messages[0]?.parts?.map((part) => part.kind)).toEqual(['skill_reference', 'text'])
+    expect(messages[0]?.metadata.canonical_turn_id).toBe('00000000-0000-0000-0000-000000000001')
+    expect(messages[1]?.metadata.canonical_reply_id).toBe('00000000-0000-0000-0000-000000000004')
   })
 })
 

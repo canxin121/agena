@@ -36,7 +36,7 @@ pub struct MessagePartResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<agena_domain::ActivityId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -400,12 +400,21 @@ pub struct ToolResultDisplayResource {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSectionResource>,
 }
 
 impl ToolResultDisplayResource {
     pub fn is_empty(&self) -> bool {
-        self.title.is_empty() && self.summary.is_empty()
+        self.title.is_empty() && self.summary.is_empty() && self.sections.is_empty()
     }
+}
+
+/// Named, expanded-only presentation content for a tool Activity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ToolPresentationSectionResource {
+    pub title: String,
+    pub text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

@@ -11,11 +11,9 @@ use std::sync::{Arc, OnceLock};
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
+use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
 };
 use base64::Engine as _;
 use schemars::JsonSchema;
@@ -25,7 +23,6 @@ use sha2::{Digest, Sha256};
 pub(crate) const OPENAI_PLUGIN_ID: &str = "agena.openai";
 
 pub(crate) struct OpenAiToolsPlugin {
-    host: OnceLock<Arc<dyn HostClient>>,
     workspace_root: OnceLock<PathBuf>,
     config: OnceLock<OpenAiToolsConfig>,
 }
@@ -142,16 +139,9 @@ struct ImageEditInput {
 impl OpenAiToolsPlugin {
     pub(crate) fn new() -> Self {
         Self {
-            host: OnceLock::new(),
             workspace_root: OnceLock::new(),
             config: OnceLock::new(),
         }
-    }
-
-    fn host(&self) -> SdkResult<&Arc<dyn HostClient>> {
-        self.host
-            .get()
-            .ok_or_else(|| PluginError::internal("OpenAI tools plugin invoked before init"))
     }
 
     fn workspace_root(&self) -> SdkResult<&Path> {
@@ -220,12 +210,6 @@ impl OpenAiToolsPlugin {
             })
     }
 
-    async fn authorize_endpoint(&self, url: &str) -> SdkResult<()> {
-        self.host()?
-            .ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url.to_owned()))
-            .await
-    }
-
     fn resolve_input_path(&self, value: &str) -> SdkResult<PathBuf> {
         let value = value.trim();
         if value.is_empty() {
@@ -270,11 +254,6 @@ impl OpenAiToolsPlugin {
             .workspace_root()?
             .join(".agena/artifacts/openai/images")
             .join(format!("{}.png", uuid::Uuid::new_v4().simple()));
-        self.host()?
-            .ensure_path_permission(HostPathPermissionCheckRequest::write(
-                path.to_string_lossy().to_string(),
-            ))
-            .await?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
                 PluginError::internal(format!("cannot create image directory: {error}"))
@@ -339,7 +318,7 @@ impl OpenAiToolsPlugin {
 )]
 impl OpenAiToolsPlugin {
     #[hook(init)]
-    async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
+    async fn init(&self, ctx: InitContext, _host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         let config: OpenAiToolsConfig =
             agena_plugin_host::sdk::macro_support::parse_defaulted_config(
                 ctx.config,
@@ -350,9 +329,6 @@ impl OpenAiToolsPlugin {
             .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
         self.config
             .set(config)
-            .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
-        self.host
-            .set(host)
             .map_err(|_| PluginError::internal("OpenAI tools plugin initialized more than once"))?;
         Ok(InitOutcome::ack(agena_plugin_host::sdk::Plugin::manifest(
             self,
@@ -367,12 +343,10 @@ impl OpenAiToolsPlugin {
         internet,
         discovery,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(r#"{"query":"Latest Rust language release notes","model":"gpt-4.1"}"#)
     )]
     async fn web_search(&self, input: OpenAiWebSearchInput) -> SdkResult<ToolInvokeOutput> {
         let url = self.endpoint("responses")?;
-        self.authorize_endpoint(url.as_str()).await?;
         let model = self.responses_model(input.model)?;
         let response = reqwest::Client::new()
             .post(url.as_str())
@@ -422,12 +396,10 @@ impl OpenAiToolsPlugin {
         network,
         internet,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         examples(r#"{"prompt":"A watercolor map of a floating city","size":"1536x1024","quality":"high"}"#)
     )]
     async fn image_generation(&self, input: ImageGenerateInput) -> SdkResult<ToolInvokeOutput> {
         let url = self.endpoint("images/generations")?;
-        self.authorize_endpoint(url.as_str()).await?;
         let model = self.image_model()?;
         let mut body = serde_json::json!({
             "model": model.clone(),
@@ -466,13 +438,11 @@ impl OpenAiToolsPlugin {
         network,
         internet,
         display = detailed,
-        capabilities(HostCapability::PermissionCheck),
         path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         examples(r#"{"prompt":"Replace the sky with an aurora","images":["assets/source.png"]}"#)
     )]
     async fn image_edit(&self, input: ImageEditInput) -> SdkResult<ToolInvokeOutput> {
         let url = self.endpoint("images/edits")?;
-        self.authorize_endpoint(url.as_str()).await?;
         let model = self.image_model()?;
         let mut form = reqwest::multipart::Form::new()
             .text("model", model.clone())
@@ -481,11 +451,6 @@ impl OpenAiToolsPlugin {
         form = apply_image_options_to_form(form, &input.options)?;
         for source in input.images {
             let path = self.resolve_input_path(source.as_str())?;
-            self.host()?
-                .ensure_path_permission(HostPathPermissionCheckRequest::read(
-                    path.to_string_lossy().to_string(),
-                ))
-                .await?;
             let bytes = tokio::fs::read(&path).await.map_err(|error| {
                 PluginError::internal(format!("cannot read image '{}': {error}", path.display()))
             })?;

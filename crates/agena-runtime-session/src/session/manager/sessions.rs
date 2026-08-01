@@ -113,7 +113,7 @@ impl SessionManager {
                 MessageMetadata {
                     source: MessageSource::System,
                     idempotency_key: None,
-                    turn_id: None,
+                    model_turn_id: None,
                     parent_message_id: session
                         .last_conversation_message()
                         .map(|message| message.id),
@@ -140,7 +140,7 @@ impl SessionManager {
                 MessageMetadata {
                     source: MessageSource::System,
                     idempotency_key: None,
-                    turn_id: Some(initial_turn_id),
+                    model_turn_id: Some(initial_turn_id),
                     parent_message_id: session
                         .last_conversation_message()
                         .map(|message| message.id),

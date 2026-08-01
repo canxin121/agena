@@ -1309,7 +1309,10 @@ mod tool_api_function_validation_tests {
             StructuredObject::try_from(serde_json::json!({ "tool": "fs.read" }))
                 .expect("structured help input"),
         );
-        invocation.tool_api_function = Some(ToolApiFunction::Help);
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: ToolApiFunction::Help,
+            arguments: invocation.input.clone(),
+        });
         let mut message = Message::prompt_parts(
             Role::Assistant,
             vec![PartContent::operation(OperationPart::completed(

@@ -551,6 +551,7 @@ dependencies = [
  "abi_stable",
  "agena-failure",
  "agena-macros",
+ "agena-tool",
  "async-trait",
  "axum",
  "bitflags 2.13.1",

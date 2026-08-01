@@ -22,13 +22,12 @@ use agena_application::dto::{
     HealthResponse, ItemsResponse, MarketplaceInstallRequest, MarketplaceInstalledPluginResource,
     MarketplaceOutdatedPluginResource, MarketplacePluginResource, MarketplaceRegistryRequest,
     MarketplaceSearchRequest, MarketplaceSearchResponse, MarketplaceUninstallRequestBody,
-    MarketplaceUpgradeRequest, MemoryWriteRequest, MessageListQuery, PartLoadMode,
-    PermissionRuleRevokeRequest, PermissionRuleWriteRequest, PluginInspectResponse,
-    PluginLogListQuery, PluginLogListResponse, PluginUiCatalogResponse, PluginUiInvokeToolRequest,
-    PluginUiRequestContext, RuntimeBackgroundTaskCancelResponse,
-    RuntimeBackgroundTaskStartResponse, SearchPaginationQuery, SessionCreateRequest,
-    SessionEventStreamQuery, SessionListQuery, SessionMessageRequest, SessionReplyRequestBody,
-    SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
+    MarketplaceUpgradeRequest, MemoryWriteRequest, PermissionRuleRevokeRequest,
+    PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
+    PluginUiCatalogResponse, PluginUiInvokeToolRequest, PluginUiRequestContext,
+    RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
+    SessionCreateRequest, SessionEventStreamQuery, SessionListQuery, SessionMessageRequest,
+    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
     WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };
@@ -64,7 +63,6 @@ mod events;
 mod git;
 mod marketplace;
 mod memory;
-mod messages;
 mod model_catalog;
 mod permissions;
 mod plugins;
@@ -74,7 +72,6 @@ mod settings;
 mod workspaces;
 
 pub use events::*;
-pub use messages::*;
 pub use permissions::*;
 pub use sessions::*;
 pub use settings::*;
@@ -133,18 +130,6 @@ pub struct SessionForkRequestBody {
     pub at_event_seq: Option<i64>,
     #[serde(default)]
     pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MessageDetailQuery {
-    #[serde(default)]
-    pub parts: PartLoadMode,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct MessagePartsQuery {
-    #[serde(default)]
-    pub mode: PartLoadMode,
 }
 
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {

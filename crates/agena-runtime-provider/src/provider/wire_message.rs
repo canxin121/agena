@@ -556,7 +556,11 @@ fn project_tool_invocation(
 
 fn invocation_name_and_args(invocation: &ToolInvocation) -> Option<(ModelToolFunction, String)> {
     let function = model_tool_function_for_invocation(invocation).ok()?;
-    let json_value: serde_json::Value = invocation.input.clone().into();
+    let json_value: serde_json::Value = invocation
+        .tool_api_call
+        .as_ref()
+        .map(|call| call.arguments.clone())?
+        .into();
     Some((
         function,
         serde_json::to_string(&json_value).unwrap_or_else(|_| "{}".to_owned()),
@@ -567,13 +571,27 @@ pub fn tool_api_function_for_invocation(
     invocation: &ToolInvocation,
 ) -> Result<ToolApiFunction, String> {
     let stored_name = invocation.name.as_str();
-    if let Some(function) = invocation.tool_api_function {
-        if stored_name == function.function_name() && invocation.plugin_name.is_none() {
-            return Ok(function);
+    if let Some(call) = invocation.tool_api_call.as_ref() {
+        if call.function == ToolApiFunction::Call {
+            let target = call
+                .arguments
+                .get("tool")
+                .and_then(agena_domain::StructuredValue::as_text)
+                .map(str::trim)
+                .filter(|target| !target.is_empty());
+            if target == Some(stored_name) {
+                return Ok(call.function);
+            }
+            return Err(format!(
+                "Tool API function `tools_call` targets {target:?}, but the operation stores execution target `{stored_name}`"
+            ));
+        }
+        if stored_name == call.function.function_name() && invocation.plugin_name.is_none() {
+            return Ok(call.function);
         }
         return Err(format!(
-            "Tool API function `{}` must store only its exact protocol name and no plugin identity, but the operation stores name `{stored_name}` with plugin {:?}",
-            function.function_name(),
+            "Tool API function `{}` must store its exact protocol handler name and no plugin identity, but the operation stores name `{stored_name}` with plugin {:?}",
+            call.function.function_name(),
             invocation.plugin_name,
         ));
     }
@@ -1005,7 +1023,13 @@ mod tests {
             }))
             .expect("structured Tool API payload"),
         );
-        invocation.tool_api_function = Some(ToolApiFunction::Call);
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: ToolApiFunction::Call,
+            arguments: invocation.input.clone(),
+        });
+        invocation.name = "agena.session.rename".to_owned();
+        invocation.input = StructuredObject::try_from(serde_json::json!({ "title": "renamed" }))
+            .expect("target input");
         let message = assistant_operation(invocation);
 
         validate_provider_native_tool_history(std::slice::from_ref(&message))
@@ -1067,10 +1091,13 @@ mod tests {
     #[test]
     fn mismatched_tool_api_identity_is_rejected() {
         let mut invocation = ToolInvocation::new(
-            ToolApiFunction::Help.function_name(),
+            ToolApiFunction::Call.function_name(),
             StructuredObject::default(),
         );
-        invocation.tool_api_function = Some(ToolApiFunction::Call);
+        invocation.tool_api_call = Some(agena_domain::ToolApiCall {
+            function: ToolApiFunction::Help,
+            arguments: StructuredObject::default(),
+        });
         let message = assistant_operation(invocation);
 
         let error =
@@ -1078,7 +1105,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("must store only its exact protocol name")
+                .contains("must store its exact protocol handler name")
         );
     }
 }

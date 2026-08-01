@@ -76,7 +76,6 @@ fn prepare_file_attachment(
     input_path: &str,
 ) -> Result<PreparedFileAttachment, ToolError> {
     let target = executor.resolve_target_path(input_path);
-    executor.ensure_read_permission(&target)?;
 
     if !target.exists() {
         return Err(ToolError::invalid_input(format!(

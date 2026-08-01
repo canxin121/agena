@@ -194,17 +194,11 @@ impl App {
     }
 
     pub(crate) fn should_suppress_pending_interactive_overlay(&self) -> bool {
-        if !self.current_route_is_main() {
-            return true;
-        }
-        composer_input_is_active(
-            self.focus,
-            !self.composer.text().trim().is_empty() || !self.composer_items.is_empty(),
-            self.prompt_history_search.is_some()
-                || self.file_mention_suggestions.is_some()
-                || self.slash_command_suggestions.is_some()
-                || self.composer_item_selection.is_active(),
-        )
+        // A pending permission or user-input request is a foreground
+        // interaction, not a transcript hint. Keeping a composer, slash
+        // picker, or mention picker open must never silently hide it behind
+        // Alt+A/Alt+U; the draft remains intact underneath the modal.
+        !self.current_route_is_main()
     }
 
     pub(crate) fn has_suppressed_pending_interactive_overlay(&self) -> bool {
@@ -681,9 +675,9 @@ use crate::{
     SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationOverlay,
     SessionNavigationQuery, SessionSearchOverlay, TimelineOverlay, TimelinePresentation,
     UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
-    composer_input_is_active, execution_pending_flash_key,
-    first_pending_interactive_request_by_kind, first_unseen_pending_interactive_request,
-    path_browser_directory_input, pending_interactive_kind_for_execution,
-    permission_prompt_content, settings_clear_label, ui_text,
+    execution_pending_flash_key, first_pending_interactive_request_by_kind,
+    first_unseen_pending_interactive_request, path_browser_directory_input,
+    pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
+    ui_text,
 };
 use agena_tui_session::{session_search::SessionSearchPresentation, session_view::SessionViewMode};

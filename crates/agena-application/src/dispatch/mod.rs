@@ -7,8 +7,7 @@ use std::future::Future;
 use crate::{
     Application, ApplicationError,
     dto::{
-        CursorPaginationQuery, MessageListQuery,
-        ModelCatalogResponse as ApplicationModelCatalogResponse,
+        CursorPaginationQuery, ModelCatalogResponse as ApplicationModelCatalogResponse,
         PermissionRuleResource as ApplicationPermissionRuleResource, PermissionRuleWriteRequest,
         RuntimeBackgroundTaskResource as ApplicationRuntimeBackgroundTaskResource,
         SearchPaginationQuery, SessionListQuery, WorkspaceListQuery, WorkspacePathRequest,
@@ -29,8 +28,7 @@ use agena_api::{
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
-        GetMessageParams, GetMessagePartParams, GetPermissionRuleParams, GetSessionParams,
-        GetWorkspaceParams, ListEventsParams, ListMessagePartsParams, ListMessagesParams,
+        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
         ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
         PaginatedEvents, Query, QueryResult,

@@ -28,8 +28,10 @@ pub enum TranscriptNodeKey {
     },
     ActivitySummary {
         entry_id: crate::TranscriptEntryId,
+        /// Stable anchor for an append-only Activity run. The last Activity
+        /// is deliberately excluded so streamed additions do not create a
+        /// different, default-collapsed summary node.
         first_content_id: crate::TranscriptContentId,
-        last_content_id: crate::TranscriptContentId,
     },
     Activity {
         entry_id: crate::TranscriptEntryId,

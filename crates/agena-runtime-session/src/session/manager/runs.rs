@@ -1,13 +1,16 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionSource, ExecutionStatus, FinishReason,
-    HistoryMessageId, HistoryRunId, MessageMetadata, MessageSource, PartContent, Role,
-    RunCompleted, RunStarted, SessionExecutionRequest, SessionManager, SessionSubtaskRequest,
-    SessionSubtaskResponse, SessionUserMessageRequest, StableRunContext, TranscriptContent,
-    UserInputPart, UserMessageAppended, build_message, mpsc,
+    AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
+    ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId, MessageMetadata, MessageSource,
+    PartContent, Role, RunCompleted, RunStarted, SessionExecutionRequest, SessionManager,
+    SessionSubtaskRequest, SessionSubtaskResponse, SessionUserMessageRequest, StableRunContext,
+    TranscriptContent, UserInputPart, UserMessageAppended, build_message, mpsc,
 };
 use crate::session::Session;
-use agena_failure::{Failure, FailureCode, FailureCategory, FailureImpact, FailureResponsibility, RecoveryDirective, RetryDirective, UserPresentation};
 use agena_domain::SubtaskStatusChangedEvent;
+use agena_failure::{
+    Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
+    RetryDirective, UserPresentation,
+};
 
 impl SessionManager {
     async fn require_subtask_session(
@@ -114,6 +117,7 @@ impl SessionManager {
         self.start_registered(
             session_id,
             ExecutionSource::User,
+            ExecutionConversationTarget::NewTurn,
             "user execution",
             move |manager, control, steer_rx| async move {
                 manager
@@ -189,7 +193,7 @@ impl SessionManager {
         let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
         let ids = self.store.reserve_message_ids(request.parts.len()).await?;
-        let user_turn_id = ids.message_id;
+        let user_model_turn_id = ids.message_id;
         let input_parts = request.parts;
         let activity_ids = input_parts
             .iter()
@@ -203,7 +207,7 @@ impl SessionManager {
             MessageMetadata {
                 source: MessageSource::User,
                 idempotency_key: request.idempotency_key.clone(),
-                turn_id: Some(user_turn_id),
+                model_turn_id: Some(user_model_turn_id),
                 parent_message_id: session
                     .last_conversation_message()
                     .map(|message| message.id),
@@ -270,7 +274,7 @@ impl SessionManager {
             StableRunContext {
                 allow_goal_continuation: false,
                 base_run_source: ExecutionSource::User,
-                active_turn_id: Some(user_message.id),
+                active_model_turn_id: Some(user_message.id),
                 state,
                 control,
                 steer_rx,
@@ -293,6 +297,7 @@ impl SessionManager {
         self.execute_registered(
             session_id,
             ExecutionSource::User,
+            ExecutionConversationTarget::NewTurn,
             "subtask execution",
             move |manager, control, steer_rx| async move {
                 manager
@@ -311,6 +316,7 @@ impl SessionManager {
         self.execute_registered(
             session_id,
             ExecutionSource::Continue,
+            ExecutionConversationTarget::LatestReply,
             "continuation execution",
             move |manager, control, steer_rx| async move {
                 manager
@@ -329,6 +335,7 @@ impl SessionManager {
         self.start_registered(
             session_id,
             ExecutionSource::Continue,
+            ExecutionConversationTarget::LatestReply,
             "continuation execution",
             move |manager, control, steer_rx| async move {
                 manager
@@ -363,7 +370,7 @@ impl SessionManager {
             StableRunContext {
                 allow_goal_continuation: true,
                 base_run_source: ExecutionSource::Continue,
-                active_turn_id: None,
+                active_model_turn_id: None,
                 state,
                 control,
                 steer_rx,
@@ -596,7 +603,15 @@ impl SessionManager {
         let (status, failure, budget_exceeded, mut session) = match run_result {
             Ok(session) if timed_out => (
                 agena_domain::SubtaskStatus::TimedOut,
-                Some(Failure::new(FailureCode::new("subtask.timeout"), FailureCategory::Timeout, FailureResponsibility::System, RetryDirective::UseAlternative, RecoveryDirective::ChooseAlternative, FailureImpact::OperationFailed, UserPresentation::new("subtask-timeout", "The subtask timed out."))),
+                Some(Failure::new(
+                    FailureCode::new("subtask.timeout"),
+                    FailureCategory::Timeout,
+                    FailureResponsibility::System,
+                    RetryDirective::UseAlternative,
+                    RecoveryDirective::ChooseAlternative,
+                    FailureImpact::OperationFailed,
+                    UserPresentation::new("subtask-timeout", "The subtask timed out."),
+                )),
                 false,
                 session,
             ),
@@ -676,7 +691,6 @@ impl SessionManager {
     }
 }
 
-
 pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
 -> std::collections::BTreeSet<String> {
     [
@@ -691,7 +705,6 @@ pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
     .into_iter()
     .map(str::to_string)
     .collect()
-
 }
 
 #[cfg(test)]

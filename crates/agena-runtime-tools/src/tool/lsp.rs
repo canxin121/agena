@@ -27,7 +27,6 @@ pub(super) fn execute_definition(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.position.file_path);
-    executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
@@ -65,7 +64,6 @@ pub(super) fn execute_references(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.position.file_path);
-    executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
     let include_definition = input.include_declaration;
@@ -108,7 +106,6 @@ pub(super) fn execute_hover(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.position.file_path);
-    executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
     let pos = Position::new(input.position.line, input.position.character);
 
@@ -144,7 +141,6 @@ pub(super) fn execute_diagnostics(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = registry(executor)?;
     let path = executor.resolve_target_path(&input.file_path);
-    executor.ensure_read_permission(&path)?;
     let uri = path_to_uri(&path)?;
 
     // Make sure the language server has been spawned (it might not have

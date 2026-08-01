@@ -99,16 +99,75 @@ where
                AND existing_session.parent_id = new_session.parent_id \
          ) \
          BEGIN SELECT RAISE(ABORT, 'delegated task identity already exists for parent'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_transcript_messages_identity_immutable \
-         BEFORE UPDATE OF message_id, session_id, turn_id, role, created_at_ms ON agena_transcript_messages \
+        "CREATE TRIGGER IF NOT EXISTS agena_turns_shape_insert_valid \
+         BEFORE INSERT ON agena_turns \
+         WHEN NEW.turn_seq <= 0 OR NEW.created_at_ms < 0 \
+         BEGIN SELECT RAISE(ABORT, 'invalid canonical turn'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_turns_identity_immutable \
+         BEFORE UPDATE OF turn_id, session_id, turn_seq, created_at_ms ON agena_turns \
+         WHEN OLD.turn_id != NEW.turn_id OR OLD.session_id != NEW.session_id \
+           OR OLD.turn_seq != NEW.turn_seq OR OLD.created_at_ms != NEW.created_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'canonical turn identity is immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_assistant_replies_shape_insert_valid \
+         BEFORE INSERT ON agena_assistant_replies \
+         WHEN NEW.status NOT IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.revision_seq < 0 OR NEW.created_at_ms < 0 \
+           OR (NEW.status IN ('completed', 'failed', 'cancelled') \
+               AND (NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.created_at_ms)) \
+           OR (NEW.status IN ('pending', 'in_progress') AND NEW.finished_at_ms IS NOT NULL) \
+         BEGIN SELECT RAISE(ABORT, 'invalid assistant reply lifecycle'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_assistant_replies_shape_update_valid \
+         BEFORE UPDATE OF status, revision_seq, finished_at_ms ON agena_assistant_replies \
+         WHEN NEW.status NOT IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.revision_seq < OLD.revision_seq \
+           OR (NEW.status IN ('completed', 'failed', 'cancelled') \
+               AND (NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.created_at_ms)) \
+           OR (NEW.status IN ('pending', 'in_progress') AND NEW.finished_at_ms IS NOT NULL) \
+         BEGIN SELECT RAISE(ABORT, 'invalid assistant reply lifecycle'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_assistant_replies_identity_immutable \
+         BEFORE UPDATE OF reply_id, turn_id, created_at_ms ON agena_assistant_replies \
+         WHEN OLD.reply_id != NEW.reply_id OR OLD.turn_id != NEW.turn_id \
+           OR OLD.created_at_ms != NEW.created_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'assistant reply identity is immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_reply_executions_shape_insert_valid \
+         BEFORE INSERT ON agena_reply_executions \
+         WHEN NEW.source NOT IN ('user', 'continue', 'compaction', 'permission_reply', 'user_input_reply') \
+           OR NEW.status NOT IN ('in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.revision_seq < 0 OR NEW.started_at_ms < 0 \
+           OR (NEW.status IN ('completed', 'failed', 'cancelled') \
+               AND (NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.started_at_ms)) \
+           OR (NEW.status = 'in_progress' AND NEW.finished_at_ms IS NOT NULL) \
+           OR (NEW.source = 'user' AND EXISTS ( \
+               SELECT 1 FROM agena_reply_executions existing WHERE existing.reply_id = NEW.reply_id \
+           )) \
+           OR (NEW.source != 'user' AND NOT EXISTS ( \
+               SELECT 1 FROM agena_reply_executions original \
+               WHERE original.reply_id = NEW.reply_id AND original.source = 'user' \
+           )) \
+         BEGIN SELECT RAISE(ABORT, 'invalid assistant reply execution'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_reply_executions_shape_update_valid \
+         BEFORE UPDATE OF status, revision_seq, finished_at_ms ON agena_reply_executions \
+         WHEN NEW.status NOT IN ('in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.revision_seq < OLD.revision_seq \
+           OR OLD.status != 'in_progress' \
+           OR NEW.status = 'in_progress' \
+           OR NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.started_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'invalid assistant reply execution lifecycle'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_reply_executions_identity_immutable \
+         BEFORE UPDATE OF execution_id, reply_id, source, started_at_ms ON agena_reply_executions \
+         WHEN OLD.execution_id != NEW.execution_id OR OLD.reply_id != NEW.reply_id \
+           OR OLD.source != NEW.source OR OLD.started_at_ms != NEW.started_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'assistant reply execution identity is immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_model_messages_identity_immutable \
+         BEFORE UPDATE OF message_id, session_id, model_turn_id, role, created_at_ms ON agena_model_messages \
          WHEN OLD.message_id != NEW.message_id \
            OR OLD.session_id != NEW.session_id \
-           OR OLD.turn_id IS NOT NEW.turn_id \
+           OR OLD.model_turn_id IS NOT NEW.model_turn_id \
            OR OLD.role != NEW.role \
            OR OLD.created_at_ms != NEW.created_at_ms \
          BEGIN SELECT RAISE(ABORT, 'message identity and ownership are immutable'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_transcript_parts_identity_immutable \
-         BEFORE UPDATE OF part_id, message_id, part_index, kind, activity_id, segment_id, operation_id, created_at_ms ON agena_transcript_parts \
+        "CREATE TRIGGER IF NOT EXISTS agena_model_message_parts_identity_immutable \
+         BEFORE UPDATE OF part_id, message_id, part_index, kind, activity_id, segment_id, operation_id, created_at_ms ON agena_model_message_parts \
          WHEN OLD.part_id != NEW.part_id \
            OR OLD.message_id != NEW.message_id \
            OR OLD.part_index != NEW.part_index \
@@ -123,44 +182,78 @@ where
          WHEN NEW.position < 0 OR NEW.revision_seq < 0 \
            OR NOT ( \
              (NEW.owner_kind = 'turn_input' AND EXISTS (SELECT 1 FROM agena_turns WHERE turn_id = NEW.owner_id)) \
-             OR (NEW.owner_kind = 'response' AND EXISTS (SELECT 1 FROM agena_responses WHERE response_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'assistant_reply' AND EXISTS (SELECT 1 FROM agena_assistant_replies WHERE reply_id = NEW.owner_id)) \
              OR (NEW.owner_kind = 'activity' AND EXISTS (SELECT 1 FROM agena_activities WHERE activity_id = NEW.owner_id)) \
              OR (NEW.owner_kind = 'session' AND EXISTS (SELECT 1 FROM agena_sessions WHERE CAST(id AS TEXT) = NEW.owner_id)) \
            ) \
            OR EXISTS (SELECT 1 FROM agena_text_segments text WHERE text.owner_kind = NEW.owner_kind AND text.owner_id = NEW.owner_id AND text.position = NEW.position) \
          BEGIN SELECT RAISE(ABORT, 'invalid activity owner or content position'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_activities_lifecycle_insert_valid \
+         BEFORE INSERT ON agena_activities \
+         WHEN NEW.actor NOT IN ('user', 'assistant', 'runtime', 'tool', 'plugin') \
+           OR NEW.state NOT IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.started_at_ms < 0 \
+           OR (NEW.state IN ('completed', 'failed', 'cancelled') \
+               AND (NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.started_at_ms)) \
+           OR (NEW.state IN ('pending', 'in_progress') AND NEW.finished_at_ms IS NOT NULL) \
+         BEGIN SELECT RAISE(ABORT, 'invalid activity lifecycle'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_activities_lifecycle_update_valid \
+         BEFORE UPDATE OF state, revision_seq, finished_at_ms ON agena_activities \
+         WHEN NEW.state NOT IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.revision_seq < OLD.revision_seq \
+           OR (NEW.state IN ('completed', 'failed', 'cancelled') \
+               AND (NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.started_at_ms)) \
+           OR (NEW.state IN ('pending', 'in_progress') AND NEW.finished_at_ms IS NOT NULL) \
+         BEGIN SELECT RAISE(ABORT, 'invalid activity lifecycle'); END",
         "CREATE TRIGGER IF NOT EXISTS agena_activities_identity_immutable \
          BEFORE UPDATE OF activity_id, owner_kind, owner_id, actor, position, started_at_ms ON agena_activities \
          WHEN OLD.activity_id != NEW.activity_id OR OLD.owner_kind != NEW.owner_kind \
            OR OLD.owner_id != NEW.owner_id OR OLD.actor != NEW.actor \
            OR OLD.position != NEW.position OR OLD.started_at_ms != NEW.started_at_ms \
          BEGIN SELECT RAISE(ABORT, 'activity identity and ownership are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_activities_revision_monotonic \
+         BEFORE UPDATE OF revision_seq ON agena_activities \
+         WHEN NEW.revision_seq < OLD.revision_seq \
+         BEGIN SELECT RAISE(ABORT, 'activity revision cannot decrease'); END",
         "CREATE TRIGGER IF NOT EXISTS agena_text_segments_owner_insert_valid \
          BEFORE INSERT ON agena_text_segments \
          WHEN NEW.position < 0 OR NEW.revision_seq < 0 \
            OR NOT ( \
              (NEW.owner_kind = 'turn_input' AND EXISTS (SELECT 1 FROM agena_turns WHERE turn_id = NEW.owner_id)) \
-             OR (NEW.owner_kind = 'response' AND EXISTS (SELECT 1 FROM agena_responses WHERE response_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'assistant_reply' AND EXISTS (SELECT 1 FROM agena_assistant_replies WHERE reply_id = NEW.owner_id)) \
            ) \
            OR EXISTS (SELECT 1 FROM agena_activities activity WHERE activity.owner_kind = NEW.owner_kind AND activity.owner_id = NEW.owner_id AND activity.position = NEW.position) \
          BEGIN SELECT RAISE(ABORT, 'invalid text owner or content position'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_text_segments_lifecycle_insert_valid \
+         BEFORE INSERT ON agena_text_segments \
+         WHEN NEW.created_at_ms < 0 OR NEW.updated_at_ms < NEW.created_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'invalid text segment lifecycle'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_text_segments_lifecycle_update_valid \
+         BEFORE UPDATE OF revision_seq, updated_at_ms ON agena_text_segments \
+         WHEN NEW.revision_seq < OLD.revision_seq \
+           OR NEW.updated_at_ms < OLD.updated_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'invalid text segment lifecycle'); END",
         "CREATE TRIGGER IF NOT EXISTS agena_text_segments_identity_immutable \
          BEFORE UPDATE OF segment_id, owner_kind, owner_id, position, created_at_ms ON agena_text_segments \
          WHEN OLD.segment_id != NEW.segment_id OR OLD.owner_kind != NEW.owner_kind \
            OR OLD.owner_id != NEW.owner_id OR OLD.position != NEW.position \
            OR OLD.created_at_ms != NEW.created_at_ms \
          BEGIN SELECT RAISE(ABORT, 'text segment identity and ownership are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_text_segments_revision_monotonic \
+         BEFORE UPDATE OF revision_seq ON agena_text_segments \
+         WHEN NEW.revision_seq < OLD.revision_seq \
+         BEGIN SELECT RAISE(ABORT, 'text segment revision cannot decrease'); END",
         "CREATE TRIGGER IF NOT EXISTS agena_turn_content_delete \
          AFTER DELETE ON agena_turns \
          BEGIN \
            DELETE FROM agena_text_segments WHERE owner_kind = 'turn_input' AND owner_id = OLD.turn_id; \
            DELETE FROM agena_activities WHERE owner_kind = 'turn_input' AND owner_id = OLD.turn_id; \
          END",
-        "CREATE TRIGGER IF NOT EXISTS agena_response_content_delete \
-         AFTER DELETE ON agena_responses \
+        "CREATE TRIGGER IF NOT EXISTS agena_assistant_reply_content_delete \
+         AFTER DELETE ON agena_assistant_replies \
          BEGIN \
-           DELETE FROM agena_text_segments WHERE owner_kind = 'response' AND owner_id = OLD.response_id; \
-           DELETE FROM agena_activities WHERE owner_kind = 'response' AND owner_id = OLD.response_id; \
+           DELETE FROM agena_text_segments WHERE owner_kind = 'assistant_reply' AND owner_id = OLD.reply_id; \
+           DELETE FROM agena_activities WHERE owner_kind = 'assistant_reply' AND owner_id = OLD.reply_id; \
          END",
         "CREATE TRIGGER IF NOT EXISTS agena_activity_children_delete \
          AFTER DELETE ON agena_activities \
@@ -183,18 +276,22 @@ where
              WHERE s.id = NEW.session_id AND s.workspace_id = NEW.workspace_id \
            )) \
          BEGIN SELECT RAISE(ABORT, 'invalid session event scope or workspace ownership'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_transcript_messages_shape_insert_valid \
-         BEFORE INSERT ON agena_transcript_messages \
+        "CREATE TRIGGER IF NOT EXISTS agena_model_messages_shape_insert_valid \
+         BEFORE INSERT ON agena_model_messages \
          WHEN NEW.part_count < 0 \
          BEGIN SELECT RAISE(ABORT, 'message part count cannot be negative'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_transcript_messages_shape_update_valid \
-         BEFORE UPDATE OF part_count ON agena_transcript_messages \
+        "CREATE TRIGGER IF NOT EXISTS agena_model_messages_shape_update_valid \
+         BEFORE UPDATE OF part_count ON agena_model_messages \
          WHEN NEW.part_count < 0 \
          BEGIN SELECT RAISE(ABORT, 'message part count cannot be negative'); END",
-        "CREATE TRIGGER IF NOT EXISTS agena_transcript_parts_shape_insert_valid \
-         BEFORE INSERT ON agena_transcript_parts \
-         WHEN NEW.part_index < 0 \
-         BEGIN SELECT RAISE(ABORT, 'part index cannot be negative'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_model_message_parts_shape_insert_valid \
+         BEFORE INSERT ON agena_model_message_parts \
+         WHEN NEW.part_index < 0 OR NEW.awaits_user_reply NOT IN (0, 1) \
+         BEGIN SELECT RAISE(ABORT, 'invalid model message part shape'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_model_message_parts_shape_update_valid \
+         BEFORE UPDATE OF awaits_user_reply ON agena_model_message_parts \
+         WHEN NEW.awaits_user_reply NOT IN (0, 1) \
+         BEGIN SELECT RAISE(ABORT, 'invalid model message part shape'); END",
     ] {
         db.execute(Statement::from_string(backend, sql.to_owned()))
             .await?;

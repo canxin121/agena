@@ -22,7 +22,7 @@ impl App {
     pub(crate) fn open_rewind_confirm_overlay(
         &mut self,
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     ) {
@@ -38,7 +38,7 @@ impl App {
             ],
             ConfirmAction::Rewind {
                 session_id,
-                message_id,
+                turn_id,
                 message_text,
                 target,
             },
@@ -127,20 +127,31 @@ impl App {
         }
     }
 
-    pub(crate) fn rewind_message_navigation_item(
+    pub(crate) fn rewind_turn_navigation_item(
         &self,
         session_id: i64,
-        message: MessageResource,
+        turn: agena_domain::TurnSnapshot,
     ) -> (
         agena_tui_session::session_navigation::SessionNavigationItem,
         SessionNavigationCommand,
     ) {
-        let label = rewind_message_preview(&message, &self.i18n);
+        let message_text = turn.input.text();
+        let normalized = message_text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let label = if normalized.is_empty() {
+            format!("Turn {}", turn.sequence)
+        } else {
+            normalized.chars().take(96).collect()
+        };
         let detail = format!(
-            "#{} | {} | {}",
-            message.id,
-            ui_text::message_state_label(&self.i18n, message.state),
-            format_timestamp(message.created_at)
+            "turn {} | {}",
+            turn.sequence,
+            format_timestamp(
+                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(turn.created_at_ms)
+                    .unwrap_or_default()
+            )
         );
         let target = format!(
             "{} ({})",
@@ -149,15 +160,15 @@ impl App {
         );
         (
             agena_tui_session::session_navigation::SessionNavigationItem::new(
-                format!("message:{}", message.id),
+                format!("turn:{}", turn.id),
                 label.clone(),
                 detail.clone(),
-                format!("{label} {detail} #{}", message.id),
+                format!("{label} {detail} {}", turn.id),
             ),
             SessionNavigationCommand::Rewind {
                 session_id,
-                message_id: message.id,
-                message_text: rewind_message_composer_text(&message),
+                turn_id: turn.id,
+                message_text,
                 target,
             },
         )
@@ -411,10 +422,10 @@ impl App {
         match action {
             ConfirmAction::Rewind {
                 session_id,
-                message_id,
+                turn_id,
                 message_text,
                 target,
-            } => self.request_session_rewind(session_id, message_id, message_text, target),
+            } => self.request_session_rewind(session_id, turn_id, message_text, target),
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())
             }
@@ -470,10 +481,9 @@ impl App {
     }
 }
 use crate::{
-    App, ConfirmAction, MessageResource, ModelRef, Overlay, PendingInteractiveKind, Route,
-    RunActivityTarget, RunOperation, SessionActivity, SessionNavigationCommand,
-    SessionNavigationQuery, SessionResource, SessionSearchItem, TimelineOverlay, format_timestamp,
-    pending_interactive_kind_for_execution, preferred_visible_session_selection,
-    rewind_message_composer_text, rewind_message_preview, ui_text,
+    App, ConfirmAction, ModelRef, Overlay, PendingInteractiveKind, Route, RunActivityTarget,
+    RunOperation, SessionActivity, SessionNavigationCommand, SessionNavigationQuery,
+    SessionResource, SessionSearchItem, TimelineOverlay, format_timestamp,
+    pending_interactive_kind_for_execution, preferred_visible_session_selection, ui_text,
 };
 use agena_tui::main_focus::Focus;

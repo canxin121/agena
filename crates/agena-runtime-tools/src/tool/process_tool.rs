@@ -144,8 +144,6 @@ fn execute_background_run(
     )?;
 
     let cwd = resolve_workdir(executor, command.workdir.as_deref())?;
-    executor.ensure_filesystem_effects_permission(&command.filesystem_effects, &cwd)?;
-    executor.ensure_network_effects_permission(&command.network_effects)?;
 
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);

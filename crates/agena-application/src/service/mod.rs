@@ -27,15 +27,15 @@ use crate::{
         ActiveExecutionResource, ActiveSnapshotResource, CursorPaginationQuery, GitCommitRequest,
         GitCommitResource, GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest,
         GitStatusResource, ManagedSnapshotResource, MemoryResource, MemoryWriteRequest,
-        MessageListQuery, MessageResource, PartLoadMode, PendingInteractiveRequestResource,
-        PermissionRuleResource, PermissionRuleWriteRequest, ScheduledJobResource,
-        ScheduledJobRunResource, SearchPaginationQuery, SessionAutomationResource,
-        SessionCreateRequest, SessionExecutionContextResource, SessionExecutionResource,
-        SessionLifecycleState, SessionRelationKind, SessionResource, SessionRunOptionsRequest,
-        SessionUpdateRequest, SessionUsageResource, SnapshotBackendSupportResource,
-        SnapshotStatusResource, SubtaskStatus, WorkspaceFileDownloadQuery, WorkspaceFileKind,
-        WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
-        WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
+        PendingInteractiveRequestResource, PermissionRuleResource, PermissionRuleWriteRequest,
+        ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
+        SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
+        SessionExecutionResource, SessionLifecycleState, SessionRelationKind, SessionResource,
+        SessionRunOptionsRequest, SessionUpdateRequest, SessionUsageResource,
+        SnapshotBackendSupportResource, SnapshotStatusResource, SubtaskStatus,
+        WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
+        WorkspaceFileTreeResource, WorkspaceListQuery, WorkspacePathRequest,
+        WorkspaceResolveRequest, WorkspaceResource,
     },
     pagination::{
         PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,
@@ -47,14 +47,12 @@ type ApplicationResult<T> = Result<T, ApplicationError>;
 pub(crate) mod execution;
 mod git;
 mod memory;
-mod messages;
 mod permissions;
 pub(crate) mod sessions;
 mod workspaces;
 
 pub(crate) use execution::execution_access_from_domain;
 pub use execution::{list_scheduled_jobs, scheduled_job_resource, sort_jobs_for_display};
-pub use messages::message_part_resource_from_runtime;
 
 /// Transport-neutral permission-rule mutation request.
 ///
@@ -93,12 +91,6 @@ struct WorkspaceCursor {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SessionCursor {
     updated_at_ms: i64,
-    id: i64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct MessageCursor {
-    created_at_ms: i64,
     id: i64,
 }
 

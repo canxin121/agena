@@ -3,7 +3,6 @@ import type { Ref } from 'vue'
 
 import {
   getSessionState,
-  listMessages,
   listSessionTimeline,
   streamSessionEvents,
   type DomainEventRecord,
@@ -12,6 +11,7 @@ import {
   type SessionExecutionResource,
 } from '../lib/agenaApi'
 import { applySessionEvent, type ChatEventState } from './chatPageModel'
+import { transcriptMessages } from './chatRenderModel'
 
 export type ChatConversationRuntimeInput = {
   errorMessage: Ref<string>
@@ -25,7 +25,6 @@ export type ChatConversationRuntimeInput = {
 export type ChatConversationRuntimeDeps = {
   applySessionEvent: typeof applySessionEvent
   getSessionState: typeof getSessionState
-  listMessages: typeof listMessages
   listSessionTimeline: typeof listSessionTimeline
   streamSessionEvents: typeof streamSessionEvents
 }
@@ -183,10 +182,7 @@ export function useChatConversationRuntime(
       // and synchronously advanced the transcript projection, so the
       // subsequent message read cannot return an older open assistant.
       const state = await deps.getSessionState(sessionId)
-      const [messageItems, eventItems] = await Promise.all([
-        deps.listMessages(sessionId),
-        deps.listSessionTimeline(sessionId, { limit: 100 }),
-      ])
+      const eventItems = await deps.listSessionTimeline(sessionId, { limit: 100 })
       if (input.selectedSessionId.value !== sessionId) return
 
       // Never overwrite an event-reduced state with a response whose event
@@ -204,7 +200,7 @@ export function useChatConversationRuntime(
         input.sessionState.value.active_execution === null &&
         state.active_execution !== null
       input.sessionState.value = locallyTerminalAtSameFence ? { ...state, active_execution: null } : state
-      input.messages.value = messageItems
+      input.messages.value = transcriptMessages(state.transcript)
       input.timelineEvents.value = eventItems
       const rootId = state.session.parent_id ? state.session.parent_id : state.session.id
       await Promise.all([options.loadSessionTree(rootId), options.loadRewindCheckpoints(sessionId)])

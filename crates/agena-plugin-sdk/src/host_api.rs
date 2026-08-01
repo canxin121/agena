@@ -10,12 +10,10 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
-use crate::error::{PluginError, PluginErrorKind, Result};
-use crate::hooks::{
-    EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
-};
+use crate::error::{PluginError, Result};
+use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::{PathKind, PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
+use crate::manifest::{PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
@@ -28,39 +26,6 @@ pub trait HostClient: Send + Sync + 'static {
     async fn unsubscribe_events(&self, subscription_id: String) -> Result<()> {
         let _ = subscription_id;
         Err(unavailable())
-    }
-
-    async fn ask_permission(&self, req: PermissionAskInput) -> Result<PermissionDecision>;
-
-    /// Evaluate the current path permission policy for a plugin-internal path
-    /// access. The host returns `Prompt` when the same access would require an
-    /// interactive permission request in the normal tool flow; plugins should
-    /// only proceed on `Allow`.
-    async fn check_path_permission(
-        &self,
-        _req: HostPathPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse> {
-        Err(unavailable())
-    }
-
-    /// Evaluate the current network permission policy for a plugin-internal
-    /// outbound connection target. Plugins should only proceed on `Allow`.
-    async fn check_network_permission(
-        &self,
-        _req: HostNetworkPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse> {
-        Err(unavailable())
-    }
-
-    async fn ensure_path_permission(&self, req: HostPathPermissionCheckRequest) -> Result<()> {
-        self.check_path_permission(req).await?.ensure_allowed()
-    }
-
-    async fn ensure_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> Result<()> {
-        self.check_network_permission(req).await?.ensure_allowed()
     }
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
@@ -425,106 +390,6 @@ pub fn current_host_callback_context() -> Option<HostCallbackContext> {
 }
 
 // ---------------- permission checks ----------------
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostPathPermissionCheckRequest {
-    pub path: String,
-    pub kind: PathKind,
-}
-
-impl HostPathPermissionCheckRequest {
-    pub fn read(path: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            kind: PathKind::Read,
-        }
-    }
-
-    pub fn write(path: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            kind: PathKind::Write,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostNetworkPermissionCheckRequest {
-    pub target: String,
-}
-
-impl HostNetworkPermissionCheckRequest {
-    pub fn connect(target: impl Into<String>) -> Self {
-        Self {
-            target: target.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HostPermissionCheckResponse {
-    pub decision: PermissionDecision,
-    pub outcome: HostPermissionOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub explanation: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HostPermissionOutcome {
-    Allowed,
-    ApprovalRequired,
-    PolicyDenied,
-    UserDeclined,
-}
-
-impl HostPermissionCheckResponse {
-    pub fn allowed() -> Self {
-        Self {
-            decision: PermissionDecision::Allow,
-            outcome: HostPermissionOutcome::Allowed,
-            reason: None,
-            explanation: String::new(),
-            details: None,
-        }
-    }
-
-    pub fn is_allowed(&self) -> bool {
-        self.decision == PermissionDecision::Allow
-    }
-
-    pub fn ensure_allowed(&self) -> Result<()> {
-        if self.is_allowed() {
-            return Ok(());
-        }
-        let reason = self
-            .reason
-            .as_deref()
-            .filter(|reason| !reason.trim().is_empty())
-            .or_else(|| (!self.explanation.trim().is_empty()).then_some(self.explanation.as_str()))
-            .unwrap_or("permission check did not allow the requested access");
-
-        let kind = match self.outcome {
-            HostPermissionOutcome::Allowed => PluginErrorKind::Internal,
-            HostPermissionOutcome::ApprovalRequired => PluginErrorKind::ApprovalRequired,
-            HostPermissionOutcome::PolicyDenied => PluginErrorKind::PolicyDenied,
-            HostPermissionOutcome::UserDeclined => PluginErrorKind::UserDeclined,
-        };
-        let mut error = PluginError::from_kind(kind, reason.to_string());
-        // plugin name not available in this scope
-        error.diagnostic.data = Some(serde_json::json!({
-            "permission_outcome": self.outcome,
-            "explanation": self.explanation,
-            "details": self.details,
-        }));
-        Err(error)
-
-    }
-}
 
 // ---------------- ask_user ----------------
 
@@ -1527,24 +1392,6 @@ impl HostClient for NoopHostClient {
     }
 
     async fn subscribe_events(&self, _: EventFilter) -> Result<EventSubscription> {
-        Err(unavailable())
-    }
-
-    async fn ask_permission(&self, _: PermissionAskInput) -> Result<PermissionDecision> {
-        Err(unavailable())
-    }
-
-    async fn check_path_permission(
-        &self,
-        _: HostPathPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse> {
-        Err(unavailable())
-    }
-
-    async fn check_network_permission(
-        &self,
-        _: HostNetworkPermissionCheckRequest,
-    ) -> Result<HostPermissionCheckResponse> {
         Err(unavailable())
     }
 

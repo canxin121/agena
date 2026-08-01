@@ -602,9 +602,9 @@ pub trait ProjectionLookupRepository: Send + Sync {
 /// usage remain opaque JSON at the storage boundary because their concrete
 /// Core aggregate types are intentionally not persistence contracts.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionHeaderRecord {
+pub struct ModelMessageHeaderRecord {
     pub message_id: i64,
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
     pub role: agena_domain::Role,
     pub state: agena_domain::ExecutionStatus,
     pub created_at_ms: i64,
@@ -615,7 +615,7 @@ pub struct MessageProjectionHeaderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionPartRecord {
+pub struct ModelMessagePartRecord {
     pub part_id: i64,
     pub message_id: i64,
     pub part_index: i32,
@@ -624,15 +624,16 @@ pub struct MessageProjectionPartRecord {
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,
+    pub awaits_user_reply: bool,
     pub activity_id: Option<agena_domain::ActivityId>,
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     pub operation_id: Option<String>,
     pub created_at_ms: i64,
     pub content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum MessageProjectionRepositoryError {
+pub enum ModelMessageRepositoryError {
     #[error("message projection repository backend error: {0}")]
     Backend(String),
 }
@@ -641,11 +642,11 @@ pub enum MessageProjectionRepositoryError {
 /// Projection synchronization and Core aggregate decoding remain outside this
 /// adapter boundary.
 #[async_trait]
-pub trait MessageProjectionRepository: Send + Sync {
+pub trait ModelMessageRepository: Send + Sync {
     async fn list_headers(
         &self,
         session_id: i64,
-    ) -> Result<Vec<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Vec<ModelMessageHeaderRecord>, ModelMessageRepositoryError>;
 
     async fn list_headers_page(
         &self,
@@ -653,36 +654,36 @@ pub trait MessageProjectionRepository: Send + Sync {
         cursor: Option<(i64, i64)>,
         limit: u64,
     ) -> Result<
-        (Vec<MessageProjectionHeaderRecord>, bool, Option<(i64, i64)>),
-        MessageProjectionRepositoryError,
+        (Vec<ModelMessageHeaderRecord>, bool, Option<(i64, i64)>),
+        ModelMessageRepositoryError,
     >;
 
     async fn get_header(
         &self,
         session_id: i64,
         message_id: i64,
-    ) -> Result<Option<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Option<ModelMessageHeaderRecord>, ModelMessageRepositoryError>;
 
     async fn list_parts(
         &self,
         message_ids: &[i64],
         include_content: bool,
-    ) -> Result<Vec<MessageProjectionPartRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Vec<ModelMessagePartRecord>, ModelMessageRepositoryError>;
 
     async fn get_part(
         &self,
         part_id: i64,
-    ) -> Result<Option<MessageProjectionPartRecord>, MessageProjectionRepositoryError>;
+    ) -> Result<Option<ModelMessagePartRecord>, ModelMessageRepositoryError>;
 }
 
 /// Stable write request for one materialized message projection. JSON payloads
 /// remain opaque at this persistence boundary while Core owns lifecycle
 /// materialization and aggregate decoding.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionMessageWrite {
+pub struct ModelMessageWrite {
     pub message_id: i64,
     pub session_id: i64,
-    pub turn_id: Option<i64>,
+    pub model_turn_id: Option<i64>,
     pub execution_id: Option<String>,
     pub run_id: Option<String>,
     pub role: agena_domain::Role,
@@ -699,7 +700,7 @@ pub struct MessageProjectionMessageWrite {
 /// opaque at this persistence boundary; Core owns lifecycle materialization
 /// until the full transcript projection contract moves.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MessageProjectionPartWrite {
+pub struct ModelMessagePartWrite {
     pub session_id: i64,
     pub part_id: i64,
     pub message_id: i64,
@@ -709,15 +710,16 @@ pub struct MessageProjectionPartWrite {
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,
+    pub awaits_user_reply: bool,
     pub activity_id: Option<agena_domain::ActivityId>,
-    pub segment_id: Option<agena_domain::ResponseSegmentId>,
+    pub segment_id: Option<agena_domain::TextSegmentId>,
     pub operation_id: Option<String>,
     pub created_at_ms: i64,
     pub content: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MessageProjectionOpenIdentity {
+pub enum ModelMessageOpenIdentity {
     RunId(String),
     ExecutionId(String),
 }
@@ -725,21 +727,21 @@ pub enum MessageProjectionOpenIdentity {
 /// Transaction-scoped writer for projection rows. The generic transaction
 /// keeps backend implementation types out of the storage contract.
 #[async_trait]
-pub trait MessageProjectionTransactionWriter<Transaction>: Send + Sync {
+pub trait ModelMessageTransactionWriter<Transaction>: Send + Sync {
     async fn terminalize_open_messages_in_transaction(
         &self,
         transaction: &Transaction,
         session_id: i64,
-        identity: &MessageProjectionOpenIdentity,
+        identity: &ModelMessageOpenIdentity,
         status: agena_domain::ExecutionStatus,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn clear_session_projection_in_transaction(
         &self,
         transaction: &Transaction,
         session_id: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn upsert_projection_watermark_in_transaction(
         &self,
@@ -747,19 +749,19 @@ pub trait MessageProjectionTransactionWriter<Transaction>: Send + Sync {
         session_id: i64,
         last_seq_global: i64,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn upsert_message_in_transaction(
         &self,
         transaction: &Transaction,
-        message: &MessageProjectionMessageWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+        message: &ModelMessageWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
 
     async fn upsert_part_in_transaction(
         &self,
         transaction: &Transaction,
-        part: &MessageProjectionPartWrite,
-    ) -> Result<(), MessageProjectionRepositoryError>;
+        part: &ModelMessagePartWrite,
+    ) -> Result<(), ModelMessageRepositoryError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -12,17 +12,19 @@ use std::{
 
 use agena_api::{
     commands::UpsertPermissionRuleParams,
-    message_part::MessagePartDetailResource,
     pagination::PaginatedResponse,
     resource::{
-        MessageResource, PendingInteractiveRequest, PendingInteractiveRequestResource,
-        PermissionRuleResource, ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderModelResource, ProviderSummaryResource, RunOptions,
-        SessionExecutionContextResource, SessionExecutionResource, SessionResource,
+        PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionRuleResource,
+        ProviderAdapterModelsResource, ProviderAdapterModelsResponse, ProviderModelResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionContextResource,
+        SessionExecutionResource, SessionResource,
     },
 };
 #[cfg(test)]
-use agena_api::{message_part::MessagePartResource, resource::MessageStatus};
+use agena_api::{
+    message_part::MessagePartResource,
+    resource::{MessageResource, MessageStatus},
+};
 use agena_application::dto::{
     ConfigJsonSources, TuiColorSchemeResource, TuiGraphicsModeResource, TuiPreferencesResource,
 };
@@ -58,7 +60,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
 };
-use serde_json::{Map as JsonMap, Value as JsonValue, json};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::{sync::mpsc::unbounded_channel, time::interval};
 use unicode_width::UnicodeWidthChar;
 
@@ -111,7 +113,7 @@ impl TranscriptFixture {
             summary: None,
             has_detail: true,
             activity_id: None,
-            segment_id: Some(agena_domain::ResponseSegmentId::new()),
+            segment_id: Some(agena_domain::TextSegmentId::new()),
             operation_id: None,
             created_at,
             content: Some(agena_api::message_part::MessagePartDetailResource::Text(
@@ -311,7 +313,7 @@ use agena_tui_transcript::{
 
 use self::transcript_view::{
     current_spinner_millis, refresh_spinner_line, render_entry_detailed, render_entry_export,
-    render_transcript_snapshot_export_markdown, rewind_message_preview, spinner_frame,
+    render_transcript_snapshot_export_markdown, spinner_frame,
 };
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 

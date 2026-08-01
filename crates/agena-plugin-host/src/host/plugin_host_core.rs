@@ -634,7 +634,9 @@ impl PluginHost {
         let _ = end_tx.send(Ok(ToolStreamEnd {
             stream_id: stream_id.clone(),
             title: result.title,
+            summary: result.summary,
             output_text: result.output_text,
+            sections: result.sections,
             payload: result.payload,
             metadata: result.metadata,
             attachments: result.attachments,
@@ -831,98 +833,6 @@ impl PluginHost {
         )
         .await
         .map_err(transport_to_plugin_error)
-    }
-
-    pub async fn dispatch_permission_ask(
-        &self,
-        input: PermissionAskInput,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
-        self.dispatch_permission_ask_cancellable(input, None).await
-    }
-
-    pub async fn dispatch_permission_ask_cancellable(
-        &self,
-        input: PermissionAskInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
-        let timeout = self.timeouts.permission_ask_or(Duration::from_secs(60));
-        for plugin in &self.plugins {
-            if !plugin.subscribes(HookSubscription::PERMISSION_ASK) {
-                continue;
-            }
-            let params = serde_json::to_value(&input)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let call = call_permission_ask_hook(plugin, params, timeout);
-            let v = match cancellation.as_ref() {
-                Some(cancellation) => tokio::select! {
-                    biased;
-                    _ = cancellation.cancelled() => {
-                        return Err(transport_to_plugin_error(TransportError::Cancelled));
-                    }
-                    result = call => result?,
-                },
-                None => call.await?,
-            };
-            if matches!(&v, serde_json::Value::Null) {
-                continue;
-            }
-            let decision: Option<PermissionAskDecision> = serde_json::from_value(v)
-                .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            match decision {
-                Some(PermissionAskDecision::Decide(d)) => {
-                    if !plugin_has_capability(plugin, HostCapability::PermissionDecision) {
-                        tracing::warn!(
-                            target: "agena_plugin_host::permission",
-                            plugin = %plugin.key(),
-                            "permission.ask_permission returned Decide without PermissionDecision capability; treating as advice"
-                        );
-                        return Ok(Some(PermissionAskOutcome::Advice {
-                            plugin_id: plugin.key().to_string(),
-                            advice: PermissionAdvice {
-                                decision: d,
-                                reason: format!(
-                                    "plugin {} requested a permission decision without PermissionDecision capability",
-                                    plugin.key()
-                                ),
-                                risk: crate::sdk::PermissionRiskLevel::Medium,
-                                requested_scope: None,
-                            },
-                            authority: plugin.authority_summary(),
-                        }));
-                    }
-                    return Ok(Some(PermissionAskOutcome::Decision {
-                        plugin_id: plugin.key().to_string(),
-                        decision: d,
-                        authority: plugin.authority_summary(),
-                    }));
-                }
-                Some(PermissionAskDecision::Advise(advice)) => {
-                    return Ok(Some(PermissionAskOutcome::Advice {
-                        plugin_id: plugin.key().to_string(),
-                        advice,
-                        authority: plugin.authority_summary(),
-                    }));
-                }
-                _ => {}
-            }
-        }
-        Ok(None)
-    }
-
-    /// Sync wrapper for permission evaluation running in a non-async context.
-    pub fn dispatch_permission_ask_blocking(
-        &self,
-        input: PermissionAskInput,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
-        self.block_on(self.dispatch_permission_ask(input))
-    }
-
-    pub fn dispatch_permission_ask_blocking_cancellable(
-        &self,
-        input: PermissionAskInput,
-        cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<Option<PermissionAskOutcome>, PluginError> {
-        self.block_on(self.dispatch_permission_ask_cancellable(input, cancellation))
     }
 
     pub async fn broadcast_notification(&self, input: NotificationInput) {
@@ -1692,23 +1602,21 @@ use super::{
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch, Duration, EventEnvelope,
-    HashMap, HookSubscription, HostCallbackContext, HostCapability, HostHandle,
-    HostStatuslineSegment, HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput,
-    PermissionAdvice, PermissionAskDecision, PermissionAskInput, PermissionAskOutcome,
-    PluginCommandCatalogItem, PluginCommandInvokeInput, PluginCommandOutput, PluginError,
-    PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
-    PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
-    PluginToolRegistry, PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction,
-    PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    RegisteredTool, RwLock, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput,
-    ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput,
-    ToolInvokeOutput, ToolInvokeStream, ToolKey, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd,
-    TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
+    HashMap, HookSubscription, HostCallbackContext, HostHandle, HostStatuslineSegment,
+    HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput, PluginCommandCatalogItem,
+    PluginCommandInvokeInput, PluginCommandOutput, PluginError, PluginHost, PluginInspect,
+    PluginKey, PluginLogRecord, PluginLogStore, PluginStudioControlCatalogItem,
+    PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginToolRegistry,
+    PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction, PluginUiCatalog,
+    PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch, RegisteredTool, RwLock,
+    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
+    TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolInvokeStream, ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput,
+    ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd, TransportError,
+    UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
     block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
-    block_on_scoped_thread, call_permission_ask_hook, call_with_timeout, dispatcher,
-    hook_registration_for_plugin, host_api, merge_json, method, plugin_has_capability,
-    requires_long_lived_tool_invoke_timeout, shutdown_transport, tool_hook_context,
-    transport_to_plugin_error,
+    block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
+    merge_json, method, requires_long_lived_tool_invoke_timeout, shutdown_transport,
+    tool_hook_context, transport_to_plugin_error,
 };

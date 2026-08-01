@@ -13,6 +13,128 @@ use super::{
 
 mod ui;
 
+#[cfg(test)]
+mod interactive_request_visibility_tests {
+    use std::collections::BTreeSet;
+
+    use agena_api::resource::{
+        PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionActionResource,
+        PermissionRequest, PermissionRiskLevel, UserInputRequest,
+    };
+    use chrono::Utc;
+
+    use super::super::{first_unseen_pending_interactive_request, pending_interactive_request_id};
+
+    fn permission(request_id: &str) -> PendingInteractiveRequestResource {
+        PendingInteractiveRequestResource {
+            session_id: 8,
+            parent_session_id: None,
+            task_id: None,
+            request: PendingInteractiveRequest::Permission {
+                request: PermissionRequest {
+                    request_id: request_id.to_owned(),
+                    session_id: Some(8),
+                    action: PermissionActionResource::Tool {
+                        tool_name: "fs.write".to_owned(),
+                        qualifier: None,
+                    },
+                    related_actions: Vec::new(),
+                    requested_actions: Vec::new(),
+                    reason: "write the requested file".to_owned(),
+                    explanation: String::new(),
+                    source: Some("static_policy".to_owned()),
+                    scope: None,
+                    operator: None,
+                    risk: PermissionRiskLevel::Medium,
+                    trace: Vec::new(),
+                    created_at: Utc::now(),
+                },
+            },
+        }
+    }
+
+    fn user_input(request_id: &str) -> PendingInteractiveRequestResource {
+        PendingInteractiveRequestResource {
+            session_id: 8,
+            parent_session_id: None,
+            task_id: None,
+            request: PendingInteractiveRequest::UserInput {
+                request: UserInputRequest {
+                    request_id: request_id.to_owned(),
+                    session_id: Some(8),
+                    title: "Choose".to_owned(),
+                    body_markdown: String::new(),
+                    kind: String::new(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
+                    auto_resolution_ms: None,
+                    questions: Vec::new(),
+                    created_at: Utc::now(),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn failed_permission_reply_makes_the_same_durable_request_visible_again() {
+        let requests = vec![permission("permission-a"), permission("permission-b")];
+        let mut seen_permissions = BTreeSet::from(["permission-a".to_owned()]);
+        let seen_user_inputs = BTreeSet::new();
+
+        // Submitting closes the modal, but a rejected backend command must
+        // remove exactly that request from the visibility ledger.
+        assert!(seen_permissions.remove("permission-a"));
+
+        let next = first_unseen_pending_interactive_request(
+            requests.as_slice(),
+            &seen_permissions,
+            &seen_user_inputs,
+        )
+        .expect("the rejected permission must be offered again");
+        assert_eq!(pending_interactive_request_id(next), "permission-a");
+    }
+
+    #[test]
+    fn successful_permission_reply_advances_to_the_next_pending_request() {
+        let requests = vec![permission("permission-b")];
+        let mut seen_permissions = BTreeSet::from(["permission-a".to_owned()]);
+        let seen_user_inputs = BTreeSet::new();
+
+        // Applying the authoritative execution snapshot retains only IDs
+        // that are still pending; the completed first request disappears.
+        seen_permissions.retain(|request_id| {
+            requests
+                .iter()
+                .any(|request| pending_interactive_request_id(request) == request_id)
+        });
+
+        let next = first_unseen_pending_interactive_request(
+            requests.as_slice(),
+            &seen_permissions,
+            &seen_user_inputs,
+        )
+        .expect("the second permission must become the next modal");
+        assert_eq!(pending_interactive_request_id(next), "permission-b");
+    }
+
+    #[test]
+    fn failed_user_input_reply_makes_the_same_durable_request_visible_again() {
+        let requests = vec![user_input("input-a")];
+        let seen_permissions = BTreeSet::new();
+        let mut seen_user_inputs = BTreeSet::from(["input-a".to_owned()]);
+
+        assert!(seen_user_inputs.remove("input-a"));
+
+        let next = first_unseen_pending_interactive_request(
+            requests.as_slice(),
+            &seen_permissions,
+            &seen_user_inputs,
+        )
+        .expect("the rejected user-input request must be offered again");
+        assert_eq!(pending_interactive_request_id(next), "input-a");
+    }
+}
+
 macro_rules! api_message_part {
     ($id:expr, $message_id:expr, $created_at:expr, $status:expr, PartContent::text($text:expr $(,)?) $(,)?) => {
         crate::TranscriptFixture::text_part($id, $message_id, $created_at, $status, $text)
@@ -70,8 +192,8 @@ mod transcript_character_cursor_tests {
     fn snapshot_turn(
         sequence: i64,
         input: &str,
-        response: &str,
-        status: agena_domain::ResponseStatus,
+        reply: &str,
+        status: agena_domain::AssistantReplyStatus,
     ) -> agena_domain::TurnSnapshot {
         let turn_id = agena_domain::TurnId::new();
         agena_domain::TurnSnapshot {
@@ -79,17 +201,14 @@ mod transcript_character_cursor_tests {
             session_id: 7,
             sequence,
             input: agena_domain::ContentDocument::new(vec![agena_domain::ContentNode::text(input)]),
-            response: agena_domain::ResponseSnapshot {
-                id: agena_domain::ResponseId::new(),
+            reply: agena_domain::AssistantReplySnapshot {
+                id: agena_domain::AssistantReplyId::new(),
                 turn_id,
-                execution_id: agena_domain::ExecutionId::new(),
                 status,
-                content: if response.is_empty() {
+                content: if reply.is_empty() {
                     agena_domain::ContentDocument::default()
                 } else {
-                    agena_domain::ContentDocument::new(vec![agena_domain::ContentNode::text(
-                        response,
-                    )])
+                    agena_domain::ContentDocument::new(vec![agena_domain::ContentNode::text(reply)])
                 },
                 revision_seq: 1,
                 created_at_ms: sequence * 10,
@@ -495,7 +614,7 @@ mod transcript_character_cursor_tests {
     }
 
     #[test]
-    fn cancelled_response_activity_is_rendered_after_its_user_turn_as_an_assistant_outcome() {
+    fn cancelled_reply_activity_is_rendered_after_its_user_turn_as_an_assistant_outcome() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             snapshot: agena_domain::TranscriptSnapshot {
@@ -504,8 +623,8 @@ mod transcript_character_cursor_tests {
                 turns: vec![snapshot_turn(
                     1,
                     "please answer",
-                    "partial assistant response",
-                    agena_domain::ResponseStatus::Cancelled,
+                    "partial assistant reply",
+                    agena_domain::AssistantReplyStatus::Cancelled,
                 )],
                 session_activities: Vec::new(),
             },
@@ -523,8 +642,8 @@ mod transcript_character_cursor_tests {
             .expect("user message");
         let response = lines
             .iter()
-            .position(|line| line.contains("partial assistant response"))
-            .expect("assistant response");
+            .position(|line| line.contains("partial assistant reply"))
+            .expect("assistant reply");
         let cancelled = lines
             .iter()
             .position(|line| line.contains("Response cancelled"))
@@ -548,7 +667,9 @@ mod transcript_character_cursor_tests {
             matches!(
                 node.key,
                 agena_tui_transcript::TranscriptNodeKey::Activity {
-                    content_id: agena_tui_transcript::TranscriptContentId::ResponseLifecycle(_),
+                    content_id: agena_tui_transcript::TranscriptContentId::AssistantReplyLifecycle(
+                        _
+                    ),
                     ..
                 }
             ) && node.kind == agena_tui_transcript::TranscriptNodeKind::Activity
@@ -556,7 +677,7 @@ mod transcript_character_cursor_tests {
     }
 
     #[test]
-    fn cancelled_response_activity_never_moves_across_a_later_user_turn() {
+    fn cancelled_reply_activity_never_moves_across_a_later_user_turn() {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             snapshot: agena_domain::TranscriptSnapshot {
@@ -567,13 +688,13 @@ mod transcript_character_cursor_tests {
                         1,
                         "cancel this turn",
                         "",
-                        agena_domain::ResponseStatus::Cancelled,
+                        agena_domain::AssistantReplyStatus::Cancelled,
                     ),
                     snapshot_turn(
                         2,
                         "the next turn",
                         "next answer",
-                        agena_domain::ResponseStatus::Completed,
+                        agena_domain::AssistantReplyStatus::Completed,
                     ),
                 ],
                 session_activities: Vec::new(),
@@ -614,12 +735,17 @@ mod transcript_character_cursor_tests {
                 session_id: 7,
                 seq_session: 8,
                 turns: vec![
-                    snapshot_turn(1, "first turn", "", agena_domain::ResponseStatus::Cancelled),
+                    snapshot_turn(
+                        1,
+                        "first turn",
+                        "",
+                        agena_domain::AssistantReplyStatus::Cancelled,
+                    ),
                     snapshot_turn(
                         2,
                         "second turn",
                         "",
-                        agena_domain::ResponseStatus::Cancelled,
+                        agena_domain::AssistantReplyStatus::Cancelled,
                     ),
                 ],
                 session_activities: Vec::new(),
@@ -697,9 +823,9 @@ mod prompt_history_tests {
 mod pending_message_tests {
     use super::super::{PendingUserMessage, TranscriptState};
     use agena_domain::{
-        ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerDocument,
-        ComposerNode, ContentDocument, ContentNode, ExecutionId, ResponseId, ResponseSnapshot,
-        ResponseStatus, SkillReferenceActivity, TranscriptSnapshot, TurnId, TurnSnapshot,
+        ActivityId, ActivityPayload, ActivityProvenance, AssistantReplyId, AssistantReplySnapshot,
+        AssistantReplyStatus, ComposerActivity, ComposerDocument, ComposerNode, ContentDocument,
+        ContentNode, SkillReferenceActivity, TranscriptSnapshot, TurnId, TurnSnapshot,
     };
 
     #[test]
@@ -807,11 +933,10 @@ mod pending_message_tests {
                 session_id: 7,
                 sequence: 1,
                 input: ContentDocument::new(vec![ContentNode::text("send this now")]),
-                response: ResponseSnapshot {
-                    id: ResponseId::new(),
+                reply: AssistantReplySnapshot {
+                    id: AssistantReplyId::new(),
                     turn_id,
-                    execution_id: ExecutionId::new(),
-                    status: ResponseStatus::InProgress,
+                    status: AssistantReplyStatus::InProgress,
                     content: ContentDocument::default(),
                     revision_seq: 1,
                     created_at_ms: 1,
@@ -829,6 +954,184 @@ mod pending_message_tests {
                 .lines
                 .iter()
                 .filter(|line| line.text.contains("send this now"))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn empty_continuation_turn_does_not_consume_an_optimistic_user_message() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 43,
+            document: ComposerDocument(vec![ComposerNode::Text {
+                text: "next real user message".to_owned(),
+            }]),
+            confirmed: true,
+        });
+
+        let continuation_turn_id = TurnId::new();
+        transcript.merge_snapshot(TranscriptSnapshot {
+            session_id: 7,
+            seq_session: 1,
+            turns: vec![TurnSnapshot {
+                id: continuation_turn_id,
+                session_id: 7,
+                sequence: 1,
+                input: ContentDocument::default(),
+                reply: AssistantReplySnapshot {
+                    id: AssistantReplyId::new(),
+                    turn_id: continuation_turn_id,
+                    status: AssistantReplyStatus::Completed,
+                    content: ContentDocument::new(vec![ContentNode::text(
+                        "continued after permission",
+                    )]),
+                    revision_seq: 1,
+                    created_at_ms: 1,
+                    finished_at_ms: Some(1),
+                },
+                created_at_ms: 1,
+            }],
+            session_activities: Vec::new(),
+        });
+
+        assert_eq!(transcript.pending_user_messages.len(), 1);
+        let rendered = transcript
+            .rendered(100)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("continued after permission"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("next real user message"), "{rendered}");
+        assert!(!rendered.contains("(empty)"), "{rendered}");
+    }
+
+    #[test]
+    fn input_materializing_on_an_existing_turn_replaces_the_optimistic_message() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 44,
+            document: ComposerDocument(vec![ComposerNode::Text {
+                text: "materialized once".to_owned(),
+            }]),
+            confirmed: true,
+        });
+
+        let turn_id = TurnId::new();
+        let response_id = AssistantReplyId::new();
+        let snapshot = |seq_session, input| TranscriptSnapshot {
+            session_id: 7,
+            seq_session,
+            turns: vec![TurnSnapshot {
+                id: turn_id,
+                session_id: 7,
+                sequence: 1,
+                input,
+                reply: AssistantReplySnapshot {
+                    id: response_id,
+                    turn_id,
+                    status: AssistantReplyStatus::InProgress,
+                    content: ContentDocument::new(vec![ContentNode::text("assistant reply")]),
+                    revision_seq: 1,
+                    created_at_ms: 1,
+                    finished_at_ms: None,
+                },
+                created_at_ms: 1,
+            }],
+            session_activities: Vec::new(),
+        };
+
+        transcript.merge_snapshot(snapshot(1, ContentDocument::default()));
+        assert_eq!(transcript.pending_user_messages.len(), 1);
+
+        transcript.merge_snapshot(snapshot(
+            2,
+            ContentDocument::new(vec![ContentNode::text("materialized once")]),
+        ));
+
+        assert!(transcript.pending_user_messages.is_empty());
+        let rendered = transcript
+            .rendered(100)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            rendered.matches("materialized once").count(),
+            1,
+            "{rendered}"
+        );
+        assert!(rendered.contains("assistant reply"), "{rendered}");
+    }
+
+    #[test]
+    fn optimistic_user_message_precedes_its_empty_active_reply_envelope() {
+        let turn_id = TurnId::new();
+        let reply_id = AssistantReplyId::new();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                seq_session: 1,
+                turns: vec![TurnSnapshot {
+                    id: turn_id,
+                    session_id: 7,
+                    sequence: 1,
+                    input: ContentDocument::default(),
+                    reply: AssistantReplySnapshot {
+                        id: reply_id,
+                        turn_id,
+                        status: AssistantReplyStatus::InProgress,
+                        content: ContentDocument::default(),
+                        revision_seq: 1,
+                        created_at_ms: 1,
+                        finished_at_ms: None,
+                    },
+                    created_at_ms: 1,
+                }],
+                session_activities: Vec::new(),
+            },
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 46,
+            document: ComposerDocument(vec![ComposerNode::Text {
+                text: "must render before the reply".to_owned(),
+            }]),
+            confirmed: false,
+        });
+
+        let lines = transcript
+            .rendered(100)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        let user = lines
+            .iter()
+            .position(|line| line.starts_with("user"))
+            .expect("optimistic user header");
+        let assistant = lines
+            .iter()
+            .position(|line| line.starts_with("assistant"))
+            .expect("active assistant header");
+        assert!(user < assistant, "rendered lines: {lines:?}");
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("must render before the reply"))
                 .count(),
             1
         );
@@ -1211,9 +1514,9 @@ mod transcript_mouse_scroll_tests {
 mod transcript_expansion_tests {
     use agena_domain::{
         ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
-        ActivityProvenance, ActivityState, ContentDocument, ContentNode, ContentPosition,
-        ExecutionId, ExecutionStatus, OperationActivity, ReasoningPart, ResponseId,
-        ResponseSnapshot, ResponseStatus, StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
+        ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
+        AssistantReplyStatus, ContentDocument, ContentNode, ContentPosition, ExecutionStatus,
+        OperationActivity, ReasoningPart, StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
         TranscriptSnapshot, TurnId, TurnSnapshot,
     };
 
@@ -1224,9 +1527,9 @@ mod transcript_expansion_tests {
     };
 
     #[test]
-    fn canonical_tools_list_activity_toggles_open_through_transcript_state() {
+    fn canonical_tools_list_activity_stays_open_when_new_reply_content_arrives() {
         let turn_id = TurnId::new();
-        let response_id = ResponseId::new();
+        let response_id = AssistantReplyId::new();
         let activity_id = ActivityId::new();
         let details = ToolOutput::from_json_payload(Some(&serde_json::json!({
             "tools": [{"name": "repo.status"}, {"name": "fs.read"}]
@@ -1234,7 +1537,9 @@ mod transcript_expansion_tests {
         .expect("tools_list output");
         let operation = ActivityNode {
             id: activity_id,
-            owner: ActivityOwner::Response { response_id },
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
             actor: ActivityActor::Tool,
             state: ActivityState::Completed,
             position: ContentPosition { index: 0 },
@@ -1245,6 +1550,7 @@ mod transcript_expansion_tests {
                 invocation: ToolInvocation::new("tools_list", StructuredObject::default()),
                 title: "tools_list".to_owned(),
                 summary: String::new(),
+                sections: Vec::new(),
                 model_output_text: String::new(),
                 details,
                 resource_activity_ids: Vec::new(),
@@ -1262,12 +1568,13 @@ mod transcript_expansion_tests {
                     session_id: 7,
                     sequence: 1,
                     input: ContentDocument::new(vec![ContentNode::text("list tools")]),
-                    response: ResponseSnapshot {
+                    reply: AssistantReplySnapshot {
                         id: response_id,
                         turn_id,
-                        execution_id: ExecutionId::new(),
-                        status: ResponseStatus::Completed,
-                        content: ContentDocument::new(vec![ContentNode::activity(operation)]),
+                        status: AssistantReplyStatus::Completed,
+                        content: ContentDocument::new(vec![ContentNode::activity(
+                            operation.clone(),
+                        )]),
                         revision_seq: 1,
                         created_at_ms: 1,
                         finished_at_ms: Some(2),
@@ -1282,7 +1589,7 @@ mod transcript_expansion_tests {
             ..TranscriptState::default()
         };
         let key = TranscriptNodeKey::Activity {
-            entry_id: agena_tui_transcript::TranscriptEntryId::Response(response_id),
+            entry_id: agena_tui_transcript::TranscriptEntryId::AssistantReply(response_id),
             content_id: agena_tui_transcript::TranscriptContentId::Activity(activity_id),
         };
         let collapsed = transcript
@@ -1320,6 +1627,41 @@ mod transcript_expansion_tests {
                 .lines
                 .iter()
                 .any(|line| line.text.contains("repo.status"))
+        );
+
+        let mut incoming = transcript.snapshot.clone();
+        incoming.seq_session = 2;
+        incoming.turns[0].reply.status = AssistantReplyStatus::InProgress;
+        incoming.turns[0].reply.revision_seq = 2;
+        incoming.turns[0].reply.finished_at_ms = None;
+        for index in 1..=6 {
+            let mut appended = operation.clone();
+            appended.id = ActivityId::new();
+            appended.position = ContentPosition { index };
+            appended.revision_seq = 2;
+            if let ActivityPayload::Operation(operation) = &mut appended.payload {
+                operation.call_id = ToolCallId::new(format!("call-appended-{index}"));
+                operation.title = format!("appended activity {index}");
+            }
+            incoming.turns[0]
+                .reply
+                .content
+                .push(ContentNode::activity(appended));
+        }
+        transcript.merge_snapshot(incoming);
+
+        let expanded_after_new_content = transcript
+            .rendered(100)
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("expanded Activity remains rendered after new AI content");
+        assert!(expanded_after_new_content.expanded);
+        assert!(
+            transcript.rendered(100).nodes.iter().any(|node| {
+                matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }) && !node.expanded
+            }),
+            "the run may still fold untouched Activities without hiding the user-expanded one"
         );
     }
 
@@ -2309,81 +2651,16 @@ mod transcript_expansion_tests {
 }
 
 #[cfg(test)]
-mod rewind_message_tests {
-    use agena_domain::ExecutionStatus;
-    use agena_domain::TextPart;
-
-    use super::super::{
-        MessageResource, MessageRole, MessageStatus, Utc, rewind_message_composer_text,
-    };
-
-    #[test]
-    fn composer_text_restores_only_visible_user_text() {
-        let now = Utc::now();
-        let parts = vec![
-            api_message_part!(
-                1,
-                42,
-                now,
-                ExecutionStatus::Completed,
-                PartContent::text("first"),
-            ),
-            api_message_part!(
-                2,
-                42,
-                now,
-                ExecutionStatus::Completed,
-                PartContent::Text(TextPart {
-                    text: "generated".to_string(),
-                    synthetic: true,
-                }),
-            ),
-            api_message_part!(
-                3,
-                42,
-                now,
-                ExecutionStatus::Completed,
-                PartContent::Text(TextPart {
-                    text: "hidden".to_string(),
-                    synthetic: true,
-                }),
-            ),
-            api_message_part!(
-                4,
-                42,
-                now,
-                ExecutionStatus::Completed,
-                PartContent::text("second"),
-            ),
-        ];
-        let message = MessageResource {
-            id: 42,
-            session_id: 7,
-            role: MessageRole::User,
-            state: MessageStatus::Completed,
-            created_at: now,
-            updated_at: now,
-            metadata: Default::default(),
-            usage: None,
-            part_count: parts.len() as u64,
-            parts: Some(parts),
-        };
-
-        assert_eq!(rewind_message_composer_text(&message), "first\n\nsecond");
-    }
-}
-
-#[cfg(test)]
 mod live_transcript_tests {
     use agena_domain::{
-        ActivityOwner, ContentDocument, ContentNode, EventMeta, ExecutionId, ResponseId,
-        ResponseSegmentId, ResponseSnapshot, ResponseStatus, TranscriptPatch, TranscriptSnapshot,
-        TurnId, TurnSnapshot,
+        ActivityOwner, AssistantReplyId, AssistantReplySnapshot, AssistantReplyStatus,
+        ComposerDocument, ComposerNode, ContentDocument, ContentNode, EventMeta, TextSegmentId,
+        TranscriptPatch, TranscriptSnapshot, TurnId, TurnSnapshot,
     };
     use agena_runtime::{RuntimePresentationEvent, RuntimePresentationEventKind};
     use uuid::Uuid;
 
-    use super::super::{TranscriptState, Utc};
+    use super::super::{PendingUserMessage, TranscriptState, Utc};
 
     fn event(kind: RuntimePresentationEventKind, seq: i64) -> RuntimePresentationEvent {
         RuntimePresentationEvent {
@@ -2404,15 +2681,17 @@ mod live_transcript_tests {
     }
 
     fn text_patch(
-        response_id: ResponseId,
-        segment_id: ResponseSegmentId,
+        response_id: AssistantReplyId,
+        segment_id: TextSegmentId,
         text: &str,
         seq: i64,
     ) -> RuntimePresentationEvent {
         event(
             RuntimePresentationEventKind::TranscriptPatch(TranscriptPatch::ContentUpserted {
                 seq_session: seq,
-                owner: ActivityOwner::Response { response_id },
+                owner: ActivityOwner::AssistantReply {
+                    reply_id: response_id,
+                },
                 node: ContentNode::text_at(segment_id, text, 0, seq),
             }),
             seq,
@@ -2426,11 +2705,10 @@ mod live_transcript_tests {
             session_id: 7,
             sequence,
             input: ContentDocument::new(vec![ContentNode::text("question")]),
-            response: ResponseSnapshot {
-                id: ResponseId::new(),
+            reply: AssistantReplySnapshot {
+                id: AssistantReplyId::new(),
                 turn_id,
-                execution_id: ExecutionId::new(),
-                status: ResponseStatus::InProgress,
+                status: AssistantReplyStatus::InProgress,
                 content: ContentDocument::default(),
                 revision_seq: 0,
                 created_at_ms: sequence,
@@ -2443,8 +2721,8 @@ mod live_transcript_tests {
     #[test]
     fn live_text_patch_is_rendered_without_waiting_for_a_refresh() {
         let turn = turn(1);
-        let response_id = turn.response.id;
-        let segment_id = ResponseSegmentId::new();
+        let response_id = turn.reply.id;
+        let segment_id = TextSegmentId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
             snapshot: TranscriptSnapshot {
@@ -2477,8 +2755,8 @@ mod live_transcript_tests {
     #[test]
     fn repeated_live_upserts_replace_one_stable_segment() {
         let turn = turn(1);
-        let response_id = turn.response.id;
-        let segment_id = ResponseSegmentId::new();
+        let response_id = turn.reply.id;
+        let segment_id = TextSegmentId::new();
         let mut transcript = TranscriptState {
             session_id: Some(7),
             snapshot: TranscriptSnapshot {
@@ -2500,10 +2778,7 @@ mod live_transcript_tests {
             20,
         );
 
-        assert_eq!(
-            transcript.snapshot.turns[0].response.content.nodes().len(),
-            1
-        );
+        assert_eq!(transcript.snapshot.turns[0].reply.content.nodes().len(), 1);
         let rendered = transcript
             .rendered(80)
             .lines
@@ -2513,5 +2788,55 @@ mod live_transcript_tests {
             .join("\n");
         assert!(rendered.contains("first second"));
         assert_eq!(rendered.matches("first second").count(), 1);
+    }
+
+    #[test]
+    fn live_user_input_materialization_replaces_the_optimistic_entry() {
+        let mut turn = turn(1);
+        turn.input = ContentDocument::default();
+        let turn_id = turn.id;
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 45,
+            document: ComposerDocument(vec![ComposerNode::Text {
+                text: "one live message".to_owned(),
+            }]),
+            confirmed: true,
+        });
+
+        assert!(!transcript.apply_presentation_event(
+            &event(
+                RuntimePresentationEventKind::TranscriptPatch(TranscriptPatch::ContentUpserted {
+                    seq_session: 2,
+                    owner: ActivityOwner::TurnInput { turn_id },
+                    node: ContentNode::text("one live message"),
+                },),
+                2,
+            ),
+            80,
+            20,
+        ));
+
+        assert!(transcript.pending_user_messages.is_empty());
+        let rendered = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(
+            rendered.matches("one live message").count(),
+            1,
+            "{rendered}"
+        );
     }
 }

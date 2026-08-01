@@ -37,12 +37,15 @@ impl App {
             }
             AppMessage::PermissionReplied {
                 session_id,
+                request_id,
                 label,
                 result,
-            } => self.handle_permission_replied(session_id, label, result),
-            AppMessage::UserInputReplied { session_id, result } => {
-                self.handle_user_input_replied(session_id, result)
-            }
+            } => self.handle_permission_replied(session_id, request_id, label, result),
+            AppMessage::UserInputReplied {
+                session_id,
+                request_id,
+                result,
+            } => self.handle_user_input_replied(session_id, request_id, result),
             AppMessage::SessionSearchPageLoaded {
                 mode,
                 query,

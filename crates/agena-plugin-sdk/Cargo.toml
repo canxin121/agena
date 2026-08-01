@@ -8,6 +8,7 @@ description = "Agena plugin SDK: write plugins as async traits, ship them as in-
 [dependencies]
 agena-failure = { workspace = true }
 agena-macros = { workspace = true }
+agena-tool = { workspace = true }
 async-trait = { workspace = true }
 bitflags = { workspace = true }
 indexmap = { workspace = true }

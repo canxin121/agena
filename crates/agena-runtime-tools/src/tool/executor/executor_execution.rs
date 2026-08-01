@@ -1,75 +1,4 @@
 impl ToolExecutor {
-    pub fn issue_execution_grant(
-        &self,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-        prepared_shell_command: Option<&PreparedShellCommand>,
-        authorized_actions: Vec<agena_domain::PermissionAction>,
-    ) -> Result<crate::tool::ExecutionGrant, ToolError> {
-        let checks =
-            self.collect_permission_checks_for_invocation_in_session(invocation, Some(session_id))?;
-        let required_actions =
-            unique_permission_actions(checks.into_iter().map(|check| check.action).collect());
-        let authorized_actions = unique_permission_actions(authorized_actions);
-        if required_actions.len() != authorized_actions.len()
-            || required_actions
-                .iter()
-                .any(|action| !authorized_actions.contains(action))
-        {
-            return Err(ToolError::InvalidExecutionGrant(
-                "authorization action set does not exactly match the prepared invocation"
-                    .to_string(),
-            ));
-        }
-        Ok(crate::tool::ExecutionGrant {
-            session_id,
-            call_id,
-            invocation_digest: execution_invocation_digest(invocation)?,
-            prepared_shell_digest: prepared_shell_command.map(prepared_shell_digest),
-            authorized_actions,
-        })
-    }
-
-    fn validate_execution_grant(
-        &self,
-        grant: &crate::tool::ExecutionGrant,
-        invocation: &ToolInvocation,
-        session_id: i64,
-        call_id: i64,
-        prepared_shell_command: Option<&PreparedShellCommand>,
-    ) -> Result<(), ToolError> {
-        if grant.session_id != session_id || grant.call_id != call_id {
-            return Err(ToolError::InvalidExecutionGrant(
-                "session or call identity changed after authorization".to_string(),
-            ));
-        }
-        if grant.invocation_digest != execution_invocation_digest(invocation)? {
-            return Err(ToolError::InvalidExecutionGrant(
-                "tool invocation changed after authorization".to_string(),
-            ));
-        }
-        if grant.prepared_shell_digest != prepared_shell_command.map(prepared_shell_digest) {
-            return Err(ToolError::InvalidExecutionGrant(
-                "prepared shell command changed after authorization".to_string(),
-            ));
-        }
-        let checks =
-            self.collect_permission_checks_for_invocation_in_session(invocation, Some(session_id))?;
-        let required_actions =
-            unique_permission_actions(checks.into_iter().map(|check| check.action).collect());
-        if required_actions.len() != grant.authorized_actions.len()
-            || required_actions
-                .iter()
-                .any(|action| !grant.authorized_actions.contains(action))
-        {
-            return Err(ToolError::InvalidExecutionGrant(
-                "protected action set changed after authorization".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
     pub fn prepare_shell_command(
         &self,
         input: &crate::message::ShellCommandInput,
@@ -85,12 +14,21 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
-        let Some(ToolPayloadInput::Shell(crate::message::ShellToolInput::Run {
+        let Some(resolution) = self.plugin_resolution_for_invocation(invocation) else {
+            return Ok((invocation.clone(), None));
+        };
+        let Some(payload) =
+            ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
+        else {
+            return Ok((invocation.clone(), None));
+        };
+        let payload = payload.map_err(|error| ToolError::invalid_input(error.to_string()))?;
+        let ToolPayloadInput::Shell(crate::message::ShellToolInput::Run {
             shell: agena_domain::ProcessShell::Bash,
             command: process_input,
             background,
             monitor,
-        })) = ToolPayloadInput::from_invocation(invocation)
+        }) = payload
         else {
             return Ok((invocation.clone(), None));
         };
@@ -116,7 +54,7 @@ impl ToolExecutor {
             .map_err(|err| ToolError::invalid_input(err.to_string()))?;
         Ok((
             ToolInvocation {
-                tool_api_function: invocation.tool_api_function,
+                tool_api_call: invocation.tool_api_call.clone(),
                 name: invocation.name.clone(),
                 plugin_name: invocation.plugin_name.clone(),
                 input,
@@ -185,11 +123,12 @@ impl ToolExecutor {
 
         let mut prepared_invocation =
             parse_invocation_from_json(model_tool_name.as_str(), input_json.as_str())?;
-        prepared_invocation.tool_api_function = invocation.tool_api_function;
-        prepared_invocation.plugin_name = invocation
-            .tool_api_function
-            .is_none()
-            .then_some(plugin_name);
+        prepared_invocation.tool_api_call = invocation.tool_api_call.clone();
+        let is_protocol_handler = invocation
+            .tool_api_call
+            .as_ref()
+            .is_some_and(|call| call.function != agena_domain::ToolApiFunction::Call);
+        prepared_invocation.plugin_name = (!is_protocol_handler).then_some(plugin_name);
 
         Ok(PreparedToolInvocation {
             invocation: prepared_invocation,
@@ -272,30 +211,16 @@ impl ToolExecutor {
         Ok(checks)
     }
 
-    /// Run a streaming invocation after a trusted caller has resolved every
-    /// permission check, including persisted rules and any user approval.
-    ///
-    /// This is an application-facing escape hatch for a trusted caller that
-    /// owns the complete permission resolution flow.
-    pub async fn execute_invocation_streaming_with_grant(
+    /// Execute a streaming tool. The executor is deliberately policy-free:
+    /// model-call authorization is owned by the session permission state
+    /// machine, while application and host invocations execute directly.
+    pub async fn execute_invocation_streaming(
         &self,
-        grant: &crate::tool::ExecutionGrant,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
-        prepared_shell_command: Option<&PreparedShellCommand>,
     ) -> Result<Option<StreamingToolExecution>, ToolError> {
-        self.validate_execution_grant(
-            grant,
-            invocation,
-            session_id,
-            call_id,
-            prepared_shell_command,
-        )?;
-        let mut authorized = self.clone();
-        authorized.authorization_state = ExecutionAuthorizationState::GrantValidated;
-        authorized
-            .execute_invocation_streaming_inner(invocation, session_id, call_id)
+        self.execute_invocation_streaming_inner(invocation, session_id, call_id)
             .await
     }
 
@@ -317,12 +242,6 @@ impl ToolExecutor {
         let resolution = self
             .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
-        let executor_guard = in_process_router::install_executor_context(
-            self,
-            session_id,
-            call_id,
-            resolution.tool_name().to_string(),
-        );
         let invoke_stream = self.plugins.invoke_tool_stream(
             &resolution,
             PluginToolInvokeInput {
@@ -376,7 +295,9 @@ impl ToolExecutor {
                 Ok(Ok(end)) => (|| {
                     let view = ToolExecutionView {
                         title: end.title,
+                        summary: end.summary,
                         output_text: end.output_text,
+                        sections: end.sections,
                         metadata: end.metadata.into_iter().collect(),
                         attachments: end.attachments,
                     };
@@ -407,7 +328,6 @@ impl ToolExecutor {
             stream_id,
             chunks,
             end: end_rx,
-            _executor_guard: Some(executor_guard),
         }))
     }
 
@@ -416,7 +336,7 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
-        _prepared_shell_command: Option<PreparedShellCommand>,
+        prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         self.ensure_not_cancelled()?;
         let plugin_invocation = PluginInvocation::from_tool_invocation(invocation);
@@ -427,12 +347,36 @@ impl ToolExecutor {
         let resolution = self
             .plugin_resolution_for_invocation(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
-        let _executor_guard = in_process_router::install_executor_context(
-            self,
-            session_id,
-            call_id,
-            resolution.tool_name().to_string(),
-        );
+
+        if let Some(payload) =
+            ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
+        {
+            let payload = payload.map_err(|error| ToolError::invalid_input(error.to_string()))?;
+            let payload_name = payload.tool_name();
+            let mut input = serde_json::to_value(payload)
+                .map_err(|error| ToolError::invalid_input(error.to_string()))?;
+            if let Some(input) = input.as_object_mut() {
+                input.remove("tool");
+            }
+            let execution = crate::tool::orchestrator::execute_tool(
+                self,
+                payload_name,
+                input,
+                crate::tool::ToolRuntimeContext {
+                    session_id: (session_id >= 0).then_some(session_id),
+                    call_id: (call_id >= 0).then_some(call_id),
+                    prepared_shell_command,
+                },
+            )?;
+            return self.finalize_execution(
+                invocation,
+                session_id,
+                resolution.canonical_name().as_str(),
+                &resolution.definition.runtime.result_policy,
+                call_id,
+                execution.into(),
+            );
+        }
 
         let response = self
             .plugins
@@ -461,7 +405,9 @@ impl ToolExecutor {
 
         let view = ToolExecutionView {
             title: response.title.clone(),
+            summary: response.summary.clone(),
             output_text: response.output_text.clone(),
+            sections: response.sections.clone(),
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
         };
@@ -482,36 +428,23 @@ impl ToolExecutor {
         )
     }
 
-    pub fn execute_invocation_detailed_with_grant(
+    pub fn execute_invocation_detailed(
         &self,
-        grant: &crate::tool::ExecutionGrant,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
     ) -> Result<ToolInvocationExecution, ToolError> {
-        self.execute_invocation_detailed_with_grant_and_prepared_shell(
-            grant, invocation, session_id, call_id, None,
-        )
+        self.execute_invocation_detailed_with_prepared_shell(invocation, session_id, call_id, None)
     }
 
-    pub fn execute_invocation_detailed_with_grant_and_prepared_shell(
+    pub fn execute_invocation_detailed_with_prepared_shell(
         &self,
-        grant: &crate::tool::ExecutionGrant,
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
         prepared_shell_command: Option<PreparedShellCommand>,
     ) -> Result<ToolInvocationExecution, ToolError> {
-        self.validate_execution_grant(
-            grant,
-            invocation,
-            session_id,
-            call_id,
-            prepared_shell_command.as_ref(),
-        )?;
-        let mut trusted = self.clone();
-        trusted.authorization_state = ExecutionAuthorizationState::GrantValidated;
-        trusted.execute_invocation_detailed_inner(
+        self.execute_invocation_detailed_inner(
             invocation,
             session_id,
             call_id,
@@ -519,42 +452,14 @@ impl ToolExecutor {
         )
     }
 }
-
-fn unique_permission_actions(
-    actions: Vec<agena_domain::PermissionAction>,
-) -> Vec<agena_domain::PermissionAction> {
-    let mut unique = Vec::with_capacity(actions.len());
-    for action in actions {
-        if !unique.contains(&action) {
-            unique.push(action);
-        }
-    }
-    unique
-}
-
-fn execution_invocation_digest(invocation: &ToolInvocation) -> Result<[u8; 32], ToolError> {
-    use sha2::{Digest, Sha256};
-    let bytes = serde_json::to_vec(invocation)
-        .map_err(|error| ToolError::InvalidExecutionGrant(error.to_string()))?;
-    Ok(Sha256::digest(bytes).into())
-}
-
-fn prepared_shell_digest(prepared: &PreparedShellCommand) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(prepared.command.as_bytes());
-    digest.update([0]);
-    digest.update(prepared.cwd.to_string_lossy().as_bytes());
-    digest.finalize().into()
-}
 use agena_domain::{PluginInvocation, StructuredObject};
 
 use super::{
-    ExecutionAuthorizationState, PluginToolBeforeInput, PluginToolInvokeInput,
-    PreparedShellCommand, PreparedToolInvocation, SdkToolStreamingMode, StreamingToolExecution,
-    ToolError, ToolExecutionView, ToolExecutor, ToolInvocation, ToolInvocationExecution,
-    ToolOutput, ToolPayloadInput, ToolPermissionCheck, apply_patch_execution_from_tool_output,
-    bash, in_process_router, invocation_effective_tags, invocation_input_json, invocation_name,
-    parse_invocation_from_json, plugin_invocation_name, resolved_plugin_invocation_input_value,
-    resolved_tool_input_value, shell_command_from_invocation,
+    PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation,
+    SdkToolStreamingMode, StreamingToolExecution, ToolError, ToolExecutionView, ToolExecutor,
+    ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput, ToolPermissionCheck,
+    apply_patch_execution_from_tool_output, bash, invocation_effective_tags, invocation_input_json,
+    invocation_name, parse_invocation_from_json, plugin_invocation_name,
+    resolved_plugin_invocation_input_value, resolved_tool_input_value,
+    shell_command_from_invocation,
 };

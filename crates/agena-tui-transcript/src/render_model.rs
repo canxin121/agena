@@ -7,7 +7,7 @@ use agena_api::{
     },
     resource::{MessageResource, MessageRole, MessageStatus},
 };
-use agena_domain::{ActivityId, ActivityPayload, ResponseId, ResponseSegmentId, TurnId};
+use agena_domain::{ActivityId, ActivityPayload, AssistantReplyId, TextSegmentId, TurnId};
 use agena_tui_components::ThemePalette;
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -26,15 +26,16 @@ use crate::{
 
 /// Stable identity of one top-level transcript entry.
 ///
-/// Turns and responses are the canonical conversation identity. A stored
-/// message id appears only in views whose business object is still a stored
-/// provider-history message (for example rewind previews); it is never
-/// synthesized for a canonical snapshot.
+/// User turns and assistant-reply anchors are the canonical conversation
+/// identity. A stored message id appears only in views whose business object
+/// is still a stored provider-history message (for example rewind previews);
+/// it is never synthesized for a canonical snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TranscriptEntryId {
     TurnInput(TurnId),
     PendingTurn(u64),
-    Response(ResponseId),
+    /// One user-visible canonical assistant reply.
+    AssistantReply(AssistantReplyId),
     SessionActivity(ActivityId),
     StoredMessage(i64),
 }
@@ -46,12 +47,12 @@ pub enum TranscriptContentId {
     /// nodes retain the canonical segment and Activity identities.
     TurnDocument(TurnId),
     PendingDocument(u64),
-    Text(ResponseSegmentId),
+    Text(TextSegmentId),
     Activity(ActivityId),
-    /// Stable presentation identity for the terminal outcome of a response.
-    /// The outcome is derived from response state and is not a synthetic
+    /// Stable presentation identity for the terminal outcome of a reply.
+    /// The outcome is derived from reply state and is not a synthetic
     /// persisted Activity.
-    ResponseLifecycle(ResponseId),
+    AssistantReplyLifecycle(AssistantReplyId),
     StoredPart(i64),
 }
 
@@ -77,12 +78,12 @@ pub enum TranscriptActivityContent {
     SkillReference(MessageSkillReferencePartResource),
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
-    ResponseLifecycle(TranscriptResponseLifecycle),
+    AssistantReplyLifecycle(TranscriptAssistantReplyLifecycle),
     Request(Box<MessageRequestPartResource>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TranscriptResponseLifecycle {
+pub enum TranscriptAssistantReplyLifecycle {
     Running,
     Completed,
     Failed,
@@ -109,7 +110,7 @@ impl TranscriptUserDocument {
 #[derive(Debug, Clone)]
 pub enum TranscriptUserDocumentNode {
     Text {
-        id: Option<ResponseSegmentId>,
+        id: Option<TextSegmentId>,
         text: String,
     },
     Activity {

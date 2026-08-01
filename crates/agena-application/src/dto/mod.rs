@@ -11,7 +11,6 @@ mod access;
 mod auth;
 mod marketplace;
 mod memory;
-mod messages;
 mod model_catalog;
 mod plugins;
 mod providers;
@@ -26,7 +25,6 @@ pub use agena_api::resource::{
 pub use auth::*;
 pub use marketplace::*;
 pub use memory::*;
-pub use messages::*;
 pub use model_catalog::*;
 pub use plugins::*;
 pub use providers::*;

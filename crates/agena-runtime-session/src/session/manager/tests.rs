@@ -13,15 +13,13 @@ mod tests {
 
     use agena_domain::{
         ExecutionStatus, FinishReason, PermissionAction, PermissionReplyKind, PermissionRiskLevel,
-        StructuredObject, TimeRange,
+        StructuredObject, TimeRange, UserInputQuestion, UserInputReplyKind,
     };
-    use sea_orm::Database;
+    use chrono::Utc;
+    use sea_orm::{ConnectionTrait, Database, Statement};
     use tokio::sync::Notify;
 
-    use super::{
-        HostPermissionGrantGuard, SessionManager, build_message,
-        host_permission_grant_matches_action, merge_system_prompts,
-    };
+    use super::{ExecutionConversationTarget, SessionManager, build_message, merge_system_prompts};
     use crate::session::history::{
         AssistantMessageFinished, RunCompleted, RunStarted, TranscriptContent, UserMessageAppended,
     };
@@ -46,9 +44,9 @@ mod tests {
     use agena_provider::CompletionRequest;
     use agena_provider::CompletionResponse;
     use agena_runtime::{
-        SessionCreateRequest, SessionPermissionReplyRequest, SessionPluginCommandRequest,
-        SessionPluginCommandService, SessionRewindRequest, SessionRunOptions,
-        SessionToolExecutionService,
+        SessionCreateRequest, SessionExecutionReplyRequest, SessionPermissionReplyRequest,
+        SessionPluginCommandRequest, SessionPluginCommandService, SessionRewindRequest,
+        SessionRunOptions, SessionToolExecutionService,
     };
 
     #[test]
@@ -97,6 +95,8 @@ mod tests {
 
     static REPLY_PROBE_STARTED: Notify = Notify::const_new();
     static REPLY_PROBE_CONTINUE: Notify = Notify::const_new();
+    static REPLY_PROBE_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
 
     #[derive(Default)]
     struct ReplyLockProbeTool;
@@ -110,9 +110,124 @@ mod tests {
     impl ReplyLockProbeTool {
         #[tool(name = "run", summary = "Wait until the reply-lock test releases it.")]
         async fn run(&self) -> String {
+            REPLY_PROBE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             REPLY_PROBE_STARTED.notify_one();
             REPLY_PROBE_CONTINUE.notified().await;
             "reply-probe-complete".to_string()
+        }
+    }
+
+    #[derive(Default)]
+    struct ApprovedFailureTool;
+
+    static APPROVED_SUCCESS_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static BATCH_SLOW_STARTED: Notify = Notify::const_new();
+    static BATCH_SLOW_RELEASE: Notify = Notify::const_new();
+    static PERMISSION_BATCH_FAST_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static PERMISSION_BATCH_SLOW_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static PERMISSION_BATCH_SLOW_STARTED: Notify = Notify::const_new();
+    static PERMISSION_BATCH_SLOW_RELEASE: Notify = Notify::const_new();
+
+    #[derive(Default)]
+    struct ApprovedSuccessTool;
+
+    #[derive(Default)]
+    struct BatchBarrierTool;
+
+    #[derive(Default)]
+    struct PermissionBatchTool;
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "batch_barrier",
+        version = "0.1.0",
+        summary = "Concurrent tool-batch barrier regression fixture."
+    )]
+    impl BatchBarrierTool {
+        #[tool(
+            name = "fast",
+            summary = "Complete immediately.",
+            read_only,
+            concurrency_safe
+        )]
+        async fn fast(&self) -> serde_json::Value {
+            serde_json::json!({ "result": "fast-complete" })
+        }
+
+        #[tool(
+            name = "slow",
+            summary = "Wait for the batch-barrier test.",
+            read_only,
+            concurrency_safe
+        )]
+        async fn slow(&self) -> serde_json::Value {
+            BATCH_SLOW_STARTED.notify_one();
+            BATCH_SLOW_RELEASE.notified().await;
+            serde_json::json!({ "result": "slow-complete" })
+        }
+    }
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "permission_batch",
+        version = "0.1.0",
+        summary = "Approved concurrent tool-batch regression fixture."
+    )]
+    impl PermissionBatchTool {
+        #[tool(
+            name = "fast",
+            summary = "Complete immediately after batch approval.",
+            read_only,
+            concurrency_safe
+        )]
+        async fn fast(&self) -> serde_json::Value {
+            PERMISSION_BATCH_FAST_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            serde_json::json!({ "result": "fast-approved" })
+        }
+
+        #[tool(
+            name = "slow",
+            summary = "Wait after batch approval.",
+            read_only,
+            concurrency_safe
+        )]
+        async fn slow(&self) -> serde_json::Value {
+            PERMISSION_BATCH_SLOW_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            PERMISSION_BATCH_SLOW_STARTED.notify_one();
+            PERMISSION_BATCH_SLOW_RELEASE.notified().await;
+            serde_json::json!({ "result": "slow-approved" })
+        }
+    }
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "approved_success",
+        version = "0.1.0",
+        summary = "Approved execution success regression fixture."
+    )]
+    impl ApprovedSuccessTool {
+        #[tool(name = "run", summary = "Complete after approval.", read_only)]
+        async fn run(&self) -> serde_json::Value {
+            APPROVED_SUCCESS_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            serde_json::json!({ "approved": true })
+        }
+    }
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "approved_failure",
+        version = "0.1.0",
+        summary = "Approved execution failure regression fixture."
+    )]
+    impl ApprovedFailureTool {
+        #[tool(name = "run", summary = "Fail after approval.")]
+        async fn run(&self) -> agena_plugin_host::sdk::Result<String> {
+            Err(agena_plugin_host::sdk::PluginError::internal(
+                "approved fixture failed with its real diagnostic",
+            ))
         }
     }
 
@@ -178,9 +293,16 @@ mod tests {
             &self,
             _request: CompletionRequest,
         ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
-            Err(agena_runtime_provider::ProviderError::Provider(
-                "reply lock test provider does not complete".to_string(),
-            ))
+            Ok(CompletionResponse {
+                provider_id: agena_domain::ProviderId::new(self.id()),
+                model: self.default_model.clone(),
+                text: "continued after approved tool".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
         }
     }
 
@@ -203,6 +325,22 @@ mod tests {
             "test.command_probe".to_string(),
             ConfiguredPlugin::static_default(),
         );
+        plugins_config.list.insert(
+            "test.approved_failure".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        plugins_config.list.insert(
+            "test.approved_success".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        plugins_config.list.insert(
+            "test.batch_barrier".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        plugins_config.list.insert(
+            "test.permission_batch".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
         let plugins = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![
                 StaticPluginRegistration::new(
@@ -220,6 +358,30 @@ mod tests {
                         .parse()
                         .expect("valid command probe plugin key"),
                     CommandProbePlugin,
+                ),
+                StaticPluginRegistration::new(
+                    "test.approved_failure"
+                        .parse()
+                        .expect("valid approved failure plugin key"),
+                    ApprovedFailureTool,
+                ),
+                StaticPluginRegistration::new(
+                    "test.approved_success"
+                        .parse()
+                        .expect("valid approved success plugin key"),
+                    ApprovedSuccessTool,
+                ),
+                StaticPluginRegistration::new(
+                    "test.batch_barrier"
+                        .parse()
+                        .expect("valid batch barrier plugin key"),
+                    BatchBarrierTool,
+                ),
+                StaticPluginRegistration::new(
+                    "test.permission_batch"
+                        .parse()
+                        .expect("valid permission batch plugin key"),
+                    PermissionBatchTool,
                 ),
             ],
             config: plugins_config,
@@ -266,6 +428,510 @@ mod tests {
         )
     }
 
+    async fn seed_canonical_assistant_reply(
+        manager: &SessionManager,
+        session_id: i64,
+    ) -> (
+        agena_domain::ExecutionId,
+        agena_domain::TurnId,
+        agena_domain::AssistantReplyId,
+    ) {
+        let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        manager
+            .store
+            .append_lifecycle_events(
+                session_id,
+                vec![EventKind::ExecutionStarted(
+                    agena_domain::ExecutionStartedEvent {
+                        session_id,
+                        execution_id,
+                        turn_id,
+                        reply_id,
+                        source: ExecutionSource::User,
+                        ts_ms: 1,
+                    },
+                )],
+            )
+            .await
+            .expect("seed canonical assistant reply");
+        (execution_id, turn_id, reply_id)
+    }
+
+    async fn checkpoint_seeded_assistant_message(
+        manager: &SessionManager,
+        session_id: i64,
+        execution_id: agena_domain::ExecutionId,
+        turn_id: agena_domain::TurnId,
+        reply_id: agena_domain::AssistantReplyId,
+        message: &crate::message::Message,
+    ) {
+        let mut events = message
+            .parts
+            .iter()
+            .cloned()
+            .map(|part| {
+                EventKind::MessagePartCheckpointed(crate::event::MessagePartCheckpointedEvent {
+                    session_id,
+                    execution_id: Some(execution_id),
+                    run_id: None,
+                    turn_id: Some(turn_id),
+                    reply_id: Some(reply_id),
+                    message_id: message.id,
+                    message_role: message.role,
+                    message_state: message.state,
+                    message_created_at: message.created_at,
+                    message_metadata: message.metadata.clone(),
+                    part,
+                    ts_ms: Utc::now().timestamp_millis(),
+                })
+            })
+            .collect::<Vec<_>>();
+        events.push(EventKind::ExecutionFinished(
+            agena_domain::ExecutionFinishedEvent {
+                session_id,
+                execution_id,
+                reply_id,
+                outcome: agena_domain::ExecutionOutcome::Completed,
+                ts_ms: Utc::now().timestamp_millis(),
+            },
+        ));
+        manager
+            .store
+            .append_lifecycle_events(session_id, events)
+            .await
+            .expect("checkpoint seeded canonical assistant message");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn approved_execution_failure_terminalizes_the_original_permission_once() {
+        let manager = test_manager().await;
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "approved failure terminalization".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create approved failure session");
+        let (seed_execution_id, seed_turn_id, seed_reply_id) =
+            seed_canonical_assistant_reply(&manager, session.id).await;
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve approved failure message ids");
+        let operation_id = "approved-failure-operation";
+        let operation = OperationPart::pending(
+            41,
+            ToolInvocation::new("test.approved_failure.run", StructuredObject::default()),
+            "Run approved_failure.run",
+            TimeRange::default(),
+        );
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(operation)],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: options.model.provider_id.to_string(),
+                model_id: options.model.model_id.to_string(),
+                ..MessageMetadata::default()
+            },
+        );
+        message.parts[0].operation_id = Some(operation_id.to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![message.clone()],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist approved failure operation");
+        let pending = session
+            .next_pending_tool()
+            .expect("approved failure pending tool");
+        let action = PermissionAction::Tool {
+            tool_name: "test.approved_failure.run".to_owned(),
+            qualifier: None,
+        };
+        for _ in 0..2 {
+            session = manager
+                .apply_permission_request_with_id(
+                    session,
+                    &pending,
+                    operation_id.to_owned(),
+                    action.clone(),
+                    vec![action.clone()],
+                    vec![action.clone()],
+                    "approved failure regression".to_owned(),
+                    "The fixture requires explicit approval.".to_owned(),
+                    Some("static_policy".to_owned()),
+                    None,
+                    None,
+                    PermissionRiskLevel::Medium,
+                    Vec::new(),
+                    manager.execution_state(),
+                )
+                .await
+                .expect("upsert one permission request");
+        }
+        checkpoint_seeded_assistant_message(
+            &manager,
+            session.id,
+            seed_execution_id,
+            seed_turn_id,
+            seed_reply_id,
+            session.messages.last().expect("seeded assistant message"),
+        )
+        .await;
+
+        let permission_part_count = session
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .filter(|part| {
+                matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Activity(
+                        crate::message::RuntimeActivity::Interaction(
+                            crate::message::RequestPart::Permission(_)
+                        )
+                    ))
+                )
+            })
+            .count();
+        assert_eq!(permission_part_count, 1);
+        let message = session
+            .messages
+            .iter()
+            .find(|message| {
+                message
+                    .parts
+                    .iter()
+                    .any(|part| part.operation_id.as_deref() == Some(operation_id))
+            })
+            .expect("message owning approved failure operation");
+        assert_eq!(
+            message
+                .parts
+                .iter()
+                .map(|part| part.part_index)
+                .collect::<Vec<_>>(),
+            vec![0, 1],
+            "dynamically appended permission activity must retain document order"
+        );
+        let events = manager
+            .list_session_events(session.id)
+            .await
+            .expect("load permission request events");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::PermissionRequested(_)))
+                .count(),
+            1
+        );
+
+        let session = manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                options,
+                PermissionReply {
+                    request_id: operation_id.to_owned(),
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("approved failure becomes a normal failed operation");
+
+        assert!(session.pending_interactive_requests().is_empty());
+        assert!(session.next_pending_tool().is_none());
+        assert!(session.has_finished_operation(operation_id));
+        let parts = session
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            parts
+                .iter()
+                .filter(|part| {
+                    matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::Activity(
+                            crate::message::RuntimeActivity::Interaction(
+                                crate::message::RequestPart::Permission(_)
+                            )
+                        ))
+                    )
+                })
+                .count(),
+            1,
+            "approval must not create a second permission activity"
+        );
+        assert!(parts.iter().any(|part| {
+            part.operation_id.as_deref() == Some(operation_id)
+                && part.status == ExecutionStatus::Failed
+                && matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Activity(
+                        crate::message::RuntimeActivity::Operation(_)
+                    ))
+                )
+        }));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn approved_provider_tool_executes_once_then_continues_the_same_turn() {
+        APPROVED_SUCCESS_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let manager = test_manager().await;
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "approved provider continuation".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create approved continuation session");
+        let (seed_execution_id, seed_turn_id, seed_reply_id) =
+            seed_canonical_assistant_reply(&manager, session.id).await;
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve approved continuation message ids");
+        let operation_id = "approved-provider-operation";
+        let target_input = StructuredObject::default();
+        let invocation = ToolInvocation {
+            tool_api_call: Some(agena_domain::ToolApiCall {
+                function: agena_domain::ToolApiFunction::Call,
+                arguments: StructuredObject::try_from(serde_json::json!({
+                    "tool": "test.approved_success.run",
+                    "input": {}
+                }))
+                .expect("valid provider tool envelope"),
+            }),
+            name: "test.approved_success.run".to_owned(),
+            plugin_name: None,
+            input: target_input,
+        };
+        let operation =
+            OperationPart::pending(42, invocation, "Run stream.object", TimeRange::default());
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(operation)],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: options.model.provider_id.to_string(),
+                model_id: options.model.model_id.to_string(),
+                ..MessageMetadata::default()
+            },
+        );
+        message.parts[0].operation_id = Some(operation_id.to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![message.clone()],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist approved continuation operation");
+        manager
+            .store
+            .append_lifecycle_events(
+                session.id,
+                vec![EventKind::MessagePartCheckpointed(
+                    crate::event::MessagePartCheckpointedEvent {
+                        session_id: session.id,
+                        execution_id: Some(seed_execution_id),
+                        run_id: None,
+                        turn_id: Some(seed_turn_id),
+                        reply_id: Some(seed_reply_id),
+                        message_id: message.id,
+                        message_role: message.role,
+                        message_state: message.state,
+                        message_created_at: message.created_at,
+                        message_metadata: message.metadata.clone(),
+                        part: message.parts[0].clone(),
+                        ts_ms: Utc::now().timestamp_millis(),
+                    },
+                )],
+            )
+            .await
+            .expect("associate operation message with canonical reply execution");
+        let pending = session
+            .next_pending_tool()
+            .expect("approved continuation pending tool");
+        let action = PermissionAction::Tool {
+            tool_name: "test.approved_success.run".to_owned(),
+            qualifier: None,
+        };
+        session = manager
+            .apply_permission_request_with_id(
+                session,
+                &pending,
+                operation_id.to_owned(),
+                action.clone(),
+                vec![action.clone()],
+                vec![action],
+                "approved continuation regression".to_owned(),
+                "The fixture requires explicit approval.".to_owned(),
+                Some("static_policy".to_owned()),
+                None,
+                None,
+                PermissionRiskLevel::Medium,
+                Vec::new(),
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist approved continuation permission");
+        let pending_permission = session
+            .find_pending_permission_by_request_id(operation_id)
+            .expect("pending permission before canonical Activity projection");
+        let request_activity_id = session
+            .part(&pending_permission.request)
+            .and_then(|part| part.activity_id)
+            .expect("permission Activity identity");
+        let canonical_activity = manager
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                manager.store.db.get_database_backend(),
+                "SELECT 1 AS present FROM agena_activities WHERE activity_id = ?",
+                [request_activity_id.to_string().into()],
+            ))
+            .await
+            .expect("query lagging canonical permission Activity");
+        assert!(
+            canonical_activity.is_none(),
+            "fixture requires an actionable model-message request before its Activity projection"
+        );
+        let projected_request_part = manager
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                manager.store.db.get_database_backend(),
+                "SELECT 1 AS present FROM agena_model_message_parts \
+                 WHERE part_id = ? AND message_id = ?",
+                [
+                    pending_permission.request.part_id.into(),
+                    pending_permission.request.message_id.into(),
+                ],
+            ))
+            .await
+            .expect("query lagging request part projection");
+        assert!(
+            projected_request_part.is_none(),
+            "fixture requires the request part projection to lag its owning message"
+        );
+        assert_eq!(
+            manager
+                .conversation_identity_for_message(
+                    session.id,
+                    pending_permission.request.message_id,
+                )
+                .await
+                .expect("resolve reply identity from durable model-message ownership"),
+            super::ConversationIdentity {
+                turn_id: seed_turn_id,
+                reply_id: seed_reply_id,
+            }
+        );
+        let user_messages_before = session
+            .messages
+            .iter()
+            .filter(|message| message.role == Role::User)
+            .count();
+
+        let session = manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                options,
+                PermissionReply {
+                    request_id: operation_id.to_owned(),
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("approved provider target continues the model turn");
+
+        manager
+            .store
+            .append_lifecycle_events(
+                session.id,
+                vec![EventKind::ExecutionFinished(
+                    agena_domain::ExecutionFinishedEvent {
+                        session_id: session.id,
+                        execution_id: seed_execution_id,
+                        reply_id: seed_reply_id,
+                        outcome: agena_domain::ExecutionOutcome::Completed,
+                        ts_ms: Utc::now().timestamp_millis(),
+                    },
+                )],
+            )
+            .await
+            .expect("close seeded origin execution");
+
+        assert_eq!(
+            APPROVED_SUCCESS_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one approval must execute one target call"
+        );
+        assert!(session.pending_interactive_requests().is_empty());
+        assert!(session.next_pending_tool().is_none());
+        assert!(session.has_finished_operation(operation_id));
+        assert_eq!(
+            session
+                .messages
+                .iter()
+                .filter(|message| message.role == Role::User)
+                .count(),
+            user_messages_before,
+            "a permission reply must not synthesize an empty user message"
+        );
+        assert_eq!(
+            session.last_assistant_text().as_deref(),
+            Some("continued after approved tool")
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn accepted_execution_returns_before_terminal_outcome_and_cancels_cleanly() {
         let manager = test_manager().await;
@@ -282,6 +948,7 @@ mod tests {
             .start_registered(
                 session.id,
                 ExecutionSource::User,
+                ExecutionConversationTarget::NewTurn,
                 "acceptance regression",
                 move |_manager, _control, _steer_rx| async move {
                     wait.notified().await;
@@ -330,6 +997,574 @@ mod tests {
         )));
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_tool_batch_resolution_waits_for_every_tool() {
+        let manager = Arc::new(test_manager().await);
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "tool batch barrier".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create batch barrier session");
+        let ids = manager
+            .store
+            .reserve_message_ids(2)
+            .await
+            .expect("reserve batch message ids");
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![
+                PartContent::operation(OperationPart::pending(
+                    71,
+                    ToolInvocation::new("test.batch_barrier.fast", StructuredObject::default()),
+                    "Run batch_barrier.fast",
+                    TimeRange::default(),
+                )),
+                PartContent::operation(OperationPart::pending(
+                    72,
+                    ToolInvocation::new("test.batch_barrier.slow", StructuredObject::default()),
+                    "Run batch_barrier.slow",
+                    TimeRange::default(),
+                )),
+            ],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: "reply-test-provider".to_owned(),
+                model_id: "reply-test-model".to_owned(),
+                ..MessageMetadata::default()
+            },
+        );
+        message.parts[0].operation_id = Some("batch-fast".to_owned());
+        message.parts[1].operation_id = Some("batch-slow".to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![message],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist pending tool batch");
+        let pending_tools = session.pending_tools();
+        assert_eq!(pending_tools.len(), 2);
+
+        let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
+        request_override.set_parallel_tool_calls(Some(true));
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let runner = manager.background_handle();
+        let state = manager.execution_state();
+        let mut batch = tokio::spawn(async move {
+            runner
+                .resolve_pending_tools(session, pending_tools, &options, state)
+                .await
+        });
+
+        tokio::select! {
+            _ = BATCH_SLOW_STARTED.notified() => {}
+            result = &mut batch => panic!("tool batch finished before the slow tool started: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                panic!("slow batch tool did not start before the timeout")
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !batch.is_finished(),
+            "batch resolution must not return while one concurrent tool is still running"
+        );
+
+        BATCH_SLOW_RELEASE.notify_one();
+        let session = tokio::time::timeout(Duration::from_secs(5), batch)
+            .await
+            .expect("batch execution completed")
+            .expect("join batch execution")
+            .expect("resolve complete batch");
+        assert!(session.next_pending_tool().is_none());
+        assert!(session.has_finished_operation("batch-fast"));
+        assert!(session.has_finished_operation("batch-slow"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_tool_batch_materializes_every_permission_before_blocking() {
+        PERMISSION_BATCH_FAST_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        PERMISSION_BATCH_SLOW_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let manager = Arc::new(
+            test_manager_with_tool_policy(ToolPermissionPolicy::new(
+                agena_domain::PermissionMode::Ask,
+            ))
+            .await,
+        );
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "parallel permission batch".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create parallel permission session");
+        let (seed_execution_id, seed_turn_id, seed_reply_id) =
+            seed_canonical_assistant_reply(manager.as_ref(), session.id).await;
+        let ids = manager
+            .store
+            .reserve_message_ids(2)
+            .await
+            .expect("reserve permission batch message ids");
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![
+                PartContent::operation(OperationPart::pending(
+                    81,
+                    ToolInvocation {
+                        tool_api_call: Some(agena_domain::ToolApiCall {
+                            function: agena_domain::ToolApiFunction::Call,
+                            arguments: StructuredObject::try_from(serde_json::json!({
+                                "tool": "test.permission_batch.fast",
+                                "input": {}
+                            }))
+                            .expect("valid fast provider tool envelope"),
+                        }),
+                        name: "test.permission_batch.fast".to_owned(),
+                        plugin_name: None,
+                        input: StructuredObject::default(),
+                    },
+                    "Run batch_barrier.fast",
+                    TimeRange::default(),
+                )),
+                PartContent::operation(OperationPart::pending(
+                    82,
+                    ToolInvocation {
+                        tool_api_call: Some(agena_domain::ToolApiCall {
+                            function: agena_domain::ToolApiFunction::Call,
+                            arguments: StructuredObject::try_from(serde_json::json!({
+                                "tool": "test.permission_batch.slow",
+                                "input": {}
+                            }))
+                            .expect("valid slow provider tool envelope"),
+                        }),
+                        name: "test.permission_batch.slow".to_owned(),
+                        plugin_name: None,
+                        input: StructuredObject::default(),
+                    },
+                    "Run batch_barrier.slow",
+                    TimeRange::default(),
+                )),
+            ],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: "reply-test-provider".to_owned(),
+                model_id: "reply-test-model".to_owned(),
+                ..MessageMetadata::default()
+            },
+        );
+        message.parts[0].operation_id = Some("permission-batch-fast".to_owned());
+        message.parts[1].operation_id = Some("permission-batch-slow".to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![message],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist permission batch");
+        let pending_tools = session.pending_tools();
+        assert_eq!(pending_tools.len(), 2);
+
+        let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
+        request_override.set_parallel_tool_calls(Some(true));
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override,
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let mut session = manager
+            .background_handle()
+            .resolve_pending_tools(session, pending_tools, &options, manager.execution_state())
+            .await
+            .expect("resolve permission batch");
+        session.refresh_derived();
+
+        let pending_permissions = session.pending_interactive_requests();
+        assert_eq!(
+            pending_permissions.len(),
+            2,
+            "every Ask member of one concurrent provider batch must be visible before the session blocks"
+        );
+        assert!(
+            session
+                .find_pending_permission_by_request_id("permission-batch-fast")
+                .is_some()
+        );
+        assert!(
+            session
+                .find_pending_permission_by_request_id("permission-batch-slow")
+                .is_some()
+        );
+        assert!(
+            session.pending_tools().is_empty(),
+            "interactive operations are represented by their pending request Activities, not re-dispatched as ordinary tools"
+        );
+        assert!(
+            session
+                .messages
+                .iter()
+                .flat_map(|message| message.parts.iter())
+                .filter(|part| part.operation_id.as_deref().is_some_and(|id| {
+                    id == "permission-batch-fast" || id == "permission-batch-slow"
+                }))
+                .all(|part| part.status == ExecutionStatus::Pending)
+        );
+        let events = manager
+            .list_session_events(session.id)
+            .await
+            .expect("load permission batch events");
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::PermissionRequested(_)))
+                .count(),
+            2,
+            "every visible permission Activity must have its own durable request event"
+        );
+
+        checkpoint_seeded_assistant_message(
+            manager.as_ref(),
+            session.id,
+            seed_execution_id,
+            seed_turn_id,
+            seed_reply_id,
+            session.messages.last().expect("permission batch message"),
+        )
+        .await;
+
+        let first_reply = manager
+            .reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                options.clone(),
+                PermissionReply {
+                    request_id: "permission-batch-fast".to_owned(),
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: None,
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("persist first batch approval");
+        assert_eq!(
+            first_reply.pending_interactive_requests().len(),
+            1,
+            "one approval must leave its sibling request pending"
+        );
+        assert!(
+            !manager.is_run_active(session.id).await,
+            "an incomplete approval batch must not register a continuation execution"
+        );
+        assert_eq!(
+            PERMISSION_BATCH_FAST_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "an approved member must wait for the batch approval barrier"
+        );
+        assert_eq!(
+            PERMISSION_BATCH_SLOW_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "an unresolved member must not execute"
+        );
+        let events_after_first = manager
+            .list_session_events(session.id)
+            .await
+            .expect("load events after first batch approval");
+        assert_eq!(
+            events_after_first
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::ExecutionStarted(_)))
+                .count(),
+            1,
+            "the first approval must not create an isolated execution"
+        );
+
+        let second_manager = Arc::clone(&manager);
+        let second_options = options.clone();
+        let session_id = session.id;
+        let mut second_reply = tokio::spawn(async move {
+            second_manager
+                .reply_permission(SessionPermissionReplyRequest::new(
+                    session_id,
+                    second_options,
+                    PermissionReply {
+                        request_id: "permission-batch-slow".to_owned(),
+                        kind: PermissionReplyKind::AllowOnce,
+                        reason: None,
+                        scope: None,
+                    },
+                    None,
+                ))
+                .await
+        });
+
+        tokio::select! {
+            _ = PERMISSION_BATCH_SLOW_STARTED.notified() => {}
+            result = &mut second_reply => {
+                panic!("approved batch finished before the slow tool reached its barrier: {result:?}")
+            }
+            _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                panic!("approved slow batch member did not start")
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while PERMISSION_BATCH_FAST_CALLS.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("approved fast batch member did not run beside the slow member");
+        assert_eq!(
+            PERMISSION_BATCH_FAST_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            PERMISSION_BATCH_SLOW_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(
+            !second_reply.is_finished(),
+            "the canonical reply must wait for every concurrent tool result"
+        );
+
+        PERMISSION_BATCH_SLOW_RELEASE.notify_one();
+        let completed = tokio::time::timeout(Duration::from_secs(5), second_reply)
+            .await
+            .expect("approved batch continuation timed out")
+            .expect("join approved batch continuation")
+            .expect("complete approved batch continuation");
+        assert!(completed.pending_interactive_requests().is_empty());
+        assert!(completed.next_pending_tool().is_none());
+        assert!(completed.has_finished_operation("permission-batch-fast"));
+        assert!(completed.has_finished_operation("permission-batch-slow"));
+        assert_eq!(
+            PERMISSION_BATCH_FAST_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an approval token must execute its immutable invocation exactly once"
+        );
+        assert_eq!(
+            PERMISSION_BATCH_SLOW_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an approval token must execute its immutable invocation exactly once"
+        );
+
+        let final_events = manager
+            .list_session_events(session.id)
+            .await
+            .expect("load completed batch events");
+        assert_eq!(
+            final_events
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::ExecutionStarted(_)))
+                .count(),
+            2,
+            "the batch needs only its seed execution and one shared continuation"
+        );
+        assert_eq!(
+            final_events
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::PermissionRequested(_)))
+                .count(),
+            2,
+            "durable approval Activities must suppress duplicate Ask evaluation"
+        );
+
+        let backend = manager.store.db.get_database_backend();
+        let reply_row = manager
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                backend,
+                "SELECT status FROM agena_assistant_replies WHERE reply_id = ?",
+                [seed_reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query completed canonical reply")
+            .expect("canonical reply row");
+        assert_eq!(
+            reply_row
+                .try_get::<String>("", "status")
+                .expect("canonical reply status"),
+            "completed"
+        );
+        let failed_activities = manager
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                backend,
+                "SELECT COUNT(*) AS count FROM agena_activities WHERE owner_kind = 'assistant_reply' AND owner_id = ? AND state = 'failed'",
+                [seed_reply_id.to_string().into()],
+            ))
+            .await
+            .expect("count failed canonical activities")
+            .expect("failed activity count row")
+            .try_get::<i64>("", "count")
+            .expect("failed activity count");
+        assert_eq!(
+            failed_activities, 0,
+            "a successful approved batch must not manufacture failed Activities"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_host_user_input_reply_does_not_require_canonical_activity_projection() {
+        let manager = test_manager().await;
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "live host input projection lag".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create host input session");
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve host input message ids");
+        let call_id = 93;
+        let operation_id = "host-input-operation";
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(OperationPart::pending(
+                call_id,
+                ToolInvocation::new("test.reply_probe.run", StructuredObject::default()),
+                "Run reply_probe.run",
+                TimeRange::default(),
+            ))],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: options.model.provider_id.to_string(),
+                model_id: options.model.model_id.to_string(),
+                ..MessageMetadata::default()
+            },
+        );
+        message.parts[0].operation_id = Some(operation_id.to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![message],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist host input operation");
+        let pending = session
+            .next_pending_tool()
+            .expect("pending host input tool");
+        let request_id = format!("host-input:{}:{call_id}:0", session.id);
+        session = manager
+            .apply_user_input_request_with_id(
+                session,
+                &pending,
+                crate::message::AskUserToolInput {
+                    title: "Continue?".to_owned(),
+                    body_markdown: "Host tool is waiting.".to_owned(),
+                    kind: "single".to_owned(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
+                    auto_resolution_ms: Some(60_000),
+                    questions: vec![UserInputQuestion {
+                        id: "continue".to_owned(),
+                        header: String::new(),
+                        question: "Continue?".to_owned(),
+                        options: Vec::new(),
+                        multiple: false,
+                        allow_custom: true,
+                    }],
+                },
+                request_id.clone(),
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist host user-input activity");
+        let pending_request = session
+            .find_pending_user_input_by_request_id(request_id.as_str())
+            .expect("pending host user-input request");
+        assert!(
+            manager
+                .conversation_identity_for_message(session.id, pending_request.request.message_id,)
+                .await
+                .is_err(),
+            "fixture must reproduce a live host request without a canonical continuation identity"
+        );
+
+        let response_rx = manager
+            .install_host_user_input_waiter(session.id, request_id.clone())
+            .await;
+        let completed = manager
+            .reply_user_input(SessionExecutionReplyRequest::new(
+                session.id,
+                options,
+                agena_domain::UserInputReply {
+                    request_id,
+                    kind: UserInputReplyKind::Timeout,
+                    answers: Default::default(),
+                    reason: Some("automatic timeout".to_owned()),
+                },
+            ))
+            .await
+            .expect("live host reply must wake its waiter without canonical lookup");
+        let response = response_rx.await.expect("host waiter received response");
+        assert!(response.timed_out);
+        assert!(!response.cancelled);
+        assert!(completed.pending_interactive_requests().is_empty());
+        assert!(
+            completed.next_pending_tool().is_some(),
+            "the already-running host tool, not a second session execution, owns continuation"
+        );
+        let events = manager
+            .list_session_events(session.id)
+            .await
+            .expect("load host input events");
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event.kind, EventKind::ExecutionStarted(_)))
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn explicit_plugin_command_does_not_consult_tool_permission_policy() {
         let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
@@ -369,26 +1604,13 @@ mod tests {
             )
             .await
             .expect("authorization is a normal invocation outcome");
-        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, .. } =
-            tool_outcome
-        else {
+        let agena_runtime::SessionToolExecutionOutcome::Completed(_) = tool_outcome else {
             panic!("unexpected tool outcome: {tool_outcome:?}");
         };
-        let request_id = request_id.expect("session-scoped Ask must have a request id");
-        let reloaded = manager
-            .get_session(session.id)
-            .await
-            .expect("reload approval session");
-        assert!(
-            reloaded
-                .find_pending_permission_by_request_id(request_id.as_str())
-                .is_some(),
-            "external Ask must create a durable, actionable permission request"
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn explicit_tool_deny_is_a_normal_policy_outcome() {
+    async fn explicit_application_tool_does_not_consult_model_permission_policy() {
         let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
             agena_domain::PermissionMode::Deny,
         ))
@@ -407,232 +1629,11 @@ mod tests {
                 ToolInvocation::new("test.stream.object", StructuredObject::default()),
             )
             .await
-            .expect("policy denial must not use the error channel");
+            .expect("application tool execution");
 
-        let agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial) = outcome else {
+        let agena_runtime::SessionToolExecutionOutcome::Completed(_) = outcome else {
             panic!("unexpected tool outcome: {outcome:?}");
         };
-        assert_eq!(denial.denied_actions.len(), 1);
-        assert!(denial.reason.contains("denied by policy"));
-        assert_eq!(denial.source.as_deref(), Some("static_policy"));
-        assert_eq!(
-            denial.authority,
-            agena_domain::PermissionAuthorityKind::StaticPolicy
-        );
-        assert!(denial.rule_id.is_none());
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn persisted_deny_reports_stable_rule_identity_and_revision() {
-        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
-            agena_domain::PermissionMode::Allow,
-        ))
-        .await;
-        let session = manager
-            .create_session(SessionCreateRequest {
-                title: "persisted denial provenance".to_owned(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create provenance session");
-        let action = PermissionAction::Tool {
-            tool_name: "test.stream.object".to_string(),
-            qualifier: None,
-        };
-        manager
-            .persist_session_changes_with_rules(
-                session.clone(),
-                Vec::new(),
-                Vec::new(),
-                vec![agena_storage::PersistedPermissionRule {
-                    id: None,
-                    created_at_ms: None,
-                    updated_at_ms: None,
-                    action_key: serde_json::to_string(&action).expect("serialize action"),
-                    mode: agena_domain::PermissionMode::Deny,
-                    scope: agena_domain::PermissionScope::Session,
-                    session_id: Some(session.id),
-                    workspace_id: None,
-                    source: "permission_studio".to_string(),
-                    reason: Some("blocked by saved user rule".to_string()),
-                    operator: Some("test-user".to_string()),
-                    revoked_at_ms: None,
-                    revoked_reason: None,
-                    revoked_by: None,
-                }],
-                manager.execution_state(),
-            )
-            .await
-            .expect("persist deny rule");
-
-        let outcome = manager
-            .execute_session_tool(
-                session.id,
-                ToolInvocation::new("test.stream.object", StructuredObject::default()),
-            )
-            .await
-            .expect("persisted denial is a normal outcome");
-        let agena_runtime::SessionToolExecutionOutcome::PolicyDenied(denial) = outcome else {
-            panic!("unexpected persisted denial outcome: {outcome:?}");
-        };
-        assert_eq!(
-            denial.authority,
-            agena_domain::PermissionAuthorityKind::PersistedRule
-        );
-        assert_eq!(denial.source.as_deref(), Some("permission_studio"));
-        assert_eq!(denial.operator.as_deref(), Some("test-user"));
-        assert!(denial.rule_id.is_some());
-        assert!(denial.rule_revision_ms.is_some());
-        let wire = serde_json::to_value(&denial).expect("serialize denial provenance");
-        assert_eq!(wire["authority"], "persisted_rule");
-        assert!(wire["rule_id"].is_number());
-        assert!(wire["rule_revision_ms"].is_number());
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn external_tool_ask_persists_and_approved_reply_executes_without_model_continuation() {
-        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
-            agena_domain::PermissionMode::Ask,
-        ))
-        .await;
-        let session = manager
-            .create_session(SessionCreateRequest {
-                title: "external approval execution".to_owned(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create external approval session");
-        let outcome = manager
-            .execute_session_tool(
-                session.id,
-                ToolInvocation::new("test.stream.object", StructuredObject::default()),
-            )
-            .await
-            .expect("Ask is a normal outcome");
-        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, .. } =
-            outcome
-        else {
-            panic!("unexpected external authorization outcome: {outcome:?}");
-        };
-        let request_id = request_id.expect("external Ask must have a request id");
-
-        let session = manager
-            .reply_permission(SessionPermissionReplyRequest::new(
-                session.id,
-                SessionRunOptions {
-                    model: ModelRef::new("unused-provider", "unused-model"),
-                    thinking_mode: None,
-                    speed_mode: None,
-                    verbosity: None,
-                    thinking: None,
-                    request_override: Default::default(),
-                    system: None,
-                    temperature: None,
-                    max_output_tokens: None,
-                },
-                PermissionReply {
-                    request_id: request_id.clone(),
-                    kind: PermissionReplyKind::AllowOnce,
-                    reason: None,
-                    scope: None,
-                },
-                None,
-            ))
-            .await
-            .expect("approved external tool executes without invoking a model");
-        assert!(session.has_finished_operation(request_id.as_str()));
-        let part = session
-            .messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .find(|part| {
-                part.operation_id.as_deref() == Some(request_id.as_str())
-                    && matches!(
-                        part.content.as_ref(),
-                        Some(PartContent::Activity(
-                            crate::message::RuntimeActivity::Operation(_)
-                        ))
-                    )
-            })
-            .expect("completed external tool operation");
-        assert_eq!(part.status, ExecutionStatus::Completed, "part={part:?}");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn external_tool_decline_finishes_as_user_declined_without_execution() {
-        let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
-            agena_domain::PermissionMode::Ask,
-        ))
-        .await;
-        let session = manager
-            .create_session(SessionCreateRequest {
-                title: "external approval decline".to_owned(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create external decline session");
-        let outcome = manager
-            .execute_session_tool(
-                session.id,
-                ToolInvocation::new("test.stream.object", StructuredObject::default()),
-            )
-            .await
-            .expect("Ask is a normal outcome");
-        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, .. } =
-            outcome
-        else {
-            panic!("unexpected external authorization outcome: {outcome:?}");
-        };
-        let request_id = request_id.expect("external Ask must have a request id");
-
-        let session = manager
-            .reply_permission(SessionPermissionReplyRequest::new(
-                session.id,
-                SessionRunOptions {
-                    model: ModelRef::new("unused-provider", "unused-model"),
-                    thinking_mode: None,
-                    speed_mode: None,
-                    verbosity: None,
-                    thinking: None,
-                    request_override: Default::default(),
-                    system: None,
-                    temperature: None,
-                    max_output_tokens: None,
-                },
-                PermissionReply {
-                    request_id: request_id.clone(),
-                    kind: PermissionReplyKind::DenyOnce,
-                    reason: Some("not now".to_owned()),
-                    scope: None,
-                },
-                None,
-            ))
-            .await
-            .expect("declining an external tool is a normal continuation");
-        let part = session
-            .messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .find(|part| {
-                part.operation_id.as_deref() == Some(request_id.as_str())
-                    && matches!(
-                        part.content.as_ref(),
-                        Some(PartContent::Activity(
-                            crate::message::RuntimeActivity::Operation(_)
-                        ))
-                    )
-            })
-            .expect("declined external tool operation");
-        assert_eq!(part.status, ExecutionStatus::UserDeclined, "part={part:?}");
-        let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(operation))) =
-            part.content.as_ref()
-        else {
-            panic!("declined part is not an operation: {part:?}");
-        };
-        assert_eq!(
-            operation.result.state,
-            agena_domain::ToolResultState::UserDeclined
-        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -667,7 +1668,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn sessionless_tool_ask_is_a_normal_non_execution_outcome() {
+    async fn sessionless_application_tool_does_not_consult_model_permission_policy() {
         let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
             agena_domain::PermissionMode::Ask,
         ))
@@ -678,14 +1679,10 @@ mod tests {
                 77,
             )
             .await
-            .expect("sessionless Ask must not use the error channel");
-        let agena_runtime::SessionToolExecutionOutcome::ApprovalRequired { request_id, reason } =
-            outcome
-        else {
+            .expect("sessionless application tool execution");
+        let agena_runtime::SessionToolExecutionOutcome::Completed(_) = outcome else {
             panic!("unexpected sessionless outcome: {outcome:?}");
         };
-        assert!(request_id.is_none());
-        assert!(reason.contains("requires confirmation"));
     }
 
     async fn append_completed_text_message(
@@ -695,7 +1692,7 @@ mod tests {
         text: &str,
         turn_id: Option<i64>,
         parent_message_id: Option<i64>,
-    ) -> (Session, i64) {
+    ) -> (Session, i64, agena_domain::TurnId) {
         let ids = manager
             .store
             .reserve_message_ids(1)
@@ -708,7 +1705,7 @@ mod tests {
             ExecutionStatus::Completed,
             vec![PartContent::text(text)],
             MessageMetadata {
-                turn_id: Some(turn_id.unwrap_or(message_id)),
+                model_turn_id: Some(turn_id.unwrap_or(message_id)),
                 parent_message_id,
                 ..Default::default()
             },
@@ -727,7 +1724,7 @@ mod tests {
         let session_id = session.id;
         let execution_id = ExecutionId::new();
         let transcript_turn_id = agena_domain::TurnId::new();
-        let response_id = agena_domain::ResponseId::new();
+        let response_id = agena_domain::AssistantReplyId::new();
         let run_id = RunId::new();
         let message_event = match role {
             Role::User => EventKind::UserMessageAppended(UserMessageAppended {
@@ -764,7 +1761,7 @@ mod tests {
                         session_id,
                         execution_id,
                         turn_id: transcript_turn_id,
-                        response_id,
+                        reply_id: response_id,
                         source: ExecutionSource::User,
                         ts_ms: message.created_at.timestamp_millis(),
                     }),
@@ -784,7 +1781,7 @@ mod tests {
                     EventKind::ExecutionFinished(agena_domain::ExecutionFinishedEvent {
                         session_id,
                         execution_id,
-                        response_id,
+                        reply_id: response_id,
                         outcome: agena_domain::ExecutionOutcome::Completed,
                         ts_ms: message.created_at.timestamp_millis(),
                     }),
@@ -793,51 +1790,186 @@ mod tests {
             )
             .await
             .expect("append current rewind regression history");
-        (session, message_id)
+        (session, message_id, transcript_turn_id)
     }
 
-    async fn install_pending_tool_api_operation(
-        manager: &SessionManager,
-        mut session: Session,
-        call_id: i64,
-    ) -> Session {
+    #[tokio::test]
+    async fn process_restart_terminalizes_hanging_tool_batch_without_resuming_the_model() {
+        let manager = test_manager().await;
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "interrupted tool batch".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create interrupted session");
+        let session_id = session.id;
+        let (execution_id, turn_id, reply_id) =
+            seed_canonical_assistant_reply(&manager, session_id).await;
+        let run_id = RunId::new();
         let ids = manager
             .store
             .reserve_message_ids(1)
             .await
-            .expect("reserve Tool API operation message ids");
-        let invocation = ToolInvocation::new(
-            "agena.tools.call",
-            StructuredObject::try_from(serde_json::json!({
-                "tool": "stream.emit",
-                "input": {}
-            }))
-            .expect("structured Tool API input"),
-        );
-        let operation =
-            OperationPart::pending(call_id, invocation, "Tool tools.call", TimeRange::default());
+            .expect("reserve interrupted tool ids");
         let mut message = build_message(
             ids,
             Role::Assistant,
             ExecutionStatus::InProgress,
-            vec![PartContent::operation(operation)],
+            vec![PartContent::operation(OperationPart::pending(
+                701,
+                ToolInvocation::new("test.batch_barrier.slow", StructuredObject::default()),
+                "Wait for batch_barrier.slow",
+                TimeRange::default(),
+            ))],
             MessageMetadata {
-                turn_id: Some(1),
+                model_turn_id: Some(1),
+                model_provider_id: "reply-test-provider".to_owned(),
+                model_id: "reply-test-model".to_owned(),
                 ..MessageMetadata::default()
             },
         );
-        message.parts[0].operation_id = Some("tool-api-stream-test".to_string());
+        message.parts[0].operation_id = Some("interrupted-tool-operation".to_owned());
         session.messages.push(message.clone());
-        manager
+        session = manager
             .persist_session_changes(
                 session,
-                vec![message],
+                vec![message.clone()],
                 Vec::new(),
                 None,
                 manager.execution_state(),
             )
             .await
-            .expect("persist pending Tool API operation")
+            .expect("persist pending tool");
+        assert_eq!(
+            session.workflow_state(),
+            agena_domain::WorkflowState::ToolPending
+        );
+
+        manager
+            .store
+            .append_lifecycle_events(
+                session_id,
+                vec![
+                    EventKind::RunStarted(RunStarted {
+                        execution_id,
+                        run_id,
+                        source: ExecutionSource::User,
+                        model_id: "reply-test-model".into(),
+                        provider_id: "reply-test-provider".into(),
+                        request_digest: None,
+                    }),
+                    EventKind::MessagePartCheckpointed(
+                        crate::event::MessagePartCheckpointedEvent {
+                            session_id,
+                            execution_id: Some(execution_id),
+                            run_id: Some(run_id),
+                            turn_id: Some(turn_id),
+                            reply_id: Some(reply_id),
+                            message_id: message.id,
+                            message_role: message.role,
+                            message_state: message.state,
+                            message_created_at: message.created_at,
+                            message_metadata: message.metadata.clone(),
+                            part: message.parts[0].clone(),
+                            ts_ms: Utc::now().timestamp_millis(),
+                        },
+                    ),
+                ],
+            )
+            .await
+            .expect("persist hanging execution history");
+
+        manager
+            .reconcile_interrupted_executions()
+            .await
+            .expect("reconcile process restart");
+
+        let recovered = manager
+            .get_session(session_id)
+            .await
+            .expect("load recovered session");
+        assert_eq!(
+            recovered.workflow_state(),
+            agena_domain::WorkflowState::Quiescent
+        );
+        assert!(recovered.pending_tools().is_empty());
+        let recovered_part = recovered
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find(|part| part.operation_id.as_deref() == Some("interrupted-tool-operation"))
+            .expect("recovered tool operation");
+        assert_eq!(recovered_part.status, ExecutionStatus::Failed);
+
+        let snapshot = manager
+            .transcript_snapshot(session_id)
+            .await
+            .expect("load recovered canonical transcript");
+        assert_eq!(snapshot.turns.len(), 1);
+        assert_eq!(
+            snapshot.turns[0].reply.status,
+            agena_domain::AssistantReplyStatus::Failed
+        );
+        assert!(
+            snapshot.turns[0].reply.content.nodes().iter().any(|node| {
+                matches!(
+                    node,
+                    agena_domain::ContentNode::Activity { activity }
+                        if activity.state == agena_domain::ActivityState::Failed
+                )
+            }),
+            "recovered reply content: {:#?}",
+            snapshot.turns[0].reply.content.nodes(),
+        );
+
+        let events_after_first_recovery = manager
+            .store
+            .list_session_events(session_id)
+            .await
+            .expect("list recovered events");
+        assert_eq!(
+            events_after_first_recovery
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::ExecutionStarted(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events_after_first_recovery
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::ExecutionFinished(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            events_after_first_recovery
+                .iter()
+                .filter(|event| matches!(
+                    event.kind,
+                    EventKind::RunAborted(crate::session::history::RunAborted {
+                        reason: agena_domain::RunAbortReason::ProcessRestart,
+                        ..
+                    })
+                ))
+                .count(),
+            1
+        );
+
+        manager
+            .reconcile_interrupted_executions()
+            .await
+            .expect("repeat recovery is idempotent");
+        assert_eq!(
+            manager
+                .store
+                .list_session_events(session_id)
+                .await
+                .expect("list events after repeated recovery")
+                .len(),
+            events_after_first_recovery.len(),
+            "restart recovery must never enqueue a new execution or provider continuation",
+        );
     }
 
     #[tokio::test]
@@ -916,7 +2048,7 @@ mod tests {
             .await
             .expect("create rewind source");
         let source_id = session.id;
-        let (session, first_user_id) = append_completed_text_message(
+        let (session, first_user_id, _) = append_completed_text_message(
             &manager,
             session,
             Role::User,
@@ -925,7 +2057,7 @@ mod tests {
             None,
         )
         .await;
-        let (session, assistant_id) = append_completed_text_message(
+        let (session, assistant_id, _) = append_completed_text_message(
             &manager,
             session,
             Role::Assistant,
@@ -934,7 +2066,7 @@ mod tests {
             Some(first_user_id),
         )
         .await;
-        let (_session, rewind_target_id) = append_completed_text_message(
+        let (_session, rewind_target_id, rewind_target_turn_id) = append_completed_text_message(
             &manager,
             session,
             Role::User,
@@ -954,7 +2086,7 @@ mod tests {
         let child = manager
             .rewind_session(SessionRewindRequest {
                 session_id: source_id,
-                message_id: rewind_target_id,
+                turn_id: rewind_target_turn_id,
                 expected_version: None,
             })
             .await
@@ -1015,7 +2147,7 @@ mod tests {
                 .all(|part| !source_part_ids.contains(&part.id))
         );
         assert_eq!(
-            child.messages[1].metadata.turn_id,
+            child.messages[1].metadata.model_turn_id,
             Some(child.messages[0].id)
         );
         assert_eq!(
@@ -1081,245 +2213,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn host_invoked_streaming_tool_updates_outer_tool_api_operation() {
-        let manager = test_manager().await;
-        let call_id = 73;
-        let session = manager
-            .create_session(SessionCreateRequest {
-                title: "Tool API stream regression".to_string(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create test session");
-        let session = install_pending_tool_api_operation(&manager, session, call_id).await;
-
-        let execution = manager
-            .execute_host_invoked_tool(
-                session.id,
-                call_id,
-                ToolInvocation::new("test.stream.emit", StructuredObject::default()),
-            )
-            .await
-            .expect("execute streaming tool");
-
-        // The ordinary handler deliberately returns a different value. This
-        // proves the host path called `tool_invoke_stream`, not `tool_invoke`.
-        assert_eq!(execution.summary().output_text, "stream-terminal");
-
-        let session = manager
-            .get_session(session.id)
-            .await
-            .expect("reload streamed Tool API session");
-        let part = session
-            .messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .find(|part| part.operation_id.as_deref() == Some("tool-api-stream-test"))
-            .expect("outer Tool API operation remains present");
-        assert_eq!(part.status, ExecutionStatus::InProgress);
-        let PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) =
-            part.content.as_ref().expect("operation content")
-        else {
-            panic!("Tool API stream test part is not an operation");
-        };
-        assert_eq!(operation.model_output.text, "stream-handler");
-    }
-
-    async fn wait_for_host_permission_request(manager: &SessionManager, session_id: i64) -> String {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                let session = manager
-                    .get_session(session_id)
-                    .await
-                    .expect("reload host permission session");
-                if let Some(request) = session
-                    .pending_interactive_requests()
-                    .into_iter()
-                    .find(|request| request.request_id().starts_with("host-permission:"))
-                {
-                    return request.request_id().to_string();
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("host permission request was not persisted")
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn dynamic_host_permission_asks_resumes_and_scopes_the_exact_grant() {
-        let manager = Arc::new(
-            test_manager_with_tool_policy(ToolPermissionPolicy::new(
-                agena_domain::PermissionMode::Allow,
-            ))
-            .await,
-        );
-        let mut session = manager
-            .create_session(SessionCreateRequest {
-                title: "dynamic host permission".to_string(),
-                parent_session_id: None,
-            })
-            .await
-            .expect("create dynamic permission session");
-        let call_id = 501;
-        session = install_pending_tool_api_operation(&manager, session, call_id).await;
-        let action = PermissionAction::NetworkAccess {
-            target: "example.com:443".to_string(),
-            host: "example.com".to_string(),
-            port: Some(443),
-        };
-        let guard = HostPermissionGrantGuard::install(
-            Arc::clone(&manager.host_permission_grants),
-            session.id,
-            call_id,
-            "test.dynamic".to_string(),
-            "fetch".to_string(),
-            Vec::new(),
-        );
-        let authorize_manager = Arc::clone(&manager);
-        let authorize_action = action.clone();
-        let authorize = tokio::spawn(async move {
-            authorize_manager
-                .authorize_host_action(
-                    session.id,
-                    call_id,
-                    "test.dynamic",
-                    "fetch",
-                    agena_tool::ToolPermissionCheck {
-                        action: authorize_action,
-                        decision: agena_domain::PermissionDecision::Ask {
-                            reason: "network access requires approval".to_string(),
-                        },
-                    },
-                )
-                .await
-        });
-        let request_id = wait_for_host_permission_request(&manager, session.id).await;
-        let options = SessionRunOptions {
-            model: ModelRef::new("permission-test-provider", "permission-test-model"),
-            thinking_mode: None,
-            speed_mode: None,
-            verbosity: None,
-            thinking: None,
-            request_override: Default::default(),
-            system: None,
-            temperature: None,
-            max_output_tokens: None,
-        };
-        manager
-            .reply_permission(SessionPermissionReplyRequest::new(
-                session.id,
-                options,
-                PermissionReply {
-                    request_id,
-                    kind: PermissionReplyKind::AllowOnce,
-                    reason: None,
-                    scope: None,
-                },
-                None,
-            ))
-            .await
-            .expect("approve dynamic host action");
-        assert!(matches!(
-            authorize
-                .await
-                .expect("join authorization")
-                .expect("authorize"),
-            agena_runtime::HostActionAuthorization::Allowed
-        ));
-        assert!(manager.has_host_permission_grant(
-            session.id,
-            call_id,
-            "test.dynamic",
-            "fetch",
-            &action,
-        ));
-        let second_action = PermissionAction::NetworkAccess {
-            target: "different.example:443".to_string(),
-            host: "different.example".to_string(),
-            port: Some(443),
-        };
-        assert!(!manager.has_host_permission_grant(
-            session.id,
-            call_id,
-            "test.dynamic",
-            "fetch",
-            &second_action,
-        ));
-        let second_manager = Arc::clone(&manager);
-        let second_check_action = second_action.clone();
-        let mut second_authorize = tokio::spawn(async move {
-            second_manager
-                .authorize_host_action(
-                    session.id,
-                    call_id,
-                    "test.dynamic",
-                    "fetch",
-                    agena_tool::ToolPermissionCheck {
-                        action: second_check_action,
-                        decision: agena_domain::PermissionDecision::Ask {
-                            reason: "a different host requires a new approval".to_string(),
-                        },
-                    },
-                )
-                .await
-        });
-        let second_request_id = tokio::select! {
-            request_id = wait_for_host_permission_request(&manager, session.id) => request_id,
-            result = &mut second_authorize => panic!("second authorization terminated before asking: {result:?}"),
-        };
-        manager
-            .reply_permission(SessionPermissionReplyRequest::new(
-                session.id,
-                SessionRunOptions {
-                    model: ModelRef::new("permission-test-provider", "permission-test-model"),
-                    thinking_mode: None,
-                    speed_mode: None,
-                    verbosity: None,
-                    thinking: None,
-                    request_override: Default::default(),
-                    system: None,
-                    temperature: None,
-                    max_output_tokens: None,
-                },
-                PermissionReply {
-                    request_id: second_request_id.clone(),
-                    kind: PermissionReplyKind::DenyOnce,
-                    reason: Some("not this host".to_string()),
-                    scope: None,
-                },
-                None,
-            ))
-            .await
-            .expect("decline second dynamic action");
-        let outcome = second_authorize
-            .await
-            .expect("join second authorization")
-            .expect("authorize second action");
-        let agena_runtime::HostActionAuthorization::UserDeclined(decline) = outcome else {
-            panic!("unexpected second authorization outcome: {outcome:?}");
-        };
-        assert_eq!(decline.request_id, second_request_id);
-        assert!(!manager.has_host_permission_grant(
-            session.id,
-            call_id,
-            "test.dynamic",
-            "fetch",
-            &second_action,
-        ));
-        drop(guard);
-        assert!(!manager.has_host_permission_grant(
-            session.id,
-            call_id,
-            "test.dynamic",
-            "fetch",
-            &action,
-        ));
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn permission_reply_releases_session_lock_before_tool_continuation() {
         let manager = Arc::new(test_manager().await);
+        REPLY_PROBE_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
         let call_id = 91;
         let request_id = "reply-lock-probe".to_string();
         let options = SessionRunOptions {
@@ -1340,6 +2236,8 @@ mod tests {
             })
             .await
             .expect("create test session");
+        let (seed_execution_id, canonical_turn_id, canonical_reply_id) =
+            seed_canonical_assistant_reply(manager.as_ref(), session.id).await;
         let ids = manager
             .store
             .reserve_message_ids(1)
@@ -1353,7 +2251,7 @@ mod tests {
             TimeRange::default(),
         );
         let metadata = MessageMetadata {
-            turn_id: Some(1),
+            model_turn_id: Some(1),
             model_provider_id: options.model.provider_id.to_string(),
             model_id: options.model.model_id.to_string(),
             ..MessageMetadata::default()
@@ -1403,6 +2301,44 @@ mod tests {
             )
             .await
             .expect("persist reply probe permission request");
+        let permission_activity_id = session
+            .find_pending_permission_by_request_id(request_id.as_str())
+            .and_then(|pending| session.part(&pending.request))
+            .and_then(|part| part.activity_id)
+            .expect("permission request activity identity");
+        checkpoint_seeded_assistant_message(
+            manager.as_ref(),
+            session.id,
+            seed_execution_id,
+            canonical_turn_id,
+            canonical_reply_id,
+            session.messages.last().expect("seeded assistant message"),
+        )
+        .await;
+
+        // A later canonical turn must not steal an older interactive reply.
+        // The request Activity owns the continuation identity explicitly, so
+        // resolving it never depends on the session's newest turn.
+        let (newer_execution_id, newer_turn_id, newer_reply_id) =
+            seed_canonical_assistant_reply(manager.as_ref(), session.id).await;
+        manager
+            .store
+            .append_lifecycle_events(
+                session.id,
+                vec![EventKind::ExecutionFinished(
+                    agena_domain::ExecutionFinishedEvent {
+                        session_id: session.id,
+                        execution_id: newer_execution_id,
+                        reply_id: newer_reply_id,
+                        outcome: agena_domain::ExecutionOutcome::Completed,
+                        ts_ms: Utc::now().timestamp_millis(),
+                    },
+                )],
+            )
+            .await
+            .expect("finish newer canonical reply");
+        assert_ne!(newer_turn_id, canonical_turn_id);
+        assert_ne!(newer_reply_id, canonical_reply_id);
 
         let session_id = session.id;
         let outcome = tokio::time::timeout(
@@ -1422,9 +2358,34 @@ mod tests {
         .await
         .expect("permission reply was not accepted")
         .expect("start permission reply");
+        let receipt = outcome
+            .receipt
+            .expect("permission continuation must return an execution receipt");
+        assert_eq!(receipt.turn_id, canonical_turn_id);
+        assert_eq!(receipt.reply_id, canonical_reply_id);
+        let canonical_permission = manager
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                manager.store.db.get_database_backend(),
+                "SELECT state, payload_json FROM agena_activities WHERE activity_id = ?",
+                [permission_activity_id.to_string().into()],
+            ))
+            .await
+            .expect("query canonical permission activity")
+            .expect("canonical permission activity");
+        assert_eq!(
+            canonical_permission
+                .try_get::<String>("", "state")
+                .expect("activity state"),
+            "completed"
+        );
+        let payload = canonical_permission
+            .try_get::<serde_json::Value>("", "payload_json")
+            .expect("activity payload");
         assert!(
-            outcome.receipt.is_some(),
-            "permission continuation must return an execution receipt"
+            payload.get("reply").is_some_and(|reply| !reply.is_null()),
+            "canonical permission Activity must contain the durable user reply: {payload}"
         );
 
         tokio::select! {
@@ -1452,33 +2413,17 @@ mod tests {
             lock_is_available,
             "permission reply held the session lock while executing the approved tool"
         );
-    }
-
-    #[test]
-    fn host_permission_grant_covers_only_public_dns_resolution() {
-        let granted = vec![PermissionAction::NetworkAccess {
-            target: "https://openai.com/".to_string(),
-            host: "openai.com".to_string(),
-            port: Some(443),
-        }];
-        let public_address = PermissionAction::NetworkAccess {
-            target: "104.18.33.45:443".to_string(),
-            host: "104.18.33.45".to_string(),
-            port: Some(443),
-        };
-        let private_address = PermissionAction::NetworkAccess {
-            target: "10.0.0.1:443".to_string(),
-            host: "10.0.0.1".to_string(),
-            port: Some(443),
-        };
-
-        assert!(host_permission_grant_matches_action(
-            &granted,
-            &public_address
-        ));
-        assert!(!host_permission_grant_matches_action(
-            &granted,
-            &private_address
-        ));
+        assert_eq!(
+            REPLY_PROBE_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one approval must execute the original target exactly once"
+        );
+        let completed = manager
+            .get_session(session_id)
+            .await
+            .expect("load completed approved operation");
+        assert!(completed.pending_interactive_requests().is_empty());
+        assert!(completed.next_pending_tool().is_none());
+        assert!(completed.has_finished_operation("reply-lock-operation"));
     }
 }

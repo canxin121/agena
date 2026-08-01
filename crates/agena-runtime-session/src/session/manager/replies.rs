@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::StableRunContext;
+use super::{ConversationIdentity, ExecutionConversationTarget, StableRunContext};
 use crate::session::Session;
 use crate::session::model::SessionPartRef;
 use agena_domain::UserInputReply;
@@ -54,13 +54,27 @@ enum ReplyDispatch {
 /// parameter list made it too easy to couple unrelated continuation details.
 struct ApprovedPermissionContinuation {
     session_id: i64,
+    conversation_identity: ConversationIdentity,
     options: SessionRunOptions,
-    turn_id: i64,
+    model_turn_id: i64,
     state: Arc<SessionManagerState>,
     pending_tool: SessionPendingTool,
     resolved_tool: ResolvedPendingTool,
-    granted_actions: Vec<PermissionAction>,
     continue_model: bool,
+}
+
+/// Stable identity and execution context for continuing one canonical reply.
+///
+/// Keeping this data together prevents permission and user-input continuations
+/// from accidentally mixing a turn/reply identity with another execution's
+/// source, model turn, or runtime state.
+struct ReplySessionContinuation {
+    session_id: i64,
+    conversation_identity: ConversationIdentity,
+    options: SessionRunOptions,
+    run_source: ExecutionSource,
+    model_turn_id: i64,
+    state: Arc<SessionManagerState>,
 }
 
 fn pending_reply_not_found_error(request_kind: &str, request_id: &str) -> AppError {
@@ -129,14 +143,19 @@ fn pending_operation_for_resolved(
 fn append_resolved_message_part(
     session: &mut Session,
     resolved: &ResolvedPendingTool,
-    part: MessagePart,
+    mut part: MessagePart,
 ) -> Result<Message, AppError> {
-    session
+    let message = session
         .messages
         .get_mut(resolved.pending.part.message_index)
-        .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?
-        .parts
-        .push(part);
+        .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
+    part.part_index = i32::try_from(message.parts.len()).map_err(|_| {
+        AppError::Internal(format!(
+            "message {} has too many parts to append an interaction activity",
+            message.id
+        ))
+    })?;
+    message.parts.push(part);
     assistant_message_for_part(session, &resolved.pending.part)
 }
 
@@ -200,6 +219,58 @@ fn matching_request_part_refs(
         .collect()
 }
 
+/// A request Activity is a child of exactly one tool operation. Once that
+/// operation reaches any terminal state, leaving an unanswered child request
+/// pending would create an unanswerable approval: the UI can still submit it,
+/// but there is no pending tool left to resume. Close such children in the
+/// same message checkpoint as the operation's terminal result.
+pub(super) fn cancel_unanswered_request_parts_for_operation(
+    session: &mut Session,
+    operation_id: &str,
+) -> Result<(), AppError> {
+    let request_parts = session
+        .messages
+        .iter()
+        .enumerate()
+        .flat_map(|(message_index, message)| {
+            message
+                .parts
+                .iter()
+                .enumerate()
+                .filter_map(move |(part_index, part)| {
+                    (part.status == ExecutionStatus::Pending
+                        && part.operation_id.as_deref() == Some(operation_id)
+                        && matches!(
+                            part.content,
+                            Some(PartContent::Activity(
+                                crate::message::RuntimeActivity::Interaction(_)
+                            ))
+                        ))
+                    .then_some(SessionPartRef {
+                        message_index,
+                        part_index,
+                        message_id: message.id,
+                        part_id: part.id,
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
+
+    for request_part in request_parts {
+        let part = session.part_mut(&request_part).ok_or_else(|| {
+            AppError::Internal(format!(
+                "pending interaction part not found while closing operation {operation_id}: message={}, part={}",
+                request_part.message_id, request_part.part_id
+            ))
+        })?;
+        part.status = ExecutionStatus::Cancelled;
+        part.summary = Some(
+            "Cancelled because the associated tool already reached a terminal result.".to_owned(),
+        );
+    }
+    Ok(())
+}
+
 fn supersede_duplicate_request_parts(
     session: &mut Session,
     request_parts: &[SessionPartRef],
@@ -255,9 +326,9 @@ fn should_execute_pending_tools_concurrently(
     request_override.parallel_tool_calls() != Some(false)
 }
 
-fn continuation_turn_for_model(
+fn matching_model_turn_id(
     session: &Session,
-    turn_id: i64,
+    model_turn_id: i64,
     options: &SessionRunOptions,
 ) -> Option<i64> {
     session
@@ -265,7 +336,7 @@ fn continuation_turn_for_model(
         .iter()
         .rev()
         .find(|message| {
-            message.role == Role::Assistant && message.metadata.turn_id == Some(turn_id)
+            message.role == Role::Assistant && message.metadata.model_turn_id == Some(model_turn_id)
         })
         .filter(|message| {
             message.metadata.model_provider_id == options.model.provider_id.as_ref()
@@ -273,7 +344,7 @@ fn continuation_turn_for_model(
                     == options.model.adapter_id.as_ref().map(AsRef::as_ref)
                 && message.metadata.model_id == options.model.model_id.as_ref()
         })
-        .map(|_| turn_id)
+        .map(|_| model_turn_id)
 }
 
 impl SessionManager {
@@ -398,15 +469,19 @@ impl SessionManager {
     async fn dispatch_reply_session(
         &self,
         mut session: Session,
-        session_id: i64,
-        options: SessionRunOptions,
-        run_source: ExecutionSource,
-        turn_id: i64,
-        state: Arc<SessionManagerState>,
+        continuation: ReplySessionContinuation,
         mode: ReplyExecutionMode,
     ) -> Result<ReplyDispatch, AppError> {
+        let ReplySessionContinuation {
+            session_id,
+            conversation_identity,
+            options,
+            run_source,
+            model_turn_id,
+            state,
+        } = continuation;
         let options = self.apply_execution_context_to_run_options(&session, options)?;
-        let continuation_turn_id = continuation_turn_for_model(&session, turn_id, &options);
+        let continuation_model_turn_id = matching_model_turn_id(&session, model_turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
                 .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
@@ -414,27 +489,31 @@ impl SessionManager {
         }
 
         let operation = move |manager: SessionManager, control: Arc<ExecutionControl>, steer_rx| async move {
-            manager
-                .run_until_stable(
-                    session,
-                    &options,
-                    StableRunContext {
-                        allow_goal_continuation: false,
-                        base_run_source: run_source,
-                        active_turn_id: continuation_turn_id,
-                        state,
-                        control,
-                        steer_rx,
-                        usage_budget: None,
-                    },
-                )
-                .await
+            // `run_until_stable` owns the complete provider/tool state
+            // machine. Keep that large future behind one heap boundary so a
+            // permission continuation does not embed the entire machine in a
+            // Tokio worker's comparatively small stack frame.
+            Box::pin(manager.run_until_stable(
+                session,
+                &options,
+                StableRunContext {
+                    allow_goal_continuation: false,
+                    base_run_source: run_source,
+                    active_model_turn_id: continuation_model_turn_id,
+                    state,
+                    control,
+                    steer_rx,
+                    usage_budget: None,
+                },
+            ))
+            .await
         };
         match mode {
             ReplyExecutionMode::Await => self
                 .execute_registered(
                     session_id,
                     run_source,
+                    ExecutionConversationTarget::ExistingReply(conversation_identity),
                     "reply continuation execution",
                     operation,
                 )
@@ -444,6 +523,7 @@ impl SessionManager {
                 .start_registered(
                     session_id,
                     run_source,
+                    ExecutionConversationTarget::ExistingReply(conversation_identity),
                     "reply continuation execution",
                     operation,
                 )
@@ -460,12 +540,12 @@ impl SessionManager {
     ) -> Result<ReplyDispatch, AppError> {
         let ApprovedPermissionContinuation {
             session_id,
+            conversation_identity,
             options,
-            turn_id,
+            model_turn_id,
             state,
             pending_tool,
             resolved_tool,
-            granted_actions,
             continue_model,
         } = continuation;
         let options = if continue_model {
@@ -473,24 +553,17 @@ impl SessionManager {
         } else {
             options
         };
-        let continuation_turn_id = if continue_model {
-            continuation_turn_for_model(&session, turn_id, &options)
+        let continuation_model_turn_id = if continue_model {
+            matching_model_turn_id(&session, model_turn_id, &options)
         } else {
             None
         };
         if continue_model && self.apply_run_selection_to_session(&mut session, &options) {
-            session = self
-                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+            self.persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
                 .await?;
         }
 
         let operation = move |manager: SessionManager, control: Arc<ExecutionControl>, steer_rx| async move {
-            let permission_grant = manager.install_host_permission_grant_for_pending_tool(
-                state.as_ref(),
-                session_id,
-                &resolved_tool,
-                granted_actions.clone(),
-            );
             let execution_manager = manager.background_handle();
             let execution_state = state.clone();
             let execution_tool = resolved_tool.clone();
@@ -501,68 +574,44 @@ impl SessionManager {
                     session_id,
                     &execution_tool,
                     Some(cancellation),
-                    granted_actions,
                 )
             })
             .await
-            .map_err(|error| {
-                AppError::Internal(format!("approved tool task failed: {error}"))
-            })?;
-            drop(permission_grant);
-
-
-            let session = match execution {
-                Ok(execution) => {
-                    manager
-                        .apply_tool_success_with_rules(
-                            session,
-                            &pending_tool,
-                            execution,
-                            Vec::new(),
-                            state.clone(),
-                        )
-                        .await?
-                }
-                Err(ToolError::UserInputRequired(input)) => {
-                    manager
-                        .apply_user_input_request(session, &pending_tool, *input, state.clone())
-                        .await?
-                }
-                Err(ToolError::Cancelled) => {
-                    manager
-                        .apply_tool_cancellation(session, &pending_tool, state.clone())
-                        .await?;
-                    return Err(AppError::Cancelled);
-                }
-
-                _ => {
-                    if !continue_model {
-                    return Ok(session);
-                }
-                manager
-                    .run_until_stable(
-                        session,
-                        &options,
-                        StableRunContext {
-                            allow_goal_continuation: false,
-                            base_run_source: ExecutionSource::PermissionReply,
-                            active_turn_id: continuation_turn_id,
-                            state,
-                            control,
-                            steer_rx,
-                            usage_budget: None,
-                        },
-                    )
-                    .await?
-            },
-            };
-            Ok(session)
+            .map_err(|error| AppError::Internal(format!("approved tool task failed: {error}")))?;
+            // A plugin may have persisted nested interaction state while the
+            // blocking invocation was in flight. Apply the terminal result to
+            // the latest projection, exactly as ordinary tool execution does.
+            let session = manager
+                .store
+                .load_session(session_id, state.cache_policy())
+                .await?;
+            let session = manager
+                .apply_tool_execution_result(session, &pending_tool, execution, state.clone())
+                .await?;
+            if !continue_model {
+                return Ok(session);
+            }
+            Box::pin(manager.run_until_stable(
+                session,
+                &options,
+                StableRunContext {
+                    allow_goal_continuation: false,
+                    base_run_source: ExecutionSource::PermissionReply,
+                    active_model_turn_id: continuation_model_turn_id,
+                    state,
+                    control,
+                    steer_rx,
+                    usage_budget: None,
+                },
+            ))
+            .await
         };
         match mode {
             ReplyExecutionMode::Await => self
                 .execute_registered(
                     session_id,
                     ExecutionSource::PermissionReply,
+                    ExecutionConversationTarget::ExistingReply(conversation_identity),
                     "approved permission execution",
                     operation,
                 )
@@ -572,25 +621,27 @@ impl SessionManager {
                 .start_registered(
                     session_id,
                     ExecutionSource::PermissionReply,
+                    ExecutionConversationTarget::ExistingReply(conversation_identity),
                     "approved permission execution",
                     operation,
                 )
                 .await
                 .map(ReplyDispatch::Accepted),
         }
-
     }
 
     async fn persist_tool_completion(
         &self,
-        session: Session,
-        assistant_message: Message,
+        mut session: Session,
+        _assistant_message: Message,
         resolved: &ResolvedPendingTool,
         persisted_rules: Vec<PersistedPermissionRule>,
         mut terminal_events: Vec<EventKind>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let tool_call_id = tool_call_id_for(resolved);
+        cancel_unanswered_request_parts_for_operation(&mut session, tool_call_id.as_ref())?;
+        let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
         let completed_part = assistant_message
             .parts
             .iter()
@@ -672,14 +723,32 @@ impl SessionManager {
             ))),
         )?;
         let replied_assistant_message = assistant_message_for_part(&session, &pending.tool.part)?;
-        let reply_turn_id = replied_assistant_message.metadata.turn_id.ok_or_else(|| {
-            AppError::Internal(format!(
-                "assistant message {} owning permission {} has no turn id",
-                replied_assistant_message.id, request_id
-            ))
-        })?;
+        let conversation_identity = self
+            .conversation_identity_for_message(
+                request.request.session_id,
+                pending.request.message_id,
+            )
+            .await?;
+        let reply_model_turn_id = replied_assistant_message
+            .metadata
+            .model_turn_id
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "assistant message {} owning permission {} has no turn id",
+                    replied_assistant_message.id, request_id
+                ))
+            })?;
 
-        let continue_model = !replied_assistant_message.metadata.externally_initiated_tool;
+        // Only a genuine provider Tool API call may resume the model after
+        // the approved target completes. A manually constructed or
+        // application-originated operation has no provider call to replay;
+        // treating it as one can re-enter the response loop without a model
+        // turn (and used to permit legacy external approval paths).
+        let continue_model = !replied_assistant_message.metadata.externally_initiated_tool
+            && resolve_pending_tool(&session, &pending.tool)?
+                .invocation
+                .tool_api_call
+                .is_some();
         let persisted_actions = if permission_request.requested_actions.is_empty() {
             vec![permission_request.action.clone()]
         } else {
@@ -711,66 +780,55 @@ impl SessionManager {
             .await?;
 
         // The reply is now durable, so another reply will observe it as a
-        // duplicate. Release the per-session serialization lock before waking
-        // or replaying the tool: a provider gateway can synchronously invoke a
-        // target that asks for another permission, and that nested request must
-        // be able to acquire this same lock to persist its prompt.
+        // duplicate. Refresh the derived pending state before deciding whether
+        // this reply is the batch barrier or merely one member of it.
+        session.refresh_derived();
+
+        // Release the per-session serialization lock only after the durable
+        // reply and its derived state agree. Concurrent approval commands can
+        // now collect decisions independently without registering competing
+        // reply executions.
         drop(reply_guard);
-
-        if request_id.starts_with("host-permission:") {
-            if let Some(waiter) = self
-                .host_permission_waiters
-                .lock()
-                .await
-                .remove(request_id.as_str())
-            {
-                let _ = waiter.response.send(request.request.reply.clone());
-                return Ok(ReplyDispatch::Completed(Box::new(session)));
-            }
-
-            session = self
-                .apply_tool_error(
-                    session,
-                    &pending.tool,
-                    ToolError::plugin(
-                        "host-invoked permission continuation is unavailable; retry the tool",
-                    ),
-                    None,
-                    state.clone(),
-                )
-                .await?;
-            return self
-                .dispatch_reply_session(
-                    session,
-                    request.request.session_id,
-                    request.request.options,
-                    ExecutionSource::PermissionReply,
-                    reply_turn_id,
-                    state,
-                    mode,
-                )
-                .await;
-        }
 
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
+                if continue_model {
+                    // Provider tool batches resume as one canonical reply
+                    // execution. Until every interaction has a durable reply,
+                    // do not execute an approved member in isolation: doing so
+                    // serializes otherwise parallel tools and lets one model
+                    // continuation race the remaining approvals.
+                    if session.blocked() {
+                        return Ok(ReplyDispatch::Completed(Box::new(session)));
+                    }
+                    return self
+                        .dispatch_reply_session(
+                            session,
+                            ReplySessionContinuation {
+                                session_id: request.request.session_id,
+                                conversation_identity,
+                                options: request.request.options,
+                                run_source: ExecutionSource::PermissionReply,
+                                model_turn_id: reply_model_turn_id,
+                                state,
+                            },
+                            mode,
+                        )
+                        .await;
+                }
+
                 let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
-                let granted_actions = if permission_request.related_actions.is_empty() {
-                    vec![permission_request.action.clone()]
-                } else {
-                    permission_request.related_actions.clone()
-                };
                 return self
                     .dispatch_approved_permission_session(
                         session,
                         ApprovedPermissionContinuation {
                             session_id: request.request.session_id,
+                            conversation_identity,
                             options: request.request.options,
-                            turn_id: reply_turn_id,
+                            model_turn_id: reply_model_turn_id,
                             state,
                             pending_tool: pending.tool,
                             resolved_tool,
-                            granted_actions,
                             continue_model,
                         },
                         mode,
@@ -791,7 +849,6 @@ impl SessionManager {
                     .flatten(),
                 };
                 session = self
-
                     .apply_tool_user_declined(
                         session,
                         &pending.tool,
@@ -799,24 +856,33 @@ impl SessionManager {
                         Vec::new(),
                         state.clone(),
                     )
-
                     .await?;
+                session.refresh_derived();
             }
         }
-
 
         if !continue_model {
             return Ok(ReplyDispatch::Completed(Box::new(session)));
         }
 
-        self.dispatch_reply_session(
+        // A denial terminalizes its own Operation, but it must not resume the
+        // model while sibling Permission/UserInput Activities are unresolved.
+        // The final interaction reply crosses the same batch barrier and owns
+        // the single continuation execution.
+        if session.blocked() {
+            return Ok(ReplyDispatch::Completed(Box::new(session)));
+        }
 
+        self.dispatch_reply_session(
             session,
-            request.request.session_id,
-            request.request.options,
-            ExecutionSource::PermissionReply,
-            reply_turn_id,
-            state,
+            ReplySessionContinuation {
+                session_id: request.request.session_id,
+                conversation_identity,
+                options: request.request.options,
+                run_source: ExecutionSource::PermissionReply,
+                model_turn_id: reply_model_turn_id,
+                state,
+            },
             mode,
         )
         .await
@@ -874,15 +940,8 @@ impl SessionManager {
                 return Ok(ReplyDispatch::Completed(Box::new(session)));
             }
         };
-        let reply_turn_id = assistant_message_for_part(&session, &pending.tool.part)?
-            .metadata
-            .turn_id
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "assistant message {} owning user input {} has no turn id",
-                    pending.tool.part.message_id, request_id
-                ))
-            })?;
+        let replied_assistant_message = assistant_message_for_part(&session, &pending.tool.part)?;
+        let reply_model_turn_id = replied_assistant_message.metadata.model_turn_id;
 
         let user_input_request = self.clone_pending_reply_request(
             &session,
@@ -986,13 +1045,32 @@ impl SessionManager {
             drop(reply_guard);
         }
 
+        // A live host request resumes the already-running tool through its
+        // waiter and returns above; it never needs a second session execution.
+        // Only replay after a lost waiter, or an ordinary model user-input
+        // Activity, reaches this continuation boundary. Resolve canonical
+        // ownership here so an in-flight host reply cannot fail merely because
+        // the Activity projection trails its durable model-message checkpoint.
+        let conversation_identity = self
+            .conversation_identity_for_message(request.session_id, pending.request.message_id)
+            .await?;
+        let reply_model_turn_id = reply_model_turn_id.ok_or_else(|| {
+            AppError::Internal(format!(
+                "assistant message {} owning user input {} has no turn id",
+                pending.tool.part.message_id, request_id
+            ))
+        })?;
+
         self.dispatch_reply_session(
             session,
-            request.session_id,
-            request.options,
-            ExecutionSource::UserInputReply,
-            reply_turn_id,
-            state,
+            ReplySessionContinuation {
+                session_id: request.session_id,
+                conversation_identity,
+                options: request.options,
+                run_source: ExecutionSource::UserInputReply,
+                model_turn_id: reply_model_turn_id,
+                state,
+            },
             mode,
         )
         .await
@@ -1085,7 +1163,7 @@ fn managed_project_state_permission(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{continuation_turn_for_model, should_execute_pending_tools_concurrently};
+    use super::{matching_model_turn_id, should_execute_pending_tools_concurrently};
     use crate::{message::Message, session::Session};
     use agena_domain::{ModelRef, ModelSpeedModeRequestOverride, Role};
     use agena_runtime::SessionRunOptions;
@@ -1109,7 +1187,7 @@ mod tests {
         let mut session = Session::new(1, 1, "test", now);
         let mut message = Message::prompt_text(Role::Assistant, "pending continuation");
         message.id = 10;
-        message.metadata.turn_id = Some(turn_id);
+        message.metadata.model_turn_id = Some(turn_id);
         message.metadata.model_provider_id = model.provider_id.to_string();
         message.metadata.model_adapter_id = model.adapter_id.as_ref().map(ToString::to_string);
         message.metadata.model_id = model.model_id.to_string();
@@ -1140,7 +1218,7 @@ mod tests {
         let session = session_with_assistant_turn(7, &model);
 
         assert_eq!(
-            continuation_turn_for_model(&session, 7, &run_options(model)),
+            matching_model_turn_id(&session, 7, &run_options(model)),
             Some(7)
         );
     }
@@ -1151,7 +1229,7 @@ mod tests {
         let session = session_with_assistant_turn(7, &original);
 
         assert_eq!(
-            continuation_turn_for_model(
+            matching_model_turn_id(
                 &session,
                 7,
                 &run_options(ModelRef::new_with_adapter(
@@ -1175,11 +1253,10 @@ use super::{
     SessionManager, SessionManagerState, SessionPendingTool, SessionPermissionReplyRequest,
     SessionRunOptions, SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange,
     ToolCallCompleted, ToolError, ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc,
-    apply_advisory_permission_decision, ask_user_title, build_message, build_request_part,
-    completed_lifecycle, custom_payload_value, execution_control_to_app_error,
-    host_user_input_response, max_permission_risk, merge_system_prompts, mpsc,
-    operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
-    permission_scope_label, permission_subject, persisted_rules_for_reply, plugin_risk_to_core,
-    resolve_pending_tool, resolve_permission_with_persisted_rules, risk_for_permission_decision,
+    ask_user_title, build_message, build_request_part, completed_lifecycle, custom_payload_value,
+    execution_control_to_app_error, host_user_input_response, max_permission_risk,
+    merge_system_prompts, mpsc, operation_blocks_from_tool_output,
+    payload_tool_name_for_invocation, permission_action_key, permission_scope_label,
+    persisted_rules_for_reply, resolve_pending_tool, resolve_permission_with_persisted_rules,
     run_abort_reason, text_result_blocks, tool_call_id_for, tool_name, user_input_execution,
 };

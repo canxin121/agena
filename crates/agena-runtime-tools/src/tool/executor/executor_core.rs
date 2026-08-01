@@ -18,7 +18,6 @@ impl ToolExecutor {
             snapshot_registry,
             scheduler,
             lsp_registry,
-            authorization_state: ExecutionAuthorizationState::Unverified,
             tool_presentation,
             cancellation_token: None,
             permission_inspector: None,
@@ -141,10 +140,10 @@ impl ToolExecutor {
         {
             ToolError::Cancelled
         } else {
-
             match error.kind {
                 agena_plugin_host::sdk::PluginErrorKind::PolicyDenied => error
-                    .diagnostic.data
+                    .diagnostic
+                    .data
                     .as_ref()
                     .and_then(|data| {
                         data.get("denial")
@@ -153,9 +152,10 @@ impl ToolExecutor {
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|denial| ToolError::PolicyDenied(Box::new(denial)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
+                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
                 agena_plugin_host::sdk::PluginErrorKind::UserDeclined => error
-                    .diagnostic.data
+                    .diagnostic
+                    .data
                     .as_ref()
                     .and_then(|data| {
                         data.get("decline")
@@ -164,26 +164,27 @@ impl ToolExecutor {
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|decline| ToolError::UserDeclined(Box::new(decline)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
+                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
                 agena_plugin_host::sdk::PluginErrorKind::CapabilityUnavailable => error
-                    .diagnostic.data
+                    .diagnostic
+                    .data
                     .as_ref()
                     .and_then(|data| data.get("unavailable"))
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|unavailable| ToolError::CapabilityUnavailable(Box::new(unavailable)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
+                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
                 agena_plugin_host::sdk::PluginErrorKind::ToolUnavailable => error
-                    .diagnostic.data
+                    .diagnostic
+                    .data
                     .as_ref()
                     .and_then(|data| data.get("unavailable"))
                     .cloned()
                     .and_then(|value| serde_json::from_value(value).ok())
                     .map(|unavailable| ToolError::ToolUnavailable(Box::new(unavailable)))
-                    .unwrap_or_else(|| ToolError::Plugin(error.diagnostic.message)),
-                _ => ToolError::Plugin(error.diagnostic.message),
+                    .unwrap_or_else(|| ToolError::from_plugin_error(error)),
+                _ => ToolError::from_plugin_error(error),
             }
-
         }
     }
 
@@ -333,6 +334,15 @@ impl ToolExecutor {
             .into_iter()
             .filter_map(ToolApiBinding::from_registered_tool)
             .collect::<Vec<_>>();
+        if tools
+            .iter()
+            .any(|binding| binding.function() != agena_domain::ToolApiFunction::Call)
+            && !tools
+                .iter()
+                .any(|binding| binding.function() == agena_domain::ToolApiFunction::Call)
+        {
+            tools.push(ToolApiBinding::call_gateway());
+        }
         tools.sort_by(|left, right| left.function_name().cmp(right.function_name()));
         tools
     }
@@ -366,9 +376,8 @@ impl ToolExecutor {
 }
 
 use super::{
-    Arc, BuiltinToolSet, ExecutionAuthorizationState, ExecutionPrincipal, MonitorService, Path,
-    PathBuf, PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor,
-    present_registered_tool, present_registered_tool_detailed, suggest_tool_names, tool_summary,
-    unknown_tool_hint,
+    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PluginHost,
+    PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor, present_registered_tool,
+    present_registered_tool_detailed, suggest_tool_names, tool_summary, unknown_tool_hint,
 };
 use crate::tool::ToolApiBinding;

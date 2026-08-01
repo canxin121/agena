@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use agena_storage::{
-    MessageProjectionHeaderRecord, MessageProjectionMessageWrite, MessageProjectionOpenIdentity,
-    MessageProjectionPartRecord, MessageProjectionPartWrite, MessageProjectionRepository,
-    MessageProjectionRepositoryError, MessageProjectionTransactionWriter,
+    ModelMessageHeaderRecord, ModelMessageOpenIdentity, ModelMessagePartRecord,
+    ModelMessagePartWrite, ModelMessageRepository, ModelMessageRepositoryError,
+    ModelMessageTransactionWriter, ModelMessageWrite,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -14,12 +14,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{StoredExecutionStatus, StoredPartKind, StoredRole};
 
-const TABLE: &str = "agena_transcript_messages";
-const COLUMNS: &str =
-    "message_id, turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count";
-const PART_TABLE: &str = "agena_transcript_parts";
-const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, activity_id, segment_id, operation_id, created_at_ms, content";
-const PROJECTION_STATE_TABLE: &str = "agena_transcript_projection_states";
+const TABLE: &str = "agena_model_messages";
+const COLUMNS: &str = "message_id, model_turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count";
+const PART_TABLE: &str = "agena_model_message_parts";
+const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, awaits_user_reply, activity_id, segment_id, operation_id, created_at_ms, content";
+const PROJECTION_STATE_TABLE: &str = "agena_model_projection_states";
 
 /// SQLite's SeaORM JSON adapter for provider-owned completion accounting.
 /// The transparent wrapper is deliberately storage-owned: it preserves the
@@ -41,7 +40,7 @@ impl From<PersistedCompletionUsage> for agena_provider::CompletionUsage {
 }
 
 /// SQLite reader for materialized message-projection headers.
-pub struct SeaMessageProjectionRepository {
+pub struct SeaModelMessageRepository {
     db: Arc<DatabaseConnection>,
 }
 
@@ -50,25 +49,25 @@ pub struct SeaMessageProjectionRepository {
 /// The session-history projection owns event interpretation, but it supplies
 /// the active transaction to this adapter so part rows and the projection
 /// watermark can be committed atomically.
-pub struct SeaMessageProjectionTransactionWriter;
+pub struct SeaModelMessageTransactionWriter;
 
-impl SeaMessageProjectionRepository {
+impl SeaModelMessageRepository {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
         Self { db }
     }
 }
 
-impl SeaMessageProjectionTransactionWriter {
+impl SeaModelMessageTransactionWriter {
     pub async fn terminalize_open_messages_in_transaction(
         transaction: &DatabaseTransaction,
         session_id: i64,
-        identity: &MessageProjectionOpenIdentity,
+        identity: &ModelMessageOpenIdentity,
         status: agena_domain::ExecutionStatus,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+    ) -> Result<(), ModelMessageRepositoryError> {
         let (identity_column, identity_value) = match identity {
-            MessageProjectionOpenIdentity::RunId(value) => ("run_id", value),
-            MessageProjectionOpenIdentity::ExecutionId(value) => ("execution_id", value),
+            ModelMessageOpenIdentity::RunId(value) => ("run_id", value),
+            ModelMessageOpenIdentity::ExecutionId(value) => ("execution_id", value),
         };
         let terminal_status = StoredExecutionStatus::from(status);
         let open_statuses: [Value; 2] = [
@@ -80,7 +79,7 @@ impl SeaMessageProjectionTransactionWriter {
                 format!(
                     "UPDATE {PART_TABLE} SET status = ? WHERE message_id IN \
                      (SELECT message_id FROM {TABLE} WHERE session_id = ? AND {identity_column} = ?) \
-                     AND status IN (?, ?)"
+                     AND status IN (?, ?) AND awaits_user_reply = 0"
                 ),
                 [
                     terminal_status.into(),
@@ -115,12 +114,12 @@ impl SeaMessageProjectionTransactionWriter {
     pub async fn clear_session_projection_in_transaction(
         transaction: &DatabaseTransaction,
         session_id: i64,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+    ) -> Result<(), ModelMessageRepositoryError> {
         transaction
             .execute(statement(
-                "DELETE FROM agena_text_segments WHERE \
+                 "DELETE FROM agena_text_segments WHERE \
                  (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
-                 OR (owner_kind = 'response' AND owner_id IN (SELECT response_id FROM agena_responses WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
+                 OR (owner_kind = 'assistant_reply' AND owner_id IN (SELECT reply_id FROM agena_assistant_replies WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
                     .to_owned(),
                 [session_id.into(), session_id.into()],
             ))
@@ -128,9 +127,9 @@ impl SeaMessageProjectionTransactionWriter {
             .map_err(map_error)?;
         transaction
             .execute(statement(
-                "DELETE FROM agena_activities WHERE \
+                 "DELETE FROM agena_activities WHERE \
                  (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
-                 OR (owner_kind = 'response' AND owner_id IN (SELECT response_id FROM agena_responses WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
+                 OR (owner_kind = 'assistant_reply' AND owner_id IN (SELECT reply_id FROM agena_assistant_replies WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
                     .to_owned(),
                 [session_id.into(), session_id.into()],
             ))
@@ -165,7 +164,7 @@ impl SeaMessageProjectionTransactionWriter {
         session_id: i64,
         last_seq_global: i64,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+    ) -> Result<(), ModelMessageRepositoryError> {
         transaction
             .execute(statement(
                 format!(
@@ -182,36 +181,38 @@ impl SeaMessageProjectionTransactionWriter {
 
     pub async fn upsert_message_in_transaction(
         transaction: &DatabaseTransaction,
-        message: &MessageProjectionMessageWrite,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+        message: &ModelMessageWrite,
+    ) -> Result<(), ModelMessageRepositoryError> {
         let role = StoredRole::from(message.role);
         let state = StoredExecutionStatus::from(message.state);
         if let Some(existing) = transaction
             .query_one(statement(
-                format!("SELECT session_id, turn_id, role, created_at_ms FROM {TABLE} WHERE message_id = ?"),
+                format!("SELECT session_id, model_turn_id, role, created_at_ms FROM {TABLE} WHERE message_id = ?"),
                 [message.message_id.into()],
             ))
             .await
             .map_err(map_error)?
         {
             let existing_session_id: i64 = existing.try_get("", "session_id").map_err(map_error)?;
-            let existing_turn_id: Option<i64> = existing.try_get("", "turn_id").map_err(map_error)?;
+            let existing_model_turn_id: Option<i64> = existing
+                .try_get("", "model_turn_id")
+                .map_err(map_error)?;
             let existing_role: StoredRole = existing.try_get("", "role").map_err(map_error)?;
             let existing_created_at_ms: i64 = existing.try_get("", "created_at_ms").map_err(map_error)?;
             if existing_session_id != message.session_id {
-                return Err(MessageProjectionRepositoryError::Backend(format!(
+                return Err(ModelMessageRepositoryError::Backend(format!(
                     "message {} belongs to session {}, cannot reassign it to session {}",
                     message.message_id, existing_session_id, message.session_id
                 )));
             }
-            if existing_turn_id != message.turn_id {
-                return Err(MessageProjectionRepositoryError::Backend(format!(
-                    "message {} turn identity is immutable: stored {:?}, received {:?}",
-                    message.message_id, existing_turn_id, message.turn_id
+            if existing_model_turn_id != message.model_turn_id {
+                return Err(ModelMessageRepositoryError::Backend(format!(
+                    "message {} model turn identity is immutable: stored {:?}, received {:?}",
+                    message.message_id, existing_model_turn_id, message.model_turn_id
                 )));
             }
             if existing_role != role || existing_created_at_ms != message.created_at_ms {
-                return Err(MessageProjectionRepositoryError::Backend(format!(
+                return Err(ModelMessageRepositoryError::Backend(format!(
                     "message {} immutable identity fields changed",
                     message.message_id
                 )));
@@ -220,7 +221,7 @@ impl SeaMessageProjectionTransactionWriter {
         transaction
             .execute(statement(
                 format!(
-                    "INSERT INTO {TABLE} (message_id, session_id, turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count) \
+                    "INSERT INTO {TABLE} (message_id, session_id, model_turn_id, execution_id, run_id, role, state, created_at_ms, updated_at_ms, metadata, provider_state, usage, part_count) \
                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                      ON CONFLICT(message_id) DO UPDATE SET \
                      execution_id = excluded.execution_id, run_id = excluded.run_id, state = excluded.state, \
@@ -228,12 +229,12 @@ impl SeaMessageProjectionTransactionWriter {
                      provider_state = excluded.provider_state, usage = excluded.usage, \
                      part_count = excluded.part_count \
                      WHERE {TABLE}.session_id = excluded.session_id \
-                     AND {TABLE}.turn_id IS excluded.turn_id \
+                     AND {TABLE}.model_turn_id IS excluded.model_turn_id \
                      AND {TABLE}.role = excluded.role \
                      AND {TABLE}.created_at_ms = excluded.created_at_ms"
                 ),
                 [
-                    message.message_id.into(), message.session_id.into(), message.turn_id.into(),
+                    message.message_id.into(), message.session_id.into(), message.model_turn_id.into(),
                     message.execution_id.clone().into(), message.run_id.clone().into(), role.into(),
                     state.into(), message.created_at_ms.into(), message.updated_at_ms.into(),
                     message.metadata.clone().into(), message.provider_state.clone().into(),
@@ -244,23 +245,24 @@ impl SeaMessageProjectionTransactionWriter {
             .map_err(map_error)?;
         let persisted = transaction
             .query_one(statement(
-                format!("SELECT session_id, turn_id, role, created_at_ms FROM {TABLE} WHERE message_id = ?"),
+                format!("SELECT session_id, model_turn_id, role, created_at_ms FROM {TABLE} WHERE message_id = ?"),
                 [message.message_id.into()],
             ))
             .await
             .map_err(map_error)?
-            .ok_or_else(|| MessageProjectionRepositoryError::Backend(format!("message {} disappeared after upsert", message.message_id)))?;
+            .ok_or_else(|| ModelMessageRepositoryError::Backend(format!("message {} disappeared after upsert", message.message_id)))?;
         let persisted_session_id: i64 = persisted.try_get("", "session_id").map_err(map_error)?;
-        let persisted_turn_id: Option<i64> = persisted.try_get("", "turn_id").map_err(map_error)?;
+        let persisted_model_turn_id: Option<i64> =
+            persisted.try_get("", "model_turn_id").map_err(map_error)?;
         let persisted_role: StoredRole = persisted.try_get("", "role").map_err(map_error)?;
         let persisted_created_at_ms: i64 =
             persisted.try_get("", "created_at_ms").map_err(map_error)?;
         if persisted_session_id != message.session_id
-            || persisted_turn_id != message.turn_id
+            || persisted_model_turn_id != message.model_turn_id
             || persisted_role != role
             || persisted_created_at_ms != message.created_at_ms
         {
-            return Err(MessageProjectionRepositoryError::Backend(format!(
+            return Err(ModelMessageRepositoryError::Backend(format!(
                 "message {} projection identity changed concurrently",
                 message.message_id
             )));
@@ -270,8 +272,8 @@ impl SeaMessageProjectionTransactionWriter {
 
     pub async fn upsert_part_in_transaction(
         transaction: &DatabaseTransaction,
-        part: &MessageProjectionPartWrite,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+        part: &ModelMessagePartWrite,
+    ) -> Result<(), ModelMessageRepositoryError> {
         let owner = transaction
             .query_one(statement(
                 format!("SELECT session_id FROM {TABLE} WHERE message_id = ?"),
@@ -280,14 +282,14 @@ impl SeaMessageProjectionTransactionWriter {
             .await
             .map_err(map_error)?
             .ok_or_else(|| {
-                MessageProjectionRepositoryError::Backend(format!(
+                ModelMessageRepositoryError::Backend(format!(
                     "part {} references missing message {}",
                     part.part_id, part.message_id
                 ))
             })?;
         let owner_session_id: i64 = owner.try_get("", "session_id").map_err(map_error)?;
         if owner_session_id != part.session_id {
-            return Err(MessageProjectionRepositoryError::Backend(format!(
+            return Err(ModelMessageRepositoryError::Backend(format!(
                 "message {} belongs to session {}, cannot attach part {} from session {}",
                 part.message_id, owner_session_id, part.part_id, part.session_id
             )));
@@ -319,7 +321,7 @@ impl SeaMessageProjectionTransactionWriter {
                 || existing_operation_id != part.operation_id
                 || existing_created_at_ms != part.created_at_ms
             {
-                return Err(MessageProjectionRepositoryError::Backend(format!(
+                return Err(ModelMessageRepositoryError::Backend(format!(
                     "part {} immutable identity fields changed",
                     part.part_id
                 )));
@@ -329,10 +331,11 @@ impl SeaMessageProjectionTransactionWriter {
         transaction
             .execute(statement(
                 format!(
-                    "INSERT INTO {PART_TABLE} ({PART_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                    "INSERT INTO {PART_TABLE} ({PART_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
                      ON CONFLICT(part_id) DO UPDATE SET \
                      status = excluded.status, name = excluded.name, summary = excluded.summary, \
-                     has_detail = excluded.has_detail, content = excluded.content \
+                     has_detail = excluded.has_detail, \
+                     awaits_user_reply = excluded.awaits_user_reply, content = excluded.content \
                      WHERE {PART_TABLE}.message_id = excluded.message_id \
                     AND {PART_TABLE}.part_index = excluded.part_index \
                     AND {PART_TABLE}.kind = excluded.kind \
@@ -350,6 +353,7 @@ impl SeaMessageProjectionTransactionWriter {
                     part.name.clone().into(),
                     part.summary.clone().into(),
                     part.has_detail.into(),
+                    part.awaits_user_reply.into(),
                     part.activity_id.map(|id| id.to_string()).into(),
                     part.segment_id.map(|id| id.to_string()).into(),
                     part.operation_id.clone().into(),
@@ -368,7 +372,7 @@ impl SeaMessageProjectionTransactionWriter {
             .await
             .map_err(map_error)?
             .ok_or_else(|| {
-                MessageProjectionRepositoryError::Backend(format!(
+                ModelMessageRepositoryError::Backend(format!(
                     "part {} disappeared after upsert",
                     part.part_id
                 ))
@@ -392,7 +396,7 @@ impl SeaMessageProjectionTransactionWriter {
             || persisted_operation_id != part.operation_id
             || persisted_created_at_ms != part.created_at_ms
         {
-            return Err(MessageProjectionRepositoryError::Backend(format!(
+            return Err(ModelMessageRepositoryError::Backend(format!(
                 "part {} projection identity changed concurrently",
                 part.part_id
             )));
@@ -402,17 +406,15 @@ impl SeaMessageProjectionTransactionWriter {
 }
 
 #[async_trait]
-impl MessageProjectionTransactionWriter<DatabaseTransaction>
-    for SeaMessageProjectionTransactionWriter
-{
+impl ModelMessageTransactionWriter<DatabaseTransaction> for SeaModelMessageTransactionWriter {
     async fn terminalize_open_messages_in_transaction(
         &self,
         transaction: &DatabaseTransaction,
         session_id: i64,
-        identity: &MessageProjectionOpenIdentity,
+        identity: &ModelMessageOpenIdentity,
         status: agena_domain::ExecutionStatus,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+    ) -> Result<(), ModelMessageRepositoryError> {
         Self::terminalize_open_messages_in_transaction(
             transaction,
             session_id,
@@ -427,7 +429,7 @@ impl MessageProjectionTransactionWriter<DatabaseTransaction>
         &self,
         transaction: &DatabaseTransaction,
         session_id: i64,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+    ) -> Result<(), ModelMessageRepositoryError> {
         Self::clear_session_projection_in_transaction(transaction, session_id).await
     }
 
@@ -437,7 +439,7 @@ impl MessageProjectionTransactionWriter<DatabaseTransaction>
         session_id: i64,
         last_seq_global: i64,
         updated_at_ms: i64,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+    ) -> Result<(), ModelMessageRepositoryError> {
         Self::upsert_projection_watermark_in_transaction(
             transaction,
             session_id,
@@ -450,26 +452,26 @@ impl MessageProjectionTransactionWriter<DatabaseTransaction>
     async fn upsert_message_in_transaction(
         &self,
         transaction: &DatabaseTransaction,
-        message: &MessageProjectionMessageWrite,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+        message: &ModelMessageWrite,
+    ) -> Result<(), ModelMessageRepositoryError> {
         Self::upsert_message_in_transaction(transaction, message).await
     }
 
     async fn upsert_part_in_transaction(
         &self,
         transaction: &DatabaseTransaction,
-        part: &MessageProjectionPartWrite,
-    ) -> Result<(), MessageProjectionRepositoryError> {
+        part: &ModelMessagePartWrite,
+    ) -> Result<(), ModelMessageRepositoryError> {
         Self::upsert_part_in_transaction(transaction, part).await
     }
 }
 
 #[async_trait]
-impl MessageProjectionRepository for SeaMessageProjectionRepository {
+impl ModelMessageRepository for SeaModelMessageRepository {
     async fn list_headers(
         &self,
         session_id: i64,
-    ) -> Result<Vec<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError> {
+    ) -> Result<Vec<ModelMessageHeaderRecord>, ModelMessageRepositoryError> {
         self.db
             .query_all(statement(
                 format!(
@@ -490,14 +492,14 @@ impl MessageProjectionRepository for SeaMessageProjectionRepository {
         cursor: Option<(i64, i64)>,
         limit: u64,
     ) -> Result<
-        (Vec<MessageProjectionHeaderRecord>, bool, Option<(i64, i64)>),
-        MessageProjectionRepositoryError,
+        (Vec<ModelMessageHeaderRecord>, bool, Option<(i64, i64)>),
+        ModelMessageRepositoryError,
     > {
         let limit = i64::try_from(limit).map_err(|_| {
-            MessageProjectionRepositoryError::Backend("message page limit exceeds i64".to_owned())
+            ModelMessageRepositoryError::Backend("message page limit exceeds i64".to_owned())
         })?;
         let fetch_limit = limit.checked_add(1).ok_or_else(|| {
-            MessageProjectionRepositoryError::Backend("message page limit overflow".to_owned())
+            ModelMessageRepositoryError::Backend("message page limit overflow".to_owned())
         })?;
         let mut sql = format!("SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ?");
         let mut values = vec![session_id.into()];
@@ -534,7 +536,7 @@ impl MessageProjectionRepository for SeaMessageProjectionRepository {
         &self,
         session_id: i64,
         message_id: i64,
-    ) -> Result<Option<MessageProjectionHeaderRecord>, MessageProjectionRepositoryError> {
+    ) -> Result<Option<ModelMessageHeaderRecord>, ModelMessageRepositoryError> {
         self.db
             .query_one(statement(
                 format!(
@@ -552,7 +554,7 @@ impl MessageProjectionRepository for SeaMessageProjectionRepository {
         &self,
         message_ids: &[i64],
         include_content: bool,
-    ) -> Result<Vec<MessageProjectionPartRecord>, MessageProjectionRepositoryError> {
+    ) -> Result<Vec<ModelMessagePartRecord>, ModelMessageRepositoryError> {
         if message_ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -568,7 +570,7 @@ impl MessageProjectionRepository for SeaMessageProjectionRepository {
     async fn get_part(
         &self,
         part_id: i64,
-    ) -> Result<Option<MessageProjectionPartRecord>, MessageProjectionRepositoryError> {
+    ) -> Result<Option<ModelMessagePartRecord>, ModelMessageRepositoryError> {
         self.db
             .query_one(statement(
                 format!("SELECT {PART_COLUMNS} FROM {PART_TABLE} WHERE part_id = ? LIMIT 1"),
@@ -587,12 +589,12 @@ fn statement(sql: String, values: impl IntoIterator<Item = Value>) -> Statement 
 
 fn header_from_row(
     row: sea_orm::QueryResult,
-) -> Result<MessageProjectionHeaderRecord, MessageProjectionRepositoryError> {
+) -> Result<ModelMessageHeaderRecord, ModelMessageRepositoryError> {
     let role: StoredRole = row.try_get("", "role").map_err(map_error)?;
     let state: StoredExecutionStatus = row.try_get("", "state").map_err(map_error)?;
-    Ok(MessageProjectionHeaderRecord {
+    Ok(ModelMessageHeaderRecord {
         message_id: row.try_get("", "message_id").map_err(map_error)?,
-        turn_id: row.try_get("", "turn_id").map_err(map_error)?,
+        model_turn_id: row.try_get("", "model_turn_id").map_err(map_error)?,
         role: role.into(),
         state: state.into(),
         created_at_ms: row.try_get("", "created_at_ms").map_err(map_error)?,
@@ -606,10 +608,10 @@ fn header_from_row(
 fn part_from_row(
     row: sea_orm::QueryResult,
     include_content: bool,
-) -> Result<MessageProjectionPartRecord, MessageProjectionRepositoryError> {
+) -> Result<ModelMessagePartRecord, ModelMessageRepositoryError> {
     let status: StoredExecutionStatus = row.try_get("", "status").map_err(map_error)?;
     let kind: StoredPartKind = row.try_get("", "kind").map_err(map_error)?;
-    Ok(MessageProjectionPartRecord {
+    Ok(ModelMessagePartRecord {
         part_id: row.try_get("", "part_id").map_err(map_error)?,
         message_id: row.try_get("", "message_id").map_err(map_error)?,
         part_index: row.try_get("", "part_index").map_err(map_error)?,
@@ -618,6 +620,7 @@ fn part_from_row(
         name: row.try_get("", "name").map_err(map_error)?,
         summary: row.try_get("", "summary").map_err(map_error)?,
         has_detail: row.try_get("", "has_detail").map_err(map_error)?,
+        awaits_user_reply: row.try_get("", "awaits_user_reply").map_err(map_error)?,
         activity_id: row
             .try_get::<Option<String>>("", "activity_id")
             .map_err(map_error)?
@@ -632,7 +635,7 @@ fn part_from_row(
             .map_err(map_error)?
             .map(|value| {
                 uuid::Uuid::parse_str(&value)
-                    .map(agena_domain::ResponseSegmentId)
+                    .map(agena_domain::TextSegmentId)
                     .map_err(map_error)
             })
             .transpose()?,
@@ -646,8 +649,8 @@ fn part_from_row(
     })
 }
 
-fn map_error(error: impl std::fmt::Display) -> MessageProjectionRepositoryError {
-    MessageProjectionRepositoryError::Backend(error.to_string())
+fn map_error(error: impl std::fmt::Display) -> ModelMessageRepositoryError {
+    ModelMessageRepositoryError::Backend(error.to_string())
 }
 
 #[cfg(test)]
@@ -656,14 +659,14 @@ mod tests {
     use agena_domain::{ExecutionStatus, PartKind, Role};
     use sea_orm::{ConnectionTrait, Database, TransactionTrait};
 
-    async fn repository() -> SeaMessageProjectionRepository {
+    async fn repository() -> SeaModelMessageRepository {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, turn_id INTEGER NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)"
+                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, model_turn_id INTEGER NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)"
             ),
         ))
         .await
@@ -671,7 +674,7 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, activity_id TEXT NULL, segment_id TEXT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
+                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, awaits_user_reply BOOLEAN NOT NULL, activity_id TEXT NULL, segment_id TEXT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
             ),
         ))
         .await
@@ -679,16 +682,16 @@ mod tests {
         for (id, created_at_ms) in [(11, 100), (12, 200)] {
             db.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                format!("INSERT INTO {TABLE} (message_id, session_id, turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count) VALUES (?, 7, ?, 2, 3, ?, ?, ?, ?, ?)") ,
-                [id.into(), id.into(), created_at_ms.into(), serde_json::json!({"turn_id": id}).into(), serde_json::json!({"response_id": id.to_string()}).into(), serde_json::json!({"output_tokens": id}).into(), (id - 10).into()],
+                format!("INSERT INTO {TABLE} (message_id, session_id, model_turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count) VALUES (?, 7, ?, 2, 3, ?, ?, ?, ?, ?)") ,
+                [id.into(), id.into(), created_at_ms.into(), serde_json::json!({"model_turn_id": id}).into(), serde_json::json!({"response_id": id.to_string()}).into(), serde_json::json!({"output_tokens": id}).into(), (id - 10).into()],
             )).await.expect("insert projection header");
         }
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            format!("INSERT INTO {PART_TABLE} (part_id, message_id, part_index, status, kind, name, summary, has_detail, activity_id, segment_id, operation_id, created_at_ms, content) VALUES (51, 12, 0, 3, 1, 'text', 'summary', 1, NULL, NULL, NULL, 201, ?)") ,
+            format!("INSERT INTO {PART_TABLE} (part_id, message_id, part_index, status, kind, name, summary, has_detail, awaits_user_reply, activity_id, segment_id, operation_id, created_at_ms, content) VALUES (51, 12, 0, 3, 1, 'text', 'summary', 1, 0, NULL, NULL, NULL, 201, ?)") ,
             [serde_json::json!({"type":"text","text":"detail","synthetic":false}).into()],
         )).await.expect("insert part");
-        SeaMessageProjectionRepository::new(Arc::new(db))
+        SeaModelMessageRepository::new(Arc::new(db))
     }
 
     #[tokio::test]
@@ -756,7 +759,7 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, activity_id TEXT NULL, segment_id TEXT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
+                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL, awaits_user_reply BOOLEAN NOT NULL, activity_id TEXT NULL, segment_id TEXT NULL, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL)"
             ),
         ))
         .await
@@ -769,9 +772,9 @@ mod tests {
         .expect("insert message fixture");
 
         let txn = db.begin().await.expect("begin transaction");
-        SeaMessageProjectionTransactionWriter::upsert_part_in_transaction(
+        SeaModelMessageTransactionWriter::upsert_part_in_transaction(
             &txn,
-            &MessageProjectionPartWrite {
+            &ModelMessagePartWrite {
                 session_id: 7,
                 part_id: 51,
                 message_id: 41,
@@ -781,8 +784,9 @@ mod tests {
                 name: Some("text".to_owned()),
                 summary: None,
                 has_detail: true,
+                awaits_user_reply: false,
                 activity_id: None,
-                segment_id: Some(agena_domain::ResponseSegmentId::new()),
+                segment_id: Some(agena_domain::TextSegmentId::new()),
                 operation_id: None,
                 created_at_ms: 100,
                 content: Some(serde_json::json!({"type": "text", "text": "pending"})),
@@ -813,26 +817,26 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)"
+                "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, model_turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)"
             ),
         ))
         .await
         .expect("create message fixture");
 
         let txn = db.begin().await.expect("begin transaction");
-        SeaMessageProjectionTransactionWriter::upsert_message_in_transaction(
+        SeaModelMessageTransactionWriter::upsert_message_in_transaction(
             &txn,
-            &MessageProjectionMessageWrite {
+            &ModelMessageWrite {
                 message_id: 41,
                 session_id: 7,
-                turn_id: Some(9),
+                model_turn_id: Some(9),
                 execution_id: Some("execution-1".to_owned()),
                 run_id: Some("run-1".to_owned()),
                 role: Role::Assistant,
                 state: ExecutionStatus::InProgress,
                 created_at_ms: 100,
                 updated_at_ms: 101,
-                metadata: serde_json::json!({"turn_id": 9}),
+                metadata: serde_json::json!({"model_turn_id": 9}),
                 provider_state: Some(serde_json::json!({"response_id": "response-1"})),
                 usage: None,
                 part_count: 1,
@@ -871,7 +875,7 @@ mod tests {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
-                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, status INTEGER NOT NULL)"
+                "CREATE TABLE {PART_TABLE} (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL, status INTEGER NOT NULL, awaits_user_reply BOOLEAN NOT NULL)"
             ),
         ))
         .await
@@ -891,23 +895,23 @@ mod tests {
         .await
         .expect("insert message");
         db.execute(statement(
-            format!("INSERT INTO {PART_TABLE} (part_id, message_id, status) VALUES (51, 41, ?)"),
+            format!("INSERT INTO {PART_TABLE} (part_id, message_id, status, awaits_user_reply) VALUES (51, 41, ?, 0)"),
             [StoredExecutionStatus::InProgress.into()],
         ))
         .await
         .expect("insert part");
 
         let txn = db.begin().await.expect("begin transaction");
-        SeaMessageProjectionTransactionWriter::terminalize_open_messages_in_transaction(
+        SeaModelMessageTransactionWriter::terminalize_open_messages_in_transaction(
             &txn,
             7,
-            &MessageProjectionOpenIdentity::RunId("run-1".to_owned()),
+            &ModelMessageOpenIdentity::RunId("run-1".to_owned()),
             ExecutionStatus::Cancelled,
             100,
         )
         .await
         .expect("terminalize projection");
-        SeaMessageProjectionTransactionWriter::upsert_projection_watermark_in_transaction(
+        SeaModelMessageTransactionWriter::upsert_projection_watermark_in_transaction(
             &txn, 7, 99, 100,
         )
         .await

@@ -14,13 +14,12 @@ use agena_api::{
         UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
-    queries::{GetSessionParams, ListMessagesParams, ListSessionsParams, Query, QueryResult},
+    queries::{GetSessionParams, ListSessionsParams, Query, QueryResult},
     resource::{
-        MessageResource, PartLoadMode, PermissionReply, PermissionRuleResource,
-        ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
-        ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderModelResource,
-        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
-        WorkspaceResource,
+        PermissionReply, PermissionRuleResource, ProviderAdapterModelsResource,
+        ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderDefaultsResource,
+        ProviderModelResource, ProviderSummaryResource, RunOptions, SessionExecutionResource,
+        SessionResource, WorkspaceResource,
     },
 };
 use agena_application::dto::{CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse};

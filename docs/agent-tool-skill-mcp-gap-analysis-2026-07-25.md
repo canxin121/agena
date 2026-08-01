@@ -1017,7 +1017,7 @@ Agena 当前的工具“数量”已经足够，甚至比几个对照产品的�
 后续 breaking refactor 已取代本报告早期的 Hybrid/Direct 设计。Provider Protocol 与 Prompt
 Envelope 都只向模型提供 `tools_list`、`tools_search`、`tools_help`、`tools_tags`、
 `tools_call` 五个固定 gateway。普通 execution tools 不拥有 provider function identity，不能绕过
-gateway、权限 resolver 或精确 `ExecutionGrant`。
+gateway 或中央 model-tool permission resolver。
 
 旧 `agena_tools.direct` 配置、provider `execution_tool` binding 和 transcript
 `provider_function_name` 字段均已删除并在反序列化时拒绝；不提供迁移兼容层。完整现行约束见

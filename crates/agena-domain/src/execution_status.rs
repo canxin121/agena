@@ -51,6 +51,7 @@ impl ExecutionStatus {
             (
                 Self::Pending,
                 Self::InProgress
+                    | Self::Completed
                     | Self::PolicyDenied
                     | Self::UserDeclined
                     | Self::CapabilityUnavailable
@@ -89,6 +90,7 @@ mod tests {
             "\"in_progress\""
         );
         assert!(ExecutionStatus::Pending.can_transition(ExecutionStatus::InProgress));
+        assert!(ExecutionStatus::Pending.can_transition(ExecutionStatus::Completed));
         assert!(ExecutionStatus::InProgress.can_transition(ExecutionStatus::Completed));
         assert!(!ExecutionStatus::Completed.can_transition(ExecutionStatus::InProgress));
     }

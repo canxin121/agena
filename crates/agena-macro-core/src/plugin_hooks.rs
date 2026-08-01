@@ -36,7 +36,6 @@ pub enum PluginHookKind {
     Event,
     Auth,
     ProviderList,
-    PermissionAsk,
     Notification,
     CommandExecuteBefore,
     CommandExecuteAfter,
@@ -235,9 +234,6 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
         PluginHookKind::ProviderList => {
             quote! { ::agena_plugin_sdk::HookSubscription::PROVIDER_LIST }
         }
-        PluginHookKind::PermissionAsk => {
-            quote! { ::agena_plugin_sdk::HookSubscription::PERMISSION_ASK }
-        }
         PluginHookKind::Notification => {
             quote! { ::agena_plugin_sdk::HookSubscription::NOTIFICATION }
         }
@@ -278,7 +274,6 @@ fn plugin_hook_order() -> &'static [PluginHookKind] {
         PluginHookKind::Event,
         PluginHookKind::Auth,
         PluginHookKind::ProviderList,
-        PluginHookKind::PermissionAsk,
         PluginHookKind::Notification,
         PluginHookKind::CommandExecuteBefore,
         PluginHookKind::CommandExecuteAfter,
@@ -370,12 +365,6 @@ fn expand_plugin_layer_hook_method_group(
             "provider_list",
             quote! { ::agena_plugin_sdk::ProviderListInput },
             quote! { Option<::agena_plugin_sdk::ProviderListPatch> },
-            bindings,
-        ),
-        PluginHookKind::PermissionAsk => expand_plugin_layer_single_arg_hook_group(
-            "permission_ask",
-            quote! { ::agena_plugin_sdk::PermissionAskInput },
-            quote! { Option<::agena_plugin_sdk::PermissionAskDecision> },
             bindings,
         ),
         PluginHookKind::Notification => expand_plugin_layer_single_arg_hook_group(

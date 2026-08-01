@@ -191,10 +191,6 @@ impl<P: Plugin> PluginDispatcher<P> {
                 let i: ProviderListInput = serde_json::from_value(params)?;
                 ok_json(&plugin.provider_list(i).await?)
             }
-            method::HOOK_PERMISSION_ASK => {
-                let i: PermissionAskInput = serde_json::from_value(params)?;
-                ok_json(&plugin.permission_ask(i).await?)
-            }
             method::HOOK_NOTIFICATION => {
                 let i: NotificationInput = serde_json::from_value(params)?;
                 plugin.notification(i).await?;

@@ -11,7 +11,9 @@ pub(super) fn tool_execution_to_invoke_output(
     let summary = execution.summary();
     ToolInvokeOutput {
         title: summary.title,
+        summary: summary.summary,
         output_text: summary.output_text,
+        sections: summary.sections,
         payload: summary.payload,
         metadata: summary.metadata.into_iter().collect(),
         attachments: execution.view.attachments,
@@ -31,67 +33,6 @@ pub(super) fn map_storage_error(err: PluginStorageError) -> PluginError {
         }
         PluginStorageError::Io(_) | PluginStorageError::Secret(_) => {
             PluginError::internal(err.to_string())
-        }
-    }
-}
-
-pub(super) fn host_permission_check_response_from_resolution(
-    resolution: agena_domain::PermissionResolution,
-) -> HostPermissionCheckResponse {
-    let outcome = host_permission_outcome_from_decision(&resolution.decision);
-    let (decision, reason) = plugin_permission_decision_and_reason(resolution.decision);
-    HostPermissionCheckResponse {
-        decision,
-        outcome,
-        reason,
-        explanation: resolution.explanation,
-        details: None,
-    }
-}
-
-pub(super) fn host_permission_check_response_from_decision(
-    decision: agena_domain::PermissionDecision,
-) -> HostPermissionCheckResponse {
-    let outcome = host_permission_outcome_from_decision(&decision);
-    let (decision, reason) = plugin_permission_decision_and_reason(decision);
-    let explanation = reason
-        .clone()
-        .unwrap_or_else(|| "permission allowed by current policy".to_string());
-    HostPermissionCheckResponse {
-        decision,
-        outcome,
-        reason,
-        explanation,
-        details: None,
-    }
-}
-
-fn host_permission_outcome_from_decision(
-    decision: &agena_domain::PermissionDecision,
-) -> agena_plugin_host::sdk::host_api::HostPermissionOutcome {
-    match decision {
-        agena_domain::PermissionDecision::Allow => {
-            agena_plugin_host::sdk::host_api::HostPermissionOutcome::Allowed
-        }
-        agena_domain::PermissionDecision::Ask { .. } => {
-            agena_plugin_host::sdk::host_api::HostPermissionOutcome::ApprovalRequired
-        }
-        agena_domain::PermissionDecision::Deny { .. } => {
-            agena_plugin_host::sdk::host_api::HostPermissionOutcome::PolicyDenied
-        }
-    }
-}
-
-pub(super) fn plugin_permission_decision_and_reason(
-    decision: agena_domain::PermissionDecision,
-) -> (PluginPermissionDecision, Option<String>) {
-    match decision {
-        agena_domain::PermissionDecision::Allow => (PluginPermissionDecision::Allow, None),
-        agena_domain::PermissionDecision::Ask { reason } => {
-            (PluginPermissionDecision::Prompt, Some(reason))
-        }
-        agena_domain::PermissionDecision::Deny { reason } => {
-            (PluginPermissionDecision::Deny, Some(reason))
         }
     }
 }
@@ -295,8 +236,6 @@ pub(super) fn host_session_from_session(session: &crate::session::Session) -> Ho
     }
 }
 
-
-
 pub(super) fn scheduler_job_to_sdk(job: agena_scheduler::ScheduledJob) -> HostSchedulerJob {
     let (kind, cron_expression, fire_at_ms) = match &job.kind {
         agena_scheduler::JobKind::Cron { expression, .. } => {
@@ -347,10 +286,9 @@ pub(super) fn host_status_to_sdk(
 }
 
 use super::{
-    AskUserRequest, AskUserToolInput, HostPermissionCheckResponse, HostPluginStatus,
-    HostSchedulerJob, HostSession, MonitorError, MonitorEvent, MonitorHandle, MonitorReadResponse,
-    PluginError, PluginPermissionDecision, PluginStorageError, ToolDescriptor, ToolInvokeOutput,
-    UserInputOption, UserInputQuestion,
+    AskUserRequest, AskUserToolInput, HostPluginStatus, HostSchedulerJob, HostSession,
+    MonitorError, MonitorEvent, MonitorHandle, MonitorReadResponse, PluginError,
+    PluginStorageError, ToolDescriptor, ToolInvokeOutput, UserInputOption, UserInputQuestion,
 };
 use agena_domain::{ProcessStatus, ProcessStream};
 use agena_plugin_sdk::ToolInput;

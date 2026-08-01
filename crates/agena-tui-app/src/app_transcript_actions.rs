@@ -18,7 +18,7 @@ impl App {
             .snapshot
             .turns
             .last()
-            .map(|turn| &turn.response)
+            .map(|turn| &turn.reply)
         else {
             self.flash_warning(ui_text::t(&self.i18n, "flash-no-assistant-message"));
             return;

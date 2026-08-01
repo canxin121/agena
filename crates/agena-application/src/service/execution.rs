@@ -27,7 +27,7 @@ impl ApplicationService {
         session_queries
             .latest_event_seq(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))
+            .map_err(session_query_error)
     }
 
     pub async fn list_session_events_after(
@@ -52,7 +52,7 @@ impl ApplicationService {
                 },
             )
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(runtime_event_query_error)?;
         Ok(events)
     }
 
@@ -76,7 +76,7 @@ impl ApplicationService {
                 let selection = execution_control
                     .selected_model(session_id)
                     .await
-                    .map_err(|error| ApplicationError::internal(error.to_string()))?;
+                    .map_err(execution_control_error)?;
                 match selection {
                     Some(model) => {
                         ensure_provider_exists(provider_catalog, &model)?;
@@ -237,13 +237,13 @@ impl ApplicationService {
         let context = session_queries
             .execution_context(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(session_query_error)?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await;
         let transcript = session_queries
             .transcript_snapshot(session_id)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
+            .map_err(session_query_error)?;
         let pending_interactive_requests =
             pending_interactive_requests(session_queries, session_id).await?;
         // Workflow readiness and execution liveness are separate facts. A
@@ -320,7 +320,7 @@ async fn session_usage_resource(
     let usage = session_queries
         .session_usage(session_id)
         .await
-        .map_err(|error| ApplicationError::internal(error.to_string()))?;
+        .map_err(session_query_error)?;
     Ok(SessionUsageResource {
         measured_prompt_tokens: usage.measured_prompt_tokens,
         current_tokens: usage.current_tokens,
@@ -364,9 +364,6 @@ const fn workflow_state_from_domain(
 ) -> agena_api::resource::WorkflowState {
     match value {
         agena_domain::WorkflowState::Quiescent => agena_api::resource::WorkflowState::Quiescent,
-        agena_domain::WorkflowState::ReadyForModel => {
-            agena_api::resource::WorkflowState::ReadyForModel
-        }
         agena_domain::WorkflowState::ToolPending => agena_api::resource::WorkflowState::ToolPending,
         agena_domain::WorkflowState::Blocked => agena_api::resource::WorkflowState::Blocked,
     }
@@ -505,7 +502,7 @@ async fn pending_interactive_requests(
     let contexts = session_queries
         .pending_interactive_requests(session_id)
         .await
-        .map_err(|error| ApplicationError::internal(error.to_string()))?;
+        .map_err(session_query_error)?;
     Ok(contexts
         .into_iter()
         .map(|context| PendingInteractiveRequestResource {
@@ -515,6 +512,18 @@ async fn pending_interactive_requests(
             request: pending_interactive_request_from_domain(context.request),
         })
         .collect())
+}
+
+fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationError {
+    ApplicationError::from_failure(*error.failure)
+}
+
+fn runtime_event_query_error(error: agena_runtime::RuntimeEventQueryError) -> ApplicationError {
+    ApplicationError::from_failure(*error.failure)
+}
+
+fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {
+    ApplicationError::from_failure(error.failure)
 }
 
 pub(crate) const fn execution_access_from_domain(

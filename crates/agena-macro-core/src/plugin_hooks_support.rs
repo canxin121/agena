@@ -174,7 +174,6 @@ fn plugin_hook_kind_from_key(key: &str, span: impl quote::ToTokens) -> Result<Pl
         "event" => Ok(PluginHookKind::Event),
         "auth" => Ok(PluginHookKind::Auth),
         "provider.list" => Ok(PluginHookKind::ProviderList),
-        "permission.ask" => Ok(PluginHookKind::PermissionAsk),
         "notification" => Ok(PluginHookKind::Notification),
         "shell.before" => Ok(PluginHookKind::CommandExecuteBefore),
         "shell.after" => Ok(PluginHookKind::CommandExecuteAfter),
@@ -348,7 +347,6 @@ pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInpu
         PluginHookKind::Event => PluginHookExpectedInput::Single("EventEnvelope"),
         PluginHookKind::Auth => PluginHookExpectedInput::Single("AuthInput"),
         PluginHookKind::ProviderList => PluginHookExpectedInput::Single("ProviderListInput"),
-        PluginHookKind::PermissionAsk => PluginHookExpectedInput::Single("PermissionAskInput"),
         PluginHookKind::Notification => PluginHookExpectedInput::Single("NotificationInput"),
         PluginHookKind::CommandExecuteBefore => {
             PluginHookExpectedInput::Single("CommandBeforeInput")
@@ -391,7 +389,6 @@ pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOut
         }
         PluginHookKind::Auth => PluginHookExpectedOutput::Option("AuthOutput"),
         PluginHookKind::ProviderList => PluginHookExpectedOutput::Option("ProviderListPatch"),
-        PluginHookKind::PermissionAsk => PluginHookExpectedOutput::Option("PermissionAskDecision"),
         PluginHookKind::CommandExecuteBefore => {
             PluginHookExpectedOutput::Option("CommandBeforeResponse")
         }
@@ -499,7 +496,6 @@ pub fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
         PluginHookKind::Event => "event",
         PluginHookKind::Auth => "auth",
         PluginHookKind::ProviderList => "provider.list",
-        PluginHookKind::PermissionAsk => "permission.ask",
         PluginHookKind::Notification => "notification",
         PluginHookKind::CommandExecuteBefore => "shell.before",
         PluginHookKind::CommandExecuteAfter => "shell.after",

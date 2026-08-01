@@ -9,13 +9,12 @@ use tokio::sync::{Mutex, RwLock};
 use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
-    EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeInput,
-    ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
+    EventEnvelope, EventFilter, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStreamHandle,
+    ToolStreamError,
 };
 use crate::host_api::{
     EventSubscription, HostClient, HostConfigReloadResponse, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-    HostPermissionCheckResponse, LogLevel,
+    HostImageExecuteResponse, LogLevel,
 };
 use crate::plugin::{InitContext, Plugin};
 use crate::rpc::{
@@ -144,38 +143,6 @@ impl HostClient for HttpCallbackHostClient {
             .unwrap_or_default()
             .to_string();
         Ok(EventSubscription { id })
-    }
-
-    async fn ask_permission(
-        &self,
-        req: PermissionAskInput,
-    ) -> crate::error::Result<PermissionDecision> {
-        let params = params_with_current_context(
-            serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?,
-        );
-        self.call(method::HOST_PERMISSION_ASK, params).await
-    }
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_PATH,
-            params_with_current_context(serde_json::json!({ "request": req })),
-        )
-        .await
-    }
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_NETWORK,
-            params_with_current_context(serde_json::json!({ "request": req })),
-        )
-        .await
     }
 
     async fn read_config(&self, path: Option<String>) -> crate::error::Result<serde_json::Value> {

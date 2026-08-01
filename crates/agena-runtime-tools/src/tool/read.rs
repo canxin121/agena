@@ -18,7 +18,6 @@ pub(super) fn execute(
     input: &ReadToolInput,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let target = executor.resolve_target_path(&input.file_path);
-    executor.ensure_read_permission(&target)?;
 
     if !target.exists() {
         return Err(ToolError::invalid_field(

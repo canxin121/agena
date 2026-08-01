@@ -32,13 +32,13 @@ const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 pub(crate) struct SessionRunRequest {
     pub run_id: RunId,
     pub execution_id: agena_domain::ExecutionId,
-    pub turn_uuid: agena_domain::TurnId,
-    pub response_id: agena_domain::ResponseId,
+    pub turn_id: agena_domain::TurnId,
+    pub reply_id: agena_domain::AssistantReplyId,
     pub session_id: i64,
-    /// Conversation turn that owns the assistant provider round. `None`
-    /// starts an explicit assistant-only turn and uses the allocated message
-    /// id as its stable turn id.
-    pub turn_id: Option<i64>,
+    /// Internal provider/model turn that owns this assistant round. This is
+    /// not the canonical UUID `turn_id`; `None` allocates from the model
+    /// message id space.
+    pub model_turn_id: Option<i64>,
     /// Last persisted conversation message before provider-input projection.
     pub completion_parent_message_id: Option<i64>,
     pub model: ModelRef,

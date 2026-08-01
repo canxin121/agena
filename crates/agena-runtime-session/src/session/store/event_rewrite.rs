@@ -4,7 +4,7 @@ use super::{EventKind, Message, Session};
 ///
 /// Message/part integers are storage addresses and are remapped separately.
 /// These UUIDs are semantic identities and must also be fresh: sharing an
-/// Execution, Turn, Response, Activity, or text segment across two sessions
+/// Execution, Turn, AssistantReply, Activity, or text segment across two sessions
 /// would make ownership ambiguous and violate the canonical transcript keys.
 pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
     #[derive(Default)]
@@ -12,12 +12,13 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
         executions: std::collections::HashMap<agena_domain::ExecutionId, agena_domain::ExecutionId>,
         runs: std::collections::HashMap<agena_domain::RunId, agena_domain::RunId>,
         turns: std::collections::HashMap<agena_domain::TurnId, agena_domain::TurnId>,
-        responses: std::collections::HashMap<agena_domain::ResponseId, agena_domain::ResponseId>,
-        activities: std::collections::HashMap<agena_domain::ActivityId, agena_domain::ActivityId>,
-        segments: std::collections::HashMap<
-            agena_domain::ResponseSegmentId,
-            agena_domain::ResponseSegmentId,
+        replies: std::collections::HashMap<
+            agena_domain::AssistantReplyId,
+            agena_domain::AssistantReplyId,
         >,
+        activities: std::collections::HashMap<agena_domain::ActivityId, agena_domain::ActivityId>,
+        segments:
+            std::collections::HashMap<agena_domain::TextSegmentId, agena_domain::TextSegmentId>,
     }
 
     fn execution(maps: &mut Maps, id: agena_domain::ExecutionId) -> agena_domain::ExecutionId {
@@ -29,16 +30,16 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
     fn turn(maps: &mut Maps, id: agena_domain::TurnId) -> agena_domain::TurnId {
         *maps.turns.entry(id).or_default()
     }
-    fn response(maps: &mut Maps, id: agena_domain::ResponseId) -> agena_domain::ResponseId {
-        *maps.responses.entry(id).or_default()
+    fn reply(
+        maps: &mut Maps,
+        id: agena_domain::AssistantReplyId,
+    ) -> agena_domain::AssistantReplyId {
+        *maps.replies.entry(id).or_default()
     }
     fn activity(maps: &mut Maps, id: agena_domain::ActivityId) -> agena_domain::ActivityId {
         *maps.activities.entry(id).or_default()
     }
-    fn segment(
-        maps: &mut Maps,
-        id: agena_domain::ResponseSegmentId,
-    ) -> agena_domain::ResponseSegmentId {
+    fn segment(maps: &mut Maps, id: agena_domain::TextSegmentId) -> agena_domain::TextSegmentId {
         *maps.segments.entry(id).or_default()
     }
     fn part(maps: &mut Maps, part: &mut crate::message::MessagePart) {
@@ -56,11 +57,11 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
             EventKind::ExecutionStarted(value) => {
                 value.execution_id = execution(&mut maps, value.execution_id);
                 value.turn_id = turn(&mut maps, value.turn_id);
-                value.response_id = response(&mut maps, value.response_id);
+                value.reply_id = reply(&mut maps, value.reply_id);
             }
             EventKind::ExecutionFinished(value) => {
                 value.execution_id = execution(&mut maps, value.execution_id);
-                value.response_id = response(&mut maps, value.response_id);
+                value.reply_id = reply(&mut maps, value.reply_id);
             }
             EventKind::CompactionCompleted(value) => {
                 value.execution_id = execution(&mut maps, value.execution_id);
@@ -70,7 +71,7 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
                 value.execution_id = value.execution_id.map(|id| execution(&mut maps, id));
                 value.run_id = value.run_id.map(|id| run(&mut maps, id));
                 value.turn_id = value.turn_id.map(|id| turn(&mut maps, id));
-                value.response_id = value.response_id.map(|id| response(&mut maps, id));
+                value.reply_id = value.reply_id.map(|id| reply(&mut maps, id));
                 part(&mut maps, &mut value.part);
             }
             EventKind::RunStarted(value) => {
@@ -232,7 +233,7 @@ pub(crate) fn visit_message_metadata_ids(
     metadata: &crate::message::MessageMetadata,
     mut visit: impl FnMut(i64),
 ) {
-    if let Some(turn_id) = metadata.turn_id {
+    if let Some(turn_id) = metadata.model_turn_id {
         visit(turn_id);
     }
     if let Some(parent_message_id) = metadata.parent_message_id {
@@ -344,7 +345,7 @@ pub(crate) fn rewrite_message_metadata_ids(
     metadata: &mut crate::message::MessageMetadata,
     mut f: impl FnMut(i64) -> i64,
 ) {
-    if let Some(turn_id) = metadata.turn_id.as_mut() {
+    if let Some(turn_id) = metadata.model_turn_id.as_mut() {
         *turn_id = f(*turn_id);
     }
     if let Some(parent_message_id) = metadata.parent_message_id.as_mut() {
@@ -468,7 +469,7 @@ mod tests {
     #[test]
     fn turn_identity_participates_in_import_id_visiting_and_rewriting() {
         let mut metadata = crate::message::MessageMetadata {
-            turn_id: Some(7),
+            model_turn_id: Some(7),
             parent_message_id: Some(6),
             ..Default::default()
         };
@@ -477,7 +478,7 @@ mod tests {
         assert_eq!(visited, vec![7, 6]);
 
         rewrite_message_metadata_ids(&mut metadata, |id| id + 100);
-        assert_eq!(metadata.turn_id, Some(107));
+        assert_eq!(metadata.model_turn_id, Some(107));
         assert_eq!(metadata.parent_message_id, Some(106));
     }
 }

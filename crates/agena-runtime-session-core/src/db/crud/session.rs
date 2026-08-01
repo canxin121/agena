@@ -863,10 +863,10 @@ mod tests {
         assert!(reparent.is_err(), "database must reject hierarchy mutation");
 
         insert_event(&db, child.id, workspace_id, 1, "user_message_appended", 1).await;
-        entities::transcript_message::ActiveModel {
+        entities::model_message::ActiveModel {
             message_id: Set(10),
             session_id: Set(child.id),
-            turn_id: Set(Some(10)),
+            model_turn_id: Set(Some(10)),
             execution_id: Set(None),
             run_id: Set(None),
             role: Set(agena_storage_sqlite::StoredRole::User),
@@ -874,7 +874,7 @@ mod tests {
             created_at_ms: Set(1),
             updated_at_ms: Set(1),
             metadata: Set(crate::message::MessageMetadata {
-                turn_id: Some(10),
+                model_turn_id: Some(10),
                 ..Default::default()
             }),
             provider_state: Set(None),
@@ -884,7 +884,7 @@ mod tests {
         .insert(&db)
         .await
         .expect("message projection");
-        entities::transcript_part::ActiveModel {
+        entities::model_message_part::ActiveModel {
             part_id: Set(11),
             message_id: Set(10),
             part_index: Set(0),
@@ -893,6 +893,7 @@ mod tests {
             name: Set(None),
             summary: Set(None),
             has_detail: Set(false),
+            awaits_user_reply: Set(false),
             activity_id: Set(None),
             segment_id: Set(None),
             operation_id: Set(None),
@@ -926,14 +927,14 @@ mod tests {
             0
         );
         assert_eq!(
-            entities::transcript_message::Entity::find()
+            entities::model_message::Entity::find()
                 .count(&db)
                 .await
                 .unwrap(),
             0
         );
         assert_eq!(
-            entities::transcript_part::Entity::find()
+            entities::model_message_part::Entity::find()
                 .count(&db)
                 .await
                 .unwrap(),

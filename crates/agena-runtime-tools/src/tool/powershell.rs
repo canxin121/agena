@@ -34,8 +34,6 @@ pub(super) fn execute(
         &input.filesystem_effects,
     )?;
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
-    executor.ensure_filesystem_effects_permission(&input.filesystem_effects, &cwd)?;
-    executor.ensure_network_effects_permission(&input.network_effects)?;
 
     let mut env = inherited_environment();
     env.extend(executor.shell_env_overrides(&cwd, context.session_id, context.call_id)?);

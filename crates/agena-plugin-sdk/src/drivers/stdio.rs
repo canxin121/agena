@@ -17,8 +17,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use crate::drivers::dispatch::PluginDispatcher;
 use crate::error::{PluginError, PluginErrorKind};
 use crate::hooks::{
-    EventEnvelope, EventFilter, PermissionAskInput, PermissionDecision, ToolInvokeOutput,
-    ToolInvokeStreamHandle, ToolStreamError,
+    EventEnvelope, EventFilter, ToolInvokeOutput, ToolInvokeStreamHandle, ToolStreamError,
 };
 use crate::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostClient,
@@ -27,7 +26,6 @@ use crate::host_api::{
     HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
     HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
     HostMcpListServersResponse, HostMcpRemoveServerRequest, HostMcpRemoveServerResponse,
-    HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest, HostPermissionCheckResponse,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
     HostRegisteredToolListResponse, HostSchedulerCreateRequest, HostSchedulerCreateResponse,
     HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
@@ -356,43 +354,6 @@ impl HostClient for StdioHostClient {
             .unwrap_or_default()
             .to_string();
         Ok(EventSubscription { id })
-    }
-
-    async fn ask_permission(
-        &self,
-        req: PermissionAskInput,
-    ) -> crate::error::Result<PermissionDecision> {
-        let params =
-            serde_json::to_value(req).map_err(|e| PluginError::invalid_params(e.to_string()))?;
-        self.call(method::HOST_PERMISSION_ASK, params).await
-    }
-
-    async fn check_path_permission(
-        &self,
-        req: HostPathPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_PATH,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn check_network_permission(
-        &self,
-        req: HostNetworkPermissionCheckRequest,
-    ) -> crate::error::Result<HostPermissionCheckResponse> {
-        self.call(
-            method::HOST_PERMISSION_CHECK_NETWORK,
-            serde_json::json!({
-                "request": req,
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
     }
 
     async fn read_config(&self, path: Option<String>) -> crate::error::Result<serde_json::Value> {
@@ -1000,7 +961,6 @@ impl HostClient for StdioHostClient {
 }
 
 fn error_object_from(e: PluginError) -> ErrorObject {
-
     let code = match e.kind {
         PluginErrorKind::Internal => codes::PLUGIN_GENERIC,
         PluginErrorKind::NotImplemented => codes::PLUGIN_NOT_IMPLEMENTED,
@@ -1009,12 +969,10 @@ fn error_object_from(e: PluginError) -> ErrorObject {
         PluginErrorKind::Disconnected => codes::PLUGIN_DISCONNECTED,
         PluginErrorKind::Panicked => codes::PLUGIN_PANICKED,
         PluginErrorKind::HostUnavailable => codes::HOST_UNAVAILABLE,
-        PluginErrorKind::ApprovalRequired => codes::APPROVAL_REQUIRED,
         PluginErrorKind::PolicyDenied => codes::POLICY_DENIED,
         PluginErrorKind::UserDeclined => codes::USER_DECLINED,
         PluginErrorKind::CapabilityUnavailable => codes::CAPABILITY_UNAVAILABLE,
         PluginErrorKind::ToolUnavailable => codes::TOOL_UNAVAILABLE,
-
     };
     ErrorObject {
         code,
@@ -1031,7 +989,6 @@ mod authorization_error_code_tests {
     #[test]
     fn authorization_and_availability_outcomes_keep_distinct_json_rpc_codes() {
         for (kind, expected) in [
-            (PluginErrorKind::ApprovalRequired, codes::APPROVAL_REQUIRED),
             (PluginErrorKind::PolicyDenied, codes::POLICY_DENIED),
             (PluginErrorKind::UserDeclined, codes::USER_DECLINED),
             (
@@ -1040,9 +997,8 @@ mod authorization_error_code_tests {
             ),
             (PluginErrorKind::ToolUnavailable, codes::TOOL_UNAVAILABLE),
         ] {
-            let mut error = PluginError::new("structured non-execution outcome");
-            error.kind = kind;
-            assert_eq!(error_object_from(error).kind, expected);
+            let error = PluginError::from_kind(kind, "structured non-execution outcome");
+            assert_eq!(error_object_from(error).code, expected);
         }
     }
 }

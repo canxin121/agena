@@ -1,4 +1,4 @@
-import { userErrorMessage } from '@/lib/api'
+import { userErrorMessage } from '../../lib/api'
 import type { Ref } from 'vue'
 
 import {
@@ -14,10 +14,7 @@ import {
   exportSessionJsonl,
   forkSession,
   getSessionGoal,
-  getMessage,
-  getMessagePart,
   importSessionJsonl,
-  listMessageParts,
   replyPermission,
   replyUserInput,
   resolveWorkspace,
@@ -103,10 +100,7 @@ export type ChatSessionActionsDeps = {
   exportSessionJsonl: typeof exportSessionJsonl
   forkSession: typeof forkSession
   getSessionGoal: typeof getSessionGoal
-  getMessage: typeof getMessage
-  getMessagePart: typeof getMessagePart
   importSessionJsonl: typeof importSessionJsonl
-  listMessageParts: typeof listMessageParts
   replyPermission: typeof replyPermission
   replyUserInput: typeof replyUserInput
   resolveWorkspace: typeof resolveWorkspace
@@ -129,10 +123,7 @@ const defaultDeps: ChatSessionActionsDeps = {
   exportSessionJsonl,
   forkSession,
   getSessionGoal,
-  getMessage,
-  getMessagePart,
   importSessionJsonl,
-  listMessageParts,
   replyPermission,
   replyUserInput,
   resolveWorkspace,
@@ -264,18 +255,17 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     return session.id
   }
 
-  async function inspectMessage(messageId: number, partId?: number) {
+  async function inspectMessage(messageId: number | string, partId?: number | string) {
     input.loading.value = true
     input.errorMessage.value = ''
     try {
-      const existingMessage = input.messages.value.find((message) => message.id === messageId) || null
-      const messagePromise = existingMessage ? Promise.resolve(existingMessage) : deps.getMessage(messageId, 'summary')
-      const partsPromise = deps.listMessageParts(messageId, 'summary')
-      const [message, parts] = await Promise.all([messagePromise, partsPromise])
+      const message = input.messages.value.find((message) => message.id === messageId) || null
+      if (!message) throw new Error(`Canonical conversation entry not found: ${messageId}`)
+      const parts = message.parts || []
       input.inspectedMessage.value = message
       input.inspectedMessageParts.value = parts
-      input.inspectedPart.value = partId == null ? null : await deps.getMessagePart(partId)
-      input.localCommandNotice.value = `Loaded message #${messageId} inspector.`
+      input.inspectedPart.value = partId == null ? null : parts.find((part) => part.id === partId) || null
+      input.localCommandNotice.value = `Loaded canonical entry ${messageId} inspector.`
     } catch (err) {
       input.errorMessage.value = userErrorMessage(err)
     } finally {
@@ -441,7 +431,6 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   async function forkCurrentSession() {
     const sessionId = input.selectedSessionId.value
     const workspaceId = input.selectedWorkspaceId.value
-    const latestMessageId = input.messages.value.at(-1)?.id
     if (!sessionId || !workspaceId) return
 
     input.loading.value = true
@@ -450,7 +439,6 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       const fallbackTitle = `Fork of #${sessionId}`
       const execution = await deps.forkSession({
         sessionId,
-        ...(latestMessageId != null ? { atMessageId: latestMessageId } : {}),
         title: input.newSessionTitle.value.trim() || fallbackTitle,
       })
       input.newSessionTitle.value = ''
@@ -778,12 +766,18 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
   }
 
-  async function rewindToMessage(messageId: number) {
+  async function rewindToMessage(messageId: number | string) {
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
+    const rewoundMessage = input.messages.value.find((message) => message.id === messageId)
+    const turnId = rewoundMessage?.metadata.canonical_turn_id
+    if (!rewoundMessage || rewoundMessage.role !== 'user' || typeof turnId !== 'string') {
+      input.errorMessage.value = 'Only canonical user turns can be rewound.'
+      return
+    }
     if (
       !input.confirm(
-        `Rewind session #${sessionId} to message #${messageId}? The retracted message will replace the current composer draft.`,
+        `Rewind session #${sessionId} to this user turn? The retracted turn will replace the current composer draft.`,
       )
     ) {
       return
@@ -792,17 +786,16 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.loading.value = true
     input.errorMessage.value = ''
     try {
-      const rewoundMessage = await deps.getMessage(messageId, 'full')
       const messageText = rewindMessageComposerText(rewoundMessage)
       input.sessionState.value = await deps.rewindSession({
         sessionId,
-        messageId,
+        turnId,
       })
       await input.refreshConversation(true)
       input.composer.value = messageText
       input.attachments.value = []
       input.skillReferences.value = []
-      input.localCommandNotice.value = `Restored message #${messageId} to the composer.`
+      input.localCommandNotice.value = `Restored canonical turn ${turnId} to the composer.`
     } catch (err) {
       input.errorMessage.value = userErrorMessage(err)
     } finally {

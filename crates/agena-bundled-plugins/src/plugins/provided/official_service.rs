@@ -13,9 +13,7 @@ use std::{
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
-use agena_plugin_host::sdk::host_api::{
-    HostClient, HostNetworkPermissionCheckRequest, HostPathPermissionCheckRequest,
-};
+use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 use agena_provider::{
     AttributedCompletionUsage, BillableUsageItem, CompletionUsage,
@@ -68,10 +66,13 @@ pub(crate) fn configured_model(
             })
         })
         .ok_or_else(|| {
-            PluginError::invalid_params(format!(
-                "{tool_name} requires input.model, plugin model configuration, or one of: {}",
-                env_names.join(", ")
-            ))
+            PluginError::configuration_required(
+                tool_name,
+                format!(
+                    "Provide input.model, configure the plugin model, or set {}.",
+                    env_names.join(" or ")
+                ),
+            )
         })
 }
 
@@ -103,9 +104,15 @@ pub(crate) fn endpoint(base_url: &str, path: &str) -> SdkResult<String> {
     Ok(format!("{base}/{}", path.trim_start_matches('/')))
 }
 
-pub(crate) async fn authorize_network(host: &Arc<dyn HostClient>, url: &str) -> SdkResult<()> {
-    host.ensure_network_permission(HostNetworkPermissionCheckRequest::connect(url.to_owned()))
-        .await
+pub(crate) async fn authorize_network(_host: &Arc<dyn HostClient>, url: &str) -> SdkResult<()> {
+    let parsed = url::Url::parse(url)
+        .map_err(|error| PluginError::invalid_params(format!("invalid provider URL: {error}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(PluginError::invalid_params(
+            "provider URL must use HTTP or HTTPS",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn merge_object_options(
@@ -840,7 +847,7 @@ fn count_object_type(value: &serde_json::Value, expected: &str) -> u64 {
 }
 
 async fn persist_response_receipt(
-    host: &Arc<dyn HostClient>,
+    _host: &Arc<dyn HostClient>,
     workspace_root: &Path,
     provider: &str,
     tool: &str,
@@ -870,10 +877,6 @@ async fn persist_response_receipt(
             safe_tool,
             uuid::Uuid::new_v4().simple()
         ));
-    host.ensure_path_permission(HostPathPermissionCheckRequest::write(
-        path.to_string_lossy().to_string(),
-    ))
-    .await?;
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|error| {
             PluginError::internal(format!("cannot create receipt directory: {error}"))
@@ -1078,7 +1081,7 @@ struct ImageCandidate {
 }
 
 async fn persist_images(
-    host: &Arc<dyn HostClient>,
+    _host: &Arc<dyn HostClient>,
     workspace_root: &Path,
     provider: &str,
     title: &str,
@@ -1110,10 +1113,6 @@ async fn persist_images(
             .join(".agena/artifacts/provider-tools")
             .join(provider)
             .join(format!("{}.{}", uuid::Uuid::new_v4().simple(), extension));
-        host.ensure_path_permission(HostPathPermissionCheckRequest::write(
-            path.to_string_lossy().to_string(),
-        ))
-        .await?;
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|error| {
                 PluginError::internal(format!(

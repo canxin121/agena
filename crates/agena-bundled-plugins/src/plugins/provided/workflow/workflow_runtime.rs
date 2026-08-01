@@ -568,6 +568,7 @@ impl WorkflowPlugin {
             .limit
             .unwrap_or(config.tool_discovery.search.default_limit)
             .clamp(1, config.tool_discovery.search.max_limit);
+        let max_summary_chars = config.tool_discovery.search.max_summary_chars as usize;
         let records = Self::filter_available_tools_by_tag(
             self.available_tool_records().await?,
             input.tag.as_deref(),
@@ -580,77 +581,15 @@ impl WorkflowPlugin {
         let results = search_tools(&documents, query, documents.len())
             .map_err(|err| PluginError::internal(format!("tool search failed: {err}")))?;
         let (results, total, offset) = Self::paginate(&results, input.offset, Some(limit));
-        let names = results
-            .iter()
-            .map(|tool| tool.name.clone())
-            .collect::<Vec<_>>();
         let mut lines = vec![format!(
-            "Found {} matching tool(s); returned {} starting at offset {} for '{}'.",
+            "Matching tools for {}: returned {} of {} starting at offset {}.",
+            serde_json::to_string(query).unwrap_or_else(|_| "\"\"".to_owned()),
+            results.len(),
             total,
-            names.len(),
             offset,
-            query
         )];
         for tool in &results {
-            lines.push(format!(
-                "- {} [{}]: {}",
-                tool.name,
-                tags_summary(tool.tags.as_slice()),
-                tool.description
-            ));
-        }
-        if !names.is_empty() {
-            lines.push(format!(
-                "Call `{}` with an exact tool name for detailed usage.",
-                agena_runtime_tools::tool::tools_help_function_name()
-            ));
-        }
-        let payload = serde_json::json!({
-            "results": names,
-            "query": query,
-            "tag": input.tag.as_deref(),
-            "tags": input.tags.as_deref(),
-            "total": total,
-            "offset": offset,
-            "returned": results.len(),
-        });
-        Ok(ToolInvokeOutput::from_parts(
-            "Tool search",
-            lines.join("\n"),
-            Some(payload),
-            BTreeMap::from([
-                ("query".to_string(), query.to_string()),
-                ("matched_tools".to_string(), total.to_string()),
-                ("returned_tools".to_string(), results.len().to_string()),
-                ("offset".to_string(), offset.to_string()),
-            ]),
-            Vec::new(),
-        ))
-    }
-
-    pub(crate) async fn invoke_tool_api_list(
-        &self,
-        input: &ToolApiListInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let config = self.config()?;
-        let limit = input
-            .limit
-            .unwrap_or(config.tool_discovery.search.default_limit)
-            .clamp(1, config.tool_discovery.search.max_limit);
-        let records = Self::filter_available_tools_by_tag(
-            self.available_tool_records().await?,
-            input.tag.as_deref(),
-            input.tags.as_deref(),
-        );
-        let (tools, total, offset) = Self::paginate(&records, input.offset, Some(limit));
-        let mut lines = vec![format!(
-            "Available tool(s): returned {}/{} starting at offset {}.",
-            tools.len(),
-            total,
-            offset
-        )];
-        for tool in &tools {
-            let summary = tool.summary.trim();
+            let summary = compact_tool_summary(&tool.description, max_summary_chars);
             if summary.is_empty() {
                 lines.push(format!(
                     "- {} [{}]",
@@ -666,29 +605,82 @@ impl WorkflowPlugin {
                 ));
             }
         }
-
-        let payload = serde_json::json!({
-            "tools": tools.iter().map(|tool| serde_json::json!({
-                "name": tool.name,
-                "summary": tool.summary,
-                "tags": tool.tags,
-            })).collect::<Vec<_>>(),
-            "total": total,
-            "offset": offset,
-            "returned": tools.len(),
-            "tag": input.tag.as_deref(),
-            "tags": input.tags.as_deref(),
-        });
-        Ok(ToolInvokeOutput::from_parts(
-            "Tool list",
+        if !results.is_empty() {
+            lines.push(format!(
+                "Call `{}` with an exact tool name for detailed usage.",
+                agena_runtime_tools::tool::tools_help_function_name()
+            ));
+        }
+        append_discovery_page_hint(
+            &mut lines,
+            agena_domain::ToolApiFunction::Search.function_name(),
+            total,
+            offset,
+            results.len(),
+        );
+        let title_query = compact_tool_summary(query, 80);
+        Ok(discovery_text_output(
+            format!(
+                "Search tools · {} · {}/{}",
+                title_query,
+                results.len(),
+                total
+            ),
+            discovery_page_summary("matching tools", total, offset, results.len()),
             lines.join("\n"),
-            Some(payload),
-            BTreeMap::from([
-                ("total_tools".to_string(), total.to_string()),
-                ("returned_tools".to_string(), tools.len().to_string()),
-                ("offset".to_string(), offset.to_string()),
-            ]),
-            Vec::new(),
+        ))
+    }
+
+    pub(crate) async fn invoke_tool_api_list(
+        &self,
+        input: &ToolApiListInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let config = self.config()?;
+        let limit = input
+            .limit
+            .unwrap_or(config.tool_discovery.list.default_limit)
+            .clamp(1, config.tool_discovery.list.max_limit);
+        let max_summary_chars = config.tool_discovery.list.max_summary_chars as usize;
+        let records = Self::filter_available_tools_by_tag(
+            self.available_tool_records().await?,
+            input.tag.as_deref(),
+            input.tags.as_deref(),
+        );
+        let (tools, total, offset) = Self::paginate(&records, input.offset, Some(limit));
+        let mut lines = vec![format!(
+            "Available tools: returned {} of {} starting at offset {}.",
+            tools.len(),
+            total,
+            offset
+        )];
+        for tool in &tools {
+            let summary = compact_tool_summary(&tool.summary, max_summary_chars);
+            if summary.is_empty() {
+                lines.push(format!(
+                    "- {} [{}]",
+                    tool.name,
+                    tags_summary(tool.tags.as_slice())
+                ));
+            } else {
+                lines.push(format!(
+                    "- {} [{}]: {}",
+                    tool.name,
+                    tags_summary(tool.tags.as_slice()),
+                    summary
+                ));
+            }
+        }
+        append_discovery_page_hint(
+            &mut lines,
+            agena_domain::ToolApiFunction::List.function_name(),
+            total,
+            offset,
+            tools.len(),
+        );
+        Ok(discovery_text_output(
+            format!("List tools · {}/{}", tools.len(), total),
+            discovery_page_summary("tools", total, offset, tools.len()),
+            lines.join("\n"),
         ))
     }
 
@@ -699,13 +691,13 @@ impl WorkflowPlugin {
         let config = self.config()?;
         let limit = input
             .limit
-            .unwrap_or(config.tool_discovery.search.default_limit)
-            .clamp(1, config.tool_discovery.search.max_limit);
+            .unwrap_or(config.tool_discovery.tags.default_limit)
+            .clamp(1, config.tool_discovery.tags.max_limit);
         let tags =
             Self::available_tool_tag_records(self.available_tool_records().await?.as_slice());
         let (tags, total, offset) = Self::paginate(&tags, input.offset, Some(limit));
         let mut lines = vec![format!(
-            "Available tool tag(s): returned {}/{} starting at offset {}.",
+            "Available tool tags: returned {} of {} starting at offset {}.",
             tags.len(),
             total,
             offset
@@ -713,22 +705,17 @@ impl WorkflowPlugin {
         for tag in &tags {
             lines.push(format!("- {}: {}", tag.tag, tag.tool_count));
         }
-        let payload = serde_json::json!({
-            "tags": tags,
-            "total": total,
-            "offset": offset,
-            "returned": tags.len(),
-        });
-        Ok(ToolInvokeOutput::from_parts(
-            "Tool tags",
+        append_discovery_page_hint(
+            &mut lines,
+            agena_domain::ToolApiFunction::Tags.function_name(),
+            total,
+            offset,
+            tags.len(),
+        );
+        Ok(discovery_text_output(
+            format!("List tool tags · {}/{}", tags.len(), total),
+            discovery_page_summary("tool tags", total, offset, tags.len()),
             lines.join("\n"),
-            Some(payload),
-            BTreeMap::from([
-                ("total_tags".to_string(), total.to_string()),
-                ("returned_tags".to_string(), tags.len().to_string()),
-                ("offset".to_string(), offset.to_string()),
-            ]),
-            Vec::new(),
         ))
     }
 
@@ -835,68 +822,11 @@ impl WorkflowPlugin {
             descriptor.name,
         ));
 
-        ToolInvokeOutput::from_parts(
-            format!("{} help", descriptor.name),
+        discovery_text_output(
+            format!("Inspect {}", descriptor.name),
+            format!("Usage and input contract for {}.", descriptor.name),
             lines.join("\n"),
-            None,
-            std::collections::BTreeMap::new(),
-            Vec::new(),
         )
-    }
-
-    pub(in crate::plugins::provided::workflow) fn invalid_tool_input_with_embedded_help(
-        descriptor: &ToolDescriptor,
-        validation_error: &str,
-    ) -> PluginError {
-        let help = Self::render_tool_api_help(descriptor, None);
-        let message = format!(
-            "Input for execution tool `{}` failed validation, so the tool was not run. A separate `tools_help` call is unnecessary because Agena attached the complete help below. Correct the input and retry Tool API function `tools_call` directly with the same tool name and one complete input object.\n\nValidation error:\n{}\n\nTool help for `{}`:\n{}",
-            descriptor.name, validation_error, descriptor.name, help.output_text,
-        );
-        PluginError::invalid_params_with_data(
-            message,
-            serde_json::json!({
-                "kind": "tool_input_rejected_with_help",
-                "tool": descriptor.name,
-                "validation_error": validation_error,
-                "help": {
-                    "title": help.title,
-                    "output_text": help.output_text,
-                    "input_schema": descriptor.input_schema,
-                    "examples": descriptor.examples,
-                    "help_text": descriptor.help,
-                },
-                "retry": {
-                    "function": agena_runtime_tools::tool::tools_call_function_name(),
-                    "arguments": {
-                        "tool": descriptor.name,
-                        "input": "<one complete corrected object>"
-                    }
-                }
-            }),
-        )
-    }
-
-    pub(crate) async fn invoke_tool_api_call(
-        &self,
-        input: &ToolApiCallInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let requested = input.tool.as_str();
-        Self::ensure_execution_tool_target(requested)?;
-        let tools = self.host()?.list_tools().await?;
-        let descriptor = Self::resolve_tool_descriptor(requested, &tools)?;
-        if let Some(schema) = descriptor.input_schema.as_ref()
-            && let Err(validation_error) =
-                agena_plugin_host::loader::validate_json_schema_value(schema, &input.input)
-        {
-            return Err(Self::invalid_tool_input_with_embedded_help(
-                descriptor,
-                validation_error.as_str(),
-            ));
-        }
-        self.host()?
-            .invoke_tool(descriptor.name.clone(), input.input.clone())
-            .await
     }
 
     pub(in crate::plugins::provided::workflow) fn ensure_execution_tool_target(
@@ -952,9 +882,44 @@ use super::{
     EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
     HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput, PlanSetInput,
     PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskAccess, RunSubtaskModelSelection,
-    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess, TaskToolInput, ToolApiCallInput,
-    ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput,
-    ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput,
-    ToolTag, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
-    WorkflowPlugin, ask_user, search_tools, snapshot_enter_permission_paths, tags_summary,
+    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess, TaskToolInput, ToolApiHelpInput,
+    ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor,
+    ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
+    WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus, WorkflowPlugin,
+    ask_user, compact_tool_summary, search_tools, snapshot_enter_permission_paths, tags_summary,
 };
+
+fn append_discovery_page_hint(
+    lines: &mut Vec<String>,
+    function_name: &str,
+    total: usize,
+    offset: usize,
+    returned: usize,
+) {
+    let next_offset = offset.saturating_add(returned);
+    if returned > 0 && next_offset < total {
+        lines.push(format!(
+            "More available: yes. Continue with `{function_name}` using `offset: {next_offset}`."
+        ));
+    } else {
+        lines.push("More available: no.".to_owned());
+    }
+}
+
+fn discovery_page_summary(item_name: &str, total: usize, offset: usize, returned: usize) -> String {
+    let next_offset = offset.saturating_add(returned);
+    if returned > 0 && next_offset < total {
+        format!("Returned {returned} of {total} {item_name}; continue at offset {next_offset}.")
+    } else {
+        format!("Returned {returned} of {total} {item_name}; no more results.")
+    }
+}
+
+pub(super) fn discovery_text_output(
+    title: impl Into<String>,
+    summary: impl Into<String>,
+    output_text: impl Into<String>,
+) -> ToolInvokeOutput {
+    ToolInvokeOutput::from_parts(title, output_text, None, BTreeMap::new(), Vec::new())
+        .with_summary(summary)
+}

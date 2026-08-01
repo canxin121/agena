@@ -14,7 +14,6 @@ impl App {
         self.run_options.clear_model_stack();
         self.seen_permission_request_ids.clear();
         self.seen_user_input_request_ids.clear();
-        self.pending_permission_replay = None;
         let _ = self.sessions.select_by_id(session_id);
         self.restore_draft_for_slot(DraftSlot::Session(session_id));
         self.persist_draft_store_with_feedback(true);

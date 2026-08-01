@@ -1557,9 +1557,11 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 
 `plugins.list."agena.memory".config` 会驱动 `agena.memory` 插件；它注册 `search`、`get`、`list`、`write`、`delete` execution tools，模型通过 `tools_call` 运行它们。检索索引是工作区本地的 Tantivy 索引，不需要单独配置服务地址。`search` 和自动回忆会按需从 memory 文件重建索引，因此始终以磁盘上的 memory 文件为准。
 
-## Workflow Tool Search
+## Tool Discovery
 
-`agena.tools.search` 现在使用进程内 Tantivy 索引。每次搜索都会基于当前可用的 execution tools 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。检索会混合精确匹配、ngram、子串、简易模糊匹配和联想补召回；`list`/`search` 默认返回 50 条、最大 100 条；`tag` 之外也支持 `tags` 传多个 tag 做交集过滤。
+`agena.tools.search` 使用进程内 Tantivy 索引。每次搜索都会基于当前可用的 execution tools 在本地重建索引，因此不依赖 Meilisearch 或其他外部服务。检索会混合精确匹配、ngram、子串、简易模糊匹配和联想补召回；`tag` 之外也支持 `tags` 传多个 tag 做交集过滤。
+
+Discovery 工具只有一个结果内容通道：`output_text`。`list`、`search`、`tags` 不再重复返回 structured payload；分页计数直接进入持久化 Activity 标题，下一页 offset 也写在文本结果末尾。默认限制按用途分开：`list` 返回 20 条、最大 50 条；`search` 返回 5 条、最大 20 条；`tags` 返回 20 条、最大 50 条。`list` 和 `search` 会把每项 summary 规范成单行并限制为 160 个字符，完整输入 schema、示例和说明应按需调用 `tools_help`。
 
 旧的 external search backend 配置已经移除。当前版本不会读取 `tool_search.url`、`tool_search.api_key`、`tool_search.index` 这些字段。
 
@@ -1583,7 +1585,6 @@ Plugin 是 Agena 的统一能力入口。模型可见 entries、MCP 暴露能力
       "timeouts": {
         "init": "10s",
         "tool_invoke": "60s",
-        "permission_ask": "10s",
         "fast": "500ms"
       },
       "default_quota": {
@@ -1713,6 +1714,23 @@ Plugin transport kind：
         "package": {
           "kind": "static"
         },
+        "config": {
+          "list": {
+            "default_limit": 20,
+            "max_limit": 50,
+            "max_summary_chars": 160
+          },
+          "search": {
+            "default_limit": 5,
+            "max_limit": 20,
+            "max_query_length": 512,
+            "max_summary_chars": 160
+          },
+          "tags": {
+            "default_limit": 20,
+            "max_limit": 50
+          }
+        },
         "timeouts": {
           "init": "5s"
         }
@@ -1800,7 +1818,6 @@ Timeout 字段：
 init
 tool_hook
 tool_invoke
-permission_ask
 chat
 fast
 ```

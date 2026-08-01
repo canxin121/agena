@@ -621,9 +621,6 @@ pub enum HostCapability {
     McpRegistry,
     Statusline,
     Theme,
-    PermissionUi,
-    PermissionDecision,
-    PermissionCheck,
     ImageGeneration,
 }
 
@@ -1053,7 +1050,6 @@ bitflags::bitflags! {
         const CHAT_SYSTEM_TRANSFORM     = 1 << 9;
         const AUTH                      = 1 << 10;
         const PROVIDER_LIST             = 1 << 11;
-        const PERMISSION_ASK            = 1 << 12;
         const COMMAND_BEFORE            = 1 << 13;
         const SHELL_ENV                 = 1 << 14;
         const CONFIG                    = 1 << 15;
@@ -1145,10 +1141,6 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ),
     ("auth", HookSubscription::AUTH),
     ("provider.list", HookSubscription::PROVIDER_LIST),
-    (
-        "permission.ask_permission",
-        HookSubscription::PERMISSION_ASK,
-    ),
     ("notification", HookSubscription::NOTIFICATION),
     ("command.execute.before", HookSubscription::COMMAND_BEFORE),
     ("command.execute.after", HookSubscription::COMMAND_AFTER),

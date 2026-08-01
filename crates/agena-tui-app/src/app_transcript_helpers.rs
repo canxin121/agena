@@ -1,21 +1,3 @@
-pub(crate) fn rewind_message_composer_text(message: &MessageResource) -> String {
-    message
-        .parts
-        .as_deref()
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|part| match part.content.as_ref()? {
-            MessagePartDetailResource::Text(text)
-                if !text.synthetic && !text.text.trim().is_empty() =>
-            {
-                Some(text.text.as_str())
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
 pub(crate) fn pending_interactive_kind_from_request(
     request: &PendingInteractiveRequestResource,
 ) -> PendingInteractiveKind {
@@ -156,14 +138,6 @@ pub(crate) fn pending_interactive_counts_for_execution(
     )
 }
 
-pub(crate) fn composer_input_is_active(
-    focus: Focus,
-    has_text_or_items: bool,
-    has_auxiliary_input_ui: bool,
-) -> bool {
-    focus == Focus::Composer && (has_text_or_items || has_auxiliary_input_ui)
-}
-
 pub(crate) fn preferred_visible_session_selection(
     session: &SessionResource,
     visible_sessions: &[agena_tui_session::session_list::SessionListItem],
@@ -180,22 +154,6 @@ pub(crate) fn preferred_visible_session_selection(
             .iter()
             .any(|item| item.session_id == *candidate)
     })
-}
-
-pub(crate) fn permission_request_fingerprint(request: &PermissionRequest) -> String {
-    json!({
-        "action": &request.action,
-        "related_actions": &request.related_actions,
-        "requested_actions": &request.requested_actions,
-        "reason": &request.reason,
-        "explanation": &request.explanation,
-        "source": &request.source,
-        "scope": &request.scope,
-        "operator": &request.operator,
-        "risk": request.risk,
-        "trace": &request.trace,
-    })
-    .to_string()
 }
 
 pub(crate) fn permission_overlay_choice(
@@ -352,10 +310,8 @@ pub(crate) fn permission_related_actions_for_display<'a>(
         .collect()
 }
 use crate::{
-    BTreeSet, I18n, MessagePartDetailResource, MessageResource, PendingInteractiveKind,
-    PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionAction,
-    PermissionOverlay, PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage,
-    PermissionReplyKind, PermissionRequest, PermissionScope, SessionExecutionResource,
-    SessionResource, UserInputOverlay, json, ui_text,
+    BTreeSet, I18n, PendingInteractiveKind, PendingInteractiveRequest,
+    PendingInteractiveRequestResource, PermissionAction, PermissionOverlay,
+    PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage, PermissionReplyKind,
+    PermissionScope, SessionExecutionResource, SessionResource, UserInputOverlay, ui_text,
 };
-use agena_tui::main_focus::Focus;

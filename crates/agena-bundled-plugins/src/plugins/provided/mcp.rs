@@ -788,6 +788,7 @@ fn invoke_tool_output(
 
     Ok(ToolInvokeOutput {
         title: format!("MCP {server}/{tool}"),
+        summary: String::new(),
         output_text: if output_text.is_empty() {
             format!(
                 "(mcp:{server}:tool:{tool} returned {} content block(s))",
@@ -796,6 +797,7 @@ fn invoke_tool_output(
         } else {
             output_text
         },
+        sections: Vec::new(),
         payload: Some(payload),
         metadata: Default::default(),
         attachments,
@@ -829,7 +831,9 @@ fn list_resources_output(server: &str, result: ListResourcesResult) -> SdkResult
     });
     Ok(ToolInvokeOutput {
         title: format!("MCP {server}/resources"),
+        summary: String::new(),
         output_text,
+        sections: Vec::new(),
         payload: Some(payload),
         metadata: Default::default(),
         attachments: Vec::new(),
@@ -863,7 +867,9 @@ fn list_resource_templates_output(
     };
     Ok(ToolInvokeOutput {
         title: format!("MCP {server}/resource templates"),
+        summary: String::new(),
         output_text,
+        sections: Vec::new(),
         payload: Some(serde_json::json!({
             "server": server,
             "resource_templates": result.resource_templates,
@@ -908,11 +914,13 @@ fn read_resource_output(
     });
     Ok(ToolInvokeOutput {
         title: format!("MCP {server}/resource"),
+        summary: String::new(),
         output_text: if output_text.is_empty() {
             format!("MCP server '{server}' returned no content for resource '{uri}'.")
         } else {
             output_text
         },
+        sections: Vec::new(),
         payload: Some(payload),
         metadata: Default::default(),
         attachments,
@@ -957,7 +965,9 @@ fn list_prompts_output(server: &str, result: ListPromptsResult) -> SdkResult<Too
     });
     Ok(ToolInvokeOutput {
         title: format!("MCP {server}/prompts"),
+        summary: String::new(),
         output_text,
+        sections: Vec::new(),
         payload: Some(payload),
         metadata: Default::default(),
         attachments: Vec::new(),
@@ -989,11 +999,13 @@ fn get_prompt_output(
     });
     Ok(ToolInvokeOutput {
         title: format!("MCP {server}/prompt {name}"),
+        summary: String::new(),
         output_text: if output_text.is_empty() {
             format!("MCP server '{server}' returned no messages for prompt '{name}'.")
         } else {
             output_text
         },
+        sections: Vec::new(),
         payload: Some(payload),
         metadata: Default::default(),
         attachments: Vec::new(),

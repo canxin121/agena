@@ -86,7 +86,7 @@ pub struct SessionReplyRequestBody<T> {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SessionRewindRequestBody {
-    pub message_id: i64,
+    pub turn_id: agena_domain::TurnId,
 }
 
 #[cfg(test)]

@@ -8,7 +8,6 @@ import {
   getSessionState,
   getSessionTree,
   listPluginToolRegistryChanges,
-  listMessages,
   listProviders,
   listRewindCheckpoints,
   listSessionTimeline,
@@ -69,7 +68,6 @@ export type ChatSessionLifecycleDeps = {
   getSessionState: typeof getSessionState
   getSessionTree: typeof getSessionTree
   listPluginToolRegistryChanges: typeof listPluginToolRegistryChanges
-  listMessages: typeof listMessages
   listProviders: typeof listProviders
   listRewindCheckpoints: typeof listRewindCheckpoints
   listSessionTimeline: typeof listSessionTimeline
@@ -85,7 +83,6 @@ const defaultDeps: ChatSessionLifecycleDeps = {
   getSessionState,
   getSessionTree,
   listPluginToolRegistryChanges,
-  listMessages,
   listProviders,
   listRewindCheckpoints,
   listSessionTimeline,
@@ -134,7 +131,6 @@ export function useChatSessionLifecycle(
     {
       applySessionEvent: deps.applySessionEvent,
       getSessionState: deps.getSessionState,
-      listMessages: deps.listMessages,
       listSessionTimeline: deps.listSessionTimeline,
       streamSessionEvents: deps.streamSessionEvents,
     },

@@ -6,6 +6,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+pub use agena_domain::ToolPresentationSection;
 use agena_domain::{PermissionAction, PermissionDecision, ToolInvocation};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -161,7 +162,11 @@ pub struct ToolAvailability {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ToolExecutionSummary {
     pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
     pub output_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sections: Vec<ToolPresentationSection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -303,7 +308,7 @@ mod tests {
     use super::{
         BuiltinToolProfile, PreparedShellCommand, SnapshotBackend, SnapshotBackendCapabilities,
         SnapshotBackendSupport, ToolAttachmentSummary, ToolAvailability, ToolExecutionSummary,
-        ToolOutputTruncationPolicy,
+        ToolOutputTruncationPolicy, ToolPresentationSection,
     };
 
     #[test]
@@ -368,7 +373,12 @@ mod tests {
     fn execution_summary_round_trips_without_core_types() {
         let value = ToolExecutionSummary {
             title: "Read README".to_owned(),
+            summary: "README.md · 1 file".to_owned(),
             output_text: "content".to_owned(),
+            sections: vec![ToolPresentationSection {
+                title: "Result".to_owned(),
+                text: "content".to_owned(),
+            }],
             payload: Some(serde_json::json!({"kind": "read"})),
             metadata: BTreeMap::from([(String::from("path"), String::from("README.md"))]),
             attachments: Vec::new(),

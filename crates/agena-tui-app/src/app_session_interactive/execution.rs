@@ -47,7 +47,7 @@ impl App {
             let result = backend
                 .create_session(title, parent_id)
                 .await
-                .map_err(crate::UiFailure::internal);
+                .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::SessionCreated {
                 submit_draft,
                 pending_message_id,
@@ -245,82 +245,18 @@ impl App {
         scope: Option<PermissionScope>,
         label: String,
     ) {
-        self.pending_permission_replay = Some(PermissionReplayState {
-            session_id,
-            fingerprint: permission_request_fingerprint(&request),
-            last_request_id: request.request_id.clone(),
-            kind,
-            scope,
-            label: label.clone(),
-        });
         self.seen_permission_request_ids
             .insert(request.request_id.clone());
         self.request_permission_reply(session_id, request.request_id, kind, scope, label);
     }
 
-    pub(crate) fn maybe_auto_reply_duplicate_permission_request(
-        &mut self,
-        _session_id: i64,
-    ) -> bool {
-        let Some(replay) = self.pending_permission_replay.clone() else {
-            return false;
-        };
-        let transcript_contains_target =
-            self.transcript.execution.as_ref().is_some_and(|execution| {
-                execution
-                    .pending_interactive_requests
-                    .iter()
-                    .any(|request| request.session_id == replay.session_id)
-            });
-        if self.transcript.session_id != Some(replay.session_id) && !transcript_contains_target {
-            self.pending_permission_replay = None;
-            return false;
-        }
-
-        let Some((pending_session_id, request)) = self.pending_permission_overlay_target() else {
-            self.pending_permission_replay = None;
-            return false;
-        };
-        if pending_session_id != replay.session_id {
-            self.pending_permission_replay = None;
-            return false;
-        }
-
-        if permission_request_fingerprint(&request) != replay.fingerprint {
-            self.pending_permission_replay = None;
-            return false;
-        }
-
-        if request.request_id == replay.last_request_id {
-            return false;
-        }
-
-        self.pending_permission_replay = Some(PermissionReplayState {
-            last_request_id: request.request_id.clone(),
-            ..replay.clone()
-        });
-        self.seen_permission_request_ids
-            .insert(request.request_id.clone());
-        self.overlay = None;
-        self.request_permission_reply(
-            pending_session_id,
-            request.request_id,
-            replay.kind,
-            replay.scope,
-            replay.label,
-        );
-        true
-    }
-
-    pub(crate) fn sync_pending_interactive_after_execution(&mut self, session_id: i64) {
-        if !self.maybe_auto_reply_duplicate_permission_request(session_id) {
-            self.maybe_auto_open_pending_interactive_overlay();
-        }
+    pub(crate) fn sync_pending_interactive_after_execution(&mut self, _session_id: i64) {
+        self.maybe_auto_open_pending_interactive_overlay();
     }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, Instant, PermissionReplayState, PermissionReplyKind,
-    PermissionRequest, PermissionScope, RunActivityTarget, RunOperation, commands,
+    App, AppMessage, ComposerDraft, Instant, PermissionReplyKind, PermissionRequest,
+    PermissionScope, RunActivityTarget, RunOperation, commands,
     composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
-    permission_request_fingerprint, plugin_command_matches_name, run_status_line_command, ui_text,
+    plugin_command_matches_name, run_status_line_command, ui_text,
 };

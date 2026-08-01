@@ -6,7 +6,7 @@ use super::{
     mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
 };
 use crate::session::Session;
-use agena_domain::{PermissionAction, ToolInvocation};
+use agena_domain::ToolInvocation;
 
 impl SessionManager {
     pub(in crate::session::manager) async fn persist_session_changes(
@@ -490,7 +490,7 @@ impl SessionManager {
                 MessageMetadata {
                     source: MessageSource::User,
                     idempotency_key: None,
-                    turn_id: Some(steer_turn_id),
+                    model_turn_id: Some(steer_turn_id),
                     parent_message_id: session.last_conversation_message().map(|m| m.id),
                     generated_by_call_id: None,
                     externally_initiated_tool: false,
@@ -527,13 +527,7 @@ impl SessionManager {
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution)
             .with_cancellation_token(cancellation);
-        let grant = pending_tool.execution_grant.as_ref().ok_or_else(|| {
-            ToolError::InvalidExecutionGrant(
-                "authorized tool execution has no execution grant".to_string(),
-            )
-        })?;
-        scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
-            grant,
+        scoped_executor.execute_invocation_detailed_with_prepared_shell(
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,
@@ -547,7 +541,6 @@ impl SessionManager {
         session_id: i64,
         pending_tool: &ResolvedPendingTool,
         cancellation: Option<tokio_util::sync::CancellationToken>,
-        authorized_actions: Vec<PermissionAction>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let _host_user_input_sequence =
             self.host_user_input_sequence_guard(session_id, pending_tool.call_id);
@@ -555,15 +548,7 @@ impl SessionManager {
             .tool_executor
             .for_session_context(&pending_tool.session_runtime.execution)
             .with_cancellation_token(cancellation);
-        let grant = scoped_executor.issue_execution_grant(
-            &pending_tool.invocation,
-            session_id,
-            pending_tool.call_id,
-            pending_tool.prepared_shell_command.as_ref(),
-            authorized_actions,
-        )?;
-        scoped_executor.execute_invocation_detailed_with_grant_and_prepared_shell(
-            &grant,
+        scoped_executor.execute_invocation_detailed_with_prepared_shell(
             &pending_tool.invocation,
             session_id,
             pending_tool.call_id,

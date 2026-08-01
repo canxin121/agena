@@ -27,8 +27,7 @@ use crate::sdk::host_api::{
     HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostImageExecuteRequest,
     HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
-    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostNetworkPermissionCheckRequest,
-    HostPathPermissionCheckRequest, HostPermissionCheckResponse, HostPluginStatus,
+    HostMcpRemoveServerRequest, HostMcpRemoveServerResponse, HostPluginStatus,
     HostPluginStatusGetRequest, HostPluginStatusGetResponse, HostPluginStatusListResponse,
     HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostSchedulerCreateRequest,
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
@@ -52,15 +51,15 @@ use crate::sdk::{
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    HostCapability, NotificationInput, PermissionAdvice, PermissionAskDecision, PermissionAskInput,
-    PermissionDecision, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
-    PluginError, PluginErrorKind, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
-    PluginTuiContentBlock, PluginUiAction, PostRunInput, PreRunInput, ProviderListInput,
-    ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
-    UserPromptSubmitInput, UserPromptSubmitPatch,
+    HostCapability, NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput,
+    PluginCommandOutput, PluginError, PluginErrorKind, PluginKey, PluginManifest,
+    PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostRunInput,
+    PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
+    SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
+    ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput,
+    ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolPermissionNetworksInput,
+    ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput,
+    UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;
@@ -324,8 +323,6 @@ pub struct PluginStudioViewCatalogItem {
 #[serde(rename_all = "snake_case")]
 pub enum PluginUiToolInvokeStatus {
     Completed,
-    ApprovalRequired,
-    PolicyDenied,
     CapabilityUnavailable,
     ToolUnavailable,
 }
@@ -335,8 +332,6 @@ pub struct PluginUiToolInvokeResponse {
     pub plugin_id: PluginKey,
     pub tool: String,
     pub status: PluginUiToolInvokeStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_request_id: Option<String>,
     pub title: String,
     pub output_text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -352,20 +347,6 @@ pub struct ToolInvokeStream {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,
     pub end: tokio::sync::oneshot::Receiver<Result<ToolStreamEnd, PluginError>>,
-}
-
-#[derive(Debug, Clone)]
-pub enum PermissionAskOutcome {
-    Decision {
-        plugin_id: String,
-        decision: PermissionDecision,
-        authority: PluginAuthoritySummary,
-    },
-    Advice {
-        plugin_id: String,
-        advice: PermissionAdvice,
-        authority: PluginAuthoritySummary,
-    },
 }
 
 /// Result-bearing facade for a tool call. Wraps async dispatch in a runtime
@@ -415,9 +396,6 @@ mod timeout_tests {
         assert!(!requires_long_lived_tool_invoke_timeout(&[
             HostCapability::InvokeTool
         ]));
-        assert!(!requires_long_lived_tool_invoke_timeout(&[
-            HostCapability::PermissionCheck
-        ]));
     }
 }
 
@@ -439,14 +417,6 @@ fn tool_hook_context(
                 .unwrap_or_else(|| tool_name.to_string()),
         ),
     }
-}
-
-fn plugin_has_capability(plugin: &LoadedPlugin, capability: HostCapability) -> bool {
-    effective_capabilities_for_manifest(
-        &plugin.manifest.tools,
-        &plugin.manifest.plugin_capabilities,
-    )
-    .contains(&capability)
 }
 
 fn hook_registration_for_plugin(plugin: &LoadedPlugin) -> HostHookRegistration {
@@ -519,29 +489,6 @@ fn transport_to_plugin_error(e: TransportError) -> PluginError {
         TransportError::Plugin(pe) => pe,
         other => PluginError::internal(other.to_string()),
     }
-}
-
-async fn call_permission_ask_hook(
-    plugin: &LoadedPlugin,
-    params: serde_json::Value,
-    timeout: Duration,
-) -> Result<serde_json::Value, PluginError> {
-    call_with_timeout(plugin, method::HOOK_PERMISSION_ASK, params, timeout)
-        .await
-        .map_err(transport_to_plugin_error)
-}
-
-async fn dispatch_permission_ask_transport(
-    transport: Arc<dyn PluginTransport>,
-    context: HostCallbackContext,
-    params: serde_json::Value,
-) -> Result<serde_json::Value, PluginError> {
-    host_api::run_in_host_callback_context(
-        context,
-        transport.dispatch(method::HOOK_PERMISSION_ASK, params),
-    )
-    .await
-    .map_err(transport_to_plugin_error)
 }
 
 fn merge_json(into: &mut serde_json::Value, from: serde_json::Value) {
@@ -631,11 +578,6 @@ pub struct HostHandle {
     statusline: Arc<RwLock<std::collections::BTreeMap<(PluginKey, String), HostStatuslineSegment>>>,
     themes: Arc<RwLock<BTreeMap<(PluginKey, String), HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
-    /// Plugin id of the registered permission UI handler, if any. When set,
-    /// `HOST_PERMISSION_ASK` delegates the prompt to that plugin via
-    /// `plugin/permission.render` instead of going to the regular
-    /// `HostClient::ask_permission` implementation.
-    permission_handler: tokio::sync::RwLock<Option<String>>,
     /// Plugin transport registry shared by the parent [`PluginHost`]. Lets
     /// the handle dispatch host->plugin calls (e.g. permission handler
     /// rendering) without holding a reference to PluginHost itself.
@@ -673,20 +615,6 @@ struct HostSubscribeParams {
 #[derive(serde::Deserialize)]
 struct HostUnsubscribeParams {
     subscription_id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct HostPermissionCheckPathParams {
-    request: HostPathPermissionCheckRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
-}
-
-#[derive(serde::Deserialize)]
-struct HostPermissionCheckNetworkParams {
-    request: HostNetworkPermissionCheckRequest,
-    #[serde(default)]
-    context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]

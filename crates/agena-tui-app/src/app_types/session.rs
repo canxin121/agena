@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 
 use crate::commands::CommandSpec;
 
-#[cfg(test)]
-use super::MessageResource;
 use super::{
     ComposerDraft, I18n, MathRenderContext, ModelRef, RenderedTranscript, SessionExecutionResource,
     SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction, TranscriptNodeKey,
     TranscriptViewport,
 };
+#[cfg(test)]
+use agena_api::resource::MessageResource;
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
 /// App-owned concrete effect map for the TUI-owned generic selection picker.
@@ -125,7 +125,7 @@ pub(crate) enum SessionNavigationCommand {
     },
     Rewind {
         session_id: i64,
-        message_id: i64,
+        turn_id: agena_domain::TurnId,
         message_text: String,
         target: String,
     },

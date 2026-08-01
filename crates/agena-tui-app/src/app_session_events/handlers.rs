@@ -2,6 +2,7 @@ impl App {
     pub(crate) fn handle_permission_replied(
         &mut self,
         session_id: i64,
+        request_id: String,
         label: String,
         result: UiResult<SessionExecutionResource>,
     ) {
@@ -37,8 +38,17 @@ impl App {
                 ));
             }
             Err(error) => {
-                self.pending_permission_replay = None;
+                // The modal closes when a decision is submitted, but the
+                // request is consumed only after backend acknowledgement. On
+                // rejection make the same durable request unseen again and
+                // immediately restore it instead of stranding it behind
+                // Alt+A.
+                self.seen_permission_request_ids.remove(&request_id);
                 self.flash_error(error);
+                if self.transcript.session_id == Some(session_id) {
+                    self.maybe_auto_open_pending_interactive_overlay();
+                    self.request_refresh(session_id, true);
+                }
             }
         }
     }
@@ -46,6 +56,7 @@ impl App {
     pub(crate) fn handle_user_input_replied(
         &mut self,
         session_id: i64,
+        request_id: String,
         result: UiResult<SessionExecutionResource>,
     ) {
         self.finish_run_operation(
@@ -70,7 +81,14 @@ impl App {
                 }
                 self.flash_success(ui_text::t(&self.i18n, "flash-user-input-reply-sent"));
             }
-            Err(error) => self.flash_error(error),
+            Err(error) => {
+                self.seen_user_input_request_ids.remove(&request_id);
+                self.flash_error(error);
+                if self.transcript.session_id == Some(session_id) {
+                    self.maybe_auto_open_pending_interactive_overlay();
+                    self.request_refresh(session_id, true);
+                }
+            }
         }
     }
 
@@ -310,7 +328,7 @@ impl App {
     pub(crate) fn handle_rewind_messages_loaded(
         &mut self,
         session_id: i64,
-        result: UiResult<Vec<MessageResource>>,
+        result: UiResult<Vec<agena_domain::TurnSnapshot>>,
     ) {
         let Some(mut dialog) = self.take_session_navigation_route() else {
             return;
@@ -330,12 +348,11 @@ impl App {
         dialog.presentation.set_loading(false);
         dialog.presentation.empty_message = ui_text::t(&self.i18n, "overlay-rewind-empty");
         match result {
-            Ok(messages) => {
-                let rows = messages
+            Ok(turns) => {
+                let rows = turns
                     .into_iter()
-                    .filter(is_rewind_target_message)
                     .rev()
-                    .map(|message| self.rewind_message_navigation_item(session_id, message))
+                    .map(|turn| self.rewind_turn_navigation_item(session_id, turn))
                     .collect::<Vec<_>>();
                 dialog.actions = rows
                     .iter()
@@ -765,21 +782,21 @@ impl App {
 }
 use crate::view::model_catalog_presentation_item;
 use crate::{
-    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, MessageResource,
-    ModelCatalogListResponse, PaginatedResponse, ProviderAdapterModelsResponse,
-    ProviderPickerPurpose, ProviderStudioFocus, ProviderSummaryResource, Route, RunActivityTarget,
-    RunOperation, SelectableListState, SelectionPickerCommand, SelectionPickerQuery,
-    SessionExecutionResource, SessionNavigationCommand, SessionNavigationQuery, SessionResource,
-    UiResult, build_timeline_item, i18n_provider_list_detail, is_rewind_target_message,
-    provider_draft_auth_action_message, provider_draft_auth_error_message,
-    provider_draft_auth_message_is_pending, provider_list_create_item,
-    provider_studio_available_model_keys, provider_studio_ensure_default_selection,
-    provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,
-    provider_studio_new_default_selected_model_keys, provider_studio_preferred_detail_field_index,
-    provider_studio_provider_rows, provider_studio_restore_model_selection,
-    provider_studio_save_error_message, provider_studio_save_result_message,
-    provider_studio_selected_adapter_id, restore_provider_studio_adapter_selection,
-    settings_choice_adapter_fallback, settings_choice_default_provider_detail, ui_text,
+    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, ModelCatalogListResponse,
+    PaginatedResponse, ProviderAdapterModelsResponse, ProviderPickerPurpose, ProviderStudioFocus,
+    ProviderSummaryResource, Route, RunActivityTarget, RunOperation, SelectableListState,
+    SelectionPickerCommand, SelectionPickerQuery, SessionExecutionResource,
+    SessionNavigationCommand, SessionNavigationQuery, SessionResource, UiResult,
+    build_timeline_item, i18n_provider_list_detail, provider_draft_auth_action_message,
+    provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
+    provider_list_create_item, provider_studio_available_model_keys,
+    provider_studio_ensure_default_selection, provider_studio_merge_refreshed_adapter_models,
+    provider_studio_model_key, provider_studio_new_default_selected_model_keys,
+    provider_studio_preferred_detail_field_index, provider_studio_provider_rows,
+    provider_studio_restore_model_selection, provider_studio_save_error_message,
+    provider_studio_save_result_message, provider_studio_selected_adapter_id,
+    restore_provider_studio_adapter_selection, settings_choice_adapter_fallback,
+    settings_choice_default_provider_detail, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

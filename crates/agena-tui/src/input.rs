@@ -41,28 +41,23 @@ impl Default for ComposerKeyBindings {
             queue: vec![KeyChord::new(KeyCode::Enter, KeyModifiers::empty())],
             newline: vec![
                 KeyChord::new(KeyCode::Enter, KeyModifiers::SHIFT),
-                KeyChord::new(KeyCode::Enter, KeyModifiers::ALT),
                 KeyChord::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
             ],
             edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::CONTROL)],
             clear_input: vec![KeyChord::new(KeyCode::Char('c'), KeyModifiers::CONTROL)],
-            focus_items: vec![KeyChord::new(KeyCode::F(2), KeyModifiers::empty())],
+            focus_items: vec![KeyChord::new(KeyCode::Char('g'), KeyModifiers::CONTROL)],
             insert_content: vec![KeyChord::new(KeyCode::Char('a'), KeyModifiers::CONTROL)],
             attach_file: vec![
-                KeyChord::new(KeyCode::F(3), KeyModifiers::empty()),
                 KeyChord::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
-                KeyChord::new(KeyCode::Char('o'), KeyModifiers::ALT),
             ],
             external_editor: vec![
-                KeyChord::new(KeyCode::F(4), KeyModifiers::empty()),
-                KeyChord::new(KeyCode::Char('e'), KeyModifiers::ALT),
+                KeyChord::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
             ],
             attach_clipboard_image: vec![
-                KeyChord::new(KeyCode::F(6), KeyModifiers::empty()),
-                KeyChord::new(KeyCode::Char('i'), KeyModifiers::ALT),
+                KeyChord::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
             ],
-            open_pending_user_input: vec![KeyChord::new(KeyCode::Char('u'), KeyModifiers::ALT)],
-            open_pending_permission: vec![KeyChord::new(KeyCode::Char('a'), KeyModifiers::ALT)],
+            open_pending_user_input: vec![KeyChord::new(KeyCode::Char('r'), KeyModifiers::CONTROL)],
+            open_pending_permission: vec![KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL)],
         }
     }
 }

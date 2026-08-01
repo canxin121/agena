@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
 use super::{
-    KeyAction as A, KeyContext, only_alt, only_ctrl, only_shift, tab_navigation_action, unmodified,
+    KeyAction as A, KeyContext, only_ctrl, only_shift, tab_navigation_action, unmodified,
     unmodified_or_shift,
 };
 
@@ -117,8 +117,6 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('r') if only_ctrl(key) => Some(A::Older),
             K::Up if unmodified(key) => Some(A::Previous),
             K::Down if unmodified(key) => Some(A::Next),
-            K::Up if only_alt(key) => Some(A::Older),
-            K::Down if only_alt(key) => Some(A::Newer),
             K::Char('s') if only_ctrl(key) => Some(A::NewerKeepOpen),
             _ => None,
         },

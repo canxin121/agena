@@ -30,10 +30,6 @@ pub(super) fn only_ctrl(key: KeyEvent) -> bool {
     command_modifiers(key) == KeyModifiers::CONTROL
 }
 
-pub(super) fn only_alt(key: KeyEvent) -> bool {
-    command_modifiers(key) == KeyModifiers::ALT
-}
-
 pub(super) fn only_shift(key: KeyEvent) -> bool {
     command_modifiers(key) == KeyModifiers::SHIFT
 }
@@ -1003,8 +999,39 @@ mod tests {
         );
         assert_eq!(
             bindings.match_action(&key(KeyCode::Char('r'), KeyModifiers::CONTROL)),
-            None
+            Some(ComposerAction::OpenPendingUserInput)
         );
+        assert_eq!(
+            bindings.match_action(&key(KeyCode::Char('l'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::OpenPendingPermission)
+        );
+        assert_eq!(
+            bindings.match_action(&key(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::FocusItems)
+        );
+        assert_eq!(
+            bindings.match_action(&key(KeyCode::Char('e'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::ExternalEditor)
+        );
+        assert_eq!(
+            bindings.match_action(&key(KeyCode::Char('t'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::AttachImage)
+        );
+        // Composer bindings must not rely on F-keys or Alt/Option.
+        for number in 1..=12u8 {
+            assert_eq!(
+                bindings.match_action(&key(KeyCode::F(number), KeyModifiers::NONE)),
+                None,
+                "F{number} must not be a composer binding",
+            );
+        }
+        for character in (b'a'..=b'z').map(char::from) {
+            assert_eq!(
+                bindings.match_action(&key(KeyCode::Char(character), KeyModifiers::ALT)),
+                None,
+                "Alt+{character} must not be a composer binding",
+            );
+        }
     }
 
     #[test]

@@ -296,14 +296,7 @@ impl Editor {
                 code: KeyCode::Left,
                 modifiers,
                 ..
-            } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
-                self.move_word_left();
-            }
-            KeyEvent {
-                code: KeyCode::Char('b'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::ALT => {
+            } if modifiers == KeyModifiers::CONTROL => {
                 self.move_word_left();
             }
             KeyEvent {
@@ -339,14 +332,7 @@ impl Editor {
                 code: KeyCode::Right,
                 modifiers,
                 ..
-            } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
-                self.move_word_right();
-            }
-            KeyEvent {
-                code: KeyCode::Char('f'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::ALT => {
+            } if modifiers == KeyModifiers::CONTROL => {
                 self.move_word_right();
             }
             KeyEvent {
@@ -402,27 +388,6 @@ impl Editor {
                 self.move_end(false);
             }
             KeyEvent {
-                code: KeyCode::Char('h'),
-                modifiers,
-                ..
-            } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
-                self.delete_backward_word();
-            }
-            KeyEvent {
-                code: KeyCode::Backspace,
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::ALT => {
-                self.delete_backward_word();
-            }
-            KeyEvent {
-                code: KeyCode::Char('\u{007f}'),
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::ALT => {
-                self.delete_backward_word();
-            }
-            KeyEvent {
                 code: KeyCode::Char('\u{007f}'),
                 modifiers: KeyModifiers::NONE,
                 ..
@@ -444,13 +409,6 @@ impl Editor {
                 } else {
                     self.delete();
                 }
-            }
-            KeyEvent {
-                code: KeyCode::Delete,
-                modifiers,
-                ..
-            } if modifiers == KeyModifiers::ALT => {
-                self.delete_forward_word();
             }
             KeyEvent {
                 code: KeyCode::Char('\u{0004}'),
@@ -635,11 +593,6 @@ impl Editor {
     fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
         self.kill_buffer = self.remove_range(start, self.cursor);
-    }
-
-    fn delete_forward_word(&mut self) {
-        let end = self.end_of_next_word();
-        self.kill_buffer = self.remove_range(self.cursor, end);
     }
 
     fn kill_to_start_of_line(&mut self, multiline: bool) {

@@ -141,10 +141,7 @@ pub fn preset_specs(
                     vec![
                         ("Enter", "context-help-key-send"),
                         ("Ctrl+Enter", "context-help-key-send-now"),
-                        (
-                            "Ctrl+J / Shift+Enter / Alt+Enter",
-                            "context-help-key-newline",
-                        ),
+                        ("Ctrl+J / Shift+Enter", "context-help-key-newline"),
                         ("Esc", "context-help-key-view-mode"),
                     ],
                 ),
@@ -154,7 +151,7 @@ pub fn preset_specs(
                         ("↑ at start", "context-help-key-history"),
                         ("Ctrl+Up", "context-help-key-recover"),
                         ("Ctrl+C", "context-help-key-clear-composer"),
-                        ("F2", "context-help-key-items"),
+                        ("Ctrl+G", "context-help-key-items"),
                     ],
                 ),
                 (
@@ -162,10 +159,10 @@ pub fn preset_specs(
                     vec![
                         ("/", "context-help-key-commands"),
                         ("Ctrl+A", "context-help-key-insert-content"),
-                        ("F3 / Ctrl+O / Alt+O", "context-help-key-attach"),
-                        ("F4 / Alt+E", "context-help-key-external-editor"),
-                        ("F6 / Alt+I", "context-help-key-image"),
-                        ("Alt+U / Alt+A", "context-help-key-pending-requests"),
+                        ("Ctrl+O", "context-help-key-attach"),
+                        ("Ctrl+E", "context-help-key-external-editor"),
+                        ("Ctrl+T", "context-help-key-image"),
+                        ("Ctrl+R / Ctrl+L", "context-help-key-pending-requests"),
                     ],
                 ),
             ],
@@ -195,8 +192,7 @@ pub fn preset_specs(
                     ("↑", "context-help-key-previous"),
                     ("↓", "context-help-key-next"),
                     ("← / → in results", "context-help-key-page"),
-                    ("Alt+Up / Ctrl+R", "context-help-key-older"),
-                    ("Alt+Down", "context-help-key-newer"),
+                    ("Ctrl+R", "context-help-key-older"),
                     ("Ctrl+S", "context-help-key-newer-stay"),
                     ("Enter", "context-help-key-accept"),
                     ("Esc / Ctrl+C", "context-help-key-close"),
@@ -228,12 +224,12 @@ pub fn preset_specs(
                 vec![
                     ("Type", "context-help-key-edit-text"),
                     (
-                        "← / →  ·  Ctrl+B/F  ·  Alt+B/F",
+                        "← / →  ·  Ctrl+B/F  ·  Ctrl+Left/Right",
                         "context-help-key-editor-move",
                     ),
                     ("Home / End  ·  Ctrl+A/E", "context-help-key-editor-move"),
                     (
-                        "Backspace / Delete  ·  Ctrl+D/W/U/K/Y",
+                        "Backspace  ·  Ctrl+D/W/U/K/Y",
                         "context-help-key-editor-edit",
                     ),
                     ("Enter", "context-help-key-submit"),
@@ -249,12 +245,12 @@ pub fn preset_specs(
                 vec![
                     ("Type", "context-help-key-edit-text"),
                     (
-                        "Arrows  ·  Ctrl+B/F/P/N  ·  Alt+B/F",
+                        "Arrows  ·  Ctrl+B/F/P/N  ·  Ctrl+Left/Right",
                         "context-help-key-editor-move",
                     ),
                     ("Home / End  ·  Ctrl+A/E", "context-help-key-editor-move"),
                     (
-                        "Backspace / Delete  ·  Ctrl+D/W/U/K/Y",
+                        "Backspace  ·  Ctrl+D/W/U/K/Y",
                         "context-help-key-editor-edit",
                     ),
                     ("Enter", "context-help-key-newline"),

@@ -942,7 +942,11 @@ mod tests {
     #[test]
     fn secondary_surface_help_avoids_alt_function_and_delete_keys() {
         for preset in [
+            HelpPreset::Composer,
             HelpPreset::ComposerItems,
+            HelpPreset::PromptHistory,
+            HelpPreset::SingleLineEditor,
+            HelpPreset::MultiLineEditor,
             HelpPreset::UserInputQuestion,
             HelpPreset::UserInputReview,
             HelpPreset::Usage,

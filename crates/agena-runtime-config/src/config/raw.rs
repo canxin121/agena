@@ -24,6 +24,7 @@ use crate::{
     ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
     SessionConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, UiConfig,
 };
+use agena_domain::ModelSelectionConfig;
 
 pub use crate::merge_optional_config as merge_option;
 pub use crate::normalize_config_optional as normalize_optional;
@@ -289,6 +290,10 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
 pub struct RawProvidersConfig {
     #[merge(strategy = option_override)]
     pub default: Option<String>,
+    /// Explicit global model route and variants selected in the settings
+    /// model picker. `default` remains the legacy provider-only selector.
+    #[merge(strategy = option_override)]
+    pub default_selection: Option<ModelSelectionConfig>,
     #[serde(flatten)]
     #[merge(strategy = map_extend)]
     pub providers: BTreeMap<String, ProviderOverlay>,
@@ -296,11 +301,12 @@ pub struct RawProvidersConfig {
 
 impl RawProvidersConfig {
     fn is_empty(&self) -> bool {
-        self.default.is_none() && self.providers.is_empty()
+        self.default.is_none() && self.default_selection.is_none() && self.providers.is_empty()
     }
 
     fn merge_project_from(&mut self, overlay: Self) {
         merge_option(&mut self.default, overlay.default);
+        merge_option(&mut self.default_selection, overlay.default_selection);
         for (provider_id, provider) in overlay.providers {
             match self.providers.get_mut(&provider_id) {
                 Some(existing) => existing.merge_project_from(provider),
@@ -315,6 +321,7 @@ impl RawProvidersConfig {
 impl Merge for RawProvidersConfig {
     fn merge_from(&mut self, overlay: Self) {
         merge_option(&mut self.default, overlay.default);
+        merge_option(&mut self.default_selection, overlay.default_selection);
         merge_map(&mut self.providers, overlay.providers);
     }
 }
@@ -509,6 +516,7 @@ impl RawConfig {
         let mcp = crate::mcp_config_from_plugins(&plugins).map_err(ConfigError::Validation)?;
         let harnesses: HarnessesConfig = self.harnesses.unwrap_or_default();
         let providers_default = self.providers.default.clone();
+        let explicit_default_selection = self.providers.default_selection.clone();
 
         validate_harnesses(&harnesses)?;
 
@@ -518,8 +526,11 @@ impl RawConfig {
             .into_iter()
             .map(|(provider_id, raw)| raw.resolve(provider_id, env, &harnesses, &mcp))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
-        let default_selection =
-            resolve_default_selection(providers_default.as_deref(), &providers)?;
+        let default_selection = resolve_default_selection(
+            providers_default.as_deref(),
+            explicit_default_selection.as_ref(),
+            &providers,
+        )?;
         validate_permission_config("permission", &permission)?;
 
         Ok(ResolvedConfig {
@@ -538,9 +549,13 @@ impl RawConfig {
 
 fn resolve_default_selection(
     explicit_provider: Option<&str>,
+    explicit_selection: Option<&agena_domain::ModelSelectionConfig>,
     providers: &BTreeMap<String, ResolvedProviderConfig>,
 ) -> Result<agena_domain::ExecutionSelection, ConfigError> {
-    let provider_id = if let Some(explicit_provider) = explicit_provider
+    let selected_provider = explicit_selection
+        .and_then(|selection| selection.provider.as_deref())
+        .or(explicit_provider);
+    let provider_id = if let Some(explicit_provider) = selected_provider
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
@@ -572,8 +587,16 @@ fn resolve_default_selection(
 
     Ok(agena_domain::ExecutionSelection {
         provider: Some(provider_id),
-        adapter: provider.defaults.adapter.clone(),
-        model: provider.defaults.model.clone(),
+        adapter: explicit_selection
+            .and_then(|selection| selection.adapter.clone())
+            .or_else(|| provider.defaults.adapter.clone()),
+        model: explicit_selection
+            .and_then(|selection| selection.model.clone())
+            .or_else(|| provider.defaults.model.clone()),
+        thinking_mode: explicit_selection.and_then(|selection| selection.thinking_mode.clone()),
+        speed_mode: explicit_selection.and_then(|selection| selection.speed_mode.clone()),
+        verbosity: explicit_selection.and_then(|selection| selection.verbosity.clone()),
+        parallel_tool_calls: explicit_selection.and_then(|selection| selection.parallel_tool_calls),
         ..Default::default()
     })
 }
@@ -1573,6 +1596,66 @@ mod openai_protocol_adapter_tests {
                 "model": "gpt-test"
             })
         );
+    }
+
+    #[test]
+    fn explicit_default_selection_resolves_model_variants() {
+        let value = serde_json::json!({
+            "providers": {
+                "default": "test",
+                "default_selection": {
+                    "provider": "test",
+                    "adapter": "openai_responses",
+                    "model": "gpt-test",
+                    "thinking_mode": "high",
+                    "speed_mode": "fast",
+                    "verbosity": "high",
+                    "parallel_tool_calls": false
+                },
+                "test": {
+                    "defaults": { "adapter": "openai_responses" },
+                    "auth": {
+                        "mode": "api",
+                        "subtype": "custom",
+                        "base_url": "https://api.openai.com",
+                        "api_key": { "kind": "inline", "value": "test-key" }
+                    },
+                    "adapters": {
+                        "openai_responses": {
+                            "enabled": true,
+                            "models": { "gpt-test": {} }
+                        }
+                    }
+                }
+            }
+        });
+        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
+        let resolved = raw
+            .resolve_with_env(&crate::ProcessEnvironment)
+            .expect("config should resolve");
+
+        assert_eq!(resolved.default_selection.provider.as_deref(), Some("test"));
+        assert_eq!(
+            resolved.default_selection.adapter.as_deref(),
+            Some("openai_responses")
+        );
+        assert_eq!(
+            resolved.default_selection.model.as_deref(),
+            Some("gpt-test")
+        );
+        assert_eq!(
+            resolved.default_selection.thinking_mode.as_deref(),
+            Some("high")
+        );
+        assert_eq!(
+            resolved.default_selection.speed_mode.as_deref(),
+            Some("fast")
+        );
+        assert_eq!(
+            resolved.default_selection.verbosity.as_deref(),
+            Some("high")
+        );
+        assert_eq!(resolved.default_selection.parallel_tool_calls, Some(false));
     }
 
     #[test]

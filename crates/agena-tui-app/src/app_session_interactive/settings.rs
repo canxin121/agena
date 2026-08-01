@@ -1,7 +1,7 @@
 use super::super::{
     permission_config_from_json_value, permission_override_summary, settings_studio_field_items,
     settings_studio_harness_items, settings_studio_permission_items, settings_studio_plugin_items,
-    settings_studio_provider_items,
+    settings_studio_provider_approval_model_item, settings_studio_provider_items,
 };
 
 impl App {
@@ -161,6 +161,12 @@ impl App {
         plugin_items.extend(settings_studio_harness_items(&self.i18n, &sources));
         let mut provider_items =
             settings_studio_provider_items(&self.i18n, &sources, &configured_providers);
+        provider_items.push(settings_studio_provider_approval_model_item(
+            &self.i18n,
+            &sources,
+            &global_permission,
+            &effective_permission,
+        ));
         provider_items.extend(settings_studio_model_catalog_items(
             &self.i18n,
             &model_catalog,

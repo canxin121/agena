@@ -209,13 +209,12 @@ impl App {
         if !dialog.selected_model_keys.remove(key.as_str()) {
             dialog.selected_model_keys.insert(key);
         }
-        provider_studio_ensure_default_selection(dialog);
     }
 }
 use crate::{
     App, ProviderDraftAuthKind, ProviderDraftInteractiveLoginKind, ProviderDraftSecretSourceKind,
     ProviderStudioField, ProviderStudioFocus, ProviderStudioOverlay, UiResult,
-    provider_studio_adapter_selectable, provider_studio_ensure_default_selection,
-    provider_studio_model_key, provider_studio_selected_adapter_id,
-    provider_studio_selected_model_target, provider_studio_visible_fields, ui_text,
+    provider_studio_adapter_selectable, provider_studio_model_key,
+    provider_studio_selected_adapter_id, provider_studio_selected_model_target,
+    provider_studio_visible_fields, ui_text,
 };

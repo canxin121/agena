@@ -25,6 +25,7 @@ export function useSettingsPageState(input: { route: RouteLocationNormalizedLoad
     browserAuthInstanceDrafts: state.browserAuthInstanceDrafts,
     browserAuthStartState: state.browserAuthStartState,
     catalogEntries: state.catalogEntries,
+    permissionConfig: state.permissionConfig,
     deviceAuthEnterpriseDrafts: state.deviceAuthEnterpriseDrafts,
     deviceAuthStartState: state.deviceAuthStartState,
     drafts: state.drafts,

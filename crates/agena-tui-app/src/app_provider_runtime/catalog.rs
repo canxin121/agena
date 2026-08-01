@@ -70,6 +70,10 @@ impl App {
         self.open_model_chooser(SessionModelChooserPurpose::ProviderDefault);
     }
 
+    pub(crate) fn open_permission_approval_model_chooser(&mut self) {
+        self.open_model_chooser(SessionModelChooserPurpose::PermissionApproval);
+    }
+
     fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
         if purpose == SessionModelChooserPurpose::RuntimeOverride {
             let Some(session_id) = self.transcript.session_id else {
@@ -90,6 +94,9 @@ impl App {
                     SessionModelChooserPurpose::RuntimeOverride => self.current_session_model_ref(),
                     SessionModelChooserPurpose::ProviderDefault => {
                         self.current_provider_default_model_ref()
+                    }
+                    SessionModelChooserPurpose::PermissionApproval => {
+                        self.current_permission_approval_model_ref()
                     }
                 };
                 mark_current_session_model_choice(&self.i18n, &mut items, current_model.as_ref());

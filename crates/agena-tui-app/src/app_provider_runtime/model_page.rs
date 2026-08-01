@@ -67,7 +67,6 @@ impl App {
         dialog
             .selected_model_keys
             .insert(provider_studio_model_key(adapter_id.as_str(), model_id));
-        provider_studio_ensure_default_selection(dialog);
         self.open_provider_studio_model_page(dialog, adapter_id, model_id.to_owned(), None);
         Ok(())
     }
@@ -255,9 +254,8 @@ use crate::{
     ProviderStudioFocus, ProviderStudioOverlay, UiResult, commit_provider_model_config_field,
     provider_model_config_draft_to_model_value, provider_model_config_field_editable,
     provider_model_config_field_prompt, provider_model_config_field_value,
-    provider_model_config_fields, provider_studio_ensure_default_selection,
-    provider_studio_model_key, remove_provider_studio_adapter_from_dialog,
-    remove_provider_studio_model_from_dialog, ui_text,
+    provider_model_config_fields, provider_studio_model_key,
+    remove_provider_studio_adapter_from_dialog, remove_provider_studio_model_from_dialog, ui_text,
 };
 use agena_api::resource::ProviderModelResource;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};

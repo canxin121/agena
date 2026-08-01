@@ -316,10 +316,22 @@ impl Backend {
             ProviderStudioSaveField::ProviderId,
         )
         .map_err(ProviderStudioSaveError::Validation)?;
-        let requested_default_adapter =
-            optional_non_empty(draft.default_adapter.as_str()).map(str::to_owned);
+        let requested_default_adapter = optional_non_empty(draft.default_adapter.as_str())
+            .map(str::to_owned)
+            .or_else(|| {
+                selected_adapter_ids
+                    .iter()
+                    .map(String::as_str)
+                    .find_map(optional_non_empty)
+                    .map(ToOwned::to_owned)
+            });
         let requested_default_model =
             optional_non_empty(draft.default_model.as_str()).map(str::to_owned);
+        if draft.default_adapter.trim().is_empty()
+            && let Some(default_adapter) = requested_default_adapter.as_ref()
+        {
+            draft.default_adapter = default_adapter.clone();
+        }
         let effective_adapter_ids = selected_adapter_ids
             .iter()
             .map(|value| value.trim())

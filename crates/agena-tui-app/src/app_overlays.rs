@@ -290,7 +290,33 @@ impl App {
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
                 purpose: SessionModelChooserPurpose::ProviderDefault,
                 identity,
-            } => self.apply_provider_default_model(model_ref_from_session_model_identity(identity)),
+            } => {
+                let model = model_ref_from_session_model_identity(identity);
+                self.open_model_selection_mode_step_or_finish(
+                    SessionModelChooserPurpose::ProviderDefault,
+                    model,
+                    None,
+                    None,
+                    None,
+                    SessionModelModeStep::ThinkingMode,
+                );
+                false
+            }
+            agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
+                purpose: SessionModelChooserPurpose::PermissionApproval,
+                identity,
+            } => {
+                let model = model_ref_from_session_model_identity(identity);
+                self.open_model_selection_mode_step_or_finish(
+                    SessionModelChooserPurpose::PermissionApproval,
+                    model,
+                    None,
+                    None,
+                    None,
+                    SessionModelModeStep::ThinkingMode,
+                );
+                false
+            }
         }
     }
 
@@ -477,10 +503,10 @@ use crate::{
     InputDialogKeyResult, KeyEvent, ModelCatalogStudioOverlay, ModelRef,
     ProviderStudioEditorAction, ProviderStudioFocus, ProviderStudioOverlay, Route,
     SearchPickerInputResult, SelectionPickerCommand, SelectionPickerOverlay,
-    SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationCommand,
-    SessionNavigationOverlay, SessionSearchOverlay, TimelineOverlay, drive_editor_dialog_key,
-    drive_input_dialog_key, plugin_command_accepts_empty_arguments, plugin_command_slash_name,
-    provider_studio_selected_adapter_models, ui_text,
+    SessionModelChooserOverlay, SessionModelChooserPurpose, SessionModelModeStep,
+    SessionNavigationCommand, SessionNavigationOverlay, SessionSearchOverlay, TimelineOverlay,
+    drive_editor_dialog_key, drive_input_dialog_key, plugin_command_accepts_empty_arguments,
+    plugin_command_slash_name, provider_studio_selected_adapter_models, ui_text,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;

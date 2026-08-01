@@ -779,14 +779,17 @@ pub fn permission_config_resource_from_domain(
                     })
                     .collect(),
             }),
-        approval_model: value
-            .approval_model
-            .as_ref()
-            .map(|model| agena_api::resource::ModelRef {
-                provider_id: model.provider_id.to_string(),
-                adapter_id: model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: model.model_id.to_string(),
-            }),
+        approval_model: value.approval_model.as_ref().map(|model| {
+            agena_api::resource::ApprovalModelSelectionResource {
+                provider_id: model.provider_id.clone(),
+                adapter_id: model.adapter_id.clone(),
+                model_id: model.model_id.clone(),
+                thinking_mode: model.thinking_mode.clone(),
+                speed_mode: model.speed_mode.clone(),
+                verbosity: model.verbosity.clone(),
+                parallel_tool_calls: model.parallel_tool_calls,
+            }
+        }),
     }
 }
 

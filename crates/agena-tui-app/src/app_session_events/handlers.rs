@@ -436,13 +436,12 @@ impl App {
                 dialog.selected_model_keys = preserved_model_keys;
                 dialog
                     .selected_model_keys
-                    .extend(provider_studio_new_default_selected_model_keys(
+                    .extend(provider_studio_new_selected_model_keys(
                         &dialog.adapter_models,
                         &dialog.selected_adapter_ids,
                         &previously_available,
                     ));
                 provider_studio_restore_model_selection(&mut dialog);
-                provider_studio_ensure_default_selection(&mut dialog);
             }
             Err(error) => self.flash_error(error),
         }
@@ -595,7 +594,6 @@ impl App {
                     }
                     _ => {}
                 }
-                provider_studio_ensure_default_selection(&mut dialog);
             }
             Err(error) => self.flash_error(provider_studio_save_error_message(&self.i18n, &error)),
         }
@@ -790,13 +788,12 @@ use crate::{
     build_timeline_item, i18n_provider_list_detail, provider_draft_auth_action_message,
     provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
     provider_list_create_item, provider_studio_available_model_keys,
-    provider_studio_ensure_default_selection, provider_studio_merge_refreshed_adapter_models,
-    provider_studio_model_key, provider_studio_new_default_selected_model_keys,
-    provider_studio_preferred_detail_field_index, provider_studio_provider_rows,
-    provider_studio_restore_model_selection, provider_studio_save_error_message,
-    provider_studio_save_result_message, provider_studio_selected_adapter_id,
-    restore_provider_studio_adapter_selection, settings_choice_adapter_fallback,
-    settings_choice_default_provider_detail, ui_text,
+    provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,
+    provider_studio_new_selected_model_keys, provider_studio_preferred_detail_field_index,
+    provider_studio_provider_rows, provider_studio_restore_model_selection,
+    provider_studio_save_error_message, provider_studio_save_result_message,
+    provider_studio_selected_adapter_id, restore_provider_studio_adapter_selection,
+    settings_choice_adapter_fallback, settings_choice_default_provider_detail, ui_text,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

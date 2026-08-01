@@ -1668,13 +1668,64 @@ impl SessionManager {
             permission.approval_model
         };
 
-        let Some(model) = approval_model else {
+        let Some(approval_model) = approval_model else {
             return PermissionDecision::Ask {
                 reason: format!(
                     "automatic approval is not configured; falling back to confirmation: {reason}"
                 ),
             };
         };
+        let model = match approval_model.model_ref() {
+            Ok(model) => model,
+            Err(error) => {
+                tracing::warn!(
+                    target: "agena::permission",
+                    session_id,
+                    error = %error,
+                    "automatic approval model reference is invalid; falling back to interactive confirmation"
+                );
+                return PermissionDecision::Ask {
+                    reason: format!(
+                        "automatic approval model is invalid; falling back to confirmation: {reason}"
+                    ),
+                };
+            }
+        };
+
+        // Resolve the selected think/speed variants through the same provider
+        // catalog path used by normal model execution. This keeps approval
+        // requests aligned with the model picker and makes an invalid or
+        // unavailable variant fail closed to Ask.
+        let mut options = SessionRunOptions {
+            model: model.clone(),
+            thinking_mode: approval_model.thinking_mode.clone(),
+            speed_mode: approval_model.speed_mode.clone(),
+            verbosity: approval_model.verbosity.clone(),
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: Some(0.0),
+            max_output_tokens: Some(8),
+        };
+        if let Some(parallel_tool_calls) = approval_model.parallel_tool_calls {
+            options
+                .request_override
+                .set_parallel_tool_calls(Some(parallel_tool_calls));
+        }
+        if let Err(error) = self.apply_model_mode_requests(&mut options) {
+            tracing::warn!(
+                target: "agena::permission",
+                session_id,
+                model = %model,
+                error = %error,
+                "automatic approval model variant is unavailable; falling back to interactive confirmation"
+            );
+            return PermissionDecision::Ask {
+                reason: format!(
+                    "automatic approval model variant unavailable; falling back to confirmation: {reason}"
+                ),
+            };
+        }
 
         let action = serde_json::to_string(&check.action)
             .unwrap_or_else(|_| "{\"action\":\"unserializable\"}".to_owned());
@@ -1705,11 +1756,11 @@ impl SessionManager {
             top_p: None,
             top_k: None,
             seed: None,
-            thinking: None,
-            verbosity: None,
+            thinking: options.thinking,
+            verbosity: options.verbosity,
             response_format: Some(agena_provider::ResponseFormat::Text),
             responses_api_metadata: None,
-            request_override: Default::default(),
+            request_override: options.request_override,
         };
 
         let response = match state

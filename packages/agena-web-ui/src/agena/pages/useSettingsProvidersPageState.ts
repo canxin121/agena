@@ -5,6 +5,7 @@ import { useSettingsProvidersState } from './useSettingsProvidersState'
 
 export type SettingsProvidersPageStateSource = {
   catalogEntries: Parameters<typeof useSettingsProvidersState>[0]['catalogEntries']
+  permissionConfig: Parameters<typeof useSettingsProvidersState>[0]['permissionConfig']
   authProviders: Parameters<typeof useSettingsProvidersState>[0]['authProviders']
   browserAuthCodeDrafts: Parameters<typeof useSettingsProvidersState>[0]['browserAuthCodeDrafts']
   browserAuthInstanceDrafts: Parameters<typeof useSettingsProvidersState>[0]['browserAuthInstanceDrafts']
@@ -58,6 +59,7 @@ export function createSettingsProvidersPanelState(state: SettingsProvidersPanelS
     deviceAuthStartState: state.deviceAuthStartState,
     drafts: state.drafts,
     catalogEntries: state.catalogEntries,
+    permissionConfig: state.permissionConfig,
     load: state.load,
     providerModels: state.providerModels,
     providers: state.providers,

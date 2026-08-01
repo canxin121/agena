@@ -45,7 +45,6 @@ impl Backend {
         adapter_id: &str,
         model_id: &str,
         model_value: JsonValue,
-        set_default: bool,
     ) -> std::result::Result<ProviderStudioSaveResult, ProviderStudioSaveError> {
         let mut draft = draft;
         draft.normalize_shape();
@@ -64,19 +63,31 @@ impl Backend {
         };
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        if draft.default_adapter.trim().is_empty() {
+            draft.default_adapter = adapter_id.to_owned();
+        }
         draft
             .validate_for_adapters_for_save(&effective_adapter_ids)
             .map_err(ProviderStudioSaveError::Validation)?;
-        let default_adapter = if set_default {
-            adapter_id
-        } else {
-            optional_non_empty(draft.default_adapter.as_str()).unwrap_or(adapter_id)
-        };
-        let default_model = if set_default {
-            model_id
-        } else {
-            optional_non_empty(draft.default_model.as_str()).unwrap_or(model_id)
-        };
+        let current_provider = self
+            .read_file_provider_settings(provider_id)
+            .map_err(ProviderStudioSaveError::other)?;
+        let current_defaults = current_provider
+            .as_ref()
+            .and_then(JsonValue::as_object)
+            .and_then(|provider| provider.get("defaults"))
+            .and_then(JsonValue::as_object);
+        let default_adapter = current_defaults
+            .and_then(|defaults| defaults.get("adapter"))
+            .and_then(JsonValue::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| optional_non_empty(draft.default_adapter.as_str()))
+            .unwrap_or(adapter_id);
+        let default_model = current_defaults
+            .and_then(|defaults| defaults.get("model"))
+            .and_then(JsonValue::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .or_else(|| optional_non_empty(draft.default_model.as_str()));
         let existing_adapter = draft
             .source_provider_id
             .as_deref()
@@ -121,13 +132,18 @@ impl Backend {
         // provider patch. Otherwise an existing provider whose defaults came
         // from another config layer fails standalone file validation even
         // though Provider Studio visibly shows a selected default adapter.
-        provider_patch.insert(
-            "defaults".to_owned(),
-            json!({
-                "adapter": default_adapter,
-                "model": default_model,
-            }),
+        let mut defaults = JsonMap::new();
+        defaults.insert(
+            "adapter".to_owned(),
+            JsonValue::String(default_adapter.to_owned()),
         );
+        if let Some(default_model) = default_model {
+            defaults.insert(
+                "model".to_owned(),
+                JsonValue::String(default_model.to_owned()),
+            );
+        }
+        provider_patch.insert("defaults".to_owned(), JsonValue::Object(defaults));
         self.patch_provider_settings(provider_id, JsonValue::Object(provider_patch))
             .await
             .map_err(ProviderStudioSaveError::other)?;
@@ -158,6 +174,9 @@ impl Backend {
             .map_err(ProviderStudioSaveError::Validation)?;
         let effective_adapter_ids =
             self.effective_provider_draft_adapter_ids(&draft, &[adapter_id.to_owned()]);
+        if draft.default_adapter.trim().is_empty() {
+            draft.default_adapter = adapter_id.to_owned();
+        }
         draft
             .validate_for_adapters_for_save(&effective_adapter_ids)
             .map_err(ProviderStudioSaveError::Validation)?;

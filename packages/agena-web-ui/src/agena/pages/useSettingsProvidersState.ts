@@ -4,6 +4,7 @@ import type {
   AuthBrowserStartResponse,
   AuthDeviceStartResponse,
   AuthProvider,
+  ConfigSettingsReadResponse,
   ModelCatalogEntry,
   ProviderModel,
   ProviderSummary,
@@ -20,6 +21,7 @@ export type SettingsProvidersStateInput = {
   deviceAuthStartState: Record<string, AuthDeviceStartResponse | null>
   drafts: Record<string, string>
   catalogEntries: Ref<ModelCatalogEntry[]>
+  permissionConfig: Ref<ConfigSettingsReadResponse | null>
   load: () => Promise<void>
   providerModels: Record<string, ProviderModel[]>
   providers: Ref<ProviderSummary[]>
@@ -44,6 +46,7 @@ export function useSettingsProvidersState(input: SettingsProvidersStateInput) {
     deviceAuthStartState: input.deviceAuthStartState,
     drafts: input.drafts,
     catalogEntries: input.catalogEntries,
+    permissionConfig: input.permissionConfig,
     load: input.load,
     providerModels: input.providerModels,
     providers: input.providers,

@@ -238,7 +238,6 @@ pub(crate) fn remove_provider_studio_model_from_dialog(
             .map(|adapter| adapter.models.len())
             .unwrap_or_default(),
     );
-    provider_studio_ensure_default_selection(dialog);
 }
 
 pub(crate) fn remove_provider_studio_adapter_from_dialog(
@@ -273,7 +272,6 @@ pub(crate) fn remove_provider_studio_adapter_from_dialog(
             .map(|adapter| adapter.models.len())
             .unwrap_or_default(),
     );
-    provider_studio_ensure_default_selection(dialog);
 }
 
 const PROVIDER_MODEL_CONFIG_FIELDS: [ProviderModelConfigField; 15] = [

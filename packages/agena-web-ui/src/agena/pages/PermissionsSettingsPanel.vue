@@ -847,48 +847,6 @@ function changeSection(section: SectionId) {
                 </div>
               </article>
             </div>
-
-            <div class="permission-approval-editor">
-              <div class="permission-section-title-row">
-                <h4 class="permission-section-title">Automatic approval model</h4>
-                <span class="muted">Missing or unavailable models safely fall back to Ask.</span>
-              </div>
-              <div class="form-grid">
-                <div class="field">
-                  <label class="label" for="permission-approval-provider">Provider</label>
-                  <input
-                    id="permission-approval-provider"
-                    v-model="draft.approvalModel.providerId"
-                    class="input mono"
-                    placeholder="openai"
-                    :disabled="isBusy"
-                    @change="saveCurrentDraft"
-                  />
-                </div>
-                <div class="field">
-                  <label class="label" for="permission-approval-adapter">Adapter (optional)</label>
-                  <input
-                    id="permission-approval-adapter"
-                    v-model="draft.approvalModel.adapterId"
-                    class="input mono"
-                    placeholder="responses"
-                    :disabled="isBusy"
-                    @change="saveCurrentDraft"
-                  />
-                </div>
-                <div class="field full">
-                  <label class="label" for="permission-approval-model">Model</label>
-                  <input
-                    id="permission-approval-model"
-                    v-model="draft.approvalModel.modelId"
-                    class="input mono"
-                    placeholder="gpt-5"
-                    :disabled="isBusy"
-                    @change="saveCurrentDraft"
-                  />
-                </div>
-              </div>
-            </div>
           </section>
 
           <section v-else-if="activeSection === 'filesystem-default-zones'" class="permission-section-card">

@@ -60,11 +60,22 @@ pub async fn list_provider_models_response(
         ));
     }
 
-    let models = state
-        .provider_catalog()
-        .list_models(&provider_id_value)
-        .await
-        .map_err(|error| ApplicationError::internal(error.to_string()))?;
+    let catalog = state.provider_catalog();
+    let models = match catalog.list_models(&provider_id_value).await {
+        Ok(models) if !models.is_empty() => models,
+        Ok(_) => catalog
+            .configured_local_models(&provider_id_value)
+            .map_err(|error| ApplicationError::internal(error.to_string()))?,
+        Err(error) => {
+            let fallback = catalog
+                .configured_local_models(&provider_id_value)
+                .map_err(|fallback_error| ApplicationError::internal(fallback_error.to_string()))?;
+            if fallback.is_empty() {
+                return Err(ApplicationError::internal(error.to_string()));
+            }
+            fallback
+        }
+    };
     Ok(ProviderModelsResponse {
         provider_id,
         models: models

@@ -1,4 +1,122 @@
 impl App {
+    pub(crate) fn model_selection_mode_choice_items(
+        &self,
+        model: &ModelRef,
+        step: SessionModelModeStep,
+    ) -> UiResult<Vec<ChoiceItem>> {
+        let mut items = match step {
+            SessionModelModeStep::ThinkingMode => inspector_rows_to_mode_choice_items(
+                self.backend
+                    .model_thinking_mode_rows(model)
+                    .map_err(crate::UiFailure::internal)?,
+                ui_text::thinking_mode_display_value,
+            ),
+            SessionModelModeStep::SpeedMode => inspector_rows_to_mode_choice_items(
+                self.backend
+                    .model_speed_mode_rows(model)
+                    .map_err(crate::UiFailure::internal)?,
+                ui_text::speed_mode_display_value,
+            ),
+            SessionModelModeStep::Verbosity => self
+                .backend
+                .model_verbosity_values(model)
+                .map_err(crate::UiFailure::internal)?
+                .into_iter()
+                .map(|value| {
+                    choice_item(
+                        value,
+                        runtime_setting_choice_supported_model_detail(&self.i18n),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        };
+        if !items.is_empty() {
+            items.insert(
+                0,
+                choice_item_with_value(
+                    ui_text::t(&self.i18n, "value-default"),
+                    "",
+                    ui_text::t(&self.i18n, "settings-provider-default-mode-inherit-detail"),
+                ),
+            );
+        }
+        Ok(items)
+    }
+
+    pub(crate) fn open_model_selection_mode_step_or_finish(
+        &mut self,
+        purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
+        model: ModelRef,
+        thinking_mode: Option<String>,
+        speed_mode: Option<String>,
+        verbosity: Option<String>,
+        step: SessionModelModeStep,
+    ) {
+        let items = match self.model_selection_mode_choice_items(&model, step) {
+            Ok(items) => items,
+            Err(error) => {
+                self.flash_warning(error);
+                return;
+            }
+        };
+        if items.is_empty() {
+            match step {
+                SessionModelModeStep::ThinkingMode => self
+                    .open_model_selection_mode_step_or_finish(
+                        purpose,
+                        model,
+                        thinking_mode,
+                        speed_mode,
+                        verbosity,
+                        SessionModelModeStep::SpeedMode,
+                    ),
+                SessionModelModeStep::SpeedMode => self.open_model_selection_mode_step_or_finish(
+                    purpose,
+                    model,
+                    thinking_mode,
+                    speed_mode,
+                    verbosity,
+                    SessionModelModeStep::Verbosity,
+                ),
+                SessionModelModeStep::Verbosity => {
+                    self.finish_model_selection(
+                        purpose,
+                        model,
+                        thinking_mode,
+                        speed_mode,
+                        verbosity,
+                    );
+                }
+            }
+            return;
+        }
+
+        let current_value = match step {
+            SessionModelModeStep::ThinkingMode => thinking_mode.clone().unwrap_or_default(),
+            SessionModelModeStep::SpeedMode => speed_mode.clone().unwrap_or_default(),
+            SessionModelModeStep::Verbosity => verbosity.clone().unwrap_or_default(),
+        };
+        self.open_choice_overlay(self.build_choice_overlay(
+            settings_edit_title(
+                &self.i18n,
+                model_mode_display_label(&self.i18n, step).as_str(),
+            ),
+            model_mode_display_description(&self.i18n, step),
+            Some(current_value),
+            items,
+            ChoiceOverlayAction::ModelSelectionMode {
+                purpose,
+                model,
+                step,
+                thinking_mode,
+                speed_mode,
+                verbosity,
+            },
+            false,
+            agena_tui::choice::ChoicePresentationStyle::SelectOnly,
+        ));
+    }
+
     pub(crate) fn session_model_mode_choice_items(
         &self,
         step: SessionModelModeStep,
@@ -108,7 +226,7 @@ impl App {
     }
 }
 use crate::{
-    App, ChoiceItem, ChoiceOverlayAction, SessionModelModeStep, UiResult, choice_item,
+    App, ChoiceItem, ChoiceOverlayAction, ModelRef, SessionModelModeStep, UiResult, choice_item,
     choice_item_with_value, inspector_rows_to_mode_choice_items, model_mode_display_description,
     model_mode_display_label, runtime_setting_choice_supported_model_detail, settings_edit_title,
     ui_text,

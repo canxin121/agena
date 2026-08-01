@@ -224,11 +224,20 @@ pub(crate) fn settings_studio_provider_default_item(
         .find(|field| field.path == "providers.default")
         .copied()
         .expect("providers.default settings field must exist");
-    let file_value = get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
-    let effective_value =
+    let file_provider_value =
+        get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
+    let effective_provider_value =
         get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
+    let file_value = get_json_path(&sources.file, Some("providers.default_selection"))
+        .ok()
+        .filter(|value| !value.is_null())
+        .unwrap_or_else(|| file_provider_value.clone());
+    let effective_value = get_json_path(&sources.effective, Some("providers.default_selection"))
+        .ok()
+        .filter(|value| !value.is_null())
+        .unwrap_or(effective_provider_value);
     let effective_summary = provider_default_selection_summary(i18n, providers, &effective_value);
-    let current_summary = if file_value.is_null() {
+    let current_summary = if file_provider_value.is_null() && file_value.is_null() {
         ui_text::t(i18n, "settings-source-unset")
     } else {
         provider_default_selection_summary(i18n, providers, &file_value)
@@ -252,11 +261,85 @@ pub(crate) fn settings_studio_provider_default_item(
     )
 }
 
+pub(crate) fn settings_studio_provider_approval_model_item(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    global_permission: &agena_domain::PermissionConfig,
+    effective_permission: &agena_domain::PermissionConfig,
+) -> SettingsStudioItem<SettingsPickerAction> {
+    let current_summary = global_permission
+        .approval_model
+        .as_ref()
+        .map(|selection| approval_model_selection_summary(selection))
+        .unwrap_or_else(|| ui_text::t(i18n, "settings-source-unset"));
+    let effective_summary = effective_permission
+        .approval_model
+        .as_ref()
+        .map(|selection| approval_model_selection_summary(selection))
+        .unwrap_or_else(|| ui_text::t(i18n, "value-unset"));
+    let source_rows = settings_source_rows_for_config_path(
+        i18n,
+        sources,
+        "permission.approval_model",
+        current_summary.clone(),
+        effective_summary.clone(),
+    );
+    SettingsStudioItem::from_parts(
+        ui_text::t(i18n, "settings-field-permission-approval-model-label"),
+        effective_summary.clone(),
+        ui_text::t(i18n, "settings-field-permission-approval-model-description"),
+        Some("permission.approval_model".to_owned()),
+        Some(current_summary),
+        Some(effective_summary),
+        source_rows,
+        SettingsPickerAction::OpenPermissionApprovalModelChooser,
+    )
+}
+
+fn approval_model_selection_summary(selection: &agena_domain::ApprovalModelSelection) -> String {
+    let mut route = vec![selection.provider_id.clone()];
+    if let Some(adapter_id) = selection
+        .adapter_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        route.push(adapter_id.trim().to_owned());
+    }
+    route.push(selection.model_id.clone());
+    let mut variants = Vec::new();
+    if let Some(value) = selection.thinking_mode.as_deref() {
+        variants.push(format!("think={value}"));
+    }
+    if let Some(value) = selection.speed_mode.as_deref() {
+        variants.push(format!("speed={value}"));
+    }
+    if let Some(value) = selection.verbosity.as_deref() {
+        variants.push(format!("verbosity={value}"));
+    }
+    if !variants.is_empty() {
+        route.push(variants.join(", "));
+    }
+    route.join(" / ")
+}
+
 pub(crate) fn provider_default_selection_summary(
     i18n: &I18n,
     providers: &[ProviderSummaryResource],
     value: &JsonValue,
 ) -> String {
+    if let Ok(selection) =
+        serde_json::from_value::<agena_domain::ModelSelectionConfig>(value.clone())
+        && selection
+            .provider
+            .as_deref()
+            .is_some_and(|provider| !provider.trim().is_empty())
+        && selection
+            .model
+            .as_deref()
+            .is_some_and(|model| !model.trim().is_empty())
+    {
+        return model_selection_summary(&selection);
+    }
     let Some(provider_id) = value
         .as_str()
         .map(str::trim)
@@ -269,6 +352,45 @@ pub(crate) fn provider_default_selection_summary(
         .find(|provider| provider.provider_id == provider_id)
         .map(|provider| provider_default_route_summary(i18n, provider))
         .unwrap_or_else(|| provider_id.to_owned())
+}
+
+fn model_selection_summary(selection: &agena_domain::ModelSelectionConfig) -> String {
+    let mut route = Vec::new();
+    if let Some(provider) = selection
+        .provider
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        route.push(provider.trim().to_owned());
+    }
+    if let Some(adapter) = selection
+        .adapter
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        route.push(adapter.trim().to_owned());
+    }
+    if let Some(model) = selection
+        .model
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        route.push(model.trim().to_owned());
+    }
+    let mut variants = Vec::new();
+    if let Some(value) = selection.thinking_mode.as_deref() {
+        variants.push(format!("think={value}"));
+    }
+    if let Some(value) = selection.speed_mode.as_deref() {
+        variants.push(format!("speed={value}"));
+    }
+    if let Some(value) = selection.verbosity.as_deref() {
+        variants.push(format!("verbosity={value}"));
+    }
+    if !variants.is_empty() {
+        route.push(variants.join(", "));
+    }
+    join_inline_segments(vec![route.join(" / ")])
 }
 
 pub(crate) fn provider_default_route_summary(
@@ -289,13 +411,6 @@ pub(crate) fn provider_default_route_summary(
     }
 
     join_inline_segments(vec![route.join(" / ")])
-}
-
-pub(crate) fn provider_defaults_settings_path(provider_id: &str) -> String {
-    format!(
-        "providers.{}.defaults",
-        quoted_settings_segment(provider_id.trim())
-    )
 }
 
 pub(crate) fn settings_studio_harness_items(
@@ -354,6 +469,5 @@ use super::{
     SessionModelModeStep, SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem,
     SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, join_inline_segments,
 };
-use crate::quoted_settings_segment;
 use crate::ui_text;
 use crate::{format_setting_value_inline, settings_studio_provider_workbench_item};

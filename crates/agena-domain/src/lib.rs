@@ -130,7 +130,7 @@ pub use model_metadata::{
     normalize_model_output_modalities,
 };
 pub use model_request_override::ModelSpeedModeRequestOverride;
-pub use model_selection::ModelSelectionConfig;
+pub use model_selection::{ApprovalModelSelection, ModelSelectionConfig};
 pub use model_values::{CapabilitySupport, ModelInputModality, ModelLifecycle};
 pub use network_permission::NetworkPermissionConfig;
 pub use network_target::{NetworkTarget, NetworkTargetParseError};

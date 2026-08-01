@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ModelRef, NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionMode,
-    ToolPermissionConfig,
+    ApprovalModelSelection, NetworkPermissionConfig, PathAccessModes, PathPermissionConfig,
+    PermissionMode, ToolPermissionConfig,
 };
 
 /// Stable, serializable permission configuration independent of policy
@@ -24,7 +24,7 @@ pub struct PermissionConfig {
     /// fail closed to an interactive `ask` when this reference is absent or
     /// cannot be resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_model: Option<ModelRef>,
+    pub approval_model: Option<ApprovalModelSelection>,
 }
 
 impl PermissionConfig {

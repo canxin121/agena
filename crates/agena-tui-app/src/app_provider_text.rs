@@ -137,24 +137,14 @@ pub(crate) fn provider_studio_save_result_message(
         agena_tui_backend::ProviderStudioSaveResult::ProviderDraftSaved {
             provider_id,
             default_adapter,
-            default_model,
-        } => match default_model {
-            Some(default_model) => i18n.text_args(
-                "flash-provider-save-draft",
-                &agena_tui::fl_args!(
-                    "provider" => provider_id.clone(),
-                    "adapter" => default_adapter.clone(),
-                    "model" => default_model.clone(),
-                ),
+            ..
+        } => i18n.text_args(
+            "flash-provider-save-draft",
+            &agena_tui::fl_args!(
+                "provider" => provider_id.clone(),
+                "adapter" => default_adapter.clone(),
             ),
-            None => i18n.text_args(
-                "flash-provider-save-draft-no-model",
-                &agena_tui::fl_args!(
-                    "provider" => provider_id.clone(),
-                    "adapter" => default_adapter.clone(),
-                ),
-            ),
-        },
+        ),
         agena_tui_backend::ProviderStudioSaveResult::AdapterMatchesSaved {
             provider_id,
             adapter_id,
@@ -441,16 +431,13 @@ pub(crate) fn provider_studio_model_list_detail(
     model_id: &str,
 ) -> String {
     let key = provider_studio_model_key(adapter_id, model_id);
-    let mut parts = vec![provider_studio_catalog_match_label(
+    let parts = vec![provider_studio_catalog_match_label(
         i18n,
         dialog
             .catalog_matches
             .get(key.as_str())
             .map(|entry| entry.model_id.as_str()),
     )];
-    if dialog.draft.default_adapter == adapter_id && dialog.draft.default_model == model_id {
-        parts.push(ui_text::t(i18n, "overlay-provider-studio-default"));
-    }
     join_inline_segments(parts)
 }
 

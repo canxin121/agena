@@ -186,6 +186,21 @@ export async function listProviderModels(providerId: string): Promise<ProviderMo
   return response.models ?? []
 }
 
+/** Load model metadata for all configured providers without letting one
+ * unavailable provider hide the models exposed by the others. */
+export async function listProviderModelsForProviders(providerIds: string[]): Promise<Record<string, ProviderModel[]>> {
+  const entries = await Promise.all(
+    providerIds.map(async (providerId) => {
+      try {
+        return [providerId, await listProviderModels(providerId)] as const
+      } catch {
+        return [providerId, []] as const
+      }
+    }),
+  )
+  return Object.fromEntries(entries)
+}
+
 export async function listProviderAdapterModels(
   request: ProviderAdapterModelsRequest,
 ): Promise<ProviderAdapterModelsResponse> {

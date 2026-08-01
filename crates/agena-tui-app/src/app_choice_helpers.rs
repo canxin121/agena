@@ -314,6 +314,12 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
                 "field" => model_mode_display_label(i18n, *step)
             ),
         ),
+        ChoiceOverlayAction::ModelSelectionMode { step, .. } => i18n.text_args(
+            "overlay-choice-clear-runtime-detail",
+            &agena_tui::fl_args!(
+                "field" => model_mode_display_label(i18n, *step)
+            ),
+        ),
         ChoiceOverlayAction::ProviderStudioField(field) => i18n.text_args(
             "overlay-choice-clear-provider-detail",
             &agena_tui::fl_args!("field" => provider_studio_field_label(i18n, *field)),
@@ -394,14 +400,13 @@ pub(crate) fn provider_studio_provider_rows(
         provider_id: Some(provider.provider_id.clone()),
         label: provider.provider_id.clone(),
         detail: i18n.text_args(
-            "overlay-provider-studio-provider-row-detail",
+            "overlay-provider-studio-provider-row-detail-no-model",
             &agena_tui::fl_args!(
                 "adapter" => provider
                     .defaults
                     .adapter
                     .clone()
                     .unwrap_or_else(|| settings_choice_adapter_fallback(i18n)),
-                "model" => provider.defaults.model.clone(),
                 "count" => provider.adapters.len() as i64,
             ),
         ),
@@ -431,14 +436,13 @@ pub(crate) fn provider_list_create_item(
 
 pub(crate) fn i18n_provider_list_detail(i18n: &I18n, provider: &ProviderSummaryResource) -> String {
     i18n.text_args(
-        "overlay-provider-list-row-detail",
+        "overlay-provider-list-row-detail-no-model",
         &agena_tui::fl_args!(
             "adapter" => provider
                 .defaults
                 .adapter
                 .clone()
                 .unwrap_or_else(|| settings_choice_adapter_fallback(i18n)),
-            "model" => provider.defaults.model.clone(),
             "count" => provider.adapters.len() as i64,
         ),
     )

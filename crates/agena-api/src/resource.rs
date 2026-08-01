@@ -1463,7 +1463,7 @@ pub struct PermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolPermissionConfigResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub approval_model: Option<ModelRef>,
+    pub approval_model: Option<ApprovalModelSelectionResource>,
 }
 
 impl PermissionConfigResource {
@@ -1481,6 +1481,25 @@ impl PermissionConfigResource {
                 .is_none_or(ToolPermissionConfigResource::is_empty)
             && self.approval_model.is_none()
     }
+}
+
+/// Concrete automatic-permission model selection, including the inference
+/// variants chosen for the approval request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalModelSelectionResource {
+    pub provider_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adapter_id: Option<String>,
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

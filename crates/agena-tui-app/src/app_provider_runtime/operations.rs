@@ -95,7 +95,6 @@ impl App {
                     adapter_id.as_str(),
                     model_id.as_str(),
                     model_value,
-                    false,
                 )
                 .await;
             let _ = tx.send(AppMessage::ProviderStudioSaved {

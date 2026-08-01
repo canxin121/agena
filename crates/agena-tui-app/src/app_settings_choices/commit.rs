@@ -68,6 +68,54 @@ impl App {
                 self.advance_session_model_mode_step(step);
                 true
             }
+            ChoiceOverlayAction::ModelSelectionMode {
+                purpose,
+                model,
+                step,
+                mut thinking_mode,
+                mut speed_mode,
+                mut verbosity,
+            } => {
+                let value = choice_selection_value(&selection);
+                let value = (!value.trim().is_empty()).then(|| value.trim().to_owned());
+                match step {
+                    SessionModelModeStep::ThinkingMode => thinking_mode = value,
+                    SessionModelModeStep::SpeedMode => speed_mode = value,
+                    SessionModelModeStep::Verbosity => {
+                        verbosity = value.map(|value| value.to_ascii_lowercase())
+                    }
+                }
+                match step {
+                    SessionModelModeStep::ThinkingMode => self
+                        .open_model_selection_mode_step_or_finish(
+                            purpose,
+                            model,
+                            thinking_mode,
+                            speed_mode,
+                            verbosity,
+                            SessionModelModeStep::SpeedMode,
+                        ),
+                    SessionModelModeStep::SpeedMode => self
+                        .open_model_selection_mode_step_or_finish(
+                            purpose,
+                            model,
+                            thinking_mode,
+                            speed_mode,
+                            verbosity,
+                            SessionModelModeStep::Verbosity,
+                        ),
+                    SessionModelModeStep::Verbosity => {
+                        self.finish_model_selection(
+                            purpose,
+                            model,
+                            thinking_mode,
+                            speed_mode,
+                            verbosity,
+                        );
+                    }
+                }
+                true
+            }
             ChoiceOverlayAction::ProviderStudioField(field) => {
                 let value = choice_selection_value(&selection);
                 let Some((host, mut parent)) = self.take_provider_studio_dialog() else {
@@ -339,9 +387,9 @@ use crate::{
     App, ChoiceOverlay, ChoiceOverlayAction, Editor, JsonValue, Overlay,
     PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionMode, PermissionRuleStudioChoiceField,
     PermissionRuleSubjectKind, PermissionStudioCatalogKind, PermissionStudioEditorAction, Route,
-    SettingsFieldSpec, SettingsValueEditOverlay, apply_permission_studio_entries_mode,
-    apply_permission_studio_mode_input, get_json_path, parse_settings_field_input,
-    refresh_permission_rule_studio_dialog, setting_value_input_text, settings_edit_title,
-    settings_field_edit_title, settings_path_cleared_message, settings_path_updated_message,
-    settings_value_edit_prompt, ui_text,
+    SessionModelModeStep, SettingsFieldSpec, SettingsValueEditOverlay,
+    apply_permission_studio_entries_mode, apply_permission_studio_mode_input, get_json_path,
+    parse_settings_field_input, refresh_permission_rule_studio_dialog, setting_value_input_text,
+    settings_edit_title, settings_field_edit_title, settings_path_cleared_message,
+    settings_path_updated_message, settings_value_edit_prompt, ui_text,
 };

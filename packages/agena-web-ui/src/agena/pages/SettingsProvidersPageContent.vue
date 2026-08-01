@@ -20,6 +20,7 @@ const props = defineProps<{
     :device-auth-start-state="props.providers.deviceAuthStartState"
     :drafts="props.providers.drafts"
     :catalog-entries="props.providers.catalogEntries"
+    :permission-config="props.providers.permissionConfig"
     :load="props.providers.load"
     :provider-models="props.providers.providerModels"
     :providers="props.providers.providers"

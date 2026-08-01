@@ -17,15 +17,16 @@ agena config validate
 `config.example.json` 展示了最小启动面：
 
 - `tracing`: 日志过滤。
-- `providers.default`: 全局默认 provider 名称。
-- `providers.<id>.defaults`: provider-local 默认 adapter/model 路由；variant 由 model capability 或显式 session/run 选项决定。
+- `providers.default`: 兼容保留的全局默认 provider 名称。
+- `providers.default_selection`: 设置页模型选择器保存的全局 provider/adapter/model 路由，以及 think/speed/verbosity variant；模型目录刷新不会修改它。
+- `providers.<id>.defaults`: provider runtime 的兼容 adapter/model 路由；variant 由 model capability 或显式 session/run 选项决定，不在 provider defaults 中配置。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".agena_tools.mode`: 该 model route 的唯一工具模式：`provider_protocol`、`prompt_envelope` 或 `disabled`。
 - `providers.<id>.adapters.<adapter-id>.models."<model-id>".native_compaction`: 是否优先使用该路由的 Provider 原生会话压缩接口，默认 `true`；不支持或调用失败时回退到 Agena 文本总结。
 - `providers.<id>`: 至少配置一个逻辑 provider，通常由 provider-local `auth` + 一个或多个 `adapters` 组成。
 - `providers.<id>.network`: 该 provider 的请求超时和连接超时。
 - `runtime.providers.client_versions`: Codex、Claude Code 与 Gemini CLI 的请求身份兼容版本。
 - `session.compaction`: 自动 compaction 开关与保留 token 数。
-- `permission`: 路径、网络、tool 权限。
+- `permission`: 路径、网络、tool 权限，以及可选的自动审批模型。
 - `plugins.list."agena.memory".config` / `plugins.list."agena.web".config` / `plugins.list."agena.mcp".config` / `plugins.list."agena.lsp".config`: 内建 static plugin 的配置。
 - `plugins.policy`: 模型工具描述与 TUI plugin/tool 元数据的全局、按 plugin、按 tool 展示策略。
 - `harnesses`: browser/shell/editor harness 配置。
@@ -144,7 +145,6 @@ Provider 覆盖：
 ```text
 providers.<id>.defaults.provider
 providers.<id>.defaults.adapter
-providers.<id>.defaults.model
 providers.<id>.auth.base_url
 providers.<id>.auth.protocol_paths.<adapter>
 providers.<id>.auth.api_key
@@ -162,7 +162,6 @@ agena \
   --set tracing.filter=debug \
   --set providers.default=openai \
   --set providers.openai.defaults.adapter=openai \
-  --set providers.openai.defaults.model=gpt-4.1-mini \
   config resolve
 ```
 
@@ -395,8 +394,9 @@ Agena 只在顶层 `runtime` 暴露 provider 客户端身份版本，在顶层 `
 
 Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 
-- `[providers.default]`：全局默认 provider 名称。
-- `[providers.<id>.defaults]`：provider-local 默认 adapter/model 路由。thinking/speed 等 variant 不在 provider 层设置。
+- `[providers.default]`：兼容保留的全局默认 provider 名称。
+- `[providers.default_selection]`：全局默认 provider/adapter/model 和 think/speed/verbosity variant 的原子选择。设置页的 Default model 与 Automatic approval model 都从同一份 provider model catalog 选择。
+- `[providers.<id>.defaults]`：provider runtime 所需的兼容 adapter 路由。旧配置中的 `defaults.model` 仍可被读取，但设置页不会展示、写入或在模型目录刷新时重写它。
 - `[providers.<id>.auth]`：认证与身份来源。
 - `[providers.<id>.adapters.<adapter-id>]`：协议实现。
 - `[providers.<id>.adapters.<adapter-id>.models."<model-id>"]`：真实上游模型节点，以及该 model 的能力覆盖、Agena 工具传输和 Provider 工具配置。
@@ -409,10 +409,14 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 {
   "providers": {
     "default": "openai",
+    "default_selection": {
+      "provider": "openai",
+      "adapter": "openai_responses",
+      "model": "gpt-5"
+    },
     "openai": {
       "defaults": {
-        "adapter": "openai_responses",
-        "model": "gpt-5"
+        "adapter": "openai_responses"
       },
       "auth": {
         "mode": "api",
@@ -440,8 +444,8 @@ Provider 定义在 `[providers.<id>]`。当前 canonical 结构是：
 
 关键规则：
 
-- `providers.<id>.defaults.adapter` 和 `providers.<id>.defaults.model` 是 provider-local 默认选择。
-- `defaults.model` 必须是真实上游 model id。
+- `providers.<id>.defaults.adapter` 是 provider runtime 的兼容 adapter 路由；全局模型由 `providers.default_selection` 原子选择。
+- 旧配置中的 `defaults.model` 仅用于迁移/兼容回退，不再作为设置页的写入目标，也不会被模型刷新自动设置。
 - adapter 不再有自己的默认模型字段。
 - model key 就是真实 model id，不再有 `target_model`。
 - `enabled` 可挂在 provider / adapter / model 三层。
@@ -1325,6 +1329,7 @@ Runtime 只有一个固定主 Agent：`agena`。研究、计划、实现、revie
 
 ```text
 allow
+auto
 ask
 deny
 ```
@@ -1337,32 +1342,42 @@ deny
     "path": {
       "workspace": {
         "read": "allow",
-        "write": "ask"
+        "write": "auto"
       },
       "external": {
-        "read": "ask",
-        "write": "ask"
+        "read": "auto",
+        "write": "auto"
       }
     },
     "network": {
-      "internet": "ask",
-      "private": "ask",
-      "loopback": "ask"
+      "internet": "auto",
+      "private": "auto",
+      "loopback": "auto"
     },
     "tools": {
-      "default": "ask",
+      "default": "auto",
       "tags": {
         "filesystem_read": "allow",
-        "filesystem_write": "ask",
-        "network": "ask",
-        "shell": "ask"
+        "filesystem_write": "auto",
+        "network": "auto",
+        "shell": "auto"
       }
+    },
+    "approval_model": {
+      "provider_id": "openai",
+      "adapter_id": "openai_responses",
+      "model_id": "gpt-5",
+      "thinking_mode": "high",
+      "speed_mode": "fast",
+      "verbosity": "compact"
     }
   }
 }
 ```
 
-未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `ask`。`agena.web.search` 和 `agena.web.fetch` 是例外：它们的只读 tool 调用默认允许，实际 URL 仍逐项服从 network zone 和 network rule，因此把 `internet`、`private`、`loopback` 全部设为 `allow` 后不会再出现一层重复的通用 tool 审批。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
+未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，其余 workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `auto`；`auto` 使用配置的 `approval_model` 做安全审批。`approval_model` 缺失、模型或 variant 不存在、provider 不可用、请求失败或返回非 `ALLOW`/`DENY` 时，运行时都会 fail closed 回退到交互式 `ask`。`agena.web.search` 和 `agena.web.fetch` 是例外：它们的只读 tool 调用默认允许，实际 URL 仍逐项服从 network zone 和 network rule。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
+
+`permission.approval_model` 使用 `provider_id`、可选 `adapter_id`、`model_id` 以及可选的 `thinking_mode`、`speed_mode`、`verbosity`。TUI 和 Web 的 Models & Providers 设置页使用同一个模型选择入口；选择模型后会继续选择该模型实际支持的 variant。自动审批模型不可用时不会阻塞权限请求，而是转为 `ask`。
 
 ### Path permission
 

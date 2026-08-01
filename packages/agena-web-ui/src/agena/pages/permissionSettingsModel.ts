@@ -1,4 +1,4 @@
-import type { ModelRef, PermissionConfig, PermissionMode } from '../lib/agenaApi'
+import type { ApprovalModelSelection, PermissionConfig, PermissionMode } from '../lib/agenaApi'
 
 export type PermissionZoneModes = {
   read: PermissionMode
@@ -26,6 +26,9 @@ export type PermissionEditorModel = {
     providerId: string
     adapterId: string
     modelId: string
+    thinkingMode: string
+    speedMode: string
+    verbosity: string
   }
 }
 
@@ -65,7 +68,7 @@ export function createPermissionEditorModel(): PermissionEditorModel {
       names: {},
       rules: {},
     },
-    approvalModel: { providerId: '', adapterId: '', modelId: '' },
+    approvalModel: { providerId: '', adapterId: '', modelId: '', thinkingMode: '', speedMode: '', verbosity: '' },
   }
 }
 
@@ -109,6 +112,9 @@ export function normalizePermissionEditorModel(value: unknown): PermissionEditor
       providerId: typeof approvalModel.provider_id === 'string' ? approvalModel.provider_id : '',
       adapterId: typeof approvalModel.adapter_id === 'string' ? approvalModel.adapter_id : '',
       modelId: typeof approvalModel.model_id === 'string' ? approvalModel.model_id : '',
+      thinkingMode: typeof approvalModel.thinking_mode === 'string' ? approvalModel.thinking_mode : '',
+      speedMode: typeof approvalModel.speed_mode === 'string' ? approvalModel.speed_mode : '',
+      verbosity: typeof approvalModel.verbosity === 'string' ? approvalModel.verbosity : '',
     },
   }
 }
@@ -178,6 +184,9 @@ export function replacePermissionEditorModel(target: PermissionEditorModel, sour
   target.approvalModel.providerId = source.approvalModel.providerId
   target.approvalModel.adapterId = source.approvalModel.adapterId
   target.approvalModel.modelId = source.approvalModel.modelId
+  target.approvalModel.thinkingMode = source.approvalModel.thinkingMode
+  target.approvalModel.speedMode = source.approvalModel.speedMode
+  target.approvalModel.verbosity = source.approvalModel.verbosity
 }
 
 /** Convert the editor's UI-only `entries` shape to the strict runtime shape. */
@@ -185,12 +194,17 @@ export function permissionConfigFromEditorModel(model: PermissionEditorModel): P
   const providerId = model.approvalModel.providerId.trim()
   const adapterId = model.approvalModel.adapterId.trim()
   const modelId = model.approvalModel.modelId.trim()
-  const approval_model: ModelRef | undefined =
+  const approval_model: ApprovalModelSelection | undefined =
     providerId && modelId
       ? {
           provider_id: providerId,
           ...(adapterId ? { adapter_id: adapterId } : {}),
           model_id: modelId,
+          ...(model.approvalModel.thinkingMode.trim()
+            ? { thinking_mode: model.approvalModel.thinkingMode.trim() }
+            : {}),
+          ...(model.approvalModel.speedMode.trim() ? { speed_mode: model.approvalModel.speedMode.trim() } : {}),
+          ...(model.approvalModel.verbosity.trim() ? { verbosity: model.approvalModel.verbosity.trim() } : {}),
         }
       : undefined
 

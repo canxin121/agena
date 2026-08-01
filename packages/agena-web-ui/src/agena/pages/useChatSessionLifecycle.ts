@@ -9,6 +9,7 @@ import {
   getSessionTree,
   listPluginToolRegistryChanges,
   listProviders,
+  listProviderModelsForProviders,
   listRewindCheckpoints,
   listSessionTimeline,
   listSessions,
@@ -70,6 +71,7 @@ export type ChatSessionLifecycleDeps = {
   getSessionTree: typeof getSessionTree
   listPluginToolRegistryChanges: typeof listPluginToolRegistryChanges
   listProviders: typeof listProviders
+  listProviderModelsForProviders: typeof listProviderModelsForProviders
   listRewindCheckpoints: typeof listRewindCheckpoints
   listSessionTimeline: typeof listSessionTimeline
   listSessions: typeof listSessions
@@ -85,6 +87,7 @@ const defaultDeps: ChatSessionLifecycleDeps = {
   getSessionTree,
   listPluginToolRegistryChanges,
   listProviders,
+  listProviderModelsForProviders,
   listRewindCheckpoints,
   listSessionTimeline,
   listSessions,
@@ -194,6 +197,13 @@ export function useChatSessionLifecycle(
 
     input.runtime.value = runtimeData
     input.providers.value = providerData
+    const providerModels = await deps.listProviderModelsForProviders(
+      providerData.map((provider) => provider.provider_id),
+    )
+    for (const providerId of Object.keys(input.providerModels)) {
+      if (!providerModels[providerId]) delete input.providerModels[providerId]
+    }
+    Object.assign(input.providerModels, providerModels)
     input.workspaces.value = workspaceData
 
     if (!input.selectedProviderId.value && providerData.length === 1) {

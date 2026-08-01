@@ -36,7 +36,6 @@ impl App {
         if !dialog.adapter_models.is_empty() {
             provider_studio_restore_model_selection(dialog);
         }
-        provider_studio_ensure_default_selection(dialog);
         self.sync_provider_studio_auth_poll_deadline(dialog, Instant::now(), false);
     }
 
@@ -112,7 +111,7 @@ use crate::{
     App, BTreeSet, Instant, ProviderStudioOverlay, provider_model_catalog_lookup_id,
     provider_studio_adapter_selectable, provider_studio_auth_poll_interval,
     provider_studio_candidate_adapter_ids, provider_studio_catalog_match_model,
-    provider_studio_detail_fields, provider_studio_ensure_default_selection,
-    provider_studio_model_key, provider_studio_restore_model_selection,
-    provider_studio_selected_adapter_models, provider_studio_visible_fields,
+    provider_studio_detail_fields, provider_studio_model_key,
+    provider_studio_restore_model_selection, provider_studio_selected_adapter_models,
+    provider_studio_visible_fields,
 };

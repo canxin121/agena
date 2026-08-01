@@ -5,7 +5,7 @@ use std::{
 };
 
 use agena_api::resource::ProviderAdapterModelsResource;
-use agena_domain::{PermissionConfig, UserInputRequest};
+use agena_domain::{ModelRef, PermissionConfig, UserInputRequest};
 use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, PermissionScope};
 
 use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
@@ -122,6 +122,14 @@ pub(crate) enum ChoiceOverlayAction {
     InsertContent,
     SettingsField(SettingsFieldSpec),
     SessionModelMode(SessionModelModeStep),
+    ModelSelectionMode {
+        purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
+        model: ModelRef,
+        step: SessionModelModeStep,
+        thinking_mode: Option<String>,
+        speed_mode: Option<String>,
+        verbosity: Option<String>,
+    },
     ProviderStudioField(ProviderStudioField),
     ProviderStudioModelField(ProviderModelConfigField),
     PermissionRuleStudio(PermissionRuleStudioChoiceField),
@@ -177,6 +185,7 @@ pub(crate) enum SettingsFieldKind {
 pub(crate) enum SettingsPickerAction {
     EditField(SettingsFieldSpec),
     OpenProviderDefaultModelChooser,
+    OpenPermissionApprovalModelChooser,
     OpenProviderList,
     OpenModelCatalogWorkbench,
     OpenGlobalPermissionWorkbench,

@@ -682,6 +682,13 @@ export type ModelRef = {
   model_id: string
 }
 
+export type ApprovalModelSelection = ModelRef & {
+  thinking_mode?: string | null
+  speed_mode?: string | null
+  verbosity?: string | null
+  parallel_tool_calls?: boolean | null
+}
+
 export type PathAccessModes = {
   read?: PermissionMode
   write?: PermissionMode
@@ -716,7 +723,7 @@ export type PermissionConfig = {
   network?: NetworkPermissionConfig
   entries?: ToolPermissionConfig
   tools?: ToolPermissionConfig
-  approval_model?: ModelRef
+  approval_model?: ApprovalModelSelection
 }
 
 export type PermissionSubjectKind = 'tool' | 'path_access' | 'network_access'

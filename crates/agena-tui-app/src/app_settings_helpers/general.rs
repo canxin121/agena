@@ -8,10 +8,6 @@ use crate::{
     permission_override_summary, ui_text,
 };
 
-pub(crate) fn quoted_settings_segment(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
 pub(crate) fn settings_studio_plugin_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,

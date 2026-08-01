@@ -206,7 +206,7 @@ pub(crate) fn provider_studio_available_model_keys(
         .collect()
 }
 
-pub(crate) fn provider_studio_new_default_selected_model_keys(
+pub(crate) fn provider_studio_new_selected_model_keys(
     adapter_models: &[ProviderAdapterModelsResource],
     selected_adapter_ids: &BTreeSet<String>,
     previously_available: &BTreeSet<String>,
@@ -276,59 +276,6 @@ pub(crate) fn provider_studio_restore_model_selection(dialog: &mut ProviderStudi
     }
 }
 
-pub(crate) fn provider_studio_first_selected_model<'a>(
-    dialog: &'a ProviderStudioOverlay,
-    adapter_id: &str,
-) -> Option<&'a ProviderModelResource> {
-    dialog
-        .adapter_models
-        .iter()
-        .find(|adapter_models| adapter_models.adapter_id == adapter_id)
-        .and_then(|adapter_models| {
-            adapter_models
-                .models
-                .iter()
-                .find(|model| provider_studio_model_selected(dialog, adapter_id, model.id.as_ref()))
-        })
-}
-
-pub(crate) fn provider_studio_ensure_default_selection(dialog: &mut ProviderStudioOverlay) {
-    let default_adapter_valid = dialog
-        .selected_adapter_ids
-        .contains(dialog.draft.default_adapter.as_str())
-        && provider_studio_adapter_selectable(dialog, dialog.draft.default_adapter.as_str());
-    if !default_adapter_valid {
-        let replacement = provider_studio_selected_adapter_id(dialog)
-            .filter(|adapter_id| dialog.selected_adapter_ids.contains(adapter_id.as_str()))
-            .filter(|adapter_id| provider_studio_adapter_selectable(dialog, adapter_id.as_str()))
-            .or_else(|| {
-                dialog
-                    .selected_adapter_ids
-                    .iter()
-                    .find(|adapter_id| {
-                        provider_studio_adapter_selectable(dialog, adapter_id.as_str())
-                    })
-                    .cloned()
-            });
-        let Some(replacement) = replacement else {
-            dialog.draft.default_adapter.clear();
-            dialog.draft.default_model.clear();
-            return;
-        };
-        dialog.draft.default_adapter = replacement;
-    }
-
-    let first_selected_model =
-        provider_studio_first_selected_model(dialog, dialog.draft.default_adapter.as_str());
-    let default_model_valid =
-        first_selected_model.is_some_and(|model| model.id == dialog.draft.default_model);
-    if !default_model_valid {
-        dialog.draft.default_model = first_selected_model
-            .map(|model| model.id.to_string())
-            .unwrap_or_default();
-    }
-}
-
 pub(crate) fn provider_studio_supports_saved_model_listing(draft: &ProviderConfigDraft) -> bool {
     draft.supports_saved_model_listing()
 }
@@ -367,7 +314,7 @@ mod tests {
     use super::{
         ProviderAdapterModelsResource, ProviderModelResource, provider_studio_available_model_keys,
         provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,
-        provider_studio_new_default_selected_model_keys,
+        provider_studio_new_selected_model_keys,
     };
     use std::collections::BTreeSet;
 
@@ -393,7 +340,7 @@ mod tests {
         )];
         let previously_available = provider_studio_available_model_keys(previous.as_slice());
 
-        let selected = provider_studio_new_default_selected_model_keys(
+        let selected = provider_studio_new_selected_model_keys(
             refreshed.as_slice(),
             &BTreeSet::from(["openai_responses".to_owned()]),
             &previously_available,
@@ -409,7 +356,7 @@ mod tests {
     fn models_from_unselected_adapters_are_not_auto_selected() {
         let refreshed = vec![adapter_models("openai_responses", &["new-a"])];
 
-        let selected = provider_studio_new_default_selected_model_keys(
+        let selected = provider_studio_new_selected_model_keys(
             refreshed.as_slice(),
             &BTreeSet::new(),
             &BTreeSet::new(),

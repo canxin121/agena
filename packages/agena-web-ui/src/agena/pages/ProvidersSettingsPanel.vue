@@ -4,11 +4,15 @@ import { computed, onMounted, reactive, ref, watchEffect, type Ref } from 'vue'
 
 import {
   getSettings,
+  deleteSettings,
   listDraftProviderAdapterModels,
   listSavedProviderAdapterModels,
   listModelCatalogEntries,
   lookupModelCatalogEntries,
+  listProviderModelsForProviders,
   patchSettings,
+  providerModelThinkingModeSelector,
+  setSettings,
   setProviderApiKey,
 } from '../lib/agenaApi'
 import {
@@ -31,6 +35,7 @@ import type {
   AuthBrowserStartResponse,
   AuthDeviceStartResponse,
   AuthProvider,
+  ConfigSettingsReadResponse,
   ModelCatalogEntry,
   ModelCatalogSummary,
   ProviderAdapterModels,
@@ -49,6 +54,7 @@ const props = defineProps<{
   deviceAuthStartState: Record<string, AuthDeviceStartResponse | null>
   drafts: Record<string, string>
   catalogEntries: ModelCatalogEntry[]
+  permissionConfig: Ref<ConfigSettingsReadResponse | null>
   load: () => Promise<void>
   providerModels: Record<string, ProviderModel[]>
   providers: ProviderSummary[]
@@ -95,10 +101,33 @@ const submittingConfig = ref(false)
 const clinePassBootstrapApiKey = ref('')
 const catalogCopyProviderId = ref('')
 const catalogCopyAdapterId = ref('openai_responses')
-const catalogCopySetDefault = ref(false)
 const providerModelProviderId = ref('')
-const providerModelSetDefault = ref(false)
 const providerModelDraft = ref<ModelCatalogEditableDraft>(createEmptyModelCatalogDraft('openai_responses', ''))
+type ModelSelectionDraft = {
+  providerId: string
+  adapterId: string
+  modelId: string
+  thinkingMode: string
+  speedMode: string
+  verbosity: string
+}
+
+function createEmptyModelSelectionDraft(): ModelSelectionDraft {
+  return {
+    providerId: '',
+    adapterId: '',
+    modelId: '',
+    thinkingMode: '',
+    speedMode: '',
+    verbosity: '',
+  }
+}
+
+const defaultModelSelection = reactive<ModelSelectionDraft>(createEmptyModelSelectionDraft())
+const approvalModelSelection = reactive<ModelSelectionDraft>(createEmptyModelSelectionDraft())
+const modelSelectionsLoading = ref(false)
+const modelSelectionsSaving = ref(false)
+const loadedProviderModels = reactive<Record<string, ProviderModel[]>>({})
 const draftAdapterModelLists = ref<ProviderAdapterModels[]>([])
 const providerAdapterModelLists = reactive<Record<string, ProviderAdapterModels[]>>({})
 const listingDraftAdapters = ref(false)
@@ -189,6 +218,217 @@ function providerName(providerId: string) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(' ')
+}
+
+type ModelSelectionOption = {
+  key: string
+  providerId: string
+  adapterId: string
+  modelId: string
+  label: string
+  model: ProviderModel
+}
+
+function modelSelectionKey(providerId: string, adapterId: string, modelId: string): string {
+  return [providerId, adapterId, modelId].join('\u001f')
+}
+
+const modelSelectionOptions = computed<ModelSelectionOption[]>(() => {
+  const options: ModelSelectionOption[] = []
+  for (const provider of props.providers) {
+    const loadedModels = loadedProviderModels[provider.provider_id]
+    const providedModels = props.providerModels[provider.provider_id]
+    const defaultModel = String(provider.defaults.model || '').trim()
+    const providerModels =
+      loadedModels?.length || providedModels?.length
+        ? loadedModels?.length
+          ? loadedModels
+          : providedModels || []
+        : defaultModel
+          ? [
+              {
+                provider_id: provider.provider_id,
+                adapter_id: provider.defaults.adapter || undefined,
+                id: defaultModel,
+              },
+            ]
+          : []
+    for (const model of providerModels) {
+      const adapterId = String(model.adapter_id || provider.defaults.adapter || '').trim()
+      const modelId = String(model.id || '').trim()
+      if (!modelId) continue
+      options.push({
+        key: modelSelectionKey(provider.provider_id, adapterId, modelId),
+        providerId: provider.provider_id,
+        adapterId,
+        modelId,
+        label: `${providerName(provider.provider_id)} / ${adapterId || 'auto'} / ${model.display_name || modelId}`,
+        model,
+      })
+    }
+  }
+  return options.sort((left, right) => left.label.localeCompare(right.label))
+})
+
+function selectionOption(selection: ModelSelectionDraft): ModelSelectionOption | undefined {
+  return modelSelectionOptions.value.find(
+    (option) =>
+      option.providerId === selection.providerId &&
+      option.adapterId === selection.adapterId &&
+      option.modelId === selection.modelId,
+  )
+}
+
+function modelThinkingModeName(mode: NonNullable<ProviderModel['thinking_modes']>[number]): string {
+  return providerModelThinkingModeSelector(mode)
+}
+
+function thinkingModeOptions(selection: ModelSelectionDraft) {
+  const modes = selectionOption(selection)?.model.thinking_modes || []
+  return [...new Set(modes.map(modelThinkingModeName).filter(Boolean))].sort()
+}
+
+function speedModeOptions(selection: ModelSelectionDraft) {
+  const modes = selectionOption(selection)?.model.speed_modes || {}
+  return Object.keys(modes).sort()
+}
+
+function verbosityOptions(selection: ModelSelectionDraft) {
+  return selectionOption(selection)?.model.metadata?.supports_verbosity ? ['low', 'medium', 'high'] : []
+}
+
+function updateModelSelection(selection: ModelSelectionDraft, event: Event) {
+  const key = String((event.target as HTMLSelectElement).value || '')
+  if (!key) {
+    selection.providerId = ''
+    selection.adapterId = ''
+    selection.modelId = ''
+    selection.thinkingMode = ''
+    selection.speedMode = ''
+    selection.verbosity = ''
+    return
+  }
+  const option = modelSelectionOptions.value.find((candidate) => candidate.key === key)
+  if (!option) return
+  selection.providerId = option.providerId
+  selection.adapterId = option.adapterId
+  selection.modelId = option.modelId
+  selection.thinkingMode = ''
+  selection.speedMode = ''
+  selection.verbosity = ''
+}
+
+function selectionPayload(selection: ModelSelectionDraft) {
+  return {
+    provider: selection.providerId,
+    ...(selection.adapterId ? { adapter: selection.adapterId } : {}),
+    model: selection.modelId,
+    ...(selection.thinkingMode ? { thinking_mode: selection.thinkingMode } : {}),
+    ...(selection.speedMode ? { speed_mode: selection.speedMode } : {}),
+    ...(selection.verbosity ? { verbosity: selection.verbosity } : {}),
+  }
+}
+
+function approvalSelectionPayload(selection: ModelSelectionDraft) {
+  return {
+    provider_id: selection.providerId,
+    ...(selection.adapterId ? { adapter_id: selection.adapterId } : {}),
+    model_id: selection.modelId,
+    ...(selection.thinkingMode ? { thinking_mode: selection.thinkingMode } : {}),
+    ...(selection.speedMode ? { speed_mode: selection.speedMode } : {}),
+    ...(selection.verbosity ? { verbosity: selection.verbosity } : {}),
+  }
+}
+
+function applySelectionRecord(target: ModelSelectionDraft, value: unknown, fallbackProvider?: ProviderSummary) {
+  const record = recordValue(value) || {}
+  const providerId = String(record.provider ?? record.provider_id ?? fallbackProvider?.provider_id ?? '').trim()
+  const provider = props.providers.find((candidate) => candidate.provider_id === providerId) || fallbackProvider
+  const modelId = String(record.model ?? record.model_id ?? provider?.defaults.model ?? '').trim()
+  const adapterId = String(record.adapter ?? record.adapter_id ?? provider?.defaults.adapter ?? '').trim()
+  target.providerId = providerId
+  target.adapterId = adapterId
+  target.modelId = modelId
+  target.thinkingMode = String(record.thinking_mode || '').trim()
+  target.speedMode = String(record.speed_mode || '').trim()
+  target.verbosity = String(record.verbosity || '').trim()
+}
+
+async function loadProviderModelsForSelection() {
+  const models = await listProviderModelsForProviders(props.providers.map((provider) => provider.provider_id))
+  for (const providerId of Object.keys(loadedProviderModels)) {
+    if (!models[providerId]) delete loadedProviderModels[providerId]
+  }
+  for (const [providerId, providerModels] of Object.entries(models)) {
+    loadedProviderModels[providerId] = providerModels
+  }
+}
+
+async function loadModelSelections() {
+  modelSelectionsLoading.value = true
+  try {
+    await loadProviderModelsForSelection()
+    const [defaultSelectionResponse, defaultProviderResponse] = await Promise.all([
+      getSettings({ path: 'providers.default_selection', source: 'effective' }),
+      getSettings({ path: 'providers.default', source: 'effective' }),
+    ])
+    const defaultProviderId = String(defaultProviderResponse.value || '').trim()
+    const defaultProvider = props.providers.find((provider) => provider.provider_id === defaultProviderId)
+    applySelectionRecord(defaultModelSelection, defaultSelectionResponse.value, defaultProvider)
+
+    const permissionRoot = recordValue(props.permissionConfig.value?.value)
+    applySelectionRecord(approvalModelSelection, permissionRoot?.approval_model)
+    if (!approvalModelSelection.providerId) {
+      approvalModelSelection.adapterId = ''
+      approvalModelSelection.modelId = ''
+      approvalModelSelection.thinkingMode = ''
+      approvalModelSelection.speedMode = ''
+      approvalModelSelection.verbosity = ''
+    }
+  } catch (err) {
+    setConfigError(userErrorMessage(err))
+  } finally {
+    modelSelectionsLoading.value = false
+  }
+}
+
+async function saveModelSelections() {
+  if (!defaultModelSelection.providerId || !defaultModelSelection.modelId) {
+    setConfigError('Choose a default model first.')
+    return
+  }
+  modelSelectionsSaving.value = true
+  try {
+    await setSettings({
+      path: 'providers.default',
+      value: defaultModelSelection.providerId,
+      validate: true,
+      reload: true,
+    })
+    await setSettings({
+      path: 'providers.default_selection',
+      value: selectionPayload(defaultModelSelection),
+      validate: true,
+      reload: true,
+    })
+    if (approvalModelSelection.providerId && approvalModelSelection.modelId) {
+      await setSettings({
+        path: 'permission.approval_model',
+        value: approvalSelectionPayload(approvalModelSelection),
+        validate: true,
+        reload: true,
+      })
+    } else {
+      await deleteSettings({ path: 'permission.approval_model', validate: true, reload: true })
+    }
+    setConfigMessage('Saved the default and automatic approval model selections with their variants.')
+    await props.load()
+    await loadModelSelections()
+  } catch (err) {
+    setConfigError(userErrorMessage(err))
+  } finally {
+    modelSelectionsSaving.value = false
+  }
 }
 
 function credentialBadgeClass(provider: AuthProvider) {
@@ -582,7 +822,6 @@ async function loadListedProviderModel(providerId: string, adapterId: string, mo
     setConfigError(userErrorMessage(err))
     return
   }
-  providerModelSetDefault.value = false
   catalogCopyProviderId.value = providerId
   catalogCopyAdapterId.value = adapterId
   setConfigMessage(`Loaded ${providerId}/${adapterId}/${model.id} into provider model draft.`)
@@ -645,7 +884,6 @@ async function patchProviderAdapterModel(input: {
   adapterId: string
   modelId: string
   definition: Record<string, unknown>
-  setDefault: boolean
 }) {
   const providerId = input.providerId.trim()
   const adapterId = input.adapterId.trim()
@@ -665,13 +903,6 @@ async function patchProviderAdapterModel(input: {
       },
     },
   }
-  if (input.setDefault) {
-    providerPatch.defaults = {
-      adapter: adapterId,
-      model: modelId,
-    }
-  }
-
   submittingConfig.value = true
   try {
     await patchSettings({
@@ -739,7 +970,6 @@ async function createProvider() {
           enabled: true,
           defaults: {
             adapter: adapterId,
-            model: modelId,
           },
           auth,
           adapters: adaptersPatch,
@@ -750,7 +980,7 @@ async function createProvider() {
     })
     const addedAdapterCount = Object.keys(adaptersPatch).length
     setConfigMessage(
-      `Created provider ${providerId} with ${addedAdapterCount} adapter(s); default ${adapterId}/${modelId}.`,
+      `Created provider ${providerId} with ${addedAdapterCount} adapter(s); initial model ${adapterId}/${modelId}.`,
     )
     await props.load()
   } catch (err) {
@@ -771,7 +1001,6 @@ async function installClinePassPreset() {
           enabled: true,
           defaults: {
             adapter: 'openai_chat_completions',
-            model: CLINE_PASS_DEFAULT_MODEL_ID,
           },
           auth: {
             mode: 'api',
@@ -826,7 +1055,6 @@ async function bootstrapClinePassCredential() {
             enabled: true,
             defaults: {
               adapter: 'openai_chat_completions',
-              model: CLINE_PASS_DEFAULT_MODEL_ID,
             },
             auth: {
               mode: 'api',
@@ -870,7 +1098,6 @@ function loadCatalogEntryIntoProviderDraft(entry: ModelCatalogEntry) {
   providerModelDraft.value = createModelCatalogDraftFromEntry(entry)
   providerModelDraft.value.adapter_id = catalogCopyAdapterId.value || providerModelDraft.value.adapter_id
   providerModelProviderId.value = catalogCopyProviderId.value || providerModelProviderId.value
-  providerModelSetDefault.value = catalogCopySetDefault.value
   setConfigMessage(`Loaded ${entry.model_id} into provider model draft.`)
 }
 
@@ -880,7 +1107,6 @@ async function saveProviderModelDraft() {
     adapterId: providerModelDraft.value.adapter_id,
     modelId: providerModelDraft.value.model_id,
     definition: buildConfiguredProviderModelFromDraft(providerModelDraft.value),
-    setDefault: providerModelSetDefault.value,
   })
 }
 
@@ -890,9 +1116,23 @@ async function copyCatalogEntryToProvider(entry: ModelCatalogEntry) {
     adapterId: catalogCopyAdapterId.value,
     modelId: entry.model_id,
     definition: modelDefinitionFromEntry(entry),
-    setDefault: catalogCopySetDefault.value,
   })
 }
+
+watch(
+  () => props.providers.map((provider) => provider.provider_id).join('\u001f'),
+  (providerKey) => {
+    if (providerKey) void loadModelSelections()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => props.permissionConfig.value,
+  () => {
+    if (props.providers.length) void loadModelSelections()
+  },
+)
 
 onMounted(() => {
   void loadCatalogPage(0)
@@ -926,6 +1166,152 @@ onMounted(() => {
 
       <p v-if="props.actionMessage.value" class="muted" style="margin-top: 12px">{{ props.actionMessage.value }}</p>
       <p v-if="props.actionError.value" class="muted" style="margin-top: 8px">{{ props.actionError.value }}</p>
+    </section>
+
+    <section class="record-card">
+      <div class="settings-panel-header">
+        <div>
+          <p class="settings-panel-kicker">Model Selection</p>
+          <h3 class="settings-panel-title">Default and Automatic Approval Models</h3>
+          <p class="muted" style="margin-top: 8px">
+            Both selections use the same provider/model list. Choosing a model also chooses its think, speed, and
+            verbosity variants; an empty variant inherits that model's capability default.
+          </p>
+        </div>
+        <button
+          class="button primary"
+          :disabled="modelSelectionsLoading || modelSelectionsSaving || !modelSelectionOptions.length"
+          @click="saveModelSelections"
+        >
+          {{ modelSelectionsSaving ? 'Saving…' : 'Save Model Selections' }}
+        </button>
+      </div>
+
+      <p v-if="modelSelectionsLoading" class="muted">Loading current model selections…</p>
+      <div v-else class="form-grid">
+        <div class="field full">
+          <label class="label" for="default-model-selection">Default model</label>
+          <select
+            id="default-model-selection"
+            class="select mono"
+            :value="
+              modelSelectionKey(
+                defaultModelSelection.providerId,
+                defaultModelSelection.adapterId,
+                defaultModelSelection.modelId,
+              )
+            "
+            :disabled="modelSelectionsSaving || !modelSelectionOptions.length"
+            @change="updateModelSelection(defaultModelSelection, $event)"
+          >
+            <option value="">Select provider / adapter / model</option>
+            <option v-for="option in modelSelectionOptions" :key="`default-${option.key}`" :value="option.key">
+              {{ option.label }}
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="default-thinking-mode">Default think variant</label>
+          <select id="default-thinking-mode" v-model="defaultModelSelection.thinkingMode" class="select mono">
+            <option value="">Model default</option>
+            <option
+              v-for="mode in thinkingModeOptions(defaultModelSelection)"
+              :key="`default-think-${mode}`"
+              :value="mode"
+            >
+              {{ mode }}
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="default-speed-mode">Default speed variant</label>
+          <select id="default-speed-mode" v-model="defaultModelSelection.speedMode" class="select mono">
+            <option value="">Model default</option>
+            <option
+              v-for="mode in speedModeOptions(defaultModelSelection)"
+              :key="`default-speed-${mode}`"
+              :value="mode"
+            >
+              {{ mode }}
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="default-verbosity">Default verbosity</label>
+          <select id="default-verbosity" v-model="defaultModelSelection.verbosity" class="select mono">
+            <option value="">Model default</option>
+            <option
+              v-for="mode in verbosityOptions(defaultModelSelection)"
+              :key="`default-verbosity-${mode}`"
+              :value="mode"
+            >
+              {{ mode }}
+            </option>
+          </select>
+        </div>
+
+        <div class="field full">
+          <label class="label" for="approval-model-selection">Automatic approval model</label>
+          <select
+            id="approval-model-selection"
+            class="select mono"
+            :value="
+              modelSelectionKey(
+                approvalModelSelection.providerId,
+                approvalModelSelection.adapterId,
+                approvalModelSelection.modelId,
+              )
+            "
+            :disabled="modelSelectionsSaving || !modelSelectionOptions.length"
+            @change="updateModelSelection(approvalModelSelection, $event)"
+          >
+            <option value="">Select provider / adapter / model</option>
+            <option v-for="option in modelSelectionOptions" :key="`approval-${option.key}`" :value="option.key">
+              {{ option.label }}
+            </option>
+          </select>
+          <span class="muted">If this model is missing or fails, the runtime falls back to Ask.</span>
+        </div>
+        <div class="field">
+          <label class="label" for="approval-thinking-mode">Approval think variant</label>
+          <select id="approval-thinking-mode" v-model="approvalModelSelection.thinkingMode" class="select mono">
+            <option value="">Model default</option>
+            <option
+              v-for="mode in thinkingModeOptions(approvalModelSelection)"
+              :key="`approval-think-${mode}`"
+              :value="mode"
+            >
+              {{ mode }}
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="approval-speed-mode">Approval speed variant</label>
+          <select id="approval-speed-mode" v-model="approvalModelSelection.speedMode" class="select mono">
+            <option value="">Model default</option>
+            <option
+              v-for="mode in speedModeOptions(approvalModelSelection)"
+              :key="`approval-speed-${mode}`"
+              :value="mode"
+            >
+              {{ mode }}
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="label" for="approval-verbosity">Approval verbosity</label>
+          <select id="approval-verbosity" v-model="approvalModelSelection.verbosity" class="select mono">
+            <option value="">Model default</option>
+            <option
+              v-for="mode in verbosityOptions(approvalModelSelection)"
+              :key="`approval-verbosity-${mode}`"
+              :value="mode"
+            >
+              {{ mode }}
+            </option>
+          </select>
+        </div>
+      </div>
     </section>
 
     <section class="record-card">
@@ -1116,9 +1502,6 @@ onMounted(() => {
           <div>
             <p class="settings-panel-kicker">{{ provider.provider_id }}</p>
             <h3 class="record-title">{{ provider.provider_id }}</h3>
-            <div class="record-subtitle mono">
-              {{ provider.defaults.adapter || 'auto' }} · {{ provider.defaults.model || 'default unset' }}
-            </div>
           </div>
           <div class="record-meta">
             <span
@@ -1377,10 +1760,6 @@ onMounted(() => {
           <input v-model="providerModelDraft.temperature_supported" type="checkbox" />
           Temperature
         </label>
-        <label class="muted" style="display: flex; gap: 8px; align-items: center">
-          <input v-model="providerModelSetDefault" type="checkbox" />
-          Set provider default
-        </label>
       </div>
     </section>
 
@@ -1408,10 +1787,6 @@ onMounted(() => {
               </option>
             </select>
           </div>
-          <label class="muted" style="display: flex; gap: 8px; align-items: center">
-            <input v-model="catalogCopySetDefault" type="checkbox" />
-            Set default
-          </label>
         </div>
       </div>
 

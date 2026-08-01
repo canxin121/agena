@@ -221,7 +221,6 @@ impl App {
                 .ok()
                 .map(|model| model_label(&model))
         };
-        let fallback_agent = || Some("agena".to_owned());
 
         if let Some(execution) = self.transcript.execution.as_ref() {
             let model_part = self
@@ -229,7 +228,6 @@ impl App {
                 .map(|model| model_label(&model))
                 .or_else(|| execution_model_name_status_label(&execution.execution))
                 .or_else(fallback_model);
-            let agent = Some(execution.execution.agent_id.clone());
             let token_usage = agena_tui::session_status::token_usage_status(
                 execution.usage.current_tokens,
                 execution.usage.projected_tokens,
@@ -238,7 +236,7 @@ impl App {
             let mut parts = Vec::new();
             parts.extend(agena_tui::session_status::session_summary_status_parts(
                 model_part,
-                agent,
+                None,
                 Some(token_usage),
             ));
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
@@ -268,7 +266,7 @@ impl App {
                 .as_ref()
                 .map(model_label)
                 .or_else(fallback_model),
-            fallback_agent(),
+            None,
             None,
         );
         if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()

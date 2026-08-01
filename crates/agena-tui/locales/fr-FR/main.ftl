@@ -195,7 +195,6 @@ permission-label-allow-always = toujours autoriser
 permission-label-deny-once = refuser une fois
 permission-label-deny-always = toujours refuser
 
-permission-summary-pending = autorisation en attente : {$reason}
 permission-summary-allow-once = autorisation accordee une fois : {$reason}
 permission-summary-allow-always = autorisation toujours accordee : {$reason}
 permission-summary-deny-once = autorisation refusee une fois : {$reason}

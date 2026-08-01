@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use agena_domain::{
     ArtifactRef, ExecutionStatus, FilesystemEffect, InteractionNotificationLevel, NetworkEffect,
-    OperationError, ProcessShell, SearchResultItem, TableColumn, TodoItem, ToolInvocation,
-    ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState,
-    UserInputQuestion,
+    OperationAuthorization, OperationError, ProcessShell, SearchResultItem, TableColumn, TodoItem,
+    ToolInvocation, ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay,
+    ToolResultState, UserInputQuestion,
 };
 use agena_tool::{ReadMode, TaskModelSelection};
 
@@ -981,6 +981,8 @@ impl ToolResultEnvelope {
 pub struct OperationPart {
     pub call_id: i64,
     pub invocation: ToolInvocation,
+    #[serde(default, skip_serializing_if = "OperationAuthorization::is_empty")]
+    pub authorization: OperationAuthorization,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1023,6 +1025,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            authorization: OperationAuthorization::default(),
             title: title.into(),
             summary: String::new(),
             model_output: ModelVisibleOutput::default(),
@@ -1060,6 +1063,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            authorization: OperationAuthorization::default(),
             title: String::new(),
             summary: output_text.clone(),
             model_output: ModelVisibleOutput {
@@ -1102,6 +1106,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            authorization: OperationAuthorization::default(),
             title: String::new(),
             summary: user_summary,
             model_output: ModelVisibleOutput {
@@ -1213,6 +1218,7 @@ impl OperationPart {
         Self {
             call_id,
             invocation,
+            authorization: OperationAuthorization::default(),
             title: String::new(),
             summary: output_text.clone(),
             model_output: ModelVisibleOutput {

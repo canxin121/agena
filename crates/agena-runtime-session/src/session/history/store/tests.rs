@@ -1182,7 +1182,6 @@ mod tests {
         let turn_id = agena_domain::TurnId::new();
         let reply_id = agena_domain::AssistantReplyId::new();
         let operation_activity_id = agena_domain::ActivityId::new();
-        let permission_activity_id = agena_domain::ActivityId::new();
         let part_writer = RuntimeProjectionPartWriter;
         project_execution_started(
             &db,
@@ -1213,70 +1212,60 @@ mod tests {
             metadata: Set(Default::default()),
             provider_state: Set(None),
             usage: Set(None),
-            part_count: Set(2),
+            part_count: Set(1),
         }
         .insert(&db)
         .await
         .expect("message");
-        for (part_id, part_index, activity_id, awaits_user_reply) in [
-            (51, 0, operation_activity_id, false),
-            (52, 1, permission_activity_id, true),
-        ] {
-            model_message_part::ActiveModel {
-                part_id: Set(part_id),
-                message_id: Set(41),
-                part_index: Set(part_index),
-                status: Set(StoredExecutionStatus::Pending),
-                kind: Set(StoredPartKind::Activity),
-                name: Set(None),
-                summary: Set(None),
-                has_detail: Set(false),
-                awaits_user_reply: Set(awaits_user_reply),
-                activity_id: Set(Some(activity_id.to_string())),
-                segment_id: Set(None),
-                operation_id: Set(Some("call_waiting".to_owned())),
-                created_at_ms: Set(1),
-                content: Set(None),
+        model_message_part::ActiveModel {
+            part_id: Set(51),
+            message_id: Set(41),
+            part_index: Set(0),
+            status: Set(StoredExecutionStatus::Pending),
+            kind: Set(StoredPartKind::Activity),
+            name: Set(None),
+            summary: Set(None),
+            has_detail: Set(false),
+            awaits_user_reply: Set(false),
+            activity_id: Set(Some(operation_activity_id.to_string())),
+            segment_id: Set(None),
+            operation_id: Set(Some("call_waiting".to_owned())),
+            created_at_ms: Set(1),
+            content: Set(None),
+        }
+        .insert(&db)
+        .await
+        .expect("message part");
+        let payload = serde_json::json!({
+            "activity_type": "operation",
+            "call_id": "call_waiting",
+            "invocation": {"name": "fs.write", "input": {}},
+            "authorization": {
+                "permissions": [{
+                    "request": {
+                        "request_id": "call_waiting",
+                        "session_id": session.id,
+                        "action": {"kind": "tool", "tool_name": "fs.write"},
+                        "reason": "write access requires approval",
+                        "risk": "medium",
+                        "created_at": "1970-01-01T00:00:00Z"
+                    }
+                }]
             }
-            .insert(&db)
-            .await
-            .expect("message part");
-        }
-        for (activity_id, position, payload) in [
-            (
-                operation_activity_id,
-                0,
-                serde_json::json!({
-                    "activity_type": "operation",
-                    "call_id": "call_waiting",
-                    "invocation": {"name": "fs.write", "input": {}}
-                }),
-            ),
-            (
-                permission_activity_id,
-                1,
-                serde_json::json!({
-                    "activity_type": "interaction",
-                    "interaction_type": "permission",
-                    "request": {"request_id": "call_waiting"}
-                }),
-            ),
-        ] {
-            db.execute(Statement::from_sql_and_values(
-                db.get_database_backend(),
-                "INSERT INTO agena_activities \
-                 (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
-                 VALUES (?, 'assistant_reply', ?, 'assistant', ?, 'pending', ?, 1, 1, NULL)",
-                [
-                    activity_id.to_string().into(),
-                    reply_id.to_string().into(),
-                    payload.into(),
-                    position.into(),
-                ],
-            ))
-            .await
-            .expect("canonical activity");
-        }
+        });
+        db.execute(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "INSERT INTO agena_activities \
+             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
+             VALUES (?, 'assistant_reply', ?, 'assistant', ?, 'pending', 0, 1, 1, NULL)",
+            [
+                operation_activity_id.to_string().into(),
+                reply_id.to_string().into(),
+                payload.into(),
+            ],
+        ))
+        .await
+        .expect("canonical operation activity");
 
         apply_projection_events_on_connection(
             &db,
@@ -1325,15 +1314,6 @@ mod tests {
         );
         assert_eq!(
             model_message_part::Entity::find_by_id(51)
-                .one(&db)
-                .await
-                .unwrap()
-                .unwrap()
-                .status,
-            StoredExecutionStatus::Pending
-        );
-        assert_eq!(
-            model_message_part::Entity::find_by_id(52)
                 .one(&db)
                 .await
                 .unwrap()
@@ -1406,15 +1386,6 @@ mod tests {
                 .unwrap()
                 .status,
             StoredExecutionStatus::Failed
-        );
-        assert_eq!(
-            model_message_part::Entity::find_by_id(52)
-                .one(&db)
-                .await
-                .unwrap()
-                .unwrap()
-                .status,
-            StoredExecutionStatus::Cancelled
         );
     }
 

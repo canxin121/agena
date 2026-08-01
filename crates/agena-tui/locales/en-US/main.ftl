@@ -1675,7 +1675,6 @@ permission-label-allow-always = allow always
 permission-label-deny-once = deny once
 permission-label-deny-always = deny always
 
-permission-summary-pending = Awaiting permission: {$reason}
 permission-summary-allow-once = Permission allowed once: {$reason}
 permission-summary-allow-always = Permission allowed always: {$reason}
 permission-summary-deny-once = Permission denied once: {$reason}

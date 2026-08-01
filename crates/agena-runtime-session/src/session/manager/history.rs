@@ -1178,12 +1178,6 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
             agena_runtime::SessionProjectedPartDetail::SkillReference(value.clone())
         }
         PartContent::Activity(crate::message::RuntimeActivity::Interaction(
-            crate::message::RequestPart::Permission(value),
-        )) => agena_runtime::SessionProjectedPartDetail::PermissionRequest {
-            request: value.request.clone(),
-            reply: value.reply.clone(),
-        },
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
             crate::message::RequestPart::UserInput(value),
         )) => agena_runtime::SessionProjectedPartDetail::UserInputRequest {
             request: value.request.clone(),
@@ -1203,6 +1197,7 @@ fn project_operation_part(
     agena_runtime::SessionProjectedOperationPart {
         call_id: value.call_id,
         invocation: value.invocation.clone(),
+        authorization: value.authorization.clone(),
         title: value.title.clone(),
         summary: value.summary.clone(),
         model_output: project_model_visible_output(&value.model_output),

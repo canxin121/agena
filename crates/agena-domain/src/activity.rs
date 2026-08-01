@@ -452,6 +452,87 @@ pub struct ReasoningActivity {
     pub content: ReasoningPart,
 }
 
+/// Durable authorization history owned by one tool Operation.
+///
+/// Permission is not transcript content of its own. It is a state transition
+/// that determines whether the Operation may execute, so requests and replies
+/// live beside the invocation and result they govern. Interactive clients
+/// derive their pending-approval queue from unresolved records here.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OperationAuthorization {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<OperationPermission>,
+}
+
+impl OperationAuthorization {
+    pub fn is_empty(&self) -> bool {
+        self.permissions.is_empty()
+    }
+
+    pub fn pending(request: PermissionRequest) -> Self {
+        Self {
+            permissions: vec![OperationPermission {
+                request,
+                reply: None,
+                replied_at_ms: None,
+            }],
+        }
+    }
+
+    pub fn awaiting(&self) -> impl Iterator<Item = &OperationPermission> {
+        self.permissions
+            .iter()
+            .filter(|permission| permission.reply.is_none())
+    }
+
+    pub fn find(&self, request_id: &str) -> Option<&OperationPermission> {
+        self.permissions
+            .iter()
+            .find(|permission| permission.request.request_id == request_id)
+    }
+
+    pub fn find_mut(&mut self, request_id: &str) -> Option<&mut OperationPermission> {
+        self.permissions
+            .iter_mut()
+            .find(|permission| permission.request.request_id == request_id)
+    }
+
+    pub fn push_pending(&mut self, request: PermissionRequest) -> bool {
+        if self.find(request.request_id.as_str()).is_some() {
+            return false;
+        }
+        self.permissions.push(OperationPermission {
+            request,
+            reply: None,
+            replied_at_ms: None,
+        });
+        true
+    }
+
+    pub fn record_reply(&mut self, reply: PermissionReply, replied_at_ms: i64) -> bool {
+        let Some(permission) = self.find_mut(reply.request_id.as_str()) else {
+            return false;
+        };
+        if permission.reply.is_some() {
+            return false;
+        }
+        permission.reply = Some(reply);
+        permission.replied_at_ms = Some(replied_at_ms);
+        true
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OperationPermission {
+    pub request: PermissionRequest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply: Option<PermissionReply>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replied_at_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct OperationActivity {
@@ -469,6 +550,8 @@ pub struct OperationActivity {
     pub details: ToolOutput,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource_activity_ids: Vec<ActivityId>,
+    #[serde(default, skip_serializing_if = "OperationAuthorization::is_empty")]
+    pub authorization: OperationAuthorization,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<OperationActivityError>,
 }
@@ -482,11 +565,6 @@ pub struct OperationActivityError {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "interaction_type", rename_all = "snake_case")]
 pub enum InteractionActivity {
-    Permission {
-        request: PermissionRequest,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reply: Option<PermissionReply>,
-    },
     UserInput {
         request: UserInputRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]

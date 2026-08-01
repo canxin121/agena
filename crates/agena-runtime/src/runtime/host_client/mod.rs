@@ -334,40 +334,6 @@ impl RuntimeHostClient {
             }),
         }
     }
-
-    async fn run_workflow_tool<T>(
-        &self,
-        tool_name: &'static str,
-        input: T,
-    ) -> Result<ToolInvokeOutput, PluginError>
-    where
-        T: serde::Serialize,
-    {
-        let context = self.callback_context()?;
-
-        let session_id = context
-            .session_id
-            .filter(|id| *id >= 0)
-            .ok_or_else(|| host_unavailable("workflow tool callback has no session id"))?;
-        let call_id = context
-            .call_id
-            .filter(|id| *id >= 0)
-            .ok_or_else(|| host_unavailable("workflow tool callback has no call id"))?;
-        let structured = StructuredObject::try_from(
-            serde_json::to_value(input).map_err(|err| PluginError::internal(err.to_string()))?,
-        )
-        .map_err(PluginError::invalid_params)?;
-        let execution = self
-            .session_manager()?
-            .execute_host_invoked_tool(
-                session_id,
-                call_id,
-                ToolInvocation::new(tool_name, structured),
-            )
-            .await
-            .map_err(plugin_error_from_app)?;
-        Ok(tool_execution_to_invoke_output(execution))
-    }
 }
 
 #[async_trait]
@@ -938,28 +904,40 @@ impl HostClient for RuntimeHostClient {
         &self,
         req: HostEnterSnapshotRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        self.run_workflow_tool(
-            "enter_snapshot",
-            EnterSnapshotToolInput {
-                name: req.name,
-                path: req.path,
-            },
-        )
-        .await
+        let (session_id, _) = self.callback_session_and_call()?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let execution = executor
+            .enter_snapshot_internal(
+                &EnterSnapshotToolInput {
+                    name: req.name,
+                    path: req.path,
+                },
+                session_id,
+            )
+            .map_err(crate::tool::ToolError::into_plugin_error)?;
+        Ok(crate::tool::router::tool_execution_to_invoke_output(
+            execution,
+        ))
     }
 
     async fn exit_snapshot(
         &self,
         req: HostExitSnapshotRequest,
     ) -> Result<ToolInvokeOutput, PluginError> {
-        self.run_workflow_tool(
-            "exit_snapshot",
-            ExitSnapshotToolInput {
-                action: req.action,
-                discard_changes: req.discard_changes,
-            },
-        )
-        .await
+        let (session_id, _) = self.callback_session_and_call()?;
+        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let execution = executor
+            .exit_snapshot_internal(
+                &ExitSnapshotToolInput {
+                    action: req.action,
+                    discard_changes: req.discard_changes,
+                },
+                session_id,
+            )
+            .map_err(crate::tool::ToolError::into_plugin_error)?;
+        Ok(crate::tool::router::tool_execution_to_invoke_output(
+            execution,
+        ))
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> Result<MonitorHandle, PluginError> {

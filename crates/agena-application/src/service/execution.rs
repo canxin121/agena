@@ -355,6 +355,9 @@ const fn execution_phase_from_domain(
         agena_domain::ExecutionPhase::ExecutingTools => {
             agena_api::resource::ExecutionPhase::ExecutingTools
         }
+        agena_domain::ExecutionPhase::AwaitingInteraction => {
+            agena_api::resource::ExecutionPhase::AwaitingInteraction
+        }
         agena_domain::ExecutionPhase::Cancelling => agena_api::resource::ExecutionPhase::Cancelling,
     }
 }

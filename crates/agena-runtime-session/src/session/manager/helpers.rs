@@ -295,9 +295,6 @@ pub(super) fn part_status(content: &PartContent) -> ExecutionStatus {
     match content {
         PartContent::Activity(crate::message::RuntimeActivity::Operation(tool)) => tool.status(),
         PartContent::Activity(crate::message::RuntimeActivity::Interaction(
-            RequestPart::Permission(permission),
-        )) => permission.status(),
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
             RequestPart::UserInput(request),
         )) => request.status(),
         _ => ExecutionStatus::Completed,

@@ -34,35 +34,43 @@ real provider tool invocation
   ├─ collect static, persisted, and plugin-declared actions
   └─ central policy result
        ├─ Allow ────────────────────────────────> execute the target
-       ├─ Ask ──> persist Permission Activity ──> wait for user reply
-       │                                             ├─ allow ─> record approved actions
-       │                                             └─ decline -> user-declined activity
-       └─ Deny ─────────────────────────────────> policy-denied activity
+       ├─ Ask ──> append Operation.authorization ─> wait in same execution
+       │                                                ├─ allow ─> execute target
+       │                                                └─ decline -> terminalize Operation
+       └─ Deny ─────────────────────────────────> terminalize Operation
 ```
 
 `Ask` never executes speculatively and never becomes a tool result sent back
-to the model. The response is paused while the user sees a durable Permission
-Activity. A matching approval resumes the original prepared target; it does
-not ask the model to retry or submit a changed invocation. `Deny` never opens
-an approval prompt and never executes.
+to the model. Permission is not an Activity or a message part. The tool's one
+Operation Activity owns an `authorization.permissions[]` history containing
+the request, its optional reply, and the reply timestamp. Interactive clients
+derive their approval queue from unresolved records in that history. A
+matching approval wakes the already-active canonical reply execution and
+resumes the original prepared target; it does not create a user message, a
+second assistant reply, or a second execution. `Deny` never opens an approval
+prompt and never executes.
 
 For one provider-emitted batch, Agena prepares every member and persists every
-independently actionable Permission Activity before it blocks. Permission
-replies then form a barrier:
+independently actionable Operation authorization request before it waits.
+Permission replies then form a barrier:
 
-1. each reply is persisted against its exact assistant message and Operation;
-2. no approved member starts while a sibling Interaction remains pending;
-3. the final reply starts one continuation execution for the existing
-   canonical assistant reply;
+1. each reply is atomically persisted inside its exact Operation, together
+   with a `PermissionReplied` audit event;
+2. no approved member starts while a sibling Operation authorization or user
+   input remains unresolved;
+3. the final reply wakes the same active execution for the existing canonical
+   assistant reply;
 4. concurrency-safe approved tools fan out together, while sequential tools
    retain transcript order;
 5. the model continues only after the entire pending tool batch settles.
 
-The completed Permission Activity is the durable one-shot authorization
-token, but only for the actions recorded in that request. Current checks with
-new actions still pass through central policy evaluation. Matching also
-includes the owning assistant message, so a provider call ID reused in a later
-turn can never inherit an old approval.
+The completed authorization record is the durable one-shot token, but only for
+the actions recorded in that request. Current checks with new actions still
+pass through central policy evaluation. Matching includes the owning Operation
+and canonical assistant reply, so a provider call ID reused in a later turn can
+never inherit an old approval. `PermissionRequested` and `PermissionReplied`
+remain lifecycle audit events; neither projects a standalone transcript
+Activity.
 
 The activity and provider tool-result projections retain the actual target,
 input, structured output, and a safe actionable error. Generic messages such
@@ -86,8 +94,8 @@ an SSRF/input-safety constraint, not user approval.
 ## Terminal outcomes
 
 - `policy_denied`: central policy rejected the real target; no side effect.
-- `user_declined`: the user declined the durable Permission Activity; no side
-  effect.
+- `user_declined`: the user declined the Operation's authorization request; no
+  side effect.
 - `capability_unavailable` / `tool_unavailable`: runtime availability issue,
   not a permission decision.
 - execution failure: target validation, OS, process, network, provider, or
@@ -97,3 +105,11 @@ All terminal execution states are Activity-backed so the transcript preserves
 their ordering with surrounding message text. Provider replay remains faithful
 to the provider function envelope, while execution and UI remain faithful to
 the real target.
+
+## Durable projection
+
+Operation state changes use changed-part checkpoints. Creating or updating one
+tool Operation checkpoints only that Operation's part; it does not rewrite
+every older part in the assistant message. Permission request/reply audit
+events remain independently queryable, while the transcript projection reads
+the current authorization state from the owning Operation in O(1) per part.

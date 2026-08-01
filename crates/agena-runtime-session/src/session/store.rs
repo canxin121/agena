@@ -25,9 +25,43 @@ use agena_domain::SessionCacheStats;
 
 pub(crate) struct SessionCommit {
     pub(crate) session: Session,
-    pub(crate) touched_messages: Vec<Message>,
+    pub(crate) checkpoints: Vec<MessageCheckpoint>,
     pub(crate) client_events: Vec<EventKind>,
     pub(crate) persisted_rules: Vec<PersistedPermissionRule>,
+}
+
+/// Explicit delta for durable model-message projection.
+///
+/// A commit names the exact parts whose value or status changed. This prevents
+/// an update to one streamed Operation from checkpointing every older sibling
+/// in the same assistant message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MessageCheckpoint {
+    pub(crate) message_id: i64,
+    pub(crate) part_ids: Vec<i64>,
+}
+
+impl MessageCheckpoint {
+    pub(crate) fn all(message: &Message) -> Self {
+        Self::parts(message.id, message.parts.iter().map(|part| part.id))
+    }
+
+    pub(crate) fn part(message_id: i64, part_id: i64) -> Self {
+        Self {
+            message_id,
+            part_ids: vec![part_id],
+        }
+    }
+
+    pub(crate) fn parts(message_id: i64, part_ids: impl IntoIterator<Item = i64>) -> Self {
+        let mut part_ids = part_ids.into_iter().collect::<Vec<_>>();
+        part_ids.sort_unstable();
+        part_ids.dedup();
+        Self {
+            message_id,
+            part_ids,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

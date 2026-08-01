@@ -1,18 +1,19 @@
 use super::{
     AggregatedPermissionOutcome, AggregatedPermissionRequest, AppError, Arc, EventKind,
-    ExecutionControl, ExecutionStatus, InteractiveRequestPart, MessageMetadata, MessageSource,
-    OperationPart, PartContent, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
-    ProviderPromptAnchor, RequestPart, ResolvedPendingTool, RunAborted, RunCompleted, RunStarted,
-    SessionManager, SessionManagerState, SessionPendingTool, SessionRunOptions, SessionRunRequest,
-    SessionRunTermination, StreamingToolExecution, ToolError, ToolInvocationExecution,
-    ToolPermissionCheck, Utc, append_resolved_message_part, ask_user_title,
-    assistant_message_for_part, build_message, build_request_part, completed_lifecycle,
-    execution_control_to_app_error, matching_request_part_refs, max_permission_risk,
-    operation_blocks_from_tool_output, pending_operation_for_resolved,
-    pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
-    push_unique_permission_action, resolve_pending_tool, resolve_permission_with_persisted_rules,
-    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
-    tool_name, update_resolved_tool_message,
+    ExecutionControl, ExecutionStatus, InteractiveRequestPart, MessageCheckpoint, MessageMetadata,
+    MessageSource, OperationPart, PartContent, PersistedPermissionRule, PromptRequestOptions,
+    PromptTurnBudget, ProviderPromptAnchor, RequestPart, ResolvedPendingTool, RunAborted,
+    RunCompleted, RunStarted, SessionManager, SessionManagerState, SessionPendingTool,
+    SessionRunOptions, SessionRunRequest, SessionRunTermination, StreamingToolExecution, ToolError,
+    ToolInvocationExecution, ToolPermissionCheck, Utc, append_resolved_message_part,
+    ask_user_title, assistant_message_for_part, build_message, build_request_part,
+    completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
+    max_permission_risk, operation_authorization, operation_blocks_from_tool_output,
+    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
+    permission_scope_label, push_unique_permission_action, resolve_pending_tool,
+    resolve_permission_with_persisted_rules, responses_api_request_metadata, run_abort_reason,
+    should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -127,9 +128,36 @@ impl SessionManager {
                 }
                 budget.cap_output_tokens(&aggregate_usage, &mut current_options);
             }
+            let interaction_epoch = control.interaction_epoch();
             session.refresh_derived();
             if session.blocked() {
-                return Ok(session);
+                control
+                    .transition(ExecutionPhase::AwaitingInteraction)
+                    .await
+                    .map_err(execution_control_to_app_error)?;
+
+                // Re-read after observing the signal generation. This closes
+                // the race where the final reply commits between our stale
+                // in-memory blocked check and installation of the waiter.
+                session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                session.refresh_derived();
+                if !session.blocked() {
+                    continue;
+                }
+
+                tokio::select! {
+                    biased;
+                    _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
+                    _ = control.wait_for_interaction_after(interaction_epoch) => {}
+                }
+                session = self
+                    .store
+                    .load_session(session.id, state.cache_policy())
+                    .await?;
+                continue;
             }
 
             if let Some(hit) = crate::session::doom_loop::detect(
@@ -217,10 +245,11 @@ impl SessionManager {
                             },
                         );
                         session.messages.push(user_message.clone());
+                        let checkpoint = MessageCheckpoint::all(&user_message);
                         session = self
                             .persist_session_changes(
                                 session,
-                                vec![user_message],
+                                vec![checkpoint],
                                 Vec::new(),
                                 None,
                                 state.clone(),
@@ -669,10 +698,29 @@ impl SessionManager {
 
                     let client_events = result.client_events;
                     session.messages.push(assistant_message.clone());
+                    // Tool Operations already publish their authoritative
+                    // invocation/result checkpoints from the processor. Text
+                    // and reasoning stream live updates ephemerally, so only
+                    // those parts need a final durable snapshot here.
+                    let final_part_ids = assistant_message
+                        .parts
+                        .iter()
+                        .filter(|part| {
+                            !matches!(
+                                part.content.as_ref(),
+                                Some(PartContent::Activity(
+                                    crate::message::RuntimeActivity::Operation(_)
+                                ))
+                            )
+                        })
+                        .map(|part| part.id)
+                        .collect::<Vec<_>>();
+                    let checkpoints = (!final_part_ids.is_empty())
+                        .then(|| MessageCheckpoint::parts(assistant_message.id, final_part_ids));
                     let mut persisted_session = self
                         .persist_session_changes(
                             session,
-                            vec![assistant_message],
+                            checkpoints.into_iter().collect(),
                             client_events,
                             None,
                             state.clone(),
@@ -826,10 +874,11 @@ impl SessionManager {
             }
         }
 
-        // Permission Activities are durable batch members, not a side effect
-        // of whichever tool happens to be first in transcript order. Persist
-        // all of them before returning a blocked session so the UI can present
-        // all approvals at once and each reply addresses its exact operation.
+        // Operation-owned authorization requests are durable batch members,
+        // not a side effect of whichever tool happens to be first in
+        // transcript order. Persist every request before waiting so the UI
+        // can present all approvals at once and each reply addresses its exact
+        // Operation.
         for (resolved, request) in permission_requests {
             session = Box::pin(self.apply_permission_request(
                 session,
@@ -976,6 +1025,7 @@ impl SessionManager {
         resolved.prepared_shell_command = prepared_shell_command;
         resolved.invocation = prepared_invocation;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
+            let authorization = operation_authorization(session, &resolved);
             let current_title = match session
                 .part(&resolved.pending.part)
                 .and_then(|part| part.content.as_ref())
@@ -998,6 +1048,7 @@ impl SessionManager {
                 prepared.invocation,
                 prepared.title_override.unwrap_or(current_title),
                 resolved.lifecycle.clone(),
+                authorization,
             )));
         }
 
@@ -1137,6 +1188,7 @@ impl SessionManager {
 
         let mut session_changed = false;
         if prepared.invocation != resolved.invocation || prepared.title_override.is_some() {
+            let authorization = operation_authorization(session, &resolved);
             let current_title = match session
                 .part(&resolved.pending.part)
                 .and_then(|part| part.content.as_ref())
@@ -1159,6 +1211,7 @@ impl SessionManager {
                 prepared.invocation,
                 prepared.title_override.unwrap_or(current_title),
                 resolved.lifecycle.clone(),
+                authorization,
             )));
             session_changed = true;
         }
@@ -1314,10 +1367,12 @@ impl SessionManager {
         }
 
         if session_changed {
-            let assistant_message = session.messages[resolved.pending.part.message_index].clone();
             session = Box::pin(self.persist_session_changes(
                 session,
-                vec![assistant_message],
+                vec![MessageCheckpoint::part(
+                    resolved.pending.part.message_id,
+                    resolved.pending.part.part_id,
+                )],
                 Vec::new(),
                 None,
                 state.clone(),
@@ -1662,30 +1717,19 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
-        let existing_request_parts = matching_request_part_refs(
-            &session,
-            request_id.as_str(),
-            agena_domain::PendingInteractiveRequestKind::Permission,
-            false,
-        );
-        let has_pending_request = existing_request_parts.iter().any(|part_ref| {
-            session
-                .part(part_ref)
-                .is_some_and(|part| part.status == ExecutionStatus::Pending)
-        });
-        let has_replied_request = existing_request_parts.iter().any(|part_ref| {
-            matches!(
-                session
-                    .part(part_ref)
-                    .and_then(|part| part.content.as_ref()),
-                Some(PartContent::Activity(
-                    crate::message::RuntimeActivity::Interaction(RequestPart::Permission(
-                        InteractiveRequestPart { reply: Some(_), .. }
-                    ))
-                ))
-            )
-        });
-        if has_replied_request || (!existing_request_parts.is_empty() && !has_pending_request) {
+        let existing_permission_replied = session
+            .part(&resolved.pending.part)
+            .and_then(|part| part.content.as_ref())
+            .and_then(|content| match content {
+                PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+                    operation
+                        .authorization
+                        .find(request_id.as_str())
+                        .map(|permission| permission.reply.is_some())
+                }
+                _ => None,
+            });
+        if existing_permission_replied == Some(true) {
             return Box::pin(self.apply_tool_error(
                 session,
                 pending_tool,
@@ -1713,48 +1757,28 @@ impl SessionManager {
             created_at: Utc::now(),
         };
 
-        let _assistant_message =
+        let assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
-                    &resolved,
-                    resolved.invocation.clone(),
-                    format!("Awaiting permission: {reason}"),
-                    resolved.lifecycle.clone(),
-                )));
+                let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                    operation,
+                ))) = tool_part.content.as_mut()
+                else {
+                    return;
+                };
+                operation.authorization.push_pending(request.clone());
+                operation.summary = format!("Awaiting approval · {reason}");
+                operation.result.display.summary = operation.summary.clone();
                 tool_part.status = ExecutionStatus::Pending;
-                tool_part.summary = Some(reason.clone());
+                tool_part.summary = Some(operation.summary.clone());
             })?;
-
-        let permission_request_part =
-            RequestPart::Permission(InteractiveRequestPart::pending(request.clone()));
-        let assistant_message = match self.upsert_existing_pending_request_part(
-            &mut session,
-            &resolved,
-            request.request_id.as_str(),
-            agena_domain::PendingInteractiveRequestKind::Permission,
-            permission_request_part,
-        )? {
-            Some(message) => message,
-            None => {
-                let permission_part_id = self.store.reserve_part_id().await?;
-                append_resolved_message_part(
-                    &mut session,
-                    &resolved,
-                    build_request_part(
-                        permission_part_id,
-                        resolved.pending.part.message_id,
-                        resolved.operation_id.as_str(),
-                        RequestPart::Permission(InteractiveRequestPart::pending(request.clone())),
-                    ),
-                )?
-            }
-        };
         let session_id = session.id;
-        let events = if has_pending_request {
+        let events = if existing_permission_replied.is_some() {
             Vec::new()
         } else {
             vec![EventKind::PermissionRequested(PermissionRequestedEvent {
                 session_id,
+                operation_id: resolved.operation_id.clone(),
+                call_id: resolved.call_id,
                 request_id: request.request_id.clone(),
                 action: request.action.clone(),
                 related_actions,
@@ -1771,7 +1795,10 @@ impl SessionManager {
         };
         self.persist_session_changes(
             session,
-            vec![assistant_message],
+            vec![MessageCheckpoint::part(
+                assistant_message.id,
+                resolved.pending.part.part_id,
+            )],
             events,
             None,
             state.clone(),
@@ -1812,6 +1839,7 @@ impl SessionManager {
             questions: input.questions,
             created_at: Utc::now(),
         };
+        let authorization = operation_authorization(&session, &resolved);
 
         let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
@@ -1820,6 +1848,7 @@ impl SessionManager {
                     resolved.invocation.clone(),
                     ask_user_title(&request),
                     resolved.lifecycle.clone(),
+                    authorization.clone(),
                 )));
                 tool_part.status = ExecutionStatus::Pending;
                 tool_part.summary = Some(match request.questions.len() {
@@ -1853,7 +1882,15 @@ impl SessionManager {
                 )?
             }
         };
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
+        let checkpoint = MessageCheckpoint::parts(
+            assistant_message.id,
+            assistant_message
+                .parts
+                .iter()
+                .filter(|part| part.operation_id.as_deref() == Some(resolved.operation_id.as_str()))
+                .map(|part| part.id),
+        );
+        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
             .await
     }
 
@@ -2041,9 +2078,17 @@ impl SessionManager {
             }
         }
 
-        let assistant_message = assistant_message_for_part(&session, &pending_tool.part)?;
-        self.persist_session_changes(session, vec![assistant_message], Vec::new(), None, state)
-            .await
+        self.persist_session_changes(
+            session,
+            vec![MessageCheckpoint::part(
+                pending_tool.part.message_id,
+                pending_tool.part.part_id,
+            )],
+            Vec::new(),
+            None,
+            state,
+        )
+        .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_success(
@@ -2073,6 +2118,7 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
+        let authorization = operation_authorization(&session, &resolved);
         let tool_output = execution.output.clone();
         let mut summary = execution.summary();
         let attributed_usage = summary
@@ -2099,20 +2145,10 @@ impl SessionManager {
         );
         let completion_title = {
             let execution_title = summary.title.trim();
-            if !execution_title.is_empty() {
+            if !execution_title.is_empty() && !is_authorization_phase_title(execution_title) {
                 execution_title.to_string()
             } else {
-                session
-                    .part(&resolved.pending.part)
-                    .and_then(|part| part.content.as_ref())
-                    .and_then(|content| match content {
-                        PartContent::Activity(crate::message::RuntimeActivity::Operation(
-                            operation,
-                        )) => Some(operation.title.clone()),
-                        _ => None,
-                    })
-                    .filter(|title| !title.trim().is_empty())
-                    .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)))
+                terminal_operation_title(&resolved.invocation)
             }
         };
         self.apply_tool_success_execution_context(&mut session, &resolved.invocation, &execution);
@@ -2127,6 +2163,7 @@ impl SessionManager {
                 tool_output.clone(),
                 lifecycle.clone(),
             );
+            operation.authorization = authorization.clone();
             operation.set_title(completion_title.clone());
             if !presentation_summary.trim().is_empty() {
                 operation.set_summary(presentation_summary.clone());

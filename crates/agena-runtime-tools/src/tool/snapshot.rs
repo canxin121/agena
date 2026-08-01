@@ -15,6 +15,28 @@ pub fn registry_for_executor() -> SnapshotRegistry {
     crate::snapshot_registry()
 }
 
+impl ToolExecutor {
+    /// Execute the runtime-owned snapshot operation behind the snapshot
+    /// plugin's host callback. This is an internal operation boundary, not a
+    /// public tool-registry lookup, so it cannot recurse through or depend on
+    /// legacy `enter_snapshot`/`exit_snapshot` registrations.
+    pub fn enter_snapshot_internal(
+        &self,
+        input: &EnterSnapshotToolInput,
+        session_id: i64,
+    ) -> Result<ToolPayloadExecution, ToolError> {
+        execute_enter(self, input, Some(session_id))
+    }
+
+    pub fn exit_snapshot_internal(
+        &self,
+        input: &ExitSnapshotToolInput,
+        session_id: i64,
+    ) -> Result<ToolPayloadExecution, ToolError> {
+        execute_exit(self, input, Some(session_id))
+    }
+}
+
 pub(super) fn execute_enter(
     executor: &ToolExecutor,
     input: &EnterSnapshotToolInput,

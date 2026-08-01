@@ -1675,7 +1675,6 @@ permission-label-allow-always = 始终允许
 permission-label-deny-once = 拒绝一次
 permission-label-deny-always = 始终拒绝
 
-permission-summary-pending = 等待权限：{$reason}
 permission-summary-allow-once = 已允许一次：{$reason}
 permission-summary-allow-always = 已始终允许：{$reason}
 permission-summary-deny-once = 已拒绝一次：{$reason}

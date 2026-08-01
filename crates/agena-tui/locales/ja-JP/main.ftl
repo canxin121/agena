@@ -195,7 +195,6 @@ permission-label-allow-always = 常に許可
 permission-label-deny-once = 1 回拒否
 permission-label-deny-always = 常に拒否
 
-permission-summary-pending = 権限待ち: {$reason}
 permission-summary-allow-once = 1 回許可: {$reason}
 permission-summary-allow-always = 常に許可: {$reason}
 permission-summary-deny-once = 1 回拒否: {$reason}

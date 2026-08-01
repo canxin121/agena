@@ -135,6 +135,89 @@ describe('canonical transcript projection', () => {
     expect(messages[0]?.metadata.canonical_turn_id).toBe('00000000-0000-0000-0000-000000000001')
     expect(messages[1]?.metadata.canonical_reply_id).toBe('00000000-0000-0000-0000-000000000004')
   })
+
+  test('keeps permission state inside its single owning Operation part', () => {
+    const transcript: TranscriptSnapshot = {
+      session_id: 7,
+      seq_session: 3,
+      turns: [
+        {
+          id: '00000000-0000-0000-0000-000000000011',
+          session_id: 7,
+          sequence: 1,
+          input: [],
+          reply: {
+            id: '00000000-0000-0000-0000-000000000012',
+            turn_id: '00000000-0000-0000-0000-000000000011',
+            status: 'in_progress',
+            content: [
+              {
+                type: 'activity',
+                activity: {
+                  id: '00000000-0000-0000-0000-000000000013',
+                  owner: {
+                    type: 'assistant_reply',
+                    reply_id: '00000000-0000-0000-0000-000000000012',
+                  },
+                  actor: 'tool',
+                  state: 'in_progress',
+                  position: { index: 0 },
+                  revision_seq: 2,
+                  lifecycle: { started_at_ms: 1_800_000_000_001 },
+                  payload: {
+                    activity_type: 'operation',
+                    call_id: 'call-fs-write',
+                    invocation: { name: 'fs.write', input: { path: 'config.json' } },
+                    title: 'fs.write',
+                    summary: 'Awaiting user approval',
+                    authorization: {
+                      permissions: [
+                        {
+                          request: {
+                            request_id: 'permission-fs-write',
+                            session_id: 7,
+                            action: { kind: 'tool', tool_name: 'fs.write' },
+                            reason: 'write access requires approval',
+                            risk: 'medium',
+                            created_at: '2026-08-01T00:00:00Z',
+                          },
+                        },
+                      ],
+                    },
+                  },
+                },
+              },
+            ],
+            revision_seq: 2,
+            created_at_ms: 1_800_000_000_001,
+          },
+          created_at_ms: 1_800_000_000_000,
+        },
+      ],
+    }
+
+    const messages = transcriptMessages(transcript)
+    const operationParts = messages[1]?.parts || []
+
+    expect(operationParts.length).toBe(1)
+    expect(operationParts[0]?.kind).toBe('operation')
+    expect(operationParts[0]?.content?.type).toBe('operation')
+    expect(operationParts[0]?.content?.authorization).toEqual({
+      permissions: [
+        {
+          request: {
+            request_id: 'permission-fs-write',
+            session_id: 7,
+            action: { kind: 'tool', tool_name: 'fs.write' },
+            reason: 'write access requires approval',
+            risk: 'medium',
+            created_at: '2026-08-01T00:00:00Z',
+          },
+        },
+      ],
+    })
+    expect(operationParts.some((part) => part.content?.type === 'request')).toBe(false)
+  })
 })
 
 describe('Skill reference rendering', () => {

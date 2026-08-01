@@ -6,6 +6,8 @@ use crate::{PolicyDeniedResult, UserDeclinedResult};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionRequestedEvent {
     pub session_id: i64,
+    pub operation_id: String,
+    pub call_id: i64,
     pub request_id: String,
     pub action: PermissionAction,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -31,6 +33,8 @@ pub struct PermissionRequestedEvent {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PermissionRepliedEvent {
     pub session_id: i64,
+    pub operation_id: String,
+    pub call_id: i64,
     pub request_id: String,
     pub kind: PermissionReplyKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +88,8 @@ mod tests {
     fn permission_reply_event_omits_absent_optional_fields() {
         let value = PermissionRepliedEvent {
             session_id: 1,
+            operation_id: "operation".into(),
+            call_id: 7,
             request_id: "request".into(),
             kind: PermissionReplyKind::AllowOnce,
             reason: None,

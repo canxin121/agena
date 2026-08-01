@@ -1,4 +1,4 @@
-use super::{EventKind, Message, Session};
+use super::EventKind;
 
 /// Give a copied/imported event stream fresh domain identities.
 ///
@@ -431,35 +431,6 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
     }
-}
-
-pub(crate) fn ordered_unique_touched_messages(
-    session: &Session,
-    touched_messages: Vec<Message>,
-) -> Vec<Message> {
-    let session_order = session
-        .messages
-        .iter()
-        .enumerate()
-        .map(|(index, message)| (message.id, index))
-        .collect::<std::collections::HashMap<_, _>>();
-
-    let mut latest_by_id = std::collections::HashMap::new();
-    for message in touched_messages {
-        latest_by_id.insert(message.id, message);
-    }
-
-    let mut ordered = latest_by_id.into_values().collect::<Vec<_>>();
-    ordered.sort_by_key(|message| {
-        (
-            session_order
-                .get(&message.id)
-                .copied()
-                .unwrap_or(usize::MAX),
-            message.id,
-        )
-    });
-    ordered
 }
 
 #[cfg(test)]

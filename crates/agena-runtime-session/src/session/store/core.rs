@@ -1029,7 +1029,7 @@ impl SessionStore {
         self.persist(
             super::SessionCommit {
                 session: child,
-                touched_messages: Vec::new(),
+                checkpoints: Vec::new(),
                 client_events: Vec::new(),
                 persisted_rules: Vec::new(),
             },

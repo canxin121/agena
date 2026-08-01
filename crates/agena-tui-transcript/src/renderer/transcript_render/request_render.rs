@@ -136,29 +136,6 @@ fn todo_priority_resource_label(
     ui_text::t(i18n, key)
 }
 
-pub(crate) fn render_permission_request(
-    permission: &agena_api::resource::PermissionRequest,
-    out: &mut Vec<RenderedLine>,
-    width: u16,
-    i18n: &I18n,
-) {
-    push_section_heading(
-        out,
-        &format!("  ▸ {}", ui_text::message_permission_heading(i18n)),
-        Style::default()
-            .fg(agena_tui_components::theme::special_color())
-            .add_modifier(Modifier::BOLD),
-        width,
-    );
-    push_multiline(
-        out,
-        "    ",
-        permission.reason.as_str(),
-        Style::default().fg(agena_tui_components::theme::special_color()),
-        width,
-    );
-}
-
 pub(crate) fn render_user_input_request(
     request: &agena_api::resource::UserInputRequest,
     out: &mut Vec<RenderedLine>,
@@ -245,9 +222,6 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             match request.as_ref() {
-                MessageRequestPartResource::Permission { request, .. } => {
-                    Some(request.reason.clone())
-                }
                 MessageRequestPartResource::UserInput { request, .. } => request
                     .questions
                     .first()

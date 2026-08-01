@@ -41,7 +41,7 @@ use super::history::{
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
 use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
-use super::store::{ReservedMessageIds, SessionCommit, SessionStore};
+use super::store::{MessageCheckpoint, ReservedMessageIds, SessionCommit, SessionStore};
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};

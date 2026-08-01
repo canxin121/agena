@@ -1004,6 +1004,7 @@ pub enum ExecutionPhase {
     PreparingModel,
     StreamingModel,
     ExecutingTools,
+    AwaitingInteraction,
     Cancelling,
 }
 

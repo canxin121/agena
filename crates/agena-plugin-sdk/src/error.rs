@@ -74,6 +74,37 @@ impl PluginError {
         error
     }
 
+    /// Preserve a private diagnostic while supplying separately reviewed,
+    /// actionable prose for the user and model channels.
+    pub fn from_kind_with_public_detail(
+        kind: PluginErrorKind,
+        diagnostic: impl std::fmt::Display,
+        public_detail: impl AsRef<str>,
+    ) -> Self {
+        let mut error = Self::from_kind(kind, diagnostic);
+        let key = format!("{}-detail", error.failure.user.key);
+        error.failure.user = UserPresentation::validated(key, public_detail);
+        error
+    }
+
+    pub fn invalid_params_with_public_detail(
+        diagnostic: impl std::fmt::Display,
+        public_detail: impl AsRef<str>,
+    ) -> Self {
+        Self::from_kind_with_public_detail(
+            PluginErrorKind::InvalidParams,
+            diagnostic,
+            public_detail,
+        )
+    }
+
+    pub fn timeout_with_public_detail(
+        diagnostic: impl std::fmt::Display,
+        public_detail: impl AsRef<str>,
+    ) -> Self {
+        Self::from_kind_with_public_detail(PluginErrorKind::Timeout, diagnostic, public_detail)
+    }
+
     pub fn from_kind(kind: PluginErrorKind, diagnostic: impl std::fmt::Display) -> Self {
         let diagnostic = diagnostic.to_string();
         let mut failure = failure_for_kind(kind);

@@ -1,7 +1,7 @@
 use super::{
-    AppError, ExecutionStatus, Message, MessageMetadata, MessageSource, PartContent, Role,
-    SessionCreateRequest, SessionListRequest, SessionManager, SessionRunOptions, SessionSummary,
-    build_message,
+    AppError, ExecutionStatus, Message, MessageCheckpoint, MessageMetadata, MessageSource,
+    PartContent, Role, SessionCreateRequest, SessionListRequest, SessionManager, SessionRunOptions,
+    SessionSummary, build_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -161,7 +161,11 @@ impl SessionManager {
             return Ok(session);
         }
 
-        self.persist_session_changes(session, injected_messages, Vec::new(), None, state)
+        let checkpoints = injected_messages
+            .iter()
+            .map(MessageCheckpoint::all)
+            .collect();
+        self.persist_session_changes(session, checkpoints, Vec::new(), None, state)
             .await
     }
 

@@ -1,12 +1,19 @@
 //! Generic per-owner execution registry: exclusive ownership, cancel, and
 //! steer. Concrete session code supplies its own steer payload type.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use agena_domain::{
     CancellationResult, ExecutionId, ExecutionLifecycle, ExecutionOutcome, ExecutionPhase,
 };
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Notify, mpsc};
 use tokio_util::sync::CancellationToken;
 
 /// Errors surfaced by cancellation, steering, and exclusive registration.
@@ -31,6 +38,8 @@ pub struct ExecutionControl<T> {
     pub steer_tx: mpsc::UnboundedSender<Vec<T>>,
     lifecycle: Mutex<ExecutionLifecycle>,
     operation_abort: Mutex<Option<tokio::task::AbortHandle>>,
+    interaction_epoch: AtomicU64,
+    interaction_notify: Notify,
 }
 
 const OPERATION_CANCELLATION_GRACE: Duration = Duration::from_millis(500);
@@ -50,6 +59,8 @@ impl<T> ExecutionControl<T> {
             steer_tx,
             lifecycle: Mutex::new(ExecutionLifecycle::start(execution_id)),
             operation_abort: Mutex::new(None),
+            interaction_epoch: AtomicU64::new(0),
+            interaction_notify: Notify::new(),
         }
     }
 
@@ -91,6 +102,28 @@ impl<T> ExecutionControl<T> {
 
     pub async fn clear_operation_abort(&self) {
         self.operation_abort.lock().await.take();
+    }
+
+    /// Observe the durable-interaction signal generation before checking the
+    /// session projection. Waiting with this generation is race-free: a reply
+    /// persisted between the projection check and the await cannot be lost.
+    pub fn interaction_epoch(&self) -> u64 {
+        self.interaction_epoch.load(Ordering::Acquire)
+    }
+
+    pub fn signal_interaction(&self) {
+        self.interaction_epoch.fetch_add(1, Ordering::AcqRel);
+        self.interaction_notify.notify_waiters();
+    }
+
+    pub async fn wait_for_interaction_after(&self, observed_epoch: u64) {
+        loop {
+            let notified = self.interaction_notify.notified();
+            if self.interaction_epoch() != observed_epoch {
+                return;
+            }
+            notified.await;
+        }
     }
 
     async fn abort_operation(&self) {
@@ -212,6 +245,21 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
 
     pub async fn is_active(&self, session_id: i64) -> bool {
         self.inner.lock().await.contains_key(&session_id)
+    }
+
+    /// Wake the active execution that owns a canonical assistant reply after
+    /// an interactive response has been durably committed.
+    pub async fn signal_interaction_for_reply(
+        &self,
+        session_id: i64,
+        reply_id: agena_domain::AssistantReplyId,
+    ) -> Option<Arc<ExecutionControl<T>>> {
+        let control = self.inner.lock().await.get(&session_id).cloned()?;
+        if control.reply_id() != reply_id {
+            return None;
+        }
+        control.signal_interaction();
+        Some(control)
     }
 
     pub async fn execution(&self, session_id: i64) -> Option<ExecutionLifecycle> {

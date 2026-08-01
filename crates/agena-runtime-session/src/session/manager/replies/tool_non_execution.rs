@@ -1,7 +1,8 @@
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PartContent, PersistedPermissionRule,
     SessionManager, SessionManagerState, SessionPendingTool, completed_lifecycle,
-    resolve_pending_tool, text_result_blocks, tool_name, update_resolved_tool_message,
+    operation_authorization, resolve_pending_tool, terminal_operation_title, text_result_blocks,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
 use agena_domain::{
@@ -20,6 +21,8 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
+        let authorization = operation_authorization(&session, &resolved);
+        let title = terminal_operation_title(&resolved.invocation);
         let output_text = format!(
             "The operation was not executed because the current runtime does not provide the required capability: {}. User approval cannot enable this capability.",
             unavailable.reason
@@ -42,7 +45,8 @@ impl SessionManager {
                     details.clone(),
                     lifecycle.clone(),
                 );
-                operation.set_title(format!("Tool {}", tool_name(&resolved.invocation)));
+                operation.authorization = authorization.clone();
+                operation.set_title(title.clone());
                 tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::CapabilityUnavailable;
             })?;
@@ -66,6 +70,8 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
+        let authorization = operation_authorization(&session, &resolved);
+        let title = terminal_operation_title(&resolved.invocation);
         let output_text = format!(
             "The operation was not executed because the requested tool is unavailable: {}.",
             unavailable.reason
@@ -88,7 +94,8 @@ impl SessionManager {
                     details.clone(),
                     lifecycle.clone(),
                 );
-                operation.set_title(format!("Tool {}", tool_name(&resolved.invocation)));
+                operation.authorization = authorization.clone();
+                operation.set_title(title.clone());
                 tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::ToolUnavailable;
             })?;
@@ -112,6 +119,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
+        let authorization = operation_authorization(&session, &resolved);
         let output_text = format!(
             "The operation was not executed because it is blocked by the effective permission policy: {}. Do not retry the same operation unless the permission rule changes.",
             denial.reason
@@ -125,17 +133,7 @@ impl SessionManager {
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
         let blocks = text_result_blocks(output_text.as_str());
-        let title = session
-            .part(&resolved.pending.part)
-            .and_then(|part| part.content.as_ref())
-            .and_then(|content| match content {
-                PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
-                    Some(operation.title.clone())
-                }
-                _ => None,
-            })
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)));
+        let title = terminal_operation_title(&resolved.invocation);
 
         let assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
@@ -147,6 +145,7 @@ impl SessionManager {
                     details.clone(),
                     lifecycle.clone(),
                 );
+                operation.authorization = authorization.clone();
                 operation.set_title(title.clone());
                 tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::PolicyDenied;
@@ -181,6 +180,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
+        let authorization = operation_authorization(&session, &resolved);
         let explanation = decline
             .reason
             .as_deref()
@@ -199,17 +199,7 @@ impl SessionManager {
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
         let blocks = text_result_blocks(output_text.as_str());
-        let title = session
-            .part(&resolved.pending.part)
-            .and_then(|part| part.content.as_ref())
-            .and_then(|content| match content {
-                PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
-                    Some(operation.title.clone())
-                }
-                _ => None,
-            })
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("Tool {}", tool_name(&resolved.invocation)));
+        let title = terminal_operation_title(&resolved.invocation);
 
         let assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
@@ -221,6 +211,7 @@ impl SessionManager {
                     details.clone(),
                     lifecycle.clone(),
                 );
+                operation.authorization = authorization.clone();
                 operation.set_title(title.clone());
                 tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::UserDeclined;

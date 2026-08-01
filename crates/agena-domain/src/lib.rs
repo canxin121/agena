@@ -78,10 +78,10 @@ pub use activity::{
     CancellationResult, ChecklistActivity, ComposerActivity, ComposerDocument, ComposerNode,
     ContentDocument, ContentNode, ContentPosition, CustomActivity, ErrorActivity, ExecutionTarget,
     FileChangesActivity, InteractionActivity, MaintenanceActivity, NestedTaskActivity,
-    OperationActivity, OperationActivityError, ProgressActivity, ReasoningActivity,
-    ResourceActivity, ResourceKind, ResourceReference, SearchActivity, SkillExecutionActivity,
-    SkillReferenceActivity, TextArtifactActivity, TextSegment, TranscriptPatch, TranscriptSnapshot,
-    TurnSnapshot,
+    OperationActivity, OperationActivityError, OperationAuthorization, OperationPermission,
+    ProgressActivity, ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference,
+    SearchActivity, SkillExecutionActivity, SkillReferenceActivity, TextArtifactActivity,
+    TextSegment, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
 };
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use command_events::{

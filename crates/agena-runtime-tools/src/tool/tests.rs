@@ -1,19 +1,22 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, process::Command, sync::Arc};
 
 use super::{
     StructuredObject, TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES, ToolError, ToolExecutor,
-    ToolInvocation, ToolOutput, bounded_model_output_preview, canonicalize_path_for_execution,
-    compact_tool_output_payload_for_model, line_count,
+    ToolInvocation, ToolOutput, ToolPayloadOutput, bounded_model_output_preview,
+    canonicalize_path_for_execution, compact_tool_output_payload_for_model, line_count,
 };
 use crate::{
     authorization::ExecutionPrincipal,
+    message::{EnterSnapshotToolInput, ExitSnapshotToolInput},
     permission::{PermissionPolicy, ToolPermissionPolicy},
+    snapshot_registry,
 };
 use agena_domain::PermissionMode;
 use agena_plugin_host::{
     ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
     ToolPresentationConfig,
 };
+use agena_tool::SnapshotBackend;
 
 #[derive(Default)]
 struct ChokePointPlugin;
@@ -29,6 +32,36 @@ struct ExecutorBackedShellAdapter;
 
 #[derive(Default)]
 struct ExecutorBackedFsAdapter;
+
+fn run_git(cwd: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .args(args)
+        .output()
+        .expect("run git fixture command");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+async fn empty_test_plugin_host(workspace_root: &std::path::Path) -> Arc<PluginHost> {
+    PluginHost::new(PluginHostBuildConfig {
+        static_plugins: Vec::new(),
+        config: PluginsConfig::default(),
+        workspace_root: workspace_root.to_path_buf(),
+        agena_version: "test".to_owned(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build empty plugin host")
+}
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
@@ -268,6 +301,95 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
     );
 
     std::fs::remove_dir_all(workspace_root).expect("remove direct builtin workspace");
+}
+
+#[tokio::test]
+async fn snapshot_internal_dispatch_does_not_depend_on_public_tool_registration() {
+    let fixture_root = std::env::temp_dir().join(format!(
+        "agena-snapshot-internal-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let workspace_root = fixture_root.join("workspace");
+    let snapshot_path = fixture_root.join("snapshot");
+    std::fs::create_dir_all(&workspace_root).expect("create snapshot fixture workspace");
+    run_git(&workspace_root, &["init"]);
+    run_git(
+        &workspace_root,
+        &["config", "user.email", "agena@example.invalid"],
+    );
+    run_git(&workspace_root, &["config", "user.name", "Agena Test"]);
+    std::fs::write(workspace_root.join("fixture.txt"), "snapshot fixture\n")
+        .expect("write snapshot fixture");
+    run_git(&workspace_root, &["add", "fixture.txt"]);
+    run_git(&workspace_root, &["commit", "-m", "initial"]);
+    run_git(
+        &workspace_root,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "agena/internal-dispatch-test",
+            snapshot_path.to_string_lossy().as_ref(),
+        ],
+    );
+
+    let registry = snapshot_registry();
+    let plugins = empty_test_plugin_host(&workspace_root).await;
+    let executor = ToolExecutor::new(
+        workspace_root.clone(),
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        plugins,
+        Some(Arc::clone(&registry)),
+        None,
+        None,
+        ToolPresentationConfig::default(),
+    );
+
+    let entered = executor
+        .enter_snapshot_internal(
+            &EnterSnapshotToolInput {
+                name: None,
+                path: Some(snapshot_path.to_string_lossy().into_owned()),
+            },
+            77,
+        )
+        .expect("typed internal snapshot enter");
+    assert!(matches!(
+        entered.output,
+        ToolPayloadOutput::EnterSnapshot {
+            ref path,
+            ref branch,
+            backend: Some(ref backend),
+            ..
+        } if path == snapshot_path.to_string_lossy().as_ref()
+            && branch == "agena/internal-dispatch-test"
+            && backend == "git"
+    ));
+    assert_eq!(
+        registry.read().get(&77).map(|session| session.backend),
+        Some(SnapshotBackend::Git)
+    );
+
+    let exited = executor
+        .exit_snapshot_internal(
+            &ExitSnapshotToolInput {
+                action: "keep".to_owned(),
+                discard_changes: false,
+            },
+            77,
+        )
+        .expect("typed internal snapshot exit");
+    assert!(matches!(
+        exited.output,
+        ToolPayloadOutput::ExitSnapshot { ref action, ref path }
+            if action == "keep" && path == snapshot_path.to_string_lossy().as_ref()
+    ));
+    assert!(!registry.read().contains_key(&77));
+
+    std::fs::remove_dir_all(&fixture_root).expect("remove snapshot fixture");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

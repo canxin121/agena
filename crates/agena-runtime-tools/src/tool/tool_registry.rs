@@ -452,6 +452,7 @@ impl ToolError {
     }
 
     pub fn from_plugin_error(error: agena_plugin_host::sdk::PluginError) -> Self {
+        let error_kind = error.kind;
         let configuration_required = error
             .diagnostic
             .data
@@ -460,19 +461,28 @@ impl ToolError {
             .and_then(|data| data.get("agena_public_problem"))
             .and_then(serde_json::Value::as_str)
             == Some(agena_plugin_host::sdk::CONFIGURATION_REQUIRED_MARKER);
+        let proposed_public_detail = error.failure.user.fallback.clone();
         let diagnostic = bounded_plugin_diagnostic(error.diagnostic.message);
         let mut public = if configuration_required {
             configuration_required_failure()
         } else {
-            *error.failure
+            // Plugin transports are not trusted to choose Failure semantics
+            // or model feedback. Rebuild the envelope from the host-owned SDK
+            // template and carry across only bounded, sanitised public prose.
+            // This retains actionable producer details without allowing a
+            // plugin to smuggle arbitrary categories, retry policy, or prompt
+            // instructions into the transcript.
+            let mut failure =
+                *agena_plugin_host::sdk::PluginError::from_kind(error_kind, "").failure;
+            if !proposed_public_detail.trim().is_empty() {
+                failure.user = agena_failure::UserPresentation::validated(
+                    format!("{}-detail", failure.user.key),
+                    proposed_public_detail,
+                );
+            }
+            failure
         };
-        if !configuration_required {
-            public.user = agena_failure::UserPresentation::validated(
-                "tool-plugin-error-detail",
-                diagnostic.as_str(),
-            );
-        }
-        public.model = Some(match error.kind {
+        public.model = Some(match error_kind {
             agena_plugin_host::sdk::PluginErrorKind::InvalidParams => {
                 agena_failure::ModelFeedback::invalid_input()
             }
@@ -671,6 +681,27 @@ mod failure_tests {
         );
         assert!(!problem.public.user.fallback.contains("GEMINI_MODEL"));
         assert!(problem.to_string().contains("GEMINI_MODEL"));
+    }
+
+    #[test]
+    fn reviewed_plugin_detail_survives_host_reprojection_without_private_diagnostic() {
+        let error = ToolError::from_plugin_error(
+            agena_plugin_host::sdk::PluginError::invalid_params_with_public_detail(
+                "failed to parse /Users/alice/.agena/config.json token=secret",
+                "Invalid settings: unknown field `providerz`; expected `providers`.",
+            ),
+        );
+        let ToolError::Plugin(problem) = error else {
+            panic!("expected plugin failure");
+        };
+        assert_eq!(problem.public.code.as_str(), "plugin.invalid_input");
+        assert_eq!(
+            problem.public.user.fallback,
+            "Invalid settings: unknown field `providerz`; expected `providers`."
+        );
+        assert!(!problem.public.user.fallback.contains("/Users"));
+        assert!(!problem.public.user.fallback.contains("token=secret"));
+        assert!(problem.to_string().contains("/Users/alice"));
     }
 
     #[test]

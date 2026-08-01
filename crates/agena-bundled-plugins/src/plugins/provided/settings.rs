@@ -1103,9 +1103,14 @@ fn is_inline_secret_source(value: &JsonValue) -> bool {
 
 fn map_err(error: ConfigError) -> PluginError {
     match error {
-        ConfigError::Validation(_) | ConfigError::ParseFile { .. } => {
-            PluginError::invalid_params(error.to_string())
-        }
+        ConfigError::Validation(detail) => PluginError::invalid_params_with_public_detail(
+            format!("config validation failed: {detail}"),
+            format!("Invalid settings: {detail}"),
+        ),
+        ConfigError::ParseFile { path, source } => PluginError::invalid_params_with_public_detail(
+            format!("failed to parse config file {}: {source}", path.display()),
+            format!("Invalid settings JSON: {source}"),
+        ),
         other => PluginError::internal(other.to_string()),
     }
 }
@@ -1130,6 +1135,33 @@ mod tests {
             "applied_layers": [{"source": "default", "description": "built-in defaults"}]
         }))
         .expect("valid settings metadata")
+    }
+
+    #[test]
+    fn settings_parse_errors_expose_schema_detail_without_private_config_path() {
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Root {
+            compaction: Option<bool>,
+        }
+
+        let source = serde_json::from_str::<Root>(r#"{"tool_trial":true}"#)
+            .expect_err("unknown field must fail");
+        let error = map_err(ConfigError::ParseFile {
+            path: PathBuf::from("/Users/private/agena/agena.json"),
+            source,
+        });
+        assert!(
+            error
+                .failure
+                .user
+                .fallback
+                .contains("unknown field `tool_trial`")
+        );
+        assert!(error.failure.user.fallback.contains("compaction"));
+        assert!(!error.failure.user.fallback.contains("/Users"));
+        assert!(error.diagnostic_message().contains("/Users/private"));
     }
 
     #[test]

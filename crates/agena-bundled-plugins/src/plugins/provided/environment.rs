@@ -124,10 +124,20 @@ impl EnvironmentPlugin {
             };
             let now = tokio::time::Instant::now();
             if now >= deadline {
-                return Err(PluginError::internal(format!(
+                let diagnostic = format!(
                     "environment readiness timed out after {} ms and {attempts} attempt(s): {last_error}",
                     input.timeout_ms
-                )));
+                );
+                let public_detail = self.timeout_public_detail(
+                    &input.condition,
+                    input.timeout_ms,
+                    attempts,
+                    last_error.as_str(),
+                );
+                return Err(PluginError::timeout_with_public_detail(
+                    diagnostic,
+                    public_detail,
+                ));
             }
             tokio::time::sleep(
                 Duration::from_millis(input.interval_ms)
@@ -228,6 +238,42 @@ impl EnvironmentPlugin {
             }
         }
     }
+
+    fn timeout_public_detail(
+        &self,
+        condition: &WaitCondition,
+        timeout_ms: u64,
+        attempts: u64,
+        last_error: &str,
+    ) -> String {
+        let condition_detail = match condition {
+            WaitCondition::Path { path } => {
+                let root = self.workspace_root.get();
+                let target =
+                    root.map_or_else(|| PathBuf::from(path), |root| resolve_path(root, path));
+                let visible = root
+                    .and_then(|root| target.strip_prefix(root).ok())
+                    .filter(|relative| !relative.as_os_str().is_empty())
+                    .map(|relative| relative.display().to_string())
+                    .or_else(|| {
+                        target
+                            .file_name()
+                            .map(|name| name.to_string_lossy().to_string())
+                    })
+                    .unwrap_or_else(|| path.clone());
+                format!("path '{visible}' does not exist")
+            }
+            WaitCondition::Tcp { host, port } => {
+                format!("TCP {host}:{port} is not ready: {last_error}")
+            }
+            WaitCondition::Http { url, .. } => {
+                format!("HTTP endpoint {url} is not ready: {last_error}")
+            }
+        };
+        format!(
+            "Environment readiness timed out after {timeout_ms} ms and {attempts} attempt(s): {condition_detail}."
+        )
+    }
 }
 
 async fn validate_public_host(target: &str, port: u16) -> SdkResult<()> {
@@ -297,9 +343,12 @@ fn is_public_address(address: IpAddr) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use agena_plugin_host::PluginError;
     use agena_plugin_host::sdk::Plugin;
 
-    use super::{EnvironmentPlugin, parse_http_url};
+    use super::{EnvironmentPlugin, WaitCondition, parse_http_url};
 
     #[test]
     fn manifest_exposes_environment_wait() {
@@ -313,5 +362,29 @@ mod tests {
         assert!(parse_http_url("file:///tmp/ready").is_err());
         assert!(parse_http_url("https://user:secret@example.com/health").is_err());
         assert!(parse_http_url("https://example.com/health").is_ok());
+    }
+
+    #[test]
+    fn readiness_timeout_public_detail_keeps_actionable_relative_path() {
+        let plugin = EnvironmentPlugin::new();
+        plugin
+            .workspace_root
+            .set(PathBuf::from("/Users/private/workspace"))
+            .expect("set workspace root");
+        let detail = plugin.timeout_public_detail(
+            &WaitCondition::Path {
+                path: "tmp/delayed.txt".to_owned(),
+            },
+            15_000,
+            31,
+            "path '/Users/private/workspace/tmp/delayed.txt' does not exist",
+        );
+        assert_eq!(
+            detail,
+            "Environment readiness timed out after 15000 ms and 31 attempt(s): path 'tmp/delayed.txt' does not exist."
+        );
+        let error = PluginError::timeout_with_public_detail("private diagnostic", detail);
+        assert!(error.failure.user.fallback.contains("tmp/delayed.txt"));
+        assert!(!error.failure.user.fallback.contains("/Users/private"));
     }
 }

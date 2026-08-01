@@ -868,19 +868,34 @@ async fn reply_has_pending_interaction<C>(
 where
     C: ConnectionTrait,
 {
-    Ok(db
-        .query_one(Statement::from_sql_and_values(
+    let rows = db
+        .query_all(Statement::from_sql_and_values(
             db.get_database_backend(),
-            "SELECT 1 AS present FROM agena_activities \
+            "SELECT payload_json FROM agena_activities \
              WHERE owner_kind = 'assistant_reply' \
                AND owner_id = ? \
-               AND state IN ('pending', 'in_progress') \
-               AND json_extract(payload_json, '$.activity_type') = 'interaction' \
-             LIMIT 1",
+               AND state IN ('pending', 'in_progress')",
             [reply_id.to_string().into()],
         ))
-        .await?
-        .is_some())
+        .await?;
+    for row in rows {
+        let payload = row.try_get::<serde_json::Value>("", "payload_json")?;
+        let payload = serde_json::from_value::<agena_domain::ActivityPayload>(payload)
+            .map_err(|error| DbErr::Custom(format!("decode pending Activity payload: {error}")))?;
+        let awaits_reply = match payload {
+            agena_domain::ActivityPayload::Interaction(
+                agena_domain::InteractionActivity::UserInput { reply, .. },
+            ) => reply.is_none(),
+            agena_domain::ActivityPayload::Operation(operation) => {
+                operation.authorization.awaiting().next().is_some()
+            }
+            _ => false,
+        };
+        if awaits_reply {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn cancel_reply_interactions<C>(
@@ -1034,6 +1049,7 @@ pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::Activ
                 model_output_text: operation.model_output.text.clone(),
                 details: operation.details.clone(),
                 resource_activity_ids: Vec::new(),
+                authorization: operation.authorization.clone(),
                 error: operation
                     .error
                     .as_ref()
@@ -1095,10 +1111,6 @@ pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::Activ
         }
         PartContent::Activity(crate::message::RuntimeActivity::Interaction(request)) => {
             Some(ActivityPayload::Interaction(match request {
-                crate::message::RequestPart::Permission(value) => InteractionActivity::Permission {
-                    request: value.request.clone(),
-                    reply: value.reply.clone(),
-                },
                 crate::message::RequestPart::UserInput(value) => InteractionActivity::UserInput {
                     request: value.request.clone(),
                     reply: value.reply.clone(),

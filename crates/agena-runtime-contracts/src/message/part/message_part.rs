@@ -92,7 +92,7 @@ impl MessagePart {
     }
 
     /// Whether this part represents an unresolved interaction that survives
-    /// the execution which requested it. Permission and user-input Activities
+    /// the execution which requested it. Operation authorization and user-input Activities
     /// are conversation state; finishing the requesting execution must not
     /// terminalize them before the user replies.
     pub fn awaits_user_reply(&self) -> bool {
@@ -213,9 +213,6 @@ fn name_from_content(content: &PartContent) -> Option<String> {
             Some(error.problem.code.to_string())
         }
         PartContent::Activity(RuntimeActivity::Resource(_)) => Some("resource".to_string()),
-        PartContent::Activity(RuntimeActivity::Interaction(RequestPart::Permission(_))) => {
-            Some("permission".to_string())
-        }
         PartContent::Activity(RuntimeActivity::Interaction(RequestPart::UserInput(_))) => {
             Some("user_input".to_string())
         }

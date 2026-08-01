@@ -349,12 +349,6 @@ pub(crate) fn activity_presentation(
             operation.error.as_ref().map(|error| error.problem.clone()),
         ),
         ActivityPayload::Interaction(interaction) => match interaction {
-            agena_domain::InteractionActivity::Permission { request, .. } => (
-                "permission".to_owned(),
-                permission_request_title(&request.action),
-                request.reason.clone(),
-                None,
-            ),
             agena_domain::InteractionActivity::UserInput { request, .. } => (
                 "user_input".to_owned(),
                 "User input requested".to_owned(),
@@ -434,22 +428,6 @@ pub(crate) fn activity_presentation(
                 .unwrap_or_default(),
             None,
         ),
-    }
-}
-
-fn permission_request_title(action: &agena_domain::PermissionAction) -> String {
-    match action {
-        agena_domain::PermissionAction::Tool { tool_name, .. } => {
-            format!("Permission: {tool_name}")
-        }
-        agena_domain::PermissionAction::PathAccess {
-            access_kind,
-            target_path,
-            ..
-        } => format!("Permission: {access_kind} {target_path}"),
-        agena_domain::PermissionAction::NetworkAccess { target, .. } => {
-            format!("Permission: network access to {target}")
-        }
     }
 }
 
@@ -569,8 +547,10 @@ const fn assistant_reply_status(status: AssistantReplyStatus) -> MessageStatus {
 mod tests {
     use agena_domain::{
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
-        CustomActivity, OperationActivity, ResourceActivity, SkillReferenceActivity,
-        StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
+        CustomActivity, OperationActivity, OperationAuthorization, OperationPermission,
+        PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
+        PermissionRiskLevel, ResourceActivity, SkillReferenceActivity, StructuredObject,
+        ToolCallId, ToolInvocation, ToolOutput,
     };
 
     use super::*;
@@ -631,7 +611,8 @@ mod tests {
     fn one_canonical_assistant_reply_projects_all_permission_continuation_content_once() {
         let turn_id = agena_domain::TurnId::new();
         let reply_id = agena_domain::AssistantReplyId::new();
-        let permission_activity_id = agena_domain::ActivityId::new();
+        let operation_activity_id = agena_domain::ActivityId::new();
+        let request_id = "permission-fs-write".to_owned();
         let snapshot = TranscriptSnapshot {
             session_id: 7,
             seq_session: 3,
@@ -647,18 +628,58 @@ mod tests {
                     content: ContentDocument::new(vec![
                         ContentNode::text("before permission"),
                         ContentNode::activity(ActivityNode {
-                            id: permission_activity_id,
+                            id: operation_activity_id,
                             owner: ActivityOwner::AssistantReply { reply_id },
-                            actor: ActivityActor::Runtime,
+                            actor: ActivityActor::Tool,
                             state: ActivityState::Completed,
                             position: ContentPosition { index: 1 },
                             revision_seq: 2,
                             lifecycle: ActivityLifecycle::default(),
-                            payload: ActivityPayload::Custom(CustomActivity {
-                                schema: "permission_decision".to_owned(),
-                                schema_version: 1,
-                                data: serde_json::json!({"decision": "allow"}),
-                                presentation: Default::default(),
+                            payload: ActivityPayload::Operation(OperationActivity {
+                                call_id: ToolCallId::new("call-fs-write"),
+                                invocation: ToolInvocation::new(
+                                    "fs.write",
+                                    StructuredObject::try_from(serde_json::json!({
+                                        "path": "config.json"
+                                    }))
+                                    .expect("structured write input"),
+                                ),
+                                title: "fs.write".to_owned(),
+                                summary: "Updated config.json".to_owned(),
+                                sections: Vec::new(),
+                                model_output_text: "Updated config.json".to_owned(),
+                                details: ToolOutput::default(),
+                                resource_activity_ids: Vec::new(),
+                                authorization: OperationAuthorization {
+                                    permissions: vec![OperationPermission {
+                                        request: PermissionRequest {
+                                            request_id: request_id.clone(),
+                                            session_id: Some(7),
+                                            action: PermissionAction::Tool {
+                                                tool_name: "fs.write".to_owned(),
+                                                qualifier: None,
+                                            },
+                                            related_actions: Vec::new(),
+                                            requested_actions: Vec::new(),
+                                            reason: "write access requires approval".to_owned(),
+                                            explanation: String::new(),
+                                            source: Some("static_policy".to_owned()),
+                                            scope: None,
+                                            operator: None,
+                                            risk: PermissionRiskLevel::Medium,
+                                            trace: Vec::new(),
+                                            created_at: Utc::now(),
+                                        },
+                                        reply: Some(PermissionReply {
+                                            request_id,
+                                            kind: PermissionReplyKind::AllowOnce,
+                                            reason: Some("approved for this edit".to_owned()),
+                                            scope: None,
+                                        }),
+                                        replied_at_ms: Some(2),
+                                    }],
+                                },
+                                error: None,
                             }),
                             provenance: ActivityProvenance::default(),
                         }),
@@ -691,7 +712,7 @@ mod tests {
             node.key
                 == crate::TranscriptNodeKey::Activity {
                     entry_id: TranscriptEntryId::AssistantReply(reply_id),
-                    content_id: TranscriptContentId::Activity(permission_activity_id),
+                    content_id: TranscriptContentId::Activity(operation_activity_id),
                 }
         }));
         let text = rendered
@@ -702,6 +723,37 @@ mod tests {
             .join("\n");
         assert!(text.contains("before permission"), "{text}");
         assert!(text.contains("continued after permission"), "{text}");
+        assert!(text.contains("fs.write"), "{text}");
+        assert!(!text.contains("Awaiting permission"), "{text}");
+
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(reply_id),
+            content_id: TranscriptContentId::Activity(operation_activity_id),
+        };
+        let expanded = crate::render_entry_detailed(
+            &entries[1],
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key, true)]),
+        );
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(expanded_text.contains("Authorization"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("Allowed once · fs.write"),
+            "{expanded_text}"
+        );
+        assert!(
+            expanded_text.contains("approved for this edit"),
+            "{expanded_text}"
+        );
     }
 
     #[test]
@@ -804,6 +856,7 @@ mod tests {
                 model_output_text: output_text.to_owned(),
                 details: ToolOutput::default(),
                 resource_activity_ids: Vec::new(),
+                authorization: Default::default(),
                 error: None,
             }),
             provenance: ActivityProvenance::default(),
@@ -915,6 +968,7 @@ mod tests {
                 })))
                 .expect("structured result"),
                 resource_activity_ids: Vec::new(),
+                authorization: Default::default(),
                 error: None,
             }),
             provenance: ActivityProvenance::default(),
@@ -1020,6 +1074,7 @@ mod tests {
                 model_output_text: String::new(),
                 details: ToolOutput::default(),
                 resource_activity_ids: Vec::new(),
+                authorization: Default::default(),
                 error: None,
             }
         };

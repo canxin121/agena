@@ -4,6 +4,7 @@ use super::*;
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
+    use crate::session::store::MessageCheckpoint;
     use crate::{AppError, RuntimeSessionManagerConfig};
     use std::{
         collections::{HashMap, HashSet},
@@ -556,7 +557,7 @@ mod tests {
         session = manager
             .persist_session_changes(
                 session,
-                vec![message.clone()],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -601,22 +602,18 @@ mod tests {
         )
         .await;
 
-        let permission_part_count = session
+        let permission_record_count = session
             .messages
             .iter()
             .flat_map(|message| message.parts.iter())
-            .filter(|part| {
-                matches!(
-                    part.content.as_ref(),
-                    Some(PartContent::Activity(
-                        crate::message::RuntimeActivity::Interaction(
-                            crate::message::RequestPart::Permission(_)
-                        )
-                    ))
-                )
+            .filter_map(|part| match part.content.as_ref() {
+                Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                    operation,
+                ))) => Some(operation.authorization.permissions.len()),
+                _ => None,
             })
-            .count();
-        assert_eq!(permission_part_count, 1);
+            .sum::<usize>();
+        assert_eq!(permission_record_count, 1);
         let message = session
             .messages
             .iter()
@@ -633,8 +630,8 @@ mod tests {
                 .iter()
                 .map(|part| part.part_index)
                 .collect::<Vec<_>>(),
-            vec![0, 1],
-            "dynamically appended permission activity must retain document order"
+            vec![0],
+            "permission must remain data on the single operation part"
         );
         let events = manager
             .list_session_events(session.id)
@@ -671,33 +668,290 @@ mod tests {
             .iter()
             .flat_map(|message| message.parts.iter())
             .collect::<Vec<_>>();
-        assert_eq!(
-            parts
-                .iter()
-                .filter(|part| {
-                    matches!(
-                        part.content.as_ref(),
-                        Some(PartContent::Activity(
-                            crate::message::RuntimeActivity::Interaction(
-                                crate::message::RequestPart::Permission(_)
-                            )
-                        ))
-                    )
-                })
-                .count(),
-            1,
-            "approval must not create a second permission activity"
-        );
         assert!(parts.iter().any(|part| {
             part.operation_id.as_deref() == Some(operation_id)
                 && part.status == ExecutionStatus::Failed
                 && matches!(
                     part.content.as_ref(),
                     Some(PartContent::Activity(
-                        crate::message::RuntimeActivity::Operation(_)
+                        crate::message::RuntimeActivity::Operation(operation)
                     ))
+                        if operation.authorization.permissions.len() == 1
+                            && operation.authorization.permissions[0].reply.is_some()
+                            && operation.title == "test.approved_failure.run"
+                            && !operation.title.contains("Awaiting permission")
                 )
         }));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn durable_permission_reply_resumes_the_existing_execution_without_partial_failure() {
+        let manager = test_manager().await;
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "active permission reply".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let (seed_execution_id, turn_id, reply_id) =
+            seed_canonical_assistant_reply(&manager, session.id).await;
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve operation ids");
+        let operation_id = "active-permission-operation";
+        let operation = OperationPart::pending(
+            43,
+            ToolInvocation::new("test.active_permission.run", StructuredObject::default()),
+            "test.active_permission.run",
+            TimeRange::default(),
+        );
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(operation)],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: options.model.provider_id.to_string(),
+                model_id: options.model.model_id.to_string(),
+                ..Default::default()
+            },
+        );
+        message.parts[0].operation_id = Some(operation_id.to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist operation");
+        let pending = session.next_pending_tool().expect("pending operation");
+        let action = PermissionAction::Tool {
+            tool_name: "test.active_permission.run".to_owned(),
+            qualifier: None,
+        };
+        session = manager
+            .apply_permission_request_with_id(
+                session,
+                &pending,
+                operation_id.to_owned(),
+                action.clone(),
+                Vec::new(),
+                vec![action],
+                "active execution approval".to_owned(),
+                String::new(),
+                Some("static_policy".to_owned()),
+                None,
+                None,
+                PermissionRiskLevel::Medium,
+                Vec::new(),
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist permission request");
+        checkpoint_seeded_assistant_message(
+            &manager,
+            session.id,
+            seed_execution_id,
+            turn_id,
+            reply_id,
+            session.messages.last().expect("assistant message"),
+        )
+        .await;
+
+        let release = Arc::new(Notify::new());
+        let release_execution = Arc::clone(&release);
+        let active = manager
+            .start_registered(
+                session.id,
+                ExecutionSource::Continue,
+                ExecutionConversationTarget::ExistingReply(super::ConversationIdentity {
+                    turn_id,
+                    reply_id,
+                }),
+                "active permission waiter",
+                move |_manager, _control, _steer_rx| async move {
+                    release_execution.notified().await;
+                    Ok::<_, AppError>(())
+                },
+            )
+            .await
+            .expect("start active execution");
+        let active_receipt = active.receipt.expect("active receipt");
+
+        let reply_outcome = manager
+            .start_reply_permission(SessionPermissionReplyRequest::new(
+                session.id,
+                options,
+                PermissionReply {
+                    request_id: operation_id.to_owned(),
+                    kind: PermissionReplyKind::AllowOnce,
+                    reason: Some("approved".to_owned()),
+                    scope: None,
+                },
+                None,
+            ))
+            .await
+            .expect("durable reply must not fail after persistence");
+        let reply_receipt = reply_outcome.receipt.expect("resumed receipt");
+        assert_eq!(reply_receipt.execution_id, active_receipt.execution_id);
+        assert_eq!(reply_receipt.turn_id, turn_id);
+        assert_eq!(reply_receipt.reply_id, reply_id);
+
+        let stored = manager
+            .get_session(session.id)
+            .await
+            .expect("load replied session");
+        let authorization = stored
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find_map(|part| match part.content.as_ref() {
+                Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                    operation,
+                ))) if part.operation_id.as_deref() == Some(operation_id) => {
+                    Some(&operation.authorization)
+                }
+                _ => None,
+            })
+            .expect("operation authorization");
+        assert_eq!(authorization.permissions.len(), 1);
+        assert_eq!(
+            authorization.permissions[0]
+                .reply
+                .as_ref()
+                .map(|reply| reply.kind),
+            Some(PermissionReplyKind::AllowOnce)
+        );
+
+        release.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("active execution finished");
+    }
+
+    #[tokio::test]
+    async fn session_commit_checkpoints_only_the_explicitly_changed_part() {
+        let manager = test_manager().await;
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "checkpoint delta".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create session");
+        let ids = manager
+            .store
+            .reserve_message_ids(3)
+            .await
+            .expect("reserve message ids");
+        let message = build_message(
+            ids,
+            Role::User,
+            ExecutionStatus::Completed,
+            vec![
+                PartContent::text("first"),
+                PartContent::text("second"),
+                PartContent::text("third"),
+            ],
+            MessageMetadata::default(),
+        );
+        let message_id = message.id;
+        let changed_part_id = message.parts[1].id;
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist initial document");
+        let before = manager
+            .list_session_events(session.id)
+            .await
+            .expect("initial events")
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    &event.kind,
+                    EventKind::MessagePartCheckpointed(checkpoint)
+                        if checkpoint.message_id == message_id
+                )
+            })
+            .count();
+        assert_eq!(before, 3);
+
+        let changed = session
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+            .and_then(|message| {
+                message
+                    .parts
+                    .iter_mut()
+                    .find(|part| part.id == changed_part_id)
+            })
+            .expect("changed part");
+        changed.set_content(PartContent::text("second updated"));
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::part(message_id, changed_part_id)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist one part delta");
+
+        let checkpoints = manager
+            .list_session_events(session.id)
+            .await
+            .expect("updated events")
+            .into_iter()
+            .filter_map(|event| match event.kind {
+                EventKind::MessagePartCheckpointed(checkpoint)
+                    if checkpoint.message_id == message_id =>
+                {
+                    Some(checkpoint.part)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(checkpoints.len(), 4);
+        assert_eq!(
+            checkpoints.last().map(|part| part.id),
+            Some(changed_part_id)
+        );
+        assert_eq!(
+            checkpoints.last().and_then(|part| part.text()),
+            Some("second updated")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -763,7 +1017,7 @@ mod tests {
         session = manager
             .persist_session_changes(
                 session,
-                vec![message.clone()],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -821,48 +1075,25 @@ mod tests {
             .expect("persist approved continuation permission");
         let pending_permission = session
             .find_pending_permission_by_request_id(operation_id)
-            .expect("pending permission before canonical Activity projection");
-        let request_activity_id = session
-            .part(&pending_permission.request)
-            .and_then(|part| part.activity_id)
-            .expect("permission Activity identity");
-        let canonical_activity = manager
-            .store
-            .db
-            .query_one(Statement::from_sql_and_values(
-                manager.store.db.get_database_backend(),
-                "SELECT 1 AS present FROM agena_activities WHERE activity_id = ?",
-                [request_activity_id.to_string().into()],
-            ))
-            .await
-            .expect("query lagging canonical permission Activity");
-        assert!(
-            canonical_activity.is_none(),
-            "fixture requires an actionable model-message request before its Activity projection"
-        );
-        let projected_request_part = manager
-            .store
-            .db
-            .query_one(Statement::from_sql_and_values(
-                manager.store.db.get_database_backend(),
-                "SELECT 1 AS present FROM agena_model_message_parts \
-                 WHERE part_id = ? AND message_id = ?",
-                [
-                    pending_permission.request.part_id.into(),
-                    pending_permission.request.message_id.into(),
-                ],
-            ))
-            .await
-            .expect("query lagging request part projection");
-        assert!(
-            projected_request_part.is_none(),
-            "fixture requires the request part projection to lag its owning message"
-        );
+            .expect("pending permission on the operation");
+        assert_eq!(pending_permission.request_id, operation_id);
+        let operation = session
+            .part(&pending_permission.tool.part)
+            .and_then(|part| part.content.as_ref())
+            .and_then(|content| match content {
+                PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+                    Some(operation)
+                }
+                _ => None,
+            })
+            .expect("operation owns permission authorization");
+        assert_eq!(operation.authorization.permissions.len(), 1);
+        assert!(operation.authorization.permissions[0].reply.is_none());
         assert_eq!(
             manager
                 .conversation_identity_for_message(
                     session.id,
-                    pending_permission.request.message_id,
+                    pending_permission.tool.part.message_id,
                 )
                 .await
                 .expect("resolve reply identity from durable model-message ownership"),
@@ -1043,7 +1274,7 @@ mod tests {
         session = manager
             .persist_session_changes(
                 session,
-                vec![message],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -1177,7 +1408,7 @@ mod tests {
         session = manager
             .persist_session_changes(
                 session,
-                vec![message],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -1225,7 +1456,7 @@ mod tests {
         );
         assert!(
             session.pending_tools().is_empty(),
-            "interactive operations are represented by their pending request Activities, not re-dispatched as ordinary tools"
+            "operations with unresolved authorization remain interaction-blocked, not re-dispatched as ordinary tools"
         );
         assert!(
             session
@@ -1247,7 +1478,7 @@ mod tests {
                 .filter(|event| matches!(event.kind, EventKind::PermissionRequested(_)))
                 .count(),
             2,
-            "every visible permission Activity must have its own durable request event"
+            "every Operation-owned authorization request must have its own durable audit event"
         );
 
         checkpoint_seeded_assistant_message(
@@ -1483,7 +1714,7 @@ mod tests {
         session = manager
             .persist_session_changes(
                 session,
-                vec![message],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -1714,7 +1945,7 @@ mod tests {
         let session = manager
             .persist_session_changes(
                 session,
-                vec![message.clone()],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -1834,7 +2065,7 @@ mod tests {
         session = manager
             .persist_session_changes(
                 session,
-                vec![message.clone()],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -2268,7 +2499,7 @@ mod tests {
         session = manager
             .persist_session_changes(
                 session,
-                vec![message],
+                vec![MessageCheckpoint::all(&message)],
                 Vec::new(),
                 None,
                 manager.execution_state(),
@@ -2301,11 +2532,11 @@ mod tests {
             )
             .await
             .expect("persist reply probe permission request");
-        let permission_activity_id = session
+        let operation_activity_id = session
             .find_pending_permission_by_request_id(request_id.as_str())
-            .and_then(|pending| session.part(&pending.request))
+            .and_then(|pending| session.part(&pending.tool.part))
             .and_then(|part| part.activity_id)
-            .expect("permission request activity identity");
+            .expect("operation activity identity");
         checkpoint_seeded_assistant_message(
             manager.as_ref(),
             session.id,
@@ -2317,7 +2548,7 @@ mod tests {
         .await;
 
         // A later canonical turn must not steal an older interactive reply.
-        // The request Activity owns the continuation identity explicitly, so
+        // The Operation owns the continuation identity explicitly, so
         // resolving it never depends on the session's newest turn.
         let (newer_execution_id, newer_turn_id, newer_reply_id) =
             seed_canonical_assistant_reply(manager.as_ref(), session.id).await;
@@ -2363,29 +2594,25 @@ mod tests {
             .expect("permission continuation must return an execution receipt");
         assert_eq!(receipt.turn_id, canonical_turn_id);
         assert_eq!(receipt.reply_id, canonical_reply_id);
-        let canonical_permission = manager
+        let canonical_operation = manager
             .store
             .db
             .query_one(Statement::from_sql_and_values(
                 manager.store.db.get_database_backend(),
-                "SELECT state, payload_json FROM agena_activities WHERE activity_id = ?",
-                [permission_activity_id.to_string().into()],
+                "SELECT payload_json FROM agena_activities WHERE activity_id = ?",
+                [operation_activity_id.to_string().into()],
             ))
             .await
-            .expect("query canonical permission activity")
-            .expect("canonical permission activity");
-        assert_eq!(
-            canonical_permission
-                .try_get::<String>("", "state")
-                .expect("activity state"),
-            "completed"
-        );
-        let payload = canonical_permission
+            .expect("query canonical operation activity")
+            .expect("canonical operation activity");
+        let payload = canonical_operation
             .try_get::<serde_json::Value>("", "payload_json")
             .expect("activity payload");
         assert!(
-            payload.get("reply").is_some_and(|reply| !reply.is_null()),
-            "canonical permission Activity must contain the durable user reply: {payload}"
+            payload
+                .pointer("/authorization/permissions/0/reply")
+                .is_some_and(|reply| !reply.is_null()),
+            "canonical Operation must contain the durable permission reply: {payload}"
         );
 
         tokio::select! {

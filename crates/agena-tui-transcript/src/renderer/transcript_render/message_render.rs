@@ -10,9 +10,7 @@ use super::super::{
     transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
 };
 use super::operation_render::render_tool_execution;
-use super::request_render::{
-    preview_for_part, render_permission_request, render_user_input_request,
-};
+use super::request_render::{preview_for_part, render_user_input_request};
 use crate::snapshot::activity_presentation;
 use crate::ui_text;
 use crate::{
@@ -142,6 +140,81 @@ fn canonical_activity_details(
     match payload {
         agena_domain::ActivityPayload::Operation(operation) => {
             let mut details = Vec::new();
+            if !operation.authorization.permissions.is_empty() {
+                let permissions = operation
+                    .authorization
+                    .permissions
+                    .iter()
+                    .map(|permission| {
+                        let status = match permission.reply.as_ref().map(|reply| reply.kind) {
+                            None => "Awaiting user approval",
+                            Some(agena_domain::PermissionReplyKind::AllowOnce) => "Allowed once",
+                            Some(agena_domain::PermissionReplyKind::AllowAlways) => {
+                                "Allowed persistently"
+                            }
+                            Some(agena_domain::PermissionReplyKind::DenyOnce) => "Denied once",
+                            Some(agena_domain::PermissionReplyKind::DenyAlways) => {
+                                "Denied persistently"
+                            }
+                        };
+                        let action = match &permission.request.action {
+                            agena_domain::PermissionAction::Tool {
+                                tool_name,
+                                qualifier,
+                            } => qualifier.as_deref().map_or_else(
+                                || tool_name.clone(),
+                                |qualifier| format!("{tool_name} · {qualifier}"),
+                            ),
+                            agena_domain::PermissionAction::PathAccess {
+                                access_kind,
+                                target_path,
+                                ..
+                            } => format!("{access_kind} {target_path}"),
+                            agena_domain::PermissionAction::NetworkAccess { target, .. } => {
+                                format!("network {target}")
+                            }
+                        };
+                        let mut lines = vec![format!("{status} · {action}")];
+                        if !permission.request.reason.trim().is_empty() {
+                            lines.push(format!("Request: {}", permission.request.reason));
+                        }
+                        if !permission.request.explanation.trim().is_empty()
+                            && permission.request.explanation.trim()
+                                != permission.request.reason.trim()
+                        {
+                            lines.push(format!("Policy: {}", permission.request.explanation));
+                        }
+                        if let Some(reason) = permission
+                            .reply
+                            .as_ref()
+                            .and_then(|reply| reply.reason.as_deref())
+                            .filter(|reason| !reason.trim().is_empty())
+                            && reason.trim() != permission.request.reason.trim()
+                        {
+                            lines.push(format!("Reply: {reason}"));
+                        }
+                        let provenance = [
+                            permission.request.source.clone(),
+                            permission.request.scope.map(|scope| format!("{scope}")),
+                            Some(format!(
+                                "{} risk",
+                                format!("{:?}", permission.request.risk).to_ascii_lowercase()
+                            )),
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .filter(|value| !value.trim().is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                        if !provenance.is_empty() {
+                            lines.push(provenance);
+                        }
+                        lines.join("\n")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n\n");
+                details.push(format!("Authorization\n{permissions}"));
+            }
             if !operation.invocation.input.is_empty()
                 && let Ok(input) = serde_json::to_string_pretty(&serde_json::Value::from(
                     operation.invocation.input.clone(),
@@ -423,7 +496,6 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
         )),
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             Some(match request.as_ref() {
-                MessageRequestPartResource::Permission { request, .. } => request.reason.clone(),
                 MessageRequestPartResource::UserInput { request, .. } => request
                     .questions
                     .iter()
@@ -1099,19 +1171,6 @@ pub(crate) fn render_part_node(
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             match request.as_ref() {
-                MessageRequestPartResource::Permission { request, .. } => {
-                    render_permission_request(request, out, width, i18n);
-                    RenderedNodeDraft {
-                        key: TranscriptNodeKey::Activity {
-                            entry_id: message.id,
-                            content_id: part.id,
-                        },
-                        kind: TranscriptNodeKind::Activity,
-                        copy_text: request.reason.clone(),
-                        toggleable: false,
-                        expanded: true,
-                    }
-                }
                 MessageRequestPartResource::UserInput { request, .. } => {
                     render_user_input_request(request, out, width, i18n);
                     RenderedNodeDraft {

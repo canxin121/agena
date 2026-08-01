@@ -8,10 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::resource::{
-    MessageAttachment, MessageSkillReference, PermissionReply, PermissionRequest, UserInputReply,
-    UserInputRequest,
-};
+use crate::resource::{MessageAttachment, MessageSkillReference, UserInputReply, UserInputRequest};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -139,11 +136,6 @@ pub struct MessageErrorPartResource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "request_type", rename_all = "snake_case")]
 pub enum MessageRequestPartResource {
-    Permission {
-        request: PermissionRequest,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reply: Option<PermissionReply>,
-    },
     UserInput {
         request: UserInputRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -155,6 +147,11 @@ pub enum MessageRequestPartResource {
 pub struct OperationPartResource {
     pub call_id: i64,
     pub invocation: ToolInvocationResource,
+    #[serde(
+        default,
+        skip_serializing_if = "agena_domain::OperationAuthorization::is_empty"
+    )]
+    pub authorization: agena_domain::OperationAuthorization,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]

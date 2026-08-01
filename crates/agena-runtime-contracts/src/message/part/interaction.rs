@@ -1,50 +1,45 @@
 use serde::{Deserialize, Serialize};
 
 use agena_domain::{
-    ExecutionStatus, PendingInteractiveRequest, PendingInteractiveRequestKind, PermissionReply,
-    PermissionReplyKind, PermissionRequest, UserInputReply, UserInputReplyKind, UserInputRequest,
+    ExecutionStatus, PendingInteractiveRequest, PendingInteractiveRequestKind, UserInputReply,
+    UserInputReplyKind, UserInputRequest,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "request_type", rename_all = "snake_case")]
 pub enum RequestPart {
-    Permission(InteractiveRequestPart<PermissionRequest, PermissionReply>),
     UserInput(InteractiveRequestPart<UserInputRequest, UserInputReply>),
-}
-
-macro_rules! map_request_part {
-    ($value:expr, |$part:ident| $body:expr) => {
-        match $value {
-            RequestPart::Permission($part) => $body,
-            RequestPart::UserInput($part) => $body,
-        }
-    };
 }
 
 impl RequestPart {
     pub const fn kind(&self) -> PendingInteractiveRequestKind {
         match self {
-            Self::Permission(_) => PendingInteractiveRequestKind::Permission,
             Self::UserInput(_) => PendingInteractiveRequestKind::UserInput,
         }
     }
 
     pub const fn status(&self) -> ExecutionStatus {
-        map_request_part!(self, |part| part.status())
+        match self {
+            Self::UserInput(part) => part.status(),
+        }
     }
 
     pub fn summary_text(&self) -> String {
-        map_request_part!(self, |part| part.summary_text())
+        match self {
+            Self::UserInput(part) => part.summary_text(),
+        }
     }
 
     pub fn request_id(&self) -> &str {
-        map_request_part!(self, |part| part.request_id())
+        match self {
+            Self::UserInput(part) => part.request_id(),
+        }
     }
 
     pub fn pending_interactive_request(&self) -> Option<PendingInteractiveRequest> {
-        map_request_part!(self, |part| {
-            part.pending_request().map(PendingInteractiveRequest::from)
-        })
+        match self {
+            Self::UserInput(part) => part.pending_request().map(PendingInteractiveRequest::from),
+        }
     }
 }
 
@@ -83,31 +78,6 @@ impl<Request, Reply> InteractiveRequestPart<Request, Reply> {
         Request: Clone,
     {
         self.reply.is_none().then_some(self.request.clone())
-    }
-}
-
-impl InteractiveRequestPart<PermissionRequest, PermissionReply> {
-    pub fn request_id(&self) -> &str {
-        self.request.request_id.as_str()
-    }
-
-    pub fn summary_text(&self) -> String {
-        match self.reply.as_ref() {
-            None => format!("Awaiting permission: {}", self.request.reason),
-            Some(reply) => {
-                let reason = reply
-                    .reason
-                    .as_deref()
-                    .unwrap_or(self.request.reason.as_str());
-                let prefix = match reply.kind {
-                    PermissionReplyKind::AllowOnce => "Permission allowed once",
-                    PermissionReplyKind::AllowAlways => "Permission allowed always",
-                    PermissionReplyKind::DenyOnce => "Permission denied once",
-                    PermissionReplyKind::DenyAlways => "Permission denied always",
-                };
-                format!("{prefix}: {reason}")
-            }
-        }
     }
 }
 

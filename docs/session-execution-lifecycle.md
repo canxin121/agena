@@ -14,12 +14,13 @@ The system deliberately does not expose one overloaded `status` field.
 
 `blocked` and `tool_pending` are durable workflow facts. They do not mean that a task is running. A provider request is represented only by an active execution and its phase; it is never persisted as resumable work. Likewise, an in-progress message is not evidence that a worker still exists.
 
-An execution and its canonical assistant reply also have different lifetimes.
-An execution may complete after it durably publishes a Permission/UserInput
-Activity, while the reply remains `in_progress` and blocked on that Activity.
-The eventual interaction continuation is another execution attached to the
-same reply. Only the canonical reply boundary owns terminalization of all of
-its remaining Activities.
+An execution and its canonical assistant reply have the same interactive
+continuation boundary. After durably publishing an Operation-owned permission
+request or a UserInput Activity, the execution moves to
+`awaiting_interaction` and remains the single active writer. A durable reply
+wakes that execution; it never registers a continuation execution. Only the
+canonical reply boundary owns terminalization of all of its remaining
+Activities.
 
 ## Single-writer boundary
 
@@ -68,6 +69,10 @@ Every execution and model run has stable typed identity:
 
 Lifecycle and terminal transcript events are persistent. High-volume deltas are ephemeral. A checkpoint may contain nonterminal state, but it is never authoritative after a terminal transition.
 
+Checkpoints are explicit changed-part deltas. Updating one Operation, including
+its authorization history, checkpoints only that part instead of rewriting
+every part in the owning assistant message.
+
 The required pairs are:
 
 - exactly one `ExecutionStarted` followed by exactly one `ExecutionFinished`;
@@ -80,10 +85,10 @@ The event log is the source of truth. Activity tables are rebuildable projection
 
 - Reads compare the projection cursor with the event store and transactionally apply every missing session event in order; structural corruption triggers a full rebuild.
 - `RunAborted` terminalizes open messages and parts for its `RunId`.
-- `ExecutionFinished` terminalizes execution-owned open artifacts unless the canonical reply has a pending/in-progress Interaction Activity.
-- A completed execution with a pending Interaction suspends the canonical reply: the reply and its queued Operations remain nonterminal, and its `finished_at_ms` remains null.
-- When no Interaction is pending, a genuinely completed/failed/cancelled reply terminalizes every remaining reply-owned Activity across all of the reply's executions. The reply, not one continuation execution id, is the cleanup boundary.
-- A failed/cancelled reply also cancels unanswered Interaction Activities, so the UI never exposes an approval that has no resumable owner.
+- `ExecutionFinished` terminalizes execution-owned open artifacts unless a legacy completed event is replayed for a reply that still contains unresolved Operation authorization or UserInput.
+- Normal interactive waiting never emits `ExecutionFinished`; the active execution remains in `awaiting_interaction` until it resumes or is cancelled.
+- When no interaction is pending, a genuinely completed/failed/cancelled reply terminalizes every remaining reply-owned Activity. The reply is the cleanup boundary.
+- A failed/cancelled reply cancels unanswered UserInput Activities and terminalizes Operations with unresolved authorization, so the UI never exposes a request that has no resumable owner.
 - A delayed nonterminal checkpoint cannot reopen a terminal message.
 
 Event persistence happens before projection application, and durable history is broadcast to live clients only after the projection barrier succeeds. If projection application fails, the next read detects the cursor gap and deterministically catches up from the durable event log. A later event can never advance the projection cursor past an earlier unapplied event.
@@ -103,8 +108,9 @@ The API returns `workflow_state` and optional `active_execution` separately. The
 - never infer execution liveness from the last assistant message;
 - preserve each assistant message as its own resource instead of collapsing consecutive rounds and borrowing the last round's status;
 - never clear `active_execution` on `AssistantMessageFinished`, because tools or another model round may still follow;
-- expose every pending interactive request independently; a provider tool batch publishes all of its permission requests before blocking;
-- treat an individual interaction reply as a durable decision, not as a user message or a new assistant reply; the final decision in a batch starts one continuation execution for the existing canonical reply;
+- derive pending permissions from each Operation's unresolved authorization records; do not render Permission as an independent Activity;
+- expose every pending interactive request independently; a provider tool batch publishes all Operation authorization requests before waiting;
+- treat an individual interaction reply as a durable decision, not as a user message or a new assistant reply; the final decision in a batch wakes the existing canonical reply execution;
 - treat lifecycle events as refresh triggers and fetch authoritative workflow state after execution completion.
 
 Optimistic event reduction may improve responsiveness, but it must preserve these ownership rules.

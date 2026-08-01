@@ -195,7 +195,6 @@ permission-label-allow-always = immer erlauben
 permission-label-deny-once = einmal ablehnen
 permission-label-deny-always = immer ablehnen
 
-permission-summary-pending = Warten auf Berechtigung: {$reason}
 permission-summary-allow-once = Einmal erlaubt: {$reason}
 permission-summary-allow-always = Immer erlaubt: {$reason}
 permission-summary-deny-once = Einmal abgelehnt: {$reason}

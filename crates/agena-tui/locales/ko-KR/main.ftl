@@ -195,7 +195,6 @@ permission-label-allow-always = 항상 허용
 permission-label-deny-once = 한 번 거부
 permission-label-deny-always = 항상 거부
 
-permission-summary-pending = 권한 대기 중: {$reason}
 permission-summary-allow-once = 한 번 허용됨: {$reason}
 permission-summary-allow-always = 항상 허용됨: {$reason}
 permission-summary-deny-once = 한 번 거부됨: {$reason}

@@ -1554,6 +1554,7 @@ mod transcript_expansion_tests {
                 model_output_text: String::new(),
                 details,
                 resource_activity_ids: Vec::new(),
+                authorization: Default::default(),
                 error: None,
             }),
             provenance: ActivityProvenance::default(),

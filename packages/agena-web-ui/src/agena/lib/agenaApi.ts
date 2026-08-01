@@ -1075,7 +1075,14 @@ export type SessionExecutionResource = {
   workflow_state: 'quiescent' | 'tool_pending' | 'blocked' | string
   active_execution: {
     execution_id: string
-    phase: 'starting' | 'preparing_model' | 'streaming_model' | 'executing_tools' | 'cancelling' | string
+    phase:
+      | 'starting'
+      | 'preparing_model'
+      | 'streaming_model'
+      | 'executing_tools'
+      | 'awaiting_interaction'
+      | 'cancelling'
+      | string
   } | null
   latest_event_seq?: number | null
   automation?: SessionAutomationResource | null

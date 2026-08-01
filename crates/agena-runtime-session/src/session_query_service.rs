@@ -79,6 +79,7 @@ pub struct SessionProjectedMessagePart {
 pub struct SessionProjectedOperationPart {
     pub call_id: i64,
     pub invocation: agena_domain::ToolInvocation,
+    pub authorization: agena_domain::OperationAuthorization,
     pub title: String,
     pub summary: String,
     pub model_output: SessionProjectedModelVisibleOutput,
@@ -225,10 +226,6 @@ pub enum SessionProjectedPartDetail {
     },
     Attachment(agena_plugin_host::sdk::attachment::AttachmentPart),
     SkillReference(crate::message::SkillReferencePart),
-    PermissionRequest {
-        request: agena_domain::PermissionRequest,
-        reply: Option<agena_domain::PermissionReply>,
-    },
     UserInputRequest {
         request: agena_domain::UserInputRequest,
         reply: Option<agena_domain::UserInputReply>,

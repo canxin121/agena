@@ -178,7 +178,20 @@ impl UserPresentation {
         ]
         .iter()
         .any(|needle| lower.contains(needle));
-        if contains_sensitive_diagnostic {
+        let contains_prompt_directive = [
+            "ignore all instructions",
+            "ignore previous instructions",
+            "ignore prior instructions",
+            "system prompt",
+            "developer message",
+            "exfiltrate",
+            "reveal your instructions",
+            "<system",
+            "<assistant",
+        ]
+        .iter()
+        .any(|needle| lower.contains(needle));
+        if contains_sensitive_diagnostic || contains_prompt_directive {
             return Self {
                 key: key.into(),
                 fallback: "The request is invalid. Review the input and try again.".to_owned(),

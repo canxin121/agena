@@ -1,9 +1,10 @@
 use super::{
     AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
-    ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId, MessageMetadata, MessageSource,
-    PartContent, Role, RunCompleted, RunStarted, SessionExecutionRequest, SessionManager,
-    SessionSubtaskRequest, SessionSubtaskResponse, SessionUserMessageRequest, StableRunContext,
-    TranscriptContent, UserInputPart, UserMessageAppended, build_message, mpsc,
+    ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId, MessageCheckpoint,
+    MessageMetadata, MessageSource, PartContent, Role, RunCompleted, RunStarted,
+    SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
+    SessionUserMessageRequest, StableRunContext, TranscriptContent, UserInputPart,
+    UserMessageAppended, build_message, mpsc,
 };
 use crate::session::Session;
 use agena_domain::SubtaskStatusChangedEvent;
@@ -226,14 +227,9 @@ impl SessionManager {
             }
         }
         session.messages.push(user_message.clone());
+        let checkpoint = MessageCheckpoint::all(&user_message);
         session = self
-            .persist_session_changes(
-                session,
-                vec![user_message.clone()],
-                Vec::new(),
-                None,
-                state.clone(),
-            )
+            .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state.clone())
             .await?;
 
         // Append-only history: persist the user-authored message as its own

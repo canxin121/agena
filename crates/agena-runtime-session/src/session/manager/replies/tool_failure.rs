@@ -1,10 +1,11 @@
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PartContent, PersistedPermissionRule,
     SessionManager, SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
-    resolve_pending_tool, text_result_blocks, tool_name, update_resolved_tool_message,
+    operation_authorization, resolve_pending_tool, terminal_operation_title, text_result_blocks,
+    update_resolved_tool_message,
 };
 use crate::session::Session;
-use agena_domain::{ToolApiFunction, ToolInvocation, ToolOutput};
+use agena_domain::ToolOutput;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
     RecoveryDirective, RetryDirective, UserPresentation,
@@ -181,29 +182,11 @@ fn tool_error_failure(error: &ToolError) -> Failure {
     .with_model_feedback(model)
 }
 
-/// Resolve the actual operation identity once for every terminal path. A Tool
-/// API gateway is protocol plumbing; a user should see the execution tool it
-/// attempted to run, whether that attempt succeeds or fails.
-fn operation_title(invocation: &ToolInvocation) -> String {
-    let function = invocation
-        .tool_api_call
-        .as_ref()
-        .map(|call| call.function)
-        .or_else(|| ToolApiFunction::from_function_name(invocation.name.as_str()));
-    match function {
-        Some(ToolApiFunction::Call) => format!("Run {}", invocation.name),
-        Some(ToolApiFunction::List) => "List tools".to_owned(),
-        Some(ToolApiFunction::Search) => "Search tools".to_owned(),
-        Some(ToolApiFunction::Help) => "Inspect tool".to_owned(),
-        Some(ToolApiFunction::Tags) => "List tool tags".to_owned(),
-        None => format!("Run {}", tool_name(invocation)),
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{operation_title, tool_error_failure};
+    use super::super::is_authorization_phase_title;
+    use super::{terminal_operation_title, tool_error_failure};
     use crate::tool::ToolError;
     use agena_domain::{StructuredObject, ToolInvocation};
     use agena_failure::{FailureCategory, RetryDirective};
@@ -284,7 +267,19 @@ mod tests {
             }))
             .expect("valid target input"),
         };
-        assert_eq!(operation_title(&invocation), "Run shell.run");
+        assert_eq!(terminal_operation_title(&invocation), "shell.run");
+    }
+
+    #[test]
+    fn authorization_phase_titles_are_never_valid_terminal_titles() {
+        assert!(is_authorization_phase_title(
+            "Awaiting permission: shell.run"
+        ));
+        assert!(is_authorization_phase_title(
+            "Awaiting approval · write access"
+        ));
+        assert!(is_authorization_phase_title("Permission request · network"));
+        assert!(!is_authorization_phase_title("Run shell.run · exit 0"));
     }
 }
 
@@ -380,18 +375,8 @@ impl SessionManager {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let lifecycle = completed_lifecycle(&resolved.lifecycle);
         let blocks = text_result_blocks(failure.user.fallback.as_str());
-        let failure_title = session
-            .part(&resolved.pending.part)
-            .and_then(|part| part.content.as_ref())
-            .and_then(|content| match content {
-                PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
-                    Some(operation.title.clone())
-                }
-                _ => None,
-            })
-            .filter(|title| !title.trim().is_empty())
-            .filter(|title| title != &format!("Tool {}", tool_name(&resolved.invocation)))
-            .unwrap_or_else(|| operation_title(&resolved.invocation));
+        let authorization = operation_authorization(&session, &resolved);
+        let failure_title = terminal_operation_title(&resolved.invocation);
 
         // Notify plugins about the tool failure (fire-and-forget).
         state.tool_executor.broadcast_tool_failure(
@@ -412,6 +397,7 @@ impl SessionManager {
                     ToolOutput::default(),
                     lifecycle.clone(),
                 );
+                operation.authorization = authorization.clone();
                 operation.set_title(failure_title.clone());
                 tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::Failed;

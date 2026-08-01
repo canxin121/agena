@@ -1,8 +1,8 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionStatus, Message, MessageMetadata, MessageSource, ModelRef,
-    PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool, Role, SessionCommit,
-    SessionManager, SessionManagerState, SessionRunOptions, ToolError, ToolInvocationExecution,
-    build_message, custom_payload_value, managed_project_state_permission,
+    AppError, Arc, EventKind, ExecutionStatus, MessageCheckpoint, MessageMetadata, MessageSource,
+    ModelRef, PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool, Role,
+    SessionCommit, SessionManager, SessionManagerState, SessionRunOptions, ToolError,
+    ToolInvocationExecution, build_message, custom_payload_value, managed_project_state_permission,
     mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
 };
 use crate::session::Session;
@@ -12,14 +12,14 @@ impl SessionManager {
     pub(in crate::session::manager) async fn persist_session_changes(
         &self,
         session: Session,
-        touched_messages: Vec<Message>,
+        checkpoints: Vec<MessageCheckpoint>,
         client_events: Vec<EventKind>,
         persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         self.persist_session_changes_with_rules(
             session,
-            touched_messages,
+            checkpoints,
             client_events,
             persisted_rule.into_iter().collect(),
             state,
@@ -30,7 +30,7 @@ impl SessionManager {
     pub(in crate::session::manager) async fn persist_session_changes_with_rules(
         &self,
         session: Session,
-        touched_messages: Vec<Message>,
+        checkpoints: Vec<MessageCheckpoint>,
         client_events: Vec<EventKind>,
         persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
@@ -39,7 +39,7 @@ impl SessionManager {
             .persist(
                 SessionCommit {
                     session,
-                    touched_messages,
+                    checkpoints,
                     client_events,
                     persisted_rules,
                 },
@@ -502,14 +502,9 @@ impl SessionManager {
                 },
             );
             session.messages.push(user_message.clone());
+            let checkpoint = MessageCheckpoint::all(&user_message);
             session = self
-                .persist_session_changes(
-                    session,
-                    vec![user_message],
-                    Vec::new(),
-                    None,
-                    state.clone(),
-                )
+                .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state.clone())
                 .await?;
         }
     }

@@ -93,6 +93,15 @@ pub struct SessionPendingInteractiveRequest {
     pub tool: SessionPendingTool,
 }
 
+/// A pending permission is an unresolved authorization record on the tool
+/// Operation itself. `request_id` selects the record; no transcript part is
+/// created for the approval.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionPendingPermissionRequest {
+    pub request_id: String,
+    pub tool: SessionPendingTool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionPendingOperation {
@@ -100,7 +109,7 @@ pub enum SessionPendingOperation {
         tool: SessionPendingTool,
     },
     Permission {
-        pending: SessionPendingInteractiveRequest,
+        pending: SessionPendingPermissionRequest,
     },
     UserInput {
         pending: SessionPendingInteractiveRequest,
@@ -112,7 +121,7 @@ impl SessionPendingOperation {
         match self {
             Self::Tool { tool }
             | Self::Permission {
-                pending: SessionPendingInteractiveRequest { tool, .. },
+                pending: SessionPendingPermissionRequest { tool, .. },
             }
             | Self::UserInput {
                 pending: SessionPendingInteractiveRequest { tool, .. },
@@ -131,7 +140,7 @@ impl SessionPendingOperation {
         matches!(self, Self::Permission { .. } | Self::UserInput { .. })
     }
 
-    fn permission_request(&self) -> Option<&SessionPendingInteractiveRequest> {
+    fn permission_request(&self) -> Option<&SessionPendingPermissionRequest> {
         match self {
             Self::Permission { pending } => Some(pending),
             Self::Tool { .. } | Self::UserInput { .. } => None,
@@ -583,8 +592,10 @@ impl SessionRuntimeState {
         for operation in &mut self.workflow.pending_operations {
             match operation {
                 SessionPendingOperation::Tool { tool } => rewrite_ref(&mut tool.part),
-                SessionPendingOperation::Permission { pending }
-                | SessionPendingOperation::UserInput { pending } => {
+                SessionPendingOperation::Permission { pending } => {
+                    rewrite_ref(&mut pending.tool.part);
+                }
+                SessionPendingOperation::UserInput { pending } => {
                     rewrite_ref(&mut pending.request);
                     rewrite_ref(&mut pending.tool.part);
                 }
@@ -931,7 +942,6 @@ impl Session {
             RequestPart::UserInput(request) => {
                 request.request.request_id == request_id && request.reply.is_some()
             }
-            _ => false,
         })
     }
 
@@ -1072,7 +1082,7 @@ impl Session {
     pub fn find_pending_permission_by_request_id(
         &self,
         request_id: &str,
-    ) -> Option<SessionPendingInteractiveRequest> {
+    ) -> Option<SessionPendingPermissionRequest> {
         self.find_pending_request_by_id(
             request_id,
             SessionPendingOperation::permission_request,
@@ -1085,12 +1095,21 @@ impl Session {
     }
 
     pub fn has_replied_permission_request(&self, request_id: &str) -> bool {
-        self.has_replied_request(request_id, |request, request_id| match request {
-            RequestPart::Permission(request) => {
-                request.request.request_id == request_id && request.reply.is_some()
-            }
-            _ => false,
-        })
+        self.messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .filter_map(|part| match part.content.as_ref() {
+                Some(PartContent::Activity(RuntimeActivity::Operation(operation))) => {
+                    Some(operation)
+                }
+                _ => None,
+            })
+            .any(|operation| {
+                operation
+                    .authorization
+                    .find(request_id)
+                    .is_some_and(|permission| permission.reply.is_some())
+            })
     }
 
     /// Permission actions durably approved for this exact message operation.
@@ -1110,32 +1129,38 @@ impl Session {
             .filter(|message| message.id == assistant_message_id)
             .flat_map(|message| &message.parts)
             .find_map(|part| {
-                if part.status != ExecutionStatus::Completed
-                    || part.operation_id.as_deref() != Some(operation_id)
-                {
+                if part.operation_id.as_deref() != Some(operation_id) {
                     return None;
                 }
-                let Some(PartContent::Activity(RuntimeActivity::Interaction(
-                    RequestPart::Permission(InteractiveRequestPart {
-                        request,
-                        reply: Some(reply),
-                    }),
-                ))) = part.content.as_ref()
+                let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
+                    part.content.as_ref()
                 else {
                     return None;
                 };
-                if !matches!(
-                    reply.kind,
-                    agena_domain::PermissionReplyKind::AllowOnce
-                        | agena_domain::PermissionReplyKind::AllowAlways
-                ) {
-                    return None;
+                let mut approved = Vec::new();
+                for permission in &operation.authorization.permissions {
+                    let Some(reply) = permission.reply.as_ref() else {
+                        continue;
+                    };
+                    if !matches!(
+                        reply.kind,
+                        agena_domain::PermissionReplyKind::AllowOnce
+                            | agena_domain::PermissionReplyKind::AllowAlways
+                    ) {
+                        continue;
+                    }
+                    let actions = if permission.request.requested_actions.is_empty() {
+                        std::slice::from_ref(&permission.request.action)
+                    } else {
+                        permission.request.requested_actions.as_slice()
+                    };
+                    for action in actions {
+                        if !approved.contains(action) {
+                            approved.push(action.clone());
+                        }
+                    }
                 }
-                Some(if request.requested_actions.is_empty() {
-                    vec![request.action.clone()]
-                } else {
-                    request.requested_actions.clone()
-                })
+                Some(approved)
             })
             .unwrap_or_default()
     }
@@ -1143,7 +1168,6 @@ impl Session {
     fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {
         #[derive(Default)]
         struct PendingRequestParts {
-            permission: Option<SessionPartRef>,
             user_input: Option<SessionPartRef>,
         }
 
@@ -1166,34 +1190,19 @@ impl Session {
                     continue;
                 };
 
-                match part.content.as_ref() {
-                    Some(PartContent::Activity(RuntimeActivity::Interaction(
-                        RequestPart::Permission(_),
-                    ))) => {
-                        request_parts_by_operation
-                            .entry(operation_id)
-                            .or_default()
-                            .permission = Some(SessionPartRef::new(
-                            message_index,
-                            message,
-                            part_index,
-                            part,
-                        ));
-                    }
-                    Some(PartContent::Activity(RuntimeActivity::Interaction(
-                        RequestPart::UserInput(_),
-                    ))) => {
-                        request_parts_by_operation
-                            .entry(operation_id)
-                            .or_default()
-                            .user_input = Some(SessionPartRef::new(
-                            message_index,
-                            message,
-                            part_index,
-                            part,
-                        ));
-                    }
-                    _ => {}
+                if let Some(PartContent::Activity(RuntimeActivity::Interaction(
+                    RequestPart::UserInput(_),
+                ))) = part.content.as_ref()
+                {
+                    request_parts_by_operation
+                        .entry(operation_id)
+                        .or_default()
+                        .user_input = Some(SessionPartRef::new(
+                        message_index,
+                        message,
+                        part_index,
+                        part,
+                    ));
                 }
             }
 
@@ -1205,12 +1214,11 @@ impl Session {
                 let Some(operation_id) = part.operation_id.as_deref() else {
                     continue;
                 };
-                if !matches!(
-                    part.content.as_ref(),
-                    Some(PartContent::Activity(RuntimeActivity::Operation(_)))
-                ) {
+                let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
+                    part.content.as_ref()
+                else {
                     continue;
-                }
+                };
                 if completed_tool_operations.contains(operation_id) {
                     continue;
                 }
@@ -1219,26 +1227,26 @@ impl Session {
                     part: SessionPartRef::new(message_index, message, part_index, part),
                 };
 
-                if let Some(request_parts) = request_parts_by_operation.get(operation_id) {
-                    if let Some(request) = request_parts.permission.as_ref() {
-                        operations.push(SessionPendingOperation::Permission {
-                            pending: SessionPendingInteractiveRequest {
-                                request: request.clone(),
-                                tool,
-                            },
-                        });
-                        continue;
-                    }
+                if let Some(permission) = operation.authorization.awaiting().next() {
+                    operations.push(SessionPendingOperation::Permission {
+                        pending: SessionPendingPermissionRequest {
+                            request_id: permission.request.request_id.clone(),
+                            tool,
+                        },
+                    });
+                    continue;
+                }
 
-                    if let Some(request) = request_parts.user_input.as_ref() {
-                        operations.push(SessionPendingOperation::UserInput {
-                            pending: SessionPendingInteractiveRequest {
-                                request: request.clone(),
-                                tool,
-                            },
-                        });
-                        continue;
-                    }
+                if let Some(request_parts) = request_parts_by_operation.get(operation_id)
+                    && let Some(request) = request_parts.user_input.as_ref()
+                {
+                    operations.push(SessionPendingOperation::UserInput {
+                        pending: SessionPendingInteractiveRequest {
+                            request: request.clone(),
+                            tool,
+                        },
+                    });
+                    continue;
                 }
 
                 operations.push(SessionPendingOperation::Tool { tool });
@@ -1351,12 +1359,18 @@ impl Session {
 
     pub fn pending_permission_request(
         &self,
-        pending: &SessionPendingInteractiveRequest,
+        pending: &SessionPendingPermissionRequest,
     ) -> Option<&agena_domain::PermissionRequest> {
-        self.pending_request(&pending.request, |request| match request {
-            RequestPart::Permission(InteractiveRequestPart { request, .. }) => Some(request),
-            _ => None,
-        })
+        let part = self.part(&pending.tool.part)?;
+        let PartContent::Activity(RuntimeActivity::Operation(operation)) = part.content.as_ref()?
+        else {
+            return None;
+        };
+        operation
+            .authorization
+            .find(pending.request_id.as_str())
+            .filter(|permission| permission.reply.is_none())
+            .map(|permission| &permission.request)
     }
 
     pub fn pending_user_input_request(
@@ -1365,7 +1379,6 @@ impl Session {
     ) -> Option<&UserInputRequest> {
         self.pending_request(&pending.request, |request| match request {
             RequestPart::UserInput(InteractiveRequestPart { request, .. }) => Some(request),
-            _ => None,
         })
     }
 

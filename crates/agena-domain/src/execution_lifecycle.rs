@@ -73,6 +73,10 @@ fn phase_transition_allowed(from: ExecutionPhase, to: ExecutionPhase) -> bool {
             (from, to),
             (ExecutionPhase::Starting, ExecutionPhase::PreparingModel)
                 | (ExecutionPhase::Starting, ExecutionPhase::ExecutingTools)
+                | (
+                    ExecutionPhase::Starting,
+                    ExecutionPhase::AwaitingInteraction
+                )
                 | (ExecutionPhase::Starting, ExecutionPhase::Cancelling)
                 | (
                     ExecutionPhase::PreparingModel,
@@ -93,6 +97,22 @@ fn phase_transition_allowed(from: ExecutionPhase, to: ExecutionPhase) -> bool {
                     ExecutionPhase::PreparingModel
                 )
                 | (ExecutionPhase::ExecutingTools, ExecutionPhase::Cancelling)
+                | (
+                    ExecutionPhase::ExecutingTools,
+                    ExecutionPhase::AwaitingInteraction
+                )
+                | (
+                    ExecutionPhase::AwaitingInteraction,
+                    ExecutionPhase::ExecutingTools
+                )
+                | (
+                    ExecutionPhase::AwaitingInteraction,
+                    ExecutionPhase::PreparingModel
+                )
+                | (
+                    ExecutionPhase::AwaitingInteraction,
+                    ExecutionPhase::Cancelling
+                )
         )
 }
 

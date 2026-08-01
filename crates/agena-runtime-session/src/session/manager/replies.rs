@@ -3,7 +3,7 @@ use std::path::Path;
 use super::{ConversationIdentity, ExecutionConversationTarget, StableRunContext};
 use crate::session::Session;
 use crate::session::model::SessionPartRef;
-use agena_domain::UserInputReply;
+use agena_domain::{ToolApiFunction, UserInputReply};
 use agena_provider::ResponsesApiRequestMetadata;
 use agena_tool::ToolPermissionCheck;
 
@@ -132,12 +132,56 @@ fn pending_operation_for_resolved(
     invocation: ToolInvocation,
     title: impl Into<String>,
     lifecycle: TimeRange,
+    authorization: agena_domain::OperationAuthorization,
 ) -> OperationPart {
     let mut operation = OperationPart::pending(resolved.call_id, invocation, title, lifecycle);
+    operation.authorization = authorization;
     if let Some(identity) = resolved.advertised_tool_identity.as_deref() {
         operation.set_advertised_tool_identity(identity.to_string());
     }
     operation
+}
+
+fn operation_authorization(
+    session: &Session,
+    resolved: &ResolvedPendingTool,
+) -> agena_domain::OperationAuthorization {
+    session
+        .part(&resolved.pending.part)
+        .and_then(|part| part.content.as_ref())
+        .and_then(|content| match content {
+            PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+                Some(operation.authorization.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// Stable terminal identity for an Operation. Approval-phase prose and the
+/// Tool API gateway are never allowed to become the final title.
+fn terminal_operation_title(invocation: &ToolInvocation) -> String {
+    let function = invocation
+        .tool_api_call
+        .as_ref()
+        .map(|call| call.function)
+        .or_else(|| ToolApiFunction::from_function_name(invocation.name.as_str()));
+    match function {
+        Some(ToolApiFunction::List) => "List tools".to_owned(),
+        Some(ToolApiFunction::Search) => "Search tools".to_owned(),
+        Some(ToolApiFunction::Help) => "Inspect tool".to_owned(),
+        Some(ToolApiFunction::Tags) => "List tool tags".to_owned(),
+        Some(ToolApiFunction::Call) => invocation.name.clone(),
+        None => tool_name(invocation),
+    }
+}
+
+fn is_authorization_phase_title(title: &str) -> bool {
+    let title = title.trim().to_ascii_lowercase();
+    title.starts_with("awaiting permission")
+        || title.starts_with("awaiting approval")
+        || title.starts_with("awaiting user approval")
+        || title.starts_with("permission request")
 }
 
 fn append_resolved_message_part(
@@ -191,14 +235,6 @@ fn matching_request_part_refs(
                     let _operation_id = part.operation_id.as_deref()?;
                     let matches_request = match (request_kind, part.content.as_ref()) {
                         (
-                            agena_domain::PendingInteractiveRequestKind::Permission,
-                            Some(PartContent::Activity(
-                                crate::message::RuntimeActivity::Interaction(
-                                    RequestPart::Permission(request),
-                                ),
-                            )),
-                        ) => request.request_id() == request_id,
-                        (
                             agena_domain::PendingInteractiveRequestKind::UserInput,
                             Some(PartContent::Activity(
                                 crate::message::RuntimeActivity::Interaction(
@@ -227,7 +263,7 @@ fn matching_request_part_refs(
 pub(super) fn cancel_unanswered_request_parts_for_operation(
     session: &mut Session,
     operation_id: &str,
-) -> Result<(), AppError> {
+) -> Result<Vec<i64>, AppError> {
     let request_parts = session
         .messages
         .iter()
@@ -256,6 +292,10 @@ pub(super) fn cancel_unanswered_request_parts_for_operation(
         })
         .collect::<Vec<_>>();
 
+    let changed_part_ids = request_parts
+        .iter()
+        .map(|request_part| request_part.part_id)
+        .collect::<Vec<_>>();
     for request_part in request_parts {
         let part = session.part_mut(&request_part).ok_or_else(|| {
             AppError::Internal(format!(
@@ -268,7 +308,7 @@ pub(super) fn cancel_unanswered_request_parts_for_operation(
             "Cancelled because the associated tool already reached a terminal result.".to_owned(),
         );
     }
-    Ok(())
+    Ok(changed_part_ids)
 }
 
 fn supersede_duplicate_request_parts(
@@ -466,6 +506,29 @@ impl SessionManager {
         Ok((state, session))
     }
 
+    async fn resume_active_reply_execution(
+        &self,
+        session: &Session,
+        conversation_identity: ConversationIdentity,
+        mode: ReplyExecutionMode,
+    ) -> Option<ReplyDispatch> {
+        let control = self
+            .execution_registry
+            .signal_interaction_for_reply(session.id, conversation_identity.reply_id)
+            .await?;
+        Some(match mode {
+            ReplyExecutionMode::Await => ReplyDispatch::Completed(Box::new(session.clone())),
+            ReplyExecutionMode::Start => {
+                ReplyDispatch::Accepted(crate::SessionExecutionCommandOutcome::accepted(
+                    session.id,
+                    control.execution_id(),
+                    control.turn_id(),
+                    control.reply_id(),
+                ))
+            }
+        })
+    }
+
     async fn dispatch_reply_session(
         &self,
         mut session: Session,
@@ -640,7 +703,9 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let tool_call_id = tool_call_id_for(resolved);
-        cancel_unanswered_request_parts_for_operation(&mut session, tool_call_id.as_ref())?;
+        let mut changed_part_ids =
+            cancel_unanswered_request_parts_for_operation(&mut session, tool_call_id.as_ref())?;
+        changed_part_ids.push(resolved.pending.part.part_id);
         let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
         let completed_part = assistant_message
             .parts
@@ -663,7 +728,10 @@ impl SessionManager {
         let session = self
             .persist_session_changes_with_rules(
                 session,
-                vec![assistant_message.clone()],
+                vec![MessageCheckpoint::parts(
+                    assistant_message.id,
+                    changed_part_ids,
+                )],
                 Vec::new(),
                 persisted_rules,
                 state.clone(),
@@ -713,20 +781,53 @@ impl SessionManager {
             "permission",
             |session, pending| session.pending_permission_request(pending).cloned(),
         )?;
-        self.complete_reply_request_parts(
-            &mut session,
-            request_id.as_str(),
-            agena_domain::PendingInteractiveRequestKind::Permission,
-            PartContent::request(RequestPart::Permission(InteractiveRequestPart::replied(
-                permission_request.clone(),
-                request.request.reply.clone(),
-            ))),
-        )?;
+        let replied_at_ms = Utc::now().timestamp_millis();
+        let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
+        let operation_id = resolved_tool.operation_id.clone();
+        let call_id = resolved_tool.call_id;
+        {
+            let tool_part = session
+                .part_mut(&pending.tool.part)
+                .ok_or_else(|| pending_tool_part_not_found_error(&pending.tool.part))?;
+            let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(operation))) =
+                tool_part.content.as_mut()
+            else {
+                return Err(pending_reply_payload_missing_error(
+                    "permission",
+                    request_id.as_str(),
+                ));
+            };
+            if !operation
+                .authorization
+                .record_reply(request.request.reply.clone(), replied_at_ms)
+            {
+                return Err(pending_reply_payload_missing_error(
+                    "permission",
+                    request_id.as_str(),
+                ));
+            }
+            let decision = match request.request.reply.kind {
+                PermissionReplyKind::AllowOnce => "Permission allowed once",
+                PermissionReplyKind::AllowAlways => "Permission allowed always",
+                PermissionReplyKind::DenyOnce => "Permission denied once",
+                PermissionReplyKind::DenyAlways => "Permission denied always",
+            };
+            operation.summary = request
+                .request
+                .reply
+                .reason
+                .as_deref()
+                .filter(|reason| !reason.trim().is_empty())
+                .map(|reason| format!("{decision} · {reason}"))
+                .unwrap_or_else(|| decision.to_owned());
+            operation.result.display.summary = operation.summary.clone();
+            tool_part.summary = Some(operation.summary.clone());
+        }
         let replied_assistant_message = assistant_message_for_part(&session, &pending.tool.part)?;
         let conversation_identity = self
             .conversation_identity_for_message(
                 request.request.session_id,
-                pending.request.message_id,
+                pending.tool.part.message_id,
             )
             .await?;
         let reply_model_turn_id = replied_assistant_message
@@ -765,9 +866,14 @@ impl SessionManager {
         session = self
             .persist_session_changes_with_rules(
                 session,
-                vec![replied_assistant_message],
+                vec![MessageCheckpoint::part(
+                    replied_assistant_message.id,
+                    pending.tool.part.part_id,
+                )],
                 vec![EventKind::PermissionReplied(PermissionRepliedEvent {
                     session_id: request.request.session_id,
+                    operation_id,
+                    call_id,
                     request_id: request.request.reply.request_id.clone(),
                     kind: request.request.reply.kind,
                     reason: request.request.reply.reason.clone(),
@@ -792,6 +898,12 @@ impl SessionManager {
 
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
+                if let Some(dispatch) = self
+                    .resume_active_reply_execution(&session, conversation_identity, mode)
+                    .await
+                {
+                    return Ok(dispatch);
+                }
                 if continue_model {
                     // Provider tool batches resume as one canonical reply
                     // execution. Until every interaction has a durable reply,
@@ -861,12 +973,19 @@ impl SessionManager {
             }
         }
 
+        if let Some(dispatch) = self
+            .resume_active_reply_execution(&session, conversation_identity, mode)
+            .await
+        {
+            return Ok(dispatch);
+        }
+
         if !continue_model {
             return Ok(ReplyDispatch::Completed(Box::new(session)));
         }
 
         // A denial terminalizes its own Operation, but it must not resume the
-        // model while sibling Permission/UserInput Activities are unresolved.
+        // model while sibling Operation authorization or UserInput remains unresolved.
         // The final interaction reply crosses the same batch barrier and owns
         // the single continuation execution.
         if session.blocked() {
@@ -975,7 +1094,10 @@ impl SessionManager {
             session = self
                 .persist_session_changes(
                     session,
-                    vec![assistant_message],
+                    vec![MessageCheckpoint::part(
+                        assistant_message.id,
+                        pending.request.part_id,
+                    )],
                     Vec::new(),
                     None,
                     state.clone(),
@@ -1060,6 +1182,13 @@ impl SessionManager {
                 pending.tool.part.message_id, request_id
             ))
         })?;
+
+        if let Some(dispatch) = self
+            .resume_active_reply_execution(&session, conversation_identity, mode)
+            .await
+        {
+            return Ok(dispatch);
+        }
 
         self.dispatch_reply_session(
             session,
@@ -1245,15 +1374,16 @@ mod tests {
 use super::{
     AppError, Arc, DecisionTraceStep, EventKind, ExecutionControl, ExecutionSource,
     ExecutionStatus, HistoryMessageId, HistoryRunId, InteractiveRequestPart, Message,
-    MessageMetadata, MessagePart, MessageSource, ModelRef, ModelSpeedModeRequestOverride,
-    OperationPart, PartContent, PathBuf, PermissionAction, PermissionMode, PermissionRepliedEvent,
-    PermissionReplyKind, PermissionRiskLevel, PermissionScope, PersistedPermissionRule,
-    PromptRequestOptions, PromptTurnBudget, ProviderPromptAnchor, RequestPart, ResolvedPendingTool,
-    Role, RunAborted, RunCompleted, RunStarted, SessionCommit, SessionExecutionReplyRequest,
-    SessionManager, SessionManagerState, SessionPendingTool, SessionPermissionReplyRequest,
-    SessionRunOptions, SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange,
-    ToolCallCompleted, ToolError, ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc,
-    ask_user_title, build_message, build_request_part, completed_lifecycle, custom_payload_value,
+    MessageCheckpoint, MessageMetadata, MessagePart, MessageSource, ModelRef,
+    ModelSpeedModeRequestOverride, OperationPart, PartContent, PathBuf, PermissionAction,
+    PermissionMode, PermissionRepliedEvent, PermissionReplyKind, PermissionRiskLevel,
+    PermissionScope, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
+    ProviderPromptAnchor, RequestPart, ResolvedPendingTool, Role, RunAborted, RunCompleted,
+    RunStarted, SessionCommit, SessionExecutionReplyRequest, SessionManager, SessionManagerState,
+    SessionPendingTool, SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest,
+    SessionRunTermination, StreamingToolExecution, TimeRange, ToolCallCompleted, ToolError,
+    ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title,
+    build_message, build_request_part, completed_lifecycle, custom_payload_value,
     execution_control_to_app_error, host_user_input_response, max_permission_risk,
     merge_system_prompts, mpsc, operation_blocks_from_tool_output,
     payload_tool_name_for_invocation, permission_action_key, permission_scope_label,

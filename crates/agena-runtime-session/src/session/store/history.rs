@@ -1,8 +1,8 @@
 use super::{
-    AppError, Arc, DbErr, EventKind, MessagePartCheckpointedEvent, PersistedPermissionRule,
-    PersistedRuleEventMeta, ProcessorPartIdAllocator, ReservedMessageIds, ReservedProcessorIds,
-    Session, SessionCachePolicy, SessionCacheStats, SessionCommit, SessionStore, Utc, access_cache,
-    ordered_unique_touched_messages, permission_rule_event_from_rule, session,
+    AppError, Arc, DbErr, EventKind, MessageCheckpoint, MessagePartCheckpointedEvent,
+    PersistedPermissionRule, PersistedRuleEventMeta, ProcessorPartIdAllocator, ReservedMessageIds,
+    ReservedProcessorIds, Session, SessionCachePolicy, SessionCacheStats, SessionCommit,
+    SessionStore, Utc, access_cache, permission_rule_event_from_rule, session,
     session_from_model_db,
 };
 
@@ -64,18 +64,38 @@ impl SessionStore {
     ) -> Result<Session, AppError> {
         let SessionCommit {
             mut session,
-            touched_messages,
+            checkpoints,
             mut client_events,
             persisted_rules,
         } = commit;
         session.sync_workflow_state();
         let session_id = session.id;
-        let touched_messages = ordered_unique_touched_messages(&session, touched_messages);
+        let checkpoints = ordered_unique_checkpoints(&session, checkpoints)?;
         let now = Utc::now();
         let ts_ms = now.timestamp_millis();
         let mut ordered_client_events = Vec::new();
-        for message in &touched_messages {
-            for part in &message.parts {
+        for checkpoint in &checkpoints {
+            let message = session
+                .messages
+                .iter()
+                .find(|message| message.id == checkpoint.message_id)
+                .ok_or_else(|| {
+                    AppError::Internal(format!(
+                        "checkpoint message {} is missing from session {session_id}",
+                        checkpoint.message_id
+                    ))
+                })?;
+            for part_id in &checkpoint.part_ids {
+                let part = message
+                    .parts
+                    .iter()
+                    .find(|part| part.id == *part_id)
+                    .ok_or_else(|| {
+                        AppError::Internal(format!(
+                            "checkpoint part {part_id} is missing from message {}",
+                            message.id
+                        ))
+                    })?;
                 ordered_client_events.push(EventKind::MessagePartCheckpointed(
                     MessagePartCheckpointedEvent {
                         session_id,
@@ -260,6 +280,45 @@ impl SessionStore {
     pub(crate) async fn current_workspace_id(&self) -> Result<i64, AppError> {
         self.workspace_id().await
     }
+}
+
+fn ordered_unique_checkpoints(
+    session: &Session,
+    checkpoints: Vec<MessageCheckpoint>,
+) -> Result<Vec<MessageCheckpoint>, AppError> {
+    let session_order = session
+        .messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| (message.id, index))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut parts_by_message = std::collections::HashMap::<i64, Vec<i64>>::new();
+    for checkpoint in checkpoints {
+        if !session_order.contains_key(&checkpoint.message_id) {
+            return Err(AppError::Internal(format!(
+                "checkpoint message {} is not owned by session {}",
+                checkpoint.message_id, session.id
+            )));
+        }
+        parts_by_message
+            .entry(checkpoint.message_id)
+            .or_default()
+            .extend(checkpoint.part_ids);
+    }
+    let mut checkpoints = parts_by_message
+        .into_iter()
+        .map(|(message_id, part_ids)| MessageCheckpoint::parts(message_id, part_ids))
+        .collect::<Vec<_>>();
+    checkpoints.sort_by_key(|checkpoint| {
+        (
+            session_order
+                .get(&checkpoint.message_id)
+                .copied()
+                .unwrap_or(usize::MAX),
+            checkpoint.message_id,
+        )
+    });
+    Ok(checkpoints)
 }
 
 #[cfg(test)]

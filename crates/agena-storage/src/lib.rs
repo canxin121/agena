@@ -187,6 +187,10 @@ pub enum EventStoreError {
     Backend(String),
     #[error("event with seq_global={0} already exists")]
     DuplicateSeq(i64),
+    #[error(
+        "event with session seq (session_id={session_id}, seq_session={seq_session}) already exists"
+    )]
+    DuplicateSessionSeq { session_id: i64, seq_session: i64 },
     #[error("invalid range: {0}")]
     InvalidRange(String),
     #[error(transparent)]

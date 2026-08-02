@@ -253,7 +253,7 @@ struct SessionManagerState {
     shared_permission: Arc<StdRwLock<crate::authorization::PermissionConfig>>,
     shared_session_permissions:
         Arc<StdRwLock<HashMap<i64, crate::authorization::PermissionConfig>>>,
-        auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
+    auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
     rule_snapshots: Arc<StdRwLock<HashMap<Option<i64>, Arc<permission_service::RuleSnapshot>>>>,
     auto_projection: Arc<StdMutex<HashMap<Option<i64>, (usize, String)>>>,
 }
@@ -398,7 +398,7 @@ impl SessionManagerState {
             config,
             shared_permission,
             Arc::new(StdRwLock::new(HashMap::new())),
-                                    Arc::new(StdMutex::new(HashMap::new())),
+            Arc::new(StdMutex::new(HashMap::new())),
             Arc::new(StdRwLock::new(HashMap::new())),
             Arc::new(StdMutex::new(HashMap::new())),
         )
@@ -412,7 +412,7 @@ impl SessionManagerState {
         shared_session_permissions: Arc<
             StdRwLock<HashMap<i64, crate::authorization::PermissionConfig>>,
         >,
-                auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
+        auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
         rule_snapshots: Arc<StdRwLock<HashMap<Option<i64>, Arc<permission_service::RuleSnapshot>>>>,
         auto_projection: Arc<StdMutex<HashMap<Option<i64>, (usize, String)>>>,
     ) -> Self {
@@ -424,7 +424,7 @@ impl SessionManagerState {
             tool_execution_semaphore,
             shared_permission,
             shared_session_permissions,
-                        auto_approval,
+            auto_approval,
             rule_snapshots,
             auto_projection,
         }
@@ -1143,13 +1143,19 @@ impl SessionManager {
             .err()
             .map(run_abort_reason)
             .unwrap_or(RunAbortReason::Internal);
-        let reconciliation_result = self
-            .store
-            .reconcile_unmatched_runs(session_id, unmatched_run_reason)
-            .await;
+        // Terminalize the execution first: `finish_execution` publishes the
+        // authoritative `ExecutionFinished` event and projects the reply
+        // outcome. Reconcile afterwards so the synthesis pass (`RunAborted`
+        // for any still-hanging run) observes those already-persisted events
+        // and cannot race the execution's own cleanup writes with duplicate
+        // per-session sequence numbers after a process restart.
         let outcome = Self::execution_outcome(control.as_ref(), &result);
         let terminal_result = self
             .finish_execution(session_id, control.as_ref(), outcome)
+            .await;
+        let reconciliation_result = self
+            .store
+            .reconcile_unmatched_runs(session_id, unmatched_run_reason)
             .await;
         self.execution_registry
             .unregister_if_matches(session_id, &control)
@@ -1596,7 +1602,7 @@ impl SessionManager {
                 config,
                 Arc::clone(&previous.shared_permission),
                 Arc::clone(&previous.shared_session_permissions),
-                                                Arc::clone(&previous.auto_approval),
+                Arc::clone(&previous.auto_approval),
                 Arc::clone(&previous.rule_snapshots),
                 Arc::clone(&previous.auto_projection),
             )));

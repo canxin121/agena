@@ -48,6 +48,13 @@ where
                     || message.contains("agena_events.seq_global")
                 {
                     Err(EventStoreError::DuplicateSeq(event.meta.seq_global))
+                } else if message.contains("agena_events.seq_session")
+                    || message.contains("uq_agena_events_session_seq")
+                {
+                    Err(EventStoreError::DuplicateSessionSeq {
+                        session_id: event.meta.session_id.unwrap_or_default(),
+                        seq_session: event.meta.seq_session.unwrap_or_default(),
+                    })
                 } else {
                     Err(EventStoreError::Backend(message))
                 };

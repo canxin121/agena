@@ -82,11 +82,16 @@ pub enum TranscriptActivityContent {
     Request(Box<MessageRequestPartResource>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TranscriptAssistantReplyLifecycle {
     Running,
     Completed,
-    Failed,
+    /// Terminal failure. Carries the structured public failure projection
+    /// (when the runtime persisted one) so renderers can show a readable
+    /// summary in the collapsed row and a rich, expandable detail view.
+    Failed {
+        problem: Option<agena_failure::UserProblem>,
+    },
     Cancelled,
 }
 

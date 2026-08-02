@@ -192,19 +192,25 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
-        )) => Some(ui_text::t(
-            i18n,
-            match status {
-                TranscriptAssistantReplyLifecycle::Running => "message-activity-response-running",
-                TranscriptAssistantReplyLifecycle::Completed => {
-                    "message-activity-response-completed"
-                }
-                TranscriptAssistantReplyLifecycle::Failed => "message-activity-response-failed",
-                TranscriptAssistantReplyLifecycle::Cancelled => {
-                    "message-activity-response-cancelled"
-                }
+        )) => Some(match status {
+            TranscriptAssistantReplyLifecycle::Running => {
+                ui_text::t(i18n, "message-activity-response-running")
+            }
+            TranscriptAssistantReplyLifecycle::Completed => {
+                ui_text::t(i18n, "message-activity-response-completed")
+            }
+            TranscriptAssistantReplyLifecycle::Failed { problem } => match problem {
+                Some(problem) => format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "message-activity-response-failed"),
+                    problem.user.fallback
+                ),
+                None => ui_text::t(i18n, "message-activity-response-failed"),
             },
-        )),
+            TranscriptAssistantReplyLifecycle::Cancelled => {
+                ui_text::t(i18n, "message-activity-response-cancelled")
+            }
+        }),
         TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => {
             attachment.attachments.first().map(|item| {
                 item.title

@@ -213,6 +213,7 @@ mod transcript_character_cursor_tests {
                 revision_seq: 1,
                 created_at_ms: sequence * 10,
                 finished_at_ms: status.is_terminal().then_some(sequence * 10 + 1),
+                failure: None,
             },
             created_at_ms: sequence * 10,
         }
@@ -941,6 +942,7 @@ mod pending_message_tests {
                     revision_seq: 1,
                     created_at_ms: 1,
                     finished_at_ms: None,
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -992,6 +994,7 @@ mod pending_message_tests {
                     revision_seq: 1,
                     created_at_ms: 1,
                     finished_at_ms: Some(1),
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -1046,6 +1049,7 @@ mod pending_message_tests {
                     revision_seq: 1,
                     created_at_ms: 1,
                     finished_at_ms: None,
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -1098,6 +1102,7 @@ mod pending_message_tests {
                         revision_seq: 1,
                         created_at_ms: 1,
                         finished_at_ms: None,
+                        failure: None,
                     },
                     created_at_ms: 1,
                 }],
@@ -1584,6 +1589,7 @@ mod transcript_expansion_tests {
                         revision_seq: 1,
                         created_at_ms: 1,
                         finished_at_ms: Some(2),
+                        failure: None,
                     },
                     created_at_ms: 1,
                 }],
@@ -2817,6 +2823,7 @@ mod live_transcript_tests {
                 revision_seq: 0,
                 created_at_ms: sequence,
                 finished_at_ms: None,
+                failure: None,
             },
             created_at_ms: sequence,
         }
@@ -2976,8 +2983,7 @@ mod live_transcript_tests {
         );
         let max_scroll = transcript.max_scroll(80, 20);
         assert_eq!(
-            transcript.viewport.top,
-            max_scroll,
+            transcript.viewport.top, max_scroll,
             "a following viewport must pin to the new bottom"
         );
         assert!(

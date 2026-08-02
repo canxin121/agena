@@ -657,6 +657,163 @@ fn patch_rendered_lines_style(lines: &mut [RenderedLine], style: Style) {
     }
 }
 
+/// Render the expandable detail body for a structured public failure
+/// projection. Every field is derived from the already-public `UserProblem`;
+/// the renderer never accepts a raw diagnostic string on this path.
+fn render_failure_detail(
+    out: &mut Vec<RenderedLine>,
+    problem: &agena_failure::UserProblem,
+    i18n: &I18n,
+    width: u16,
+) {
+    let muted = Style::default().fg(agena_tui_components::theme::muted_color());
+    let danger = Style::default().fg(agena_tui_components::theme::danger_color());
+    let mut push = |label: &str, value: &str, style: Style| {
+        push_label_value(out, "    ", &format!("{label}: {value}"), style, width);
+    };
+    push(
+        &ui_text::t(i18n, "failure-detail-message"),
+        problem.user.fallback.as_str(),
+        danger,
+    );
+    push(
+        &ui_text::t(i18n, "failure-detail-code"),
+        problem.code.as_str(),
+        Style::default(),
+    );
+    push(
+        &ui_text::t(i18n, "failure-detail-category"),
+        &failure_category_label(problem.category, i18n),
+        Style::default(),
+    );
+    push(
+        &ui_text::t(i18n, "failure-detail-responsibility"),
+        &failure_responsibility_label(problem.responsibility, i18n),
+        Style::default(),
+    );
+    push(
+        &ui_text::t(i18n, "failure-detail-impact"),
+        &failure_impact_label(problem.impact, i18n),
+        Style::default(),
+    );
+    push(
+        &ui_text::t(i18n, "failure-detail-recovery"),
+        &recovery_directive_label(problem.recovery, i18n),
+        Style::default(),
+    );
+    push(
+        &ui_text::t(i18n, "failure-detail-retry"),
+        &retry_directive_label(problem.retry, i18n),
+        Style::default(),
+    );
+    push(
+        &ui_text::t(i18n, "failure-detail-reference"),
+        &problem.id.to_string(),
+        muted,
+    );
+}
+
+fn failure_category_label(category: agena_failure::FailureCategory, i18n: &I18n) -> String {
+    ui_text::t(
+        i18n,
+        match category {
+            agena_failure::FailureCategory::InvalidInput => "failure-category-invalid-input",
+            agena_failure::FailureCategory::NotFound => "failure-category-not-found",
+            agena_failure::FailureCategory::Conflict => "failure-category-conflict",
+            agena_failure::FailureCategory::PermissionRequired => {
+                "failure-category-permission-required"
+            }
+            agena_failure::FailureCategory::PermissionDenied => {
+                "failure-category-permission-denied"
+            }
+            agena_failure::FailureCategory::AuthenticationRequired => {
+                "failure-category-authentication-required"
+            }
+            agena_failure::FailureCategory::RateLimited => "failure-category-rate-limited",
+            agena_failure::FailureCategory::QuotaExceeded => "failure-category-quota-exceeded",
+            agena_failure::FailureCategory::Timeout => "failure-category-timeout",
+            agena_failure::FailureCategory::DependencyUnavailable => {
+                "failure-category-dependency-unavailable"
+            }
+            agena_failure::FailureCategory::ProtocolFailure => "failure-category-protocol-failure",
+            agena_failure::FailureCategory::DataCorruption => "failure-category-data-corruption",
+            agena_failure::FailureCategory::Internal => "failure-category-internal",
+        },
+    )
+}
+
+fn failure_responsibility_label(
+    responsibility: agena_failure::FailureResponsibility,
+    i18n: &I18n,
+) -> String {
+    ui_text::t(
+        i18n,
+        match responsibility {
+            agena_failure::FailureResponsibility::Caller => "failure-responsibility-caller",
+            agena_failure::FailureResponsibility::Policy => "failure-responsibility-policy",
+            agena_failure::FailureResponsibility::Dependency => "failure-responsibility-dependency",
+            agena_failure::FailureResponsibility::System => "failure-responsibility-system",
+        },
+    )
+}
+
+fn failure_impact_label(impact: agena_failure::FailureImpact, i18n: &I18n) -> String {
+    ui_text::t(
+        i18n,
+        match impact {
+            agena_failure::FailureImpact::RequestRejected => "failure-impact-request-rejected",
+            agena_failure::FailureImpact::OperationFailed => "failure-impact-operation-failed",
+            agena_failure::FailureImpact::OperationPaused => "failure-impact-operation-paused",
+            agena_failure::FailureImpact::PartialSuccess => "failure-impact-partial-success",
+            agena_failure::FailureImpact::BackgroundTaskFailed => {
+                "failure-impact-background-task-failed"
+            }
+            agena_failure::FailureImpact::RuntimeDegraded => "failure-impact-runtime-degraded",
+            agena_failure::FailureImpact::FatalStartupFailure => {
+                "failure-impact-fatal-startup-failure"
+            }
+        },
+    )
+}
+
+fn recovery_directive_label(recovery: agena_failure::RecoveryDirective, i18n: &I18n) -> String {
+    ui_text::t(
+        i18n,
+        match recovery {
+            agena_failure::RecoveryDirective::None => "failure-recovery-none",
+            agena_failure::RecoveryDirective::Refresh => "failure-recovery-refresh",
+            agena_failure::RecoveryDirective::Reauthenticate => "failure-recovery-reauthenticate",
+            agena_failure::RecoveryDirective::OpenSettings => "failure-recovery-open-settings",
+            agena_failure::RecoveryDirective::RequestPermission => {
+                "failure-recovery-request-permission"
+            }
+            agena_failure::RecoveryDirective::AskUser => "failure-recovery-ask-user",
+            agena_failure::RecoveryDirective::Retry => "failure-recovery-retry",
+            agena_failure::RecoveryDirective::ChooseAlternative => {
+                "failure-recovery-choose-alternative"
+            }
+            agena_failure::RecoveryDirective::RestartPlugin => "failure-recovery-restart-plugin",
+            agena_failure::RecoveryDirective::RestartRuntime => "failure-recovery-restart-runtime",
+        },
+    )
+}
+
+fn retry_directive_label(retry: agena_failure::RetryDirective, i18n: &I18n) -> String {
+    ui_text::t(
+        i18n,
+        match retry {
+            agena_failure::RetryDirective::Never => "failure-retry-never",
+            agena_failure::RetryDirective::CorrectInput => "failure-retry-correct-input",
+            agena_failure::RetryDirective::AfterUserAction => "failure-retry-after-user-action",
+            agena_failure::RetryDirective::AfterRefresh => "failure-retry-after-refresh",
+            agena_failure::RetryDirective::ImmediateOnce => "failure-retry-immediate-once",
+            agena_failure::RetryDirective::Backoff => "failure-retry-backoff",
+            agena_failure::RetryDirective::UseAlternative => "failure-retry-use-alternative",
+            agena_failure::RetryDirective::Unknown => "failure-retry-unknown",
+        },
+    )
+}
+
 fn render_canonical_activity_detail(
     out: &mut Vec<RenderedLine>,
     detail: &CanonicalActivityDetail,
@@ -931,19 +1088,25 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
-        )) => Some(ui_text::t(
-            i18n,
-            match status {
-                TranscriptAssistantReplyLifecycle::Running => "message-activity-response-running",
-                TranscriptAssistantReplyLifecycle::Completed => {
-                    "message-activity-response-completed"
-                }
-                TranscriptAssistantReplyLifecycle::Failed => "message-activity-response-failed",
-                TranscriptAssistantReplyLifecycle::Cancelled => {
-                    "message-activity-response-cancelled"
-                }
+        )) => Some(match status {
+            TranscriptAssistantReplyLifecycle::Running => {
+                ui_text::t(i18n, "message-activity-response-running")
+            }
+            TranscriptAssistantReplyLifecycle::Completed => {
+                ui_text::t(i18n, "message-activity-response-completed")
+            }
+            TranscriptAssistantReplyLifecycle::Failed { problem } => match problem {
+                Some(problem) => format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "message-activity-response-failed"),
+                    problem.user.fallback
+                ),
+                None => ui_text::t(i18n, "message-activity-response-failed"),
             },
-        )),
+            TranscriptAssistantReplyLifecycle::Cancelled => {
+                ui_text::t(i18n, "message-activity-response-cancelled")
+            }
+        }),
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             Some(match request.as_ref() {
                 MessageRequestPartResource::UserInput { request, .. } => request
@@ -1467,40 +1630,32 @@ pub(crate) fn render_part_node(
                 content_id: part.id,
             };
             let expanded = expansions.get(&key).copied().unwrap_or(true);
-            let text = if error.problem.is_unexpected() {
-                format!(
-                    "{} Reference: {}",
-                    error.problem.user.fallback, error.problem.id
-                )
+            let title = error.problem.user.fallback.clone();
+            let reference = if error.problem.is_unexpected() {
+                Some(format!("Reference: {}", error.problem.id))
             } else {
-                error.problem.user.fallback.clone()
+                None
             };
             push_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
-                "Error",
-                text.as_str(),
+                title.as_str(),
+                reference.as_deref().unwrap_or(""),
                 width,
             );
             if expanded {
-                render_canonical_activity_detail(
-                    out,
-                    &CanonicalActivityDetail::section(
-                        "Error",
-                        text.as_str(),
-                        CanonicalActivityDetailFormat::Auto,
-                    ),
-                    width,
-                    Some(Style::default().fg(agena_tui_components::theme::danger_color())),
-                    true,
-                );
+                render_failure_detail(out, &error.problem, i18n, width);
             }
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: text,
+                copy_text: if let Some(reference) = reference {
+                    format!("{title} {reference}")
+                } else {
+                    title
+                },
                 toggleable: true,
                 expanded,
                 end_line: None,
@@ -1510,6 +1665,10 @@ pub(crate) fn render_part_node(
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
         )) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
+            };
             let title = ui_text::t(
                 i18n,
                 match status {
@@ -1519,22 +1678,58 @@ pub(crate) fn render_part_node(
                     TranscriptAssistantReplyLifecycle::Completed => {
                         "message-activity-response-completed"
                     }
-                    TranscriptAssistantReplyLifecycle::Failed => "message-activity-response-failed",
+                    TranscriptAssistantReplyLifecycle::Failed { .. } => {
+                        "message-activity-response-failed"
+                    }
                     TranscriptAssistantReplyLifecycle::Cancelled => {
                         "message-activity-response-cancelled"
                     }
                 },
             );
-            push_activity_headline(out, part.status, false, false, title.as_str(), "", width);
+            let problem = match status {
+                TranscriptAssistantReplyLifecycle::Failed { problem } => problem,
+                _ => &None,
+            };
+            let summary = problem
+                .as_ref()
+                .map(|problem| problem.user.fallback.as_str())
+                .unwrap_or("");
+            // A failed reply is expandable whenever the runtime persisted a
+            // structured failure; the collapsed row shows the readable
+            // summary and the expanded body carries the full field set.
+            let toggleable = problem.is_some();
+            let expanded = if toggleable {
+                expansions
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(defaults.activity_expanded)
+            } else {
+                true
+            };
+            push_activity_headline(
+                out,
+                part.status,
+                expanded,
+                toggleable,
+                title.as_str(),
+                summary,
+                width,
+            );
+            if toggleable && expanded {
+                if let Some(problem) = problem.as_ref() {
+                    render_failure_detail(out, problem, i18n, width);
+                }
+            }
             RenderedNodeDraft {
-                key: TranscriptNodeKey::Activity {
-                    entry_id: message.id,
-                    content_id: part.id,
-                },
+                key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: title,
-                toggleable: false,
-                expanded: true,
+                copy_text: if summary.is_empty() {
+                    title
+                } else {
+                    format!("{title}: {summary}")
+                },
+                toggleable,
+                expanded,
                 end_line: None,
                 children: Vec::new(),
             }

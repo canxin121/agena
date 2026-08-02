@@ -44,6 +44,7 @@ pub fn transcript_entries(snapshot: &TranscriptSnapshot) -> Vec<TranscriptEntry>
             assistant_reply_status(turn.reply.status),
             turn.reply.created_at_ms,
             &turn.reply.content,
+            turn.reply.failure.clone(),
         ));
     }
     entries.extend(
@@ -110,10 +111,11 @@ fn assistant_reply_document_entry(
     state: MessageStatus,
     created_at_ms: i64,
     document: &ContentDocument,
+    failure: Option<agena_failure::UserProblem>,
 ) -> TranscriptEntry {
     let mut parts = assistant_reply_document_parts(document);
     if document.is_empty() || assistant_reply_state_requires_outcome(state) {
-        parts.push(assistant_reply_lifecycle_part(reply_id, state));
+        parts.push(assistant_reply_lifecycle_part(reply_id, state, failure));
     }
     TranscriptEntry {
         id: TranscriptEntryId::AssistantReply(reply_id),
@@ -157,6 +159,7 @@ const fn assistant_reply_state_requires_outcome(state: MessageStatus) -> bool {
 fn assistant_reply_lifecycle_part(
     response_id: agena_domain::AssistantReplyId,
     state: MessageStatus,
+    failure: Option<agena_failure::UserProblem>,
 ) -> TranscriptEntryPart {
     let (status, lifecycle) = match state {
         MessageStatus::Pending | MessageStatus::InProgress => (
@@ -177,7 +180,7 @@ fn assistant_reply_lifecycle_part(
         | MessageStatus::CapabilityUnavailable
         | MessageStatus::ToolUnavailable => (
             PartExecutionStatusResource::Failed,
-            TranscriptAssistantReplyLifecycle::Failed,
+            TranscriptAssistantReplyLifecycle::Failed { problem: failure },
         ),
     };
     TranscriptEntryPart {
@@ -507,6 +510,7 @@ mod tests {
             MessageStatus::InProgress,
             1,
             &ContentDocument::default(),
+            None,
         );
         assert!(matches!(
             entry.parts.as_slice(),
@@ -632,6 +636,7 @@ mod tests {
                     revision_seq: 3,
                     created_at_ms: 1,
                     finished_at_ms: Some(3),
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -860,8 +865,13 @@ mod tests {
             }),
             provenance: ActivityProvenance::default(),
         })]);
-        let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Completed, 1, &document);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -1026,8 +1036,13 @@ mod tests {
             }),
             provenance: ActivityProvenance::default(),
         })]);
-        let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Completed, 1, &document);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -1233,7 +1248,7 @@ mod tests {
             provenance: ActivityProvenance::default(),
         })]);
         let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document);
+            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document, None);
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -1374,7 +1389,7 @@ mod tests {
             provenance: ActivityProvenance::default(),
         })]);
         let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document);
+            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document, None);
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -1444,7 +1459,7 @@ mod tests {
             provenance: ActivityProvenance::default(),
         })]);
         let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document);
+            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document, None);
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -1517,8 +1532,13 @@ mod tests {
             }),
             provenance: ActivityProvenance::default(),
         })]);
-        let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Completed, 1, &document);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -1608,6 +1628,7 @@ mod tests {
             MessageStatus::Completed,
             1,
             &operation_document(ordinary_title, &"PNG result details ".repeat(30)),
+            None,
         );
         let ordinary_rendered = crate::render_entry_detailed(
             &ordinary,
@@ -1634,6 +1655,7 @@ mod tests {
             MessageStatus::Completed,
             1,
             &operation_document(long_title.as_str(), "complete"),
+            None,
         );
         let long_rendered = crate::render_entry_detailed(
             &long,
@@ -1839,6 +1861,7 @@ mod tests {
                     revision_seq: 1,
                     created_at_ms: 1,
                     finished_at_ms: None,
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -1946,5 +1969,99 @@ mod tests {
                 .iter()
                 .any(|line| line.text.contains("[folder: .git]"))
         );
+    }
+
+    #[test]
+    fn failed_reply_with_structured_problem_renders_summary_and_expandable_detail() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let problem = agena_failure::UserProblem::from(agena_failure::Failure::new(
+            agena_failure::FailureCode::new("internal.event_store"),
+            agena_failure::FailureCategory::Internal,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::ImmediateOnce,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new(
+                "internal-event-store",
+                "The reply was interrupted because the runtime restarted. Try again.",
+            ),
+        ));
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Failed,
+            1,
+            &ContentDocument::default(),
+            Some(problem),
+        );
+        let defaults = crate::TranscriptDetailDefaults {
+            activity_expanded: false,
+        };
+
+        // Collapsed: the row carries the readable failure summary.
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &Default::default(),
+        );
+        let collapsed_text = collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(
+            collapsed_text.contains("Response failed"),
+            "{collapsed_text}"
+        );
+        assert!(
+            collapsed_text
+                .contains("The reply was interrupted because the runtime restarted. Try again."),
+            "{collapsed_text}"
+        );
+
+        // Expanded: the structured public failure fields are visible.
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::AssistantReplyLifecycle(response_id),
+        };
+        let expanded = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &std::collections::BTreeMap::from([(key, true)]),
+        );
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(
+            expanded_text.contains("Error code: internal.event_store"),
+            "{expanded_text}"
+        );
+        assert!(
+            expanded_text.contains("Category: Internal error"),
+            "{expanded_text}"
+        );
+        assert!(
+            expanded_text.contains("Responsibility: The system"),
+            "{expanded_text}"
+        );
+        assert!(expanded_text.contains("Recovery: Retry"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("Retry: Retry once immediately"),
+            "{expanded_text}"
+        );
+        assert!(expanded_text.contains("Reference:"), "{expanded_text}");
     }
 }

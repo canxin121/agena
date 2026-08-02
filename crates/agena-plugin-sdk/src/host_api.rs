@@ -664,6 +664,12 @@ pub struct HostContextStatusResponse {
     pub model_max_input_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_max_output_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_adapter_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
     pub prompt_window_generation: u64,
     pub compacted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -1,4 +1,4 @@
-//! Safe model-context budget and compaction status.
+//! Safe model-context budget, model identity, and compaction status.
 
 use std::sync::{Arc, OnceLock};
 
@@ -19,7 +19,7 @@ pub(crate) struct ContextPlugin {
     namespace = "agena",
     name = "context",
     version = env!("CARGO_PKG_VERSION"),
-    summary = "Safe context-window budget and compaction status.",
+    summary = "Safe context-window budget, model identity, and compaction status.",
     display = detailed
 )]
 impl ContextPlugin {
@@ -40,7 +40,7 @@ impl ContextPlugin {
     }
 
     #[tool(
-        summary = "Inspect remaining context budget and compaction health without exposing prompts.",
+        summary = "Inspect remaining context budget, model identity, and compaction health without exposing prompts.",
         read_only,
         display = detailed,
         capabilities(HostCapability::SessionRegistry),
@@ -58,8 +58,19 @@ impl ContextPlugin {
         let ratio = status
             .limit_tokens
             .and_then(|limit| (limit > 0).then_some(status.current_tokens as f64 / limit as f64));
+        let model_identity = match (
+            status.model_provider_id.as_deref(),
+            status.model_adapter_id.as_deref(),
+            status.model_id.as_deref(),
+        ) {
+            (Some(provider), Some(adapter), Some(model)) => {
+                format!("{provider}/{adapter}/{model}")
+            }
+            (Some(provider), None, Some(model)) => format!("{provider}/{model}"),
+            _ => "unknown".to_string(),
+        };
         let text = format!(
-            "Context: {} token(s) used; limit {}; remaining {}; generation {}; compacted={}; auto_compaction_disabled={}.",
+            "Context: {} token(s) used; limit {}; remaining {}; generation {}; compacted={}; auto_compaction_disabled={}. Model: {model_identity}.",
             status.current_tokens,
             status
                 .limit_tokens
@@ -73,6 +84,9 @@ impl ContextPlugin {
         );
         let payload = serde_json::json!({
             "session_id": status.session_id,
+            "model_provider_id": status.model_provider_id,
+            "model_adapter_id": status.model_adapter_id,
+            "model_id": status.model_id,
             "current_tokens": status.current_tokens,
             "measured_prompt_tokens": status.measured_prompt_tokens,
             "projected_tokens": status.projected_tokens,

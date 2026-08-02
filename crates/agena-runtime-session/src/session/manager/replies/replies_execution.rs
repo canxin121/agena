@@ -2147,8 +2147,37 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Session, AppError> {
-        let stream_id = stream.stream_id.clone();
+                        let stream_id = stream.stream_id.clone();
+        const DELTA_BATCH_MS: u64 = 100;
+        const TITLE_REFRESH_MS: u64 = 2_000;
+        let mut batch_started = std::time::Instant::now();
+        let mut last_title_refresh = std::time::Instant::now();
+        let mut pending_delta = String::new();
         loop {
+            // Flush the accumulated batch once the window elapses (also
+            // reached by the idle heartbeat below, so long silent periods
+            // still refresh the title). Batching turns a high-frequency
+            // output stream into a bounded number of load/persist cycles.
+            if !pending_delta.is_empty()
+                && batch_started.elapsed() >= std::time::Duration::from_millis(DELTA_BATCH_MS)
+            {
+                let refresh_title =
+                    last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS);
+                if refresh_title {
+                    last_title_refresh = std::time::Instant::now();
+                }
+                session = self
+                    .append_streaming_tool_output_delta(
+                        session.id,
+                        pending_tool,
+                        &pending_delta,
+                        refresh_title,
+                        state.clone(),
+                    )
+                    .await?;
+                pending_delta.clear();
+                batch_started = std::time::Instant::now();
+            }
             let chunk = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
                     biased;
@@ -2156,20 +2185,36 @@ impl SessionManager {
                         return self.apply_tool_cancellation(session, pending_tool, state).await;
                     },
                     chunk = stream.chunks.recv() => chunk,
+                    // Idle heartbeat: no output for the batch window; flush
+                    // any partial batch and refresh the title so a silent
+                    // long-running command still shows live progress.
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(DELTA_BATCH_MS)) => {
+                        continue;
+                    },
                 },
                 None => stream.chunks.recv().await,
             };
-            let Some(chunk) = chunk else { break };
+            let Some(chunk) = chunk else {
+                if !pending_delta.is_empty() {
+                    session = self
+                        .append_streaming_tool_output_delta(
+                            session.id,
+                            pending_tool,
+                            &pending_delta,
+                            true,
+                            state.clone(),
+                        )
+                        .await?;
+                }
+                break;
+            };
             let Some(delta) = chunk.text_delta.as_deref() else {
                 continue;
             };
             if delta.is_empty() {
                 continue;
             }
-
-            session = self
-                .append_streaming_tool_output_delta(session.id, pending_tool, delta, state.clone())
-                .await?;
+            pending_delta.push_str(delta);
         }
 
         let stream_end = match cancellation.as_ref() {
@@ -2288,14 +2333,21 @@ impl SessionManager {
         .await
     }
 
+        
+
+            
     /// Persist one text chunk for a pending tool operation. This is shared by
     /// ordinary direct streaming invocations and streaming targets executed
-    /// through Tool API function `tools_call`.
+    /// through Tool API function `tools_call`. The caller batches deltas into
+    /// a short time window and passes `refresh_title` on a fixed cadence so
+    /// the running elapsed time is persisted with the same checkpoint instead
+    /// of a separate load/persist round trip.
     pub(in crate::session::manager) async fn append_streaming_tool_output_delta(
         &self,
         session_id: i64,
         pending_tool: &SessionPendingTool,
         delta: &str,
+        refresh_title: bool,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let mut session = self
@@ -2320,6 +2372,30 @@ impl SessionManager {
                 ExecutionStatus::Pending | ExecutionStatus::InProgress
             ) {
                 tool_part.status = ExecutionStatus::InProgress;
+            }
+            if refresh_title
+                && let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                    operation,
+                ))) = tool_part.content.as_mut()
+            {
+                let elapsed_secs = if operation.lifecycle.start_ms > 0 {
+                    (Utc::now().timestamp_millis() - operation.lifecycle.start_ms) / 1000
+                } else {
+                    0
+                };
+                if elapsed_secs >= 1 {
+                    let base_title = operation
+                        .metadata
+                        .get("agena_streaming_base_title")
+                        .and_then(|value| value.as_str())
+                        .map(ToOwned::to_owned)
+                        .unwrap_or_else(|| operation.title.clone());
+                    operation.metadata.insert(
+                        "agena_streaming_base_title".to_owned(),
+                        serde_json::json!(base_title),
+                    );
+                    operation.set_title(format!("{base_title} · {elapsed_secs}s"));
+                }
             }
         }
 

@@ -277,10 +277,8 @@ fn project_runtime_presentation_event(
 
     let seq_session = event.meta.seq_session.unwrap_or(event.meta.seq_global);
     let kind = match &event.kind {
-        EventKind::MessagePartCheckpointed(update) => update
-            .turn_id
-            .zip(update.reply_id)
-            .and_then(|(turn_id, reply_id)| {
+                EventKind::MessagePartCheckpointed(update) => {
+            if let (Some(turn_id), Some(reply_id)) = (update.turn_id, update.reply_id) {
                 transcript_part_patch(
                     seq_session,
                     update.message_role,
@@ -288,8 +286,20 @@ fn project_runtime_presentation_event(
                     reply_id,
                     &update.part,
                 )
-            })
-            .map(agena_runtime::RuntimePresentationEventKind::TranscriptPatch),
+                .map(agena_runtime::RuntimePresentationEventKind::TranscriptPatch)
+            } else {
+                // Tool-owned parts are checkpointed from the session store,
+                // which does not attach the owning turn/reply ids to the
+                // event. Without an owner the patch cannot be materialized,
+                // so fall back to a refresh: the terminal UI must observe
+                // tool output deltas, status changes, and title updates as
+                // they are persisted instead of waiting for a later event
+                // or a restart.
+                Some(agena_runtime::RuntimePresentationEventKind::Refresh {
+                    force_refresh: false,
+                })
+            }
+        }
         EventKind::TranscriptPartUpserted(update) => transcript_part_patch(
             seq_session,
             update.message_role,

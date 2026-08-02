@@ -1417,32 +1417,60 @@ impl SessionManager {
             .await
             .map_err(tool_error_to_app_error)?
         {
-            let stream_id = stream.stream_id.clone();
+                        let stream_id = stream.stream_id.clone();
+            const DELTA_BATCH_MS: u64 = 100;
+            let mut batch_started = std::time::Instant::now();
+            let mut pending_delta = String::new();
             loop {
+                if !pending_delta.is_empty()
+                    && batch_started.elapsed() >= std::time::Duration::from_millis(DELTA_BATCH_MS)
+                {
+                    if let Some(pending_tool) = outer_pending_tool.as_ref() {
+                        self.append_streaming_tool_output_delta(
+                            session_id,
+                            pending_tool,
+                            &pending_delta,
+                            false,
+                            state.clone(),
+                        )
+                        .await?;
+                    }
+                    pending_delta.clear();
+                    batch_started = std::time::Instant::now();
+                }
                 let chunk = match cancellation.as_ref() {
                     Some(cancellation) => tokio::select! {
                         biased;
                         _ = cancellation.cancelled() => return Err(AppError::Cancelled),
                         chunk = stream.chunks.recv() => chunk,
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(DELTA_BATCH_MS)) => {
+                            continue;
+                        },
                     },
                     None => stream.chunks.recv().await,
                 };
-                let Some(chunk) = chunk else { break };
+                let Some(chunk) = chunk else {
+                    if !pending_delta.is_empty()
+                        && let Some(pending_tool) = outer_pending_tool.as_ref()
+                    {
+                        self.append_streaming_tool_output_delta(
+                            session_id,
+                            pending_tool,
+                            &pending_delta,
+                            false,
+                            state.clone(),
+                        )
+                        .await?;
+                    }
+                    break;
+                };
                 let Some(delta) = chunk.text_delta.as_deref() else {
                     continue;
                 };
                 if delta.is_empty() {
                     continue;
                 }
-                if let Some(pending_tool) = outer_pending_tool.as_ref() {
-                    self.append_streaming_tool_output_delta(
-                        session_id,
-                        pending_tool,
-                        delta,
-                        state.clone(),
-                    )
-                    .await?;
-                }
+                pending_delta.push_str(delta);
             }
             let end = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {

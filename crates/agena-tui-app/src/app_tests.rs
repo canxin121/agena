@@ -2943,4 +2943,99 @@ mod live_transcript_tests {
             "{rendered}"
         );
     }
+
+    #[test]
+    fn refresh_merge_keeps_follow_tail_pinned_to_the_bottom() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![tall_turn(1, "first")],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+        transcript.scroll_to_bottom(80, 20);
+        let bottom_before = transcript.viewport.top;
+        assert!(transcript.viewport.follow_tail);
+
+        // A periodic refresh merges the full snapshot without a live patch.
+        transcript.merge_snapshot(TranscriptSnapshot {
+            session_id: 7,
+            turns: vec![tall_turn(1, "first"), tall_turn(2, "reply")],
+            ..Default::default()
+        });
+
+        // The next render runs clamp_scroll before ensure_visual_focus.
+        transcript.clamp_scroll(80, 20);
+        transcript.ensure_visual_focus(80, 20);
+
+        assert!(
+            transcript.viewport.follow_tail,
+            "follow mode must survive a full-state refresh merge"
+        );
+        let max_scroll = transcript.max_scroll(80, 20);
+        assert_eq!(
+            transcript.viewport.top,
+            max_scroll,
+            "a following viewport must pin to the new bottom"
+        );
+        assert!(
+            transcript.viewport.top > bottom_before,
+            "the new reply must move the viewport downward"
+        );
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(transcript.rendered(80).lines.len().saturating_sub(1)),
+            "the cursor must re-anchor to the new tail"
+        );
+    }
+
+    #[test]
+    fn refresh_merge_does_not_hijack_a_scrolled_up_viewport() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![tall_turn(1, "first")],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+        transcript.scroll_to_bottom(80, 20);
+        assert!(transcript.viewport.follow_tail);
+
+        // The user scrolls up to read history while the reply streams in.
+        transcript.move_cursor_by_wheel(80, 20, -4);
+        assert!(!transcript.viewport.follow_tail);
+        let reading_top = transcript.viewport.top;
+
+        transcript.merge_snapshot(TranscriptSnapshot {
+            session_id: 7,
+            turns: vec![tall_turn(1, "first"), tall_turn(2, "reply")],
+            ..Default::default()
+        });
+        transcript.clamp_scroll(80, 20);
+        transcript.ensure_visual_focus(80, 20);
+
+        assert!(
+            !transcript.viewport.follow_tail,
+            "reading history must stay detached from the tail"
+        );
+        assert_eq!(
+            transcript.viewport.top, reading_top,
+            "new content must not drag a scrolled-up viewport"
+        );
+    }
+
+    fn tall_turn(sequence: i64, prefix: &str) -> TurnSnapshot {
+        let mut turn = turn(sequence);
+        turn.reply.content = ContentDocument::new(vec![ContentNode::text(
+            (0..40)
+                .map(|line| format!("{prefix} line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )]);
+        turn
+    }
 }

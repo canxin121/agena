@@ -1612,6 +1612,16 @@ impl TranscriptState {
             self.viewport.follow_tail = true;
             return;
         }
+        // While the user is following the tail, content that arrived through a
+        // full-state merge (periodic refresh, session load, turn submission)
+        // must keep the viewport pinned to the bottom. The navigation cursor
+        // can be stale relative to the newly appended lines, so running
+        // sync_follow_tail on the old cursor below would cancel follow mode
+        // before ensure_visual_focus gets a chance to scroll.
+        if self.viewport.follow_tail {
+            self.scroll_to_bottom(width, height);
+            return;
+        }
         self.viewport.top = self.viewport.top.min(self.max_scroll(width, height));
         self.reconcile_cursor_anchor(width, height);
         let last_line = total_lines.saturating_sub(1);

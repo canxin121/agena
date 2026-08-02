@@ -535,6 +535,10 @@ impl Editor {
     fn move_up(&mut self) {
         let current_start = self.current_line_start();
         if current_start == 0 {
+            // First line: there is no previous row, so land on the line head
+            // (the beginning of the whole input) instead of doing nothing.
+            self.cursor = 0;
+            self.preferred_column = None;
             return;
         }
         let target_end = current_start.saturating_sub(1);
@@ -557,6 +561,10 @@ impl Editor {
     fn move_down(&mut self) {
         let current_end = self.current_line_end();
         if current_end >= self.text.len() {
+            // Last line: there is no next row, so land on the line tail (the
+            // end of the whole input) instead of doing nothing.
+            self.cursor = self.text.len();
+            self.preferred_column = None;
             return;
         }
         let target_start = current_end + 1;
@@ -1072,6 +1080,50 @@ mod tests {
 
         editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
         assert_eq!(editor.cursor(), 4);
+    }
+
+    #[test]
+    fn up_on_the_first_line_lands_on_the_input_head() {
+        let mut editor = Editor::from_text("alpha\nbeta\ngamma".to_string());
+        editor.set_cursor(2);
+
+        editor.handle_multiline_input_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+
+        assert_eq!(editor.cursor(), 0);
+    }
+
+    #[test]
+    fn down_on_the_last_line_lands_on_the_input_tail() {
+        let mut editor = Editor::from_text("alpha\nbeta\ngamma".to_string());
+        editor.set_cursor(12);
+
+        editor.handle_multiline_input_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+
+        assert_eq!(editor.cursor(), editor.text().len());
+    }
+
+    #[test]
+    fn up_and_down_between_middle_lines_preserve_the_preferred_column() {
+        let mut editor = Editor::from_text("alpha\nbeta\ngamma".to_string());
+        editor.set_cursor(9);
+
+        editor.handle_multiline_input_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(editor.cursor(), 3);
+
+        editor.handle_multiline_input_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(editor.cursor(), 9);
+    }
+
+    #[test]
+    fn single_line_inputs_ignore_up_and_down() {
+        let mut editor = Editor::from_text("alpha".to_string());
+        editor.set_cursor(2);
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+        assert_eq!(editor.cursor(), 2);
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        assert_eq!(editor.cursor(), 2);
     }
 
     #[test]

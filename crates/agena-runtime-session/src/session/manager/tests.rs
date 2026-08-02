@@ -632,6 +632,186 @@ mod tests {
         ));
     }
 
+        #[tokio::test]
+    async fn path_granted_tool_ask_is_allowed_when_every_path_check_allows() {
+        let manager = test_manager_with_permission(
+            ToolPermissionPolicy::allow_all(),
+            agena_domain::PermissionConfig::global_default(),
+        )
+        .await;
+        let outcome = manager
+            .aggregate_permission_outcome(
+                None,
+                &[
+                    ToolPermissionCheck {
+                        action: PermissionAction::Tool {
+                            tool_name: "fs.apply_patch".to_owned(),
+                            qualifier: None,
+                        },
+                        decision: PermissionDecision::Ask {
+                            reason: "tool 'fs.apply_patch' requires confirmation by policy"
+                                .to_owned(),
+                        },
+                        tags: vec!["filesystem_write".to_owned()],
+                    },
+                    ToolPermissionCheck {
+                        action: PermissionAction::PathAccess {
+                            access_kind: "write".to_owned(),
+                            workspace_root: "/workspace".to_owned(),
+                            target_path: "/workspace/crates/x.rs".to_owned(),
+                        },
+                        decision: PermissionDecision::Allow,
+                        tags: Vec::new(),
+                    },
+                ],
+            )
+            .await
+            .expect("path-granted tool ask should resolve");
+        assert!(matches!(
+            outcome,
+            super::replies::AggregatedPermissionOutcome::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn path_granted_override_requires_all_path_checks_to_allow() {
+        let manager = test_manager_with_permission(
+            ToolPermissionPolicy::allow_all(),
+            agena_domain::PermissionConfig::global_default(),
+        )
+        .await;
+        let outcome = manager
+            .aggregate_permission_outcome(
+                None,
+                &[
+                    ToolPermissionCheck {
+                        action: PermissionAction::Tool {
+                            tool_name: "fs.apply_patch".to_owned(),
+                            qualifier: None,
+                        },
+                        decision: PermissionDecision::Ask {
+                            reason: "tool 'fs.apply_patch' requires confirmation by policy"
+                                .to_owned(),
+                        },
+                        tags: vec!["filesystem_write".to_owned()],
+                    },
+                    ToolPermissionCheck {
+                        action: PermissionAction::PathAccess {
+                            access_kind: "write".to_owned(),
+                            workspace_root: "/workspace".to_owned(),
+                            target_path: "/workspace/inside.rs".to_owned(),
+                        },
+                        decision: PermissionDecision::Allow,
+                        tags: Vec::new(),
+                    },
+                    ToolPermissionCheck {
+                        action: PermissionAction::PathAccess {
+                            access_kind: "write".to_owned(),
+                            workspace_root: "/workspace".to_owned(),
+                            target_path: "/tmp/outside.rs".to_owned(),
+                        },
+                        decision: PermissionDecision::Ask {
+                            reason: "external write requires confirmation".to_owned(),
+                        },
+                        tags: Vec::new(),
+                    },
+                ],
+            )
+            .await
+            .expect("mixed path outcome should resolve");
+        assert!(
+            matches!(
+                outcome,
+                super::replies::AggregatedPermissionOutcome::Request(_)
+            ),
+            "an external path that still needs confirmation must keep the tool ask"
+        );
+    }
+
+    #[tokio::test]
+    async fn path_granted_override_never_lifts_tool_deny() {
+        let manager = test_manager_with_permission(
+            ToolPermissionPolicy::allow_all(),
+            agena_domain::PermissionConfig::global_default(),
+        )
+        .await;
+        let outcome = manager
+            .aggregate_permission_outcome(
+                None,
+                &[
+                    ToolPermissionCheck {
+                        action: PermissionAction::Tool {
+                            tool_name: "shell.run".to_owned(),
+                            qualifier: None,
+                        },
+                        decision: PermissionDecision::Deny {
+                            reason: "bash command matches deny pattern and is unconditionally blocked"
+                                .to_owned(),
+                        },
+                        tags: vec!["shell".to_owned()],
+                    },
+                    ToolPermissionCheck {
+                        action: PermissionAction::PathAccess {
+                            access_kind: "write".to_owned(),
+                            workspace_root: "/workspace".to_owned(),
+                            target_path: "/workspace/out".to_owned(),
+                        },
+                        decision: PermissionDecision::Allow,
+                        tags: Vec::new(),
+                    },
+                ],
+            )
+            .await
+            .expect("deny must stay authoritative");
+        assert!(matches!(
+            outcome,
+            super::replies::AggregatedPermissionOutcome::Deny(_)
+        ));
+    }
+
+        #[tokio::test]
+    async fn path_granted_override_never_applies_to_arbitrary_execution_tools() {
+        let manager = test_manager_with_permission(
+            ToolPermissionPolicy::allow_all(),
+            agena_domain::PermissionConfig::global_default(),
+        )
+        .await;
+        let outcome = manager
+            .aggregate_permission_outcome(
+                None,
+                &[
+                    ToolPermissionCheck {
+                        action: PermissionAction::Tool {
+                            tool_name: "shell.run".to_owned(),
+                            qualifier: None,
+                        },
+                        decision: PermissionDecision::Ask {
+                            reason: "tool 'shell.run' requires confirmation by policy".to_owned(),
+                        },
+                        tags: vec!["shell".to_owned(), "filesystem_write".to_owned()],
+                    },
+                    ToolPermissionCheck {
+                        action: PermissionAction::PathAccess {
+                            access_kind: "write".to_owned(),
+                            workspace_root: "/workspace".to_owned(),
+                            target_path: "/workspace/out.txt".to_owned(),
+                        },
+                        decision: PermissionDecision::Allow,
+                        tags: Vec::new(),
+                    },
+                ],
+            )
+            .await
+            .expect("shell tools must keep their tool-level ask");
+        assert!(
+            matches!(
+                outcome,
+                super::replies::AggregatedPermissionOutcome::Request(_)
+            ),
+            "allowing writes inside the workspace must not authorize arbitrary shell execution"
+        );
+    }
+
     async fn seed_canonical_assistant_reply(
         manager: &SessionManager,
         session_id: i64,

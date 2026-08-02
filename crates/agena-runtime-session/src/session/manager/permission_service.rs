@@ -82,9 +82,9 @@ impl SessionManager {
         Ok(snapshot)
     }
 
-    pub(crate) fn invalidate_rule_snapshot(&self, session_id: Option<i64>) {
+        pub(crate) fn invalidate_rule_snapshots(&self) {
         if let Ok(mut snapshots) = self.execution_state().rule_snapshots.write() {
-            snapshots.remove(&session_id);
+            snapshots.clear();
         }
     }
 
@@ -209,7 +209,7 @@ impl SessionManager {
             request_override: Default::default(),
             system: None,
             temperature: Some(0.0),
-            max_output_tokens: Some(64),
+                        max_output_tokens: Some(256),
         };
         if let Some(parallel_tool_calls) = selection
             .as_ref()
@@ -223,12 +223,18 @@ impl SessionManager {
             return candidates.into_iter().map(|_| Err(())).collect();
         }
 
-        let transcript_budget_chars = state
+                let transcript_budget_chars = state
             .processor
             .model_metadata(&model)
             .ok()
             .and_then(|metadata| metadata.limits.context_window_tokens)
-            .map(|tokens| tokens as usize)
+            // The window is measured in tokens but the projection budget is
+            // characters; cap it so a large model window (1M tokens) cannot
+            // balloon the classifier transcript to megabytes per request.
+            .map(|tokens| {
+                (tokens as usize / 4)
+                    .clamp(8_000, agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS)
+            })
             .unwrap_or(agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS);
                 let transcript = session.map(|session| {
             let cached = state
@@ -256,8 +262,14 @@ impl SessionManager {
             &recent_decisions,
         );
 
-        let mut results = Vec::with_capacity(candidates.len());
+                                let mut futures = Vec::with_capacity(candidates.len());
         for candidate in candidates {
+            let model_ref = model.clone();
+            let context = context_message.clone();
+            let thinking = options.thinking.clone();
+            let verbosity = options.verbosity.clone();
+            let request_override = options.request_override.clone();
+            futures.push(async move {
             let action = serde_json::to_string(&candidate.action)
                 .unwrap_or_else(|_| r#"{"action":"unserializable"}"#.to_owned());
                         let action_message = agena_permission::build_classifier_action_message(
@@ -265,11 +277,11 @@ impl SessionManager {
                 &candidate.policy_reason,
             );
             let request = agena_provider::CompletionRequest {
-                model: model.model_id.clone(),
+                                model: model_ref.model_id.clone(),
                 system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
                                 messages: {
                     let mut messages = Vec::with_capacity(2);
-                    if let Some(context) = &context_message {
+                                        if let Some(context) = &context {
                         messages.push(agena_provider::CompletionInputMessage {
                             role: Role::User,
                             parts: vec![agena_provider::CompletionInputPart::Text {
@@ -291,8 +303,8 @@ impl SessionManager {
                 provider_native_tools: Default::default(),
                 disable_tools: true,
                 temperature: Some(0.0),
-                max_output_tokens: Some(64),
-                                prompt_cache_key: Some(format!("agena:auto:{}", model.model_id)),
+                                max_output_tokens: Some(256),
+                                                prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
                 previous_response_id: None,
                 prompt_window_generation: None,
                 provider_compaction: None,
@@ -300,22 +312,22 @@ impl SessionManager {
                 top_p: None,
                 top_k: None,
                 seed: None,
-                thinking: options.thinking.clone(),
-                verbosity: options.verbosity.clone(),
+                                thinking,
+                verbosity,
                 response_format: Some(agena_provider::ResponseFormat::JsonSchema {
                     name: "permission_verdict".to_owned(),
                     schema: agena_permission::classifier_json_schema(),
                     strict: true,
                 }),
                 responses_api_metadata: None,
-                request_override: options.request_override.clone(),
+                                request_override,
             };
             let outcome = match tokio::time::timeout(
                 agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT,
                 state
                     .processor
                     .provider_registry()
-                    .complete(&model, request),
+                                        .complete(&model_ref, request),
             )
             .await
             {
@@ -330,8 +342,9 @@ impl SessionManager {
                 }
                 Ok(Err(_)) | Err(_) => Err(()),
             };
-            results.push(outcome);
+                                    outcome
+            });
         }
-        results
+        futures_util::future::join_all(futures).await
     }
 }

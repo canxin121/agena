@@ -2,6 +2,62 @@ use serde::{Deserialize, Serialize};
 
 use crate::PermissionScope;
 
+/// Structured decision input for the permission pipeline. Unlike
+/// [`PermissionAction`] (the wire/UI contract), an `ActionSpec` carries the
+/// tool tags the policy engine needs, so decisions never depend on tool-name
+/// allowlists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ActionSpec {
+    Tool {
+        tool_name: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        tags: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+    },
+    Path {
+        access: String,
+        workspace_root: String,
+        target: String,
+    },
+    Network {
+        target: String,
+        host: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        port: Option<u16>,
+    },
+}
+
+impl ActionSpec {
+    pub fn from_action(action: &PermissionAction) -> Self {
+        match action {
+            PermissionAction::Tool {
+                tool_name,
+                qualifier,
+            } => Self::Tool {
+                tool_name: tool_name.clone(),
+                tags: Vec::new(),
+                command: qualifier.clone(),
+            },
+            PermissionAction::PathAccess {
+                access_kind,
+                workspace_root,
+                target_path,
+            } => Self::Path {
+                access: access_kind.clone(),
+                workspace_root: workspace_root.clone(),
+                target: target_path.clone(),
+            },
+            PermissionAction::NetworkAccess { target, host, port } => Self::Network {
+                target: target.clone(),
+                host: host.clone(),
+                port: *port,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionAction {

@@ -150,7 +150,8 @@ pub use permission_events::{
 pub use permission_interaction::{PendingPermission, PermissionReply, PermissionRequest};
 pub use permission_outcome::{PermissionAuthorityKind, PolicyDeniedResult, UserDeclinedResult};
 pub use permission_request::{
-    DecisionTrace, DecisionTraceStep, PermissionAction, PermissionRiskLevel, PolicySourceKind,
+    ActionSpec, DecisionTrace, DecisionTraceStep, PermissionAction, PermissionRiskLevel,
+    PolicySourceKind,
 };
 pub use permission_resolution::{
     PermissionDecision, PermissionResolution, PermissionResolutionSource, decide_from_mode,

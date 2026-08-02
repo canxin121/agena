@@ -1379,9 +1379,17 @@ deny
 }
 ```
 
-未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，其余 workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `auto`；`auto` 使用配置的 `approval_model` 做安全审批。`approval_model` 缺失、模型或 variant 不存在、provider 不可用、请求失败或返回非 `ALLOW`/`DENY` 时，运行时都会 fail closed 回退到交互式 `ask`。`agena.web.search` 和 `agena.web.fetch` 是例外：它们的只读 tool 调用默认允许，实际 URL 仍逐项服从 network zone 和 network rule。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
+未显式配置 `permission` 时，Agena 的全局权限默认值是：允许读取当前 workspace，其余 workspace 写入、外部路径读写、网络区域和未覆盖工具调用均为 `auto`。`auto` 走分层自动审批（见下），不再要求显式配置 `approval_model`：`approval_model` 缺失时会回退使用当前会话模型（或全局默认模型）作为审批分类器。`agena.web.search` 和 `agena.web.fetch` 是例外：它们的只读 tool 调用默认允许，实际 URL 仍逐项服从 network zone 和 network rule。显式配置的字段会覆盖这些默认值，未配置的字段继续保留默认值。
 
-`permission.approval_model` 使用 `provider_id`、可选 `adapter_id`、`model_id` 以及可选的 `thinking_mode`、`speed_mode`、`verbosity`。TUI 和 Web 的 Models & Providers 设置页使用同一个模型选择入口；选择模型后会继续选择该模型实际支持的 variant。自动审批模型不可用时不会阻塞权限请求，而是转为 `ask`。
+`auto` 权限的分层自动审批顺序：
+1. **同步 fast-path**：交互类工具（`interaction.ask` 等）强制 `ask`；只读工具（`fs.read`/`fs.glob`/`fs.grep`/`fs.stat`/`fs.read_many`/`fs.view_image`/`web.search`、shell/process 列表与日志）直接放行；workspace 内路径读、runtime 管理的项目状态目录（`.agena`）内写入直接放行；`true`/`:`/`false` 等 no-op shell 命令直接放行。
+2. **shell 启发式**：`rm -rf /`、`curl|sh`、`chmod 777`、`base64 -d`、`mkfs`、`dd if=`、`nc -e`、`sudo` 提权、写 `/etc` 等危险模式直接拒绝；`git status`/`git commit`/`cargo build`/`cargo test`/`npm run` 等常规开发命令直接放行。
+3. **LLM 分类器**：用 `approval_model`（或会话/默认模型）评估“最近精简 transcript + 待审 action”，输出严格 JSON `{thinking, shouldBlock, reason}`，默认 30s 超时。
+4. **每会话 denial 预算**：分类器连续拒绝 3 次或累计拒绝 20 次后回退 `ask`。
+
+fast-path、启发式与分类器都无法决定，或模型缺失/不可用、provider 错误、超时、输出无法解析时，运行时都会 fail closed 回退到交互式 `ask`。
+
+`permission.approval_model` 使用 `provider_id`、可选 `adapter_id`、`model_id` 以及可选的 `thinking_mode`、`speed_mode`、`verbosity`。TUI 和 Web 的 Models & Providers 设置页使用同一个模型选择入口；选择模型后会继续选择该模型实际支持的 variant。未配置 `approval_model` 时，自动审批使用当前会话模型（无会话时使用全局默认模型）运行分类器；只有会话模型和默认模型都不存在时才转为 `ask`。自动审批模型不可用时不会阻塞权限请求，而是转为 `ask`。
 
 ### Path permission
 

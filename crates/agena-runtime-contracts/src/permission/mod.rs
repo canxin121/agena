@@ -1,5 +1,3 @@
-mod resolver;
-
 use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
@@ -11,8 +9,6 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use agena_plugin_host::sdk::ToolTag;
-
-pub use resolver::resolve_permission_with_persisted_rules;
 
 #[derive(Debug, Clone)]
 pub struct ToolPermissionPolicy {

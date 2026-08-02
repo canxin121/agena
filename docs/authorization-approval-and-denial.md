@@ -113,3 +113,37 @@ tool Operation checkpoints only that Operation's part; it does not rewrite
 every older part in the assistant message. Permission request/reply audit
 events remain independently queryable, while the transcript projection reads
 the current authorization state from the owning Operation in O(1) per part.
+
+## Automatic approval (`permission = auto`)
+
+When the effective policy mode for an action is `auto`, the central evaluator
+hands the action to the layered engine in `agena-permission` (a pure decision
+core with no runtime, storage, or provider dependency). The layers run in
+order and the first conclusive result wins:
+
+```text
+auto decision
+  ├─ fast path       tag/command allowlist (read-only tools, no-op commands)
+  │                  and interaction tools that must always ask
+  ├─ heuristics      deny dangerous shell/path/network patterns
+  │                  (rm -rf /, curl|sh, chmod 777, base64 -d, mkfs, dd if=,
+  │                  nc -e, sudo, writes into /etc, shutdown/reboot, ...)
+  ├─ denial budget   after repeated consecutive denials the engine stops
+  │                  burning model calls and falls back to interactive `ask`
+  └─ classifier      one shared provider call for the whole tool batch:
+                     stable context message (transcript projection + recent
+                     decisions) then one action message per candidate
+```
+
+Classifier calls run with `temperature = 0`, a strict JSON verdict schema
+(`thinking` / `shouldBlock` / `reason`), a 30s timeout, and a bounded
+projection of the session transcript. The verdict parser accepts only a clean
+JSON object (possibly fenced or embedded in prose) or an unambiguous
+single-word reply (`allow`/`approve`/`deny`/`blocked`, ...); anything else
+falls back fail-closed to `ask`. Denials carry a guidance suffix so the model
+does not retry the exact denied action or attempt to work around it.
+
+The context message is cached per session while the message count is
+unchanged, and the request uses a stable `prompt_cache_key`, so consecutive
+classifier calls reuse the provider's prefix cache for the transcript while
+only the trailing action message changes.

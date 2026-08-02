@@ -16,7 +16,6 @@ use crate::message::{
     AttachmentItem, InteractiveRequestPart, Message, MessageMetadata, MessagePart, OperationBlock,
     OperationPart, PartContent, RequestPart,
 };
-use crate::permission::resolve_permission_with_persisted_rules;
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
@@ -254,6 +253,9 @@ struct SessionManagerState {
     shared_permission: Arc<StdRwLock<crate::authorization::PermissionConfig>>,
     shared_session_permissions:
         Arc<StdRwLock<HashMap<i64, crate::authorization::PermissionConfig>>>,
+        auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
+    rule_snapshots: Arc<StdRwLock<HashMap<Option<i64>, Arc<permission_service::RuleSnapshot>>>>,
+    auto_projection: Arc<StdMutex<HashMap<Option<i64>, (usize, String)>>>,
 }
 
 /// Per-run collaborators that belong to one execution lifecycle.
@@ -374,6 +376,7 @@ fn usage_cost_microusd(cost_usd: f64) -> u64 {
 mod compact;
 mod helpers;
 mod history;
+mod permission_service;
 mod replies;
 mod runs;
 mod sessions;
@@ -395,6 +398,9 @@ impl SessionManagerState {
             config,
             shared_permission,
             Arc::new(StdRwLock::new(HashMap::new())),
+                                    Arc::new(StdMutex::new(HashMap::new())),
+            Arc::new(StdRwLock::new(HashMap::new())),
+            Arc::new(StdMutex::new(HashMap::new())),
         )
     }
 
@@ -406,6 +412,9 @@ impl SessionManagerState {
         shared_session_permissions: Arc<
             StdRwLock<HashMap<i64, crate::authorization::PermissionConfig>>,
         >,
+                auto_approval: Arc<StdMutex<HashMap<Option<i64>, agena_permission::DenialBudget>>>,
+        rule_snapshots: Arc<StdRwLock<HashMap<Option<i64>, Arc<permission_service::RuleSnapshot>>>>,
+        auto_projection: Arc<StdMutex<HashMap<Option<i64>, (usize, String)>>>,
     ) -> Self {
         let tool_execution_semaphore = Arc::new(Semaphore::new(config.max_concurrent_tools));
         Self {
@@ -415,6 +424,9 @@ impl SessionManagerState {
             tool_execution_semaphore,
             shared_permission,
             shared_session_permissions,
+                        auto_approval,
+            rule_snapshots,
+            auto_projection,
         }
     }
 
@@ -1584,6 +1596,9 @@ impl SessionManager {
                 config,
                 Arc::clone(&previous.shared_permission),
                 Arc::clone(&previous.shared_session_permissions),
+                                                Arc::clone(&previous.auto_approval),
+                Arc::clone(&previous.rule_snapshots),
+                Arc::clone(&previous.auto_projection),
             )));
     }
 

@@ -826,6 +826,59 @@ fn provider_metadata_field<'a>(
         })
 }
 
+/// Project a bounded transcript for permission classification, anchoring the
+/// first message and the most recent messages, truncating to `budget_chars`.
+pub(crate) fn project_transcript(messages: &[Message], budget_chars: usize) -> String {
+    let projected = messages
+        .iter()
+        .map(project_session_text_lossy)
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>();
+    if projected.is_empty() {
+        return String::new();
+    }
+    let total: usize = projected.iter().map(String::len).sum();
+    if total <= budget_chars {
+        return projected.join(
+            "
+",
+        );
+    }
+    if projected.len() == 1 {
+        return truncate_chars(&projected[0], budget_chars);
+    }
+    let head_budget = (budget_chars / 4).max(1);
+    let tail_budget = budget_chars.saturating_sub(head_budget);
+    let mut parts = vec![truncate_chars(&projected[0], head_budget)];
+    let mut tail = Vec::new();
+    let mut used = 0usize;
+    for text in projected.iter().rev().take(projected.len() - 1) {
+        if used + text.len() <= tail_budget {
+            tail.push(text.clone());
+            used += text.len();
+        } else if tail.is_empty() {
+            tail.push(truncate_chars(text, tail_budget));
+            break;
+        } else {
+            break;
+        }
+    }
+    tail.reverse();
+    parts.extend(tail);
+    parts.push("[transcript truncated to fit the approval context window]".to_owned());
+    parts.join(
+        "
+",
+    )
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.len() <= max_chars {
+        return text.to_owned();
+    }
+    text.chars().take(max_chars).collect()
+}
+
 fn approximate_message_payload_chars(message: &Message) -> usize {
     project_session_text_lossy(message)
         .len()

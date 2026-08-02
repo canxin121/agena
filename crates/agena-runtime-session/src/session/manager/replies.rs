@@ -1263,7 +1263,7 @@ async fn responses_api_request_metadata(
     }
 }
 
-fn managed_project_state_permission(
+pub(super) fn managed_project_state_permission(
     workspace_root: &Path,
 ) -> crate::authorization::PermissionConfig {
     let managed_root = agena_runtime::project_state_dir(workspace_root)
@@ -1384,6 +1384,6 @@ use super::{
     execution_control_to_app_error, host_user_input_response, max_permission_risk,
     merge_system_prompts, mpsc, operation_blocks_from_tool_output,
     payload_tool_name_for_invocation, permission_action_key, permission_scope_label,
-    persisted_rules_for_reply, resolve_pending_tool, resolve_permission_with_persisted_rules,
-    run_abort_reason, text_result_blocks, tool_call_id_for, tool_name, user_input_execution,
+    persisted_rules_for_reply, resolve_pending_tool, run_abort_reason, text_result_blocks,
+    tool_call_id_for, tool_name, user_input_execution,
 };

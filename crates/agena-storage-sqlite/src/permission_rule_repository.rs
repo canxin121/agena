@@ -241,6 +241,28 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         }
         Ok(result)
     }
+
+    async fn resolve_snapshot(
+        &self,
+        session_id: Option<i64>,
+        workspace_id: Option<i64>,
+    ) -> Result<Vec<PersistedPermissionRule>, PermissionRuleRepositoryError> {
+        let rows = self
+            .db
+            .query_all(statement(
+                format!(
+                    "SELECT {COLUMNS} FROM {TABLE} WHERE revoked_at_ms IS NULL AND (scope = 'global' OR (scope = 'workspace' AND workspace_id IS ?) OR (scope = 'session' AND session_id IS ?)) ORDER BY action_key, scope, updated_at_ms DESC, id DESC"
+                ),
+                [workspace_id.into(), session_id.into()],
+            ))
+            .await
+            .map_err(map_error)?;
+        let mut rules = Vec::with_capacity(rows.len());
+        for row in rows {
+            rules.push(persisted_rule_from_row(row)?);
+        }
+        Ok(rules)
+    }
 }
 
 fn statement(sql: String, values: impl IntoIterator<Item = Value>) -> Statement {

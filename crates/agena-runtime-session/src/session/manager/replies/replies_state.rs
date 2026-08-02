@@ -35,6 +35,9 @@ impl SessionManager {
         persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
+        if !persisted_rules.is_empty() {
+            self.invalidate_rule_snapshot(Some(session.id));
+        }
         self.store
             .persist(
                 SessionCommit {

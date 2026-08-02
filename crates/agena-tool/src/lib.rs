@@ -335,6 +335,10 @@ pub struct CronRunSummary {
 pub struct ToolPermissionCheck {
     pub action: PermissionAction,
     pub decision: PermissionDecision,
+    /// Tool tags (e.g. `read_only`, `filesystem_read`) attached by the
+    /// executor. The decision pipeline uses them instead of tool-name
+    /// allowlists.
+    pub tags: Vec<String>,
 }
 
 /// Invocation after tool lookup/presentation has prepared it for execution.

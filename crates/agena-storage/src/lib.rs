@@ -509,6 +509,14 @@ pub trait PermissionRuleRepository: Send + Sync {
         session_id: Option<i64>,
         workspace_id: Option<i64>,
     ) -> Result<Vec<PersistedPermissionRule>, PermissionRuleRepositoryError>;
+
+    /// Load every non-revoked rule visible to a session in one query.
+    /// The session runtime caches this snapshot and invalidates it on writes.
+    async fn resolve_snapshot(
+        &self,
+        session_id: Option<i64>,
+        workspace_id: Option<i64>,
+    ) -> Result<Vec<PersistedPermissionRule>, PermissionRuleRepositoryError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

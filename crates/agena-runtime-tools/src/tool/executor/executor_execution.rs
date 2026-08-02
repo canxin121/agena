@@ -178,7 +178,16 @@ impl ToolExecutor {
             tags.as_slice(),
             Some(&self.principal.tool_policy),
         );
-        let mut checks = vec![ToolPermissionCheck { action, decision }];
+        let tag_labels = tags
+            .iter()
+            .map(agena_plugin_host::sdk::ToolTag::as_ref)
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let mut checks = vec![ToolPermissionCheck {
+            action,
+            decision,
+            tags: tag_labels,
+        }];
 
         if let Some(inspector) = self.permission_inspector.as_ref() {
             checks.extend(inspector.additional_checks(invocation, &self.principal)?);

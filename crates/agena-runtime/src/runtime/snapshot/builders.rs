@@ -524,6 +524,7 @@ impl agena_runtime_tools::tool::ExecutionPermissionInspector for McpRiskPermissi
                     "MCP tool '{server}/{tool}' advertises destructive or open-world effects and requires automatic approval"
                 ),
             },
+            tags: vec!["mcp".to_owned()],
         }])
     }
 }

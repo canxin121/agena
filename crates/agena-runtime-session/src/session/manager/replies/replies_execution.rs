@@ -8,10 +8,9 @@ use super::{
     ToolInvocationExecution, ToolPermissionCheck, Utc, append_resolved_message_part,
     ask_user_title, assistant_message_for_part, build_message, build_request_part,
     completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
-    managed_project_state_permission, max_permission_risk, operation_authorization,
-    operation_blocks_from_tool_output, pending_operation_for_resolved,
-    pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
-    push_unique_permission_action, resolve_pending_tool, resolve_permission_with_persisted_rules,
+    max_permission_risk, operation_authorization, operation_blocks_from_tool_output,
+    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
+    permission_scope_label, push_unique_permission_action, resolve_pending_tool,
     responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
     terminal_operation_title, tool_name, update_resolved_tool_message,
 };
@@ -26,42 +25,6 @@ use agena_domain::{
 use tracing::Instrument;
 
 use super::super::StableRunContext;
-
-fn parse_automatic_permission_verdict(text: &str) -> Option<bool> {
-    // Providers occasionally wrap a one-token answer in a Markdown code
-    // fence or add terminal punctuation despite the strict prompt. Accept
-    // only those presentation wrappers; any explanatory text remains
-    // ambiguous and still falls back to interactive confirmation.
-    let cleaned = text.replace("```text", "").replace("```", "");
-    let normalized = cleaned
-        .trim()
-        .trim_matches(|character: char| matches!(character, '`' | '*' | '_' | '.' | '!' | ':'))
-        .trim();
-    match normalized.to_ascii_uppercase().as_str() {
-        "ALLOW" => Some(true),
-        "DENY" => Some(false),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod automatic_permission_tests {
-    use super::parse_automatic_permission_verdict;
-
-    #[test]
-    fn accepts_only_a_single_verdict_with_presentation_wrappers() {
-        assert_eq!(parse_automatic_permission_verdict("ALLOW"), Some(true));
-        assert_eq!(
-            parse_automatic_permission_verdict("```text\nDENY\n```"),
-            Some(false)
-        );
-        assert_eq!(parse_automatic_permission_verdict("ALLOW."), Some(true));
-        assert_eq!(
-            parse_automatic_permission_verdict("ALLOW because this is safe"),
-            None
-        );
-    }
-}
 
 /// One member of a provider-emitted tool batch after preflight.
 ///
@@ -1205,7 +1168,7 @@ impl SessionManager {
         let permission_outcome = if permission_checks.is_empty() {
             AggregatedPermissionOutcome::Allow
         } else {
-            self.aggregate_permission_outcome(Some(session.id), permission_checks.as_slice())
+            self.aggregate_permission_outcome(Some(session), permission_checks.as_slice())
                 .await?
         };
 
@@ -1456,7 +1419,7 @@ impl SessionManager {
             AggregatedPermissionOutcome::Allow
         } else {
             Box::pin(
-                self.aggregate_permission_outcome(Some(session.id), permission_checks.as_slice()),
+                self.aggregate_permission_outcome(Some(&session), permission_checks.as_slice()),
             )
             .await?
         };
@@ -1642,234 +1605,25 @@ impl SessionManager {
             return Err(AppError::Cancelled);
         }
         let key = permission_action_key(&check.action)?;
-        let persisted_rules = self
-            .store
-            .resolve_permission_rules(key.as_str(), session_id)
-            .await?;
-        if cancellation
-            .as_ref()
-            .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
-        {
-            return Err(AppError::Cancelled);
-        }
+        let state = self.execution_state();
+        let snapshot = self.rule_snapshot(&state, session_id).await?;
         let resolution =
-            resolve_permission_with_persisted_rules(check.decision.clone(), &persisted_rules);
+            agena_permission::rules::apply_rules(&check.decision, snapshot.rules_for(key.as_str()));
         tracing::debug!(
             target: "agena::permission",
             session_id,
             action = key.as_str(),
             static_decision = ?check.decision,
-            persisted_rule_count = persisted_rules.len(),
+            persisted_rule_count = snapshot.rules_for(key.as_str()).len(),
             resolved_decision = ?resolution.decision,
             "resolved tool permission"
         );
         Ok(resolution)
     }
 
-    /// Resolve an `auto` policy decision through the explicitly configured
-    /// approval model. This path is deliberately fail-closed: a missing model,
-    /// an unavailable provider, a provider error, or an ambiguous response is
-    /// converted to an ordinary interactive Ask request.
-    async fn resolve_auto_permission_decision(
-        &self,
-        session_id: Option<i64>,
-        check: &ToolPermissionCheck,
-        reason: &str,
-    ) -> PermissionDecision {
-        let state = self.execution_state();
-        // Resolve the model from the same effective policy used by tool
-        // preflight. In particular, this includes the managed project-state
-        // allowance and the live shared session overlay, so changing a
-        // session's permission while a run is active also changes which
-        // approval model is used by the next check.
-        let approval_model = if let Some(session_id) = session_id {
-            let mut session = match self.get_session(session_id).await {
-                Ok(session) => session,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "agena::permission",
-                        session_id,
-                        error = %error,
-                        "could not reload session policy for automatic approval"
-                    );
-                    return PermissionDecision::Ask {
-                        reason: format!(
-                            "automatic approval policy could not be loaded; falling back to confirmation: {reason}"
-                        ),
-                    };
-                }
-            };
-            self.refresh_execution_policy(&mut session, &state);
-            session
-                .runtime
-                .execution
-                .effective_permission
-                .approval_model
-        } else {
-            let mut permission = state
-                .shared_permission
-                .read()
-                .map(|value| value.clone())
-                .unwrap_or_else(|_| state.config.permission.clone());
-            permission.merge_from(managed_project_state_permission(
-                state.tool_executor.workspace_root(),
-            ));
-            permission.approval_model
-        };
-
-        let Some(approval_model) = approval_model else {
-            return PermissionDecision::Ask {
-                reason: format!(
-                    "automatic approval is not configured; falling back to confirmation: {reason}"
-                ),
-            };
-        };
-        let model = match approval_model.model_ref() {
-            Ok(model) => match state.processor.provider_registry().resolve_model_selection(
-                model.provider_id.as_ref(),
-                model.adapter_id.as_ref().map(|adapter| adapter.as_ref()),
-                Some(model.model_id.as_ref()),
-            ) {
-                Ok(model) => model,
-                Err(error) => {
-                    tracing::warn!(
-                        target: "agena::permission",
-                        session_id,
-                        error = %error,
-                        "automatic approval model is not available in the active provider registry; falling back to interactive confirmation"
-                    );
-                    return PermissionDecision::Ask {
-                        reason: format!(
-                            "automatic approval model is unavailable; falling back to confirmation: {reason}"
-                        ),
-                    };
-                }
-            },
-            Err(error) => {
-                tracing::warn!(
-                    target: "agena::permission",
-                    session_id,
-                    error = %error,
-                    "automatic approval model reference is invalid; falling back to interactive confirmation"
-                );
-                return PermissionDecision::Ask {
-                    reason: format!(
-                        "automatic approval model is invalid; falling back to confirmation: {reason}"
-                    ),
-                };
-            }
-        };
-
-        // Resolve the selected think/speed variants through the same provider
-        // catalog path used by normal model execution. This keeps approval
-        // requests aligned with the model picker and makes an invalid or
-        // unavailable variant fail closed to Ask.
-        let mut options = SessionRunOptions {
-            model: model.clone(),
-            thinking_mode: approval_model.thinking_mode.clone(),
-            speed_mode: approval_model.speed_mode.clone(),
-            verbosity: approval_model.verbosity.clone(),
-            thinking: None,
-            request_override: Default::default(),
-            system: None,
-            temperature: Some(0.0),
-            max_output_tokens: Some(8),
-        };
-        if let Some(parallel_tool_calls) = approval_model.parallel_tool_calls {
-            options
-                .request_override
-                .set_parallel_tool_calls(Some(parallel_tool_calls));
-        }
-        if let Err(error) = self.apply_model_mode_requests(&mut options) {
-            tracing::warn!(
-                target: "agena::permission",
-                session_id,
-                model = %model,
-                error = %error,
-                "automatic approval model variant is unavailable; falling back to interactive confirmation"
-            );
-            return PermissionDecision::Ask {
-                reason: format!(
-                    "automatic approval model variant unavailable; falling back to confirmation: {reason}"
-                ),
-            };
-        }
-
-        let action = serde_json::to_string(&check.action)
-            .unwrap_or_else(|_| "{\"action\":\"unserializable\"}".to_owned());
-        let prompt = format!(
-            "Permission request:\n{action}\nPolicy reason: {reason}\n\nReturn exactly one token: ALLOW or DENY. ALLOW only when the requested action is clearly safe and within the configured workspace policy. Return DENY when it is clearly unsafe. Never return any other text."
-        );
-        let request = agena_provider::CompletionRequest {
-            model: model.model_id.clone(),
-            system: Some(
-                "You are Agena's permission approval model. You are a safety gate, not an agent. Evaluate the supplied permission request without tools. Output exactly ALLOW or DENY. When uncertain, output DENY."
-                    .to_owned(),
-            ),
-            messages: vec![agena_provider::CompletionInputMessage {
-                role: Role::User,
-                parts: vec![agena_provider::CompletionInputPart::Text { text: prompt }],
-                provider_state: Default::default(),
-            }],
-            tool_api_functions: Vec::new(),
-            provider_native_tools: Default::default(),
-            disable_tools: true,
-            temperature: Some(0.0),
-            max_output_tokens: Some(8),
-            prompt_cache_key: None,
-            previous_response_id: None,
-            prompt_window_generation: None,
-            provider_compaction: None,
-            stop_sequences: Vec::new(),
-            top_p: None,
-            top_k: None,
-            seed: None,
-            thinking: options.thinking,
-            verbosity: options.verbosity,
-            response_format: Some(agena_provider::ResponseFormat::Text),
-            responses_api_metadata: None,
-            request_override: options.request_override,
-        };
-
-        let response = match state
-            .processor
-            .provider_registry()
-            .complete(&model, request)
-            .await
-        {
-            Ok(response) => response,
-            Err(error) => {
-                tracing::warn!(
-                    target: "agena::permission",
-                    session_id,
-                    model = %model,
-                    error = %error,
-                    "automatic permission approval failed; falling back to interactive confirmation"
-                );
-                return PermissionDecision::Ask {
-                    reason: format!(
-                        "automatic approval model unavailable; falling back to confirmation: {reason}"
-                    ),
-                };
-            }
-        };
-
-        match parse_automatic_permission_verdict(response.text.as_str()) {
-            Some(true) => PermissionDecision::Allow,
-            Some(false) => PermissionDecision::Deny {
-                reason: format!("automatic approval model denied the action: {reason}"),
-            },
-            None => PermissionDecision::Ask {
-                reason: format!(
-                    "automatic approval model returned an ambiguous answer; falling back to confirmation: {reason}"
-                ),
-            },
-        }
-    }
-
     pub(in crate::session::manager) async fn aggregate_permission_outcome(
         &self,
-        session_id: Option<i64>,
+        session: Option<&Session>,
         checks: &[ToolPermissionCheck],
     ) -> Result<AggregatedPermissionOutcome, AppError> {
         let mut related_actions = Vec::with_capacity(checks.len());
@@ -1877,23 +1631,93 @@ impl SessionManager {
         let mut primary_request: Option<AggregatedPermissionRequest> = None;
         let mut denial: Option<agena_domain::PolicyDeniedResult> = None;
 
+        if checks.is_empty() {
+            return Ok(AggregatedPermissionOutcome::Allow);
+        }
+        let session_id = session.map(|session| session.id);
+        let state = self.execution_state();
+        let snapshot = self.rule_snapshot(&state, session_id).await?;
+        let managed_project_root =
+            agena_runtime::project_state_dir(state.tool_executor.workspace_root())
+                .to_string_lossy()
+                .into_owned();
+        let context = agena_permission::DecisionContext {
+            managed_project_root: Some(managed_project_root.as_str()),
+        };
+        let budget = self.auto_budget(session_id);
+
+        // Phase 1: synchronous pipeline (static policy + rule snapshot +
+        // fast path + heuristics + denial budget) for every check. Checks
+        // that still need the classifier are deferred to phase 2.
+        let mut decisions: Vec<(PermissionAction, agena_domain::PermissionResolution, bool)> =
+            Vec::with_capacity(checks.len());
+        let mut candidates = Vec::new();
         for check in checks {
             let action = check.action.clone();
             push_unique_permission_action(&mut related_actions, action.clone());
-            let mut resolution = self.resolve_permission_decision(session_id, check).await?;
-            let auto_approval = matches!(&resolution.decision, PermissionDecision::Auto { .. });
-            let auto_reason = match &resolution.decision {
-                PermissionDecision::Auto { reason } => Some(reason.clone()),
-                _ => None,
-            };
-            if let Some(reason) = auto_reason {
-                resolution.decision = self
-                    .resolve_auto_permission_decision(session_id, check, reason.as_str())
-                    .await;
+            let key = permission_action_key(&check.action)?;
+            let mut resolution = agena_permission::rules::apply_rules(
+                &check.decision,
+                snapshot.rules_for(key.as_str()),
+            );
+            let was_auto = matches!(&resolution.decision, PermissionDecision::Auto { .. });
+            if was_auto {
+                let mut spec = agena_domain::ActionSpec::from_action(&check.action);
+                if let agena_domain::ActionSpec::Tool { tags, .. } = &mut spec {
+                    *tags = check.tags.clone();
+                }
+                match agena_permission::decide_sync(&resolution.decision, &spec, &context, &budget)
+                {
+                    agena_permission::SyncOutcome::Final(decision) => {
+                        resolution.decision = decision;
+                    }
+                    agena_permission::SyncOutcome::Classifier(candidate) => {
+                        candidates.push((action, resolution, candidate));
+                        continue;
+                    }
+                }
             }
-            // `resolve_auto_permission_decision` normally materializes an auto
-            // decision as allow, deny, or ask. Keep the fallback fail-closed
-            // if a future resolver ever leaves the marker unresolved.
+            decisions.push((action, resolution, was_auto));
+        }
+
+        // Phase 2: one shared classifier context (model, transcript, recent
+        // decisions) serves every candidate from this batch.
+        if !candidates.is_empty() {
+            let outcomes = self
+                .classify_auto_candidates(
+                    session,
+                    &state,
+                    session_id,
+                    candidates
+                        .iter()
+                        .map(|(_, _, candidate)| candidate.clone())
+                        .collect(),
+                )
+                .await;
+            for ((action, mut resolution, candidate), outcome) in
+                candidates.into_iter().zip(outcomes)
+            {
+                resolution.decision = match outcome {
+                    Ok(true) => PermissionDecision::Allow,
+                                        Ok(false) => PermissionDecision::Deny {
+                        reason: agena_permission::deny_reason(format!(
+                            "automatic approval classifier denied the action: {}",
+                            candidate.policy_reason
+                        )),
+                    },
+                    Err(()) => PermissionDecision::Ask {
+                        reason: format!(
+                            "automatic approval classifier unavailable; falling back to confirmation: {}",
+                            candidate.policy_reason
+                        ),
+                    },
+                };
+                decisions.push((action, resolution, true));
+            }
+        }
+
+        // Phase 3: aggregate final decisions.
+        for (action, resolution, auto_approval) in decisions {
             let decision = match resolution.decision {
                 PermissionDecision::Auto { reason } => PermissionDecision::Ask {
                     reason: format!(

@@ -500,6 +500,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "agena-permission"
+version = "0.1.0"
+dependencies = [
+ "agena-domain",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "agena-plugin-host"
 version = "0.1.0"
 dependencies = [
@@ -906,6 +919,7 @@ dependencies = [
  "agena-failure",
  "agena-keyring-store",
  "agena-lsp",
+ "agena-permission",
  "agena-plugin-host",
  "agena-plugin-sdk",
  "agena-provider",

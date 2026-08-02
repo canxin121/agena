@@ -562,10 +562,69 @@ mod tests {
                     decision: PermissionDecision::Auto {
                         reason: "workspace write is eligible for automatic approval".to_owned(),
                     },
+                    tags: Vec::new(),
                 }],
             )
             .await
             .expect("automatic approval should resolve");
+
+        assert!(matches!(
+            outcome,
+            super::replies::AggregatedPermissionOutcome::Allow
+        ));
+    }
+
+    #[tokio::test]
+    async fn automatic_permission_falls_back_to_session_model_without_approval_model() {
+        // The default permission config has no approval_model; auto must still
+        // resolve through the classifier using the session model instead of
+        // asking interactively.
+        let manager = test_manager_with_permission(
+            ToolPermissionPolicy::allow_all(),
+            agena_domain::PermissionConfig::global_default(),
+        )
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "auto fallback".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create auto fallback session");
+        manager
+            .update_session_selection(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("approval-test-provider", "approval-test-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+            )
+            .await
+            .expect("select approval-test model for the session");
+
+        let outcome = manager
+            .aggregate_permission_outcome(
+                Some(&session),
+                &[ToolPermissionCheck {
+                    action: PermissionAction::Tool {
+                        tool_name: "fs.write".to_owned(),
+                        qualifier: None,
+                    },
+                    decision: PermissionDecision::Auto {
+                        reason: "tool is eligible for automatic approval".to_owned(),
+                    },
+                    tags: vec!["filesystem_write".to_owned()],
+                }],
+            )
+            .await
+            .expect("automatic approval should resolve without an approval model");
 
         assert!(matches!(
             outcome,

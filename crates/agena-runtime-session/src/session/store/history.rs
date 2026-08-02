@@ -1,9 +1,8 @@
 use super::{
     AppError, Arc, DbErr, EventKind, MessageCheckpoint, MessagePartCheckpointedEvent,
-    PersistedPermissionRule, PersistedRuleEventMeta, ProcessorPartIdAllocator, ReservedMessageIds,
-    ReservedProcessorIds, Session, SessionCachePolicy, SessionCacheStats, SessionCommit,
-    SessionStore, Utc, access_cache, permission_rule_event_from_rule, session,
-    session_from_model_db,
+    PersistedRuleEventMeta, ProcessorPartIdAllocator, ReservedMessageIds, ReservedProcessorIds,
+    Session, SessionCachePolicy, SessionCacheStats, SessionCommit, SessionStore, Utc, access_cache,
+    permission_rule_event_from_rule, session, session_from_model_db,
 };
 
 use agena_storage_sqlite::run_transaction_effects;
@@ -212,14 +211,13 @@ impl SessionStore {
         Ok(())
     }
 
-    pub(crate) async fn resolve_permission_rules(
+    pub(crate) async fn resolve_permission_rule_snapshot(
         &self,
-        action_key: &str,
         session_id: Option<i64>,
-    ) -> Result<Vec<PersistedPermissionRule>, AppError> {
-        let workspace_id = self.lookup_workspace_id().await?;
+        workspace_id: Option<i64>,
+    ) -> Result<Vec<agena_storage::PersistedPermissionRule>, AppError> {
         self.permission_rule_repository
-            .resolve(action_key, session_id, workspace_id)
+            .resolve_snapshot(session_id, workspace_id)
             .await
             .map_err(|error| AppError::Internal(error.to_string()))
     }

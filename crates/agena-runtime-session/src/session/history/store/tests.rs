@@ -275,6 +275,115 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_duplicate_terminal_event_for_failed_execution_is_idempotent() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/recovery-duplicate-terminal")
+            .await
+            .expect("workspace");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "recovery duplicate")
+                .await
+                .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+            1,
+        )
+        .await
+        .expect("started reply");
+
+        // The bootstrap reconcile pass synthesizes the first terminal event
+        // after a process restart (revision 2).
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: interrupted_execution_problem(),
+                },
+                ts_ms: 20,
+            },
+            2,
+        )
+        .await
+        .expect("recovery terminal event");
+
+        // The owning execution is still running in the new process and
+        // terminalizes again with its own later revision (3). Both events
+        // report a failure, so the duplicate must be absorbed while keeping
+        // the first projection authoritative.
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: interrupted_execution_problem(),
+                },
+                ts_ms: 30,
+            },
+            3,
+        )
+        .await
+        .expect("late duplicate terminal event is idempotent");
+
+        let persisted = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, revision_seq, finished_at_ms \
+                 FROM agena_reply_executions WHERE execution_id = ?",
+                [execution_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply execution")
+            .expect("reply execution");
+        assert_eq!(
+            persisted.try_get::<String>("", "status").unwrap(),
+            "failed"
+        );
+        assert_eq!(
+            persisted.try_get::<i64>("", "revision_seq").unwrap(),
+            2,
+            "the first terminal projection stays authoritative"
+        );
+        let reply = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, revision_seq, finished_at_ms \
+                 FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply")
+            .expect("reply");
+        assert_eq!(reply.try_get::<String>("", "status").unwrap(), "failed");
+        assert_eq!(reply.try_get::<i64>("", "revision_seq").unwrap(), 2);
+    }
+
+    #[tokio::test]
     async fn permission_continuation_reuses_one_turn_and_one_assistant_reply() {
         let db = Database::connect("sqlite::memory:")
             .await

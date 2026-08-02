@@ -820,8 +820,6 @@ where
 
     // Applying the same event again is harmless. This can happen after an
     // ambiguous transaction outcome or while recovering a projection cursor.
-    // A different terminal event is not harmless and remains an invariant
-    // violation with a precise diagnostic.
     let existing = db
         .query_one(Statement::from_sql_and_values(
             db.get_database_backend(),
@@ -853,6 +851,24 @@ where
                 cancel_reply_interactions(db, payload, revision_seq).await?;
             }
         }
+        return Ok(reply_waits_for_user);
+    }
+    // A later terminal event for an already-terminal execution is not an
+    // invariant violation but the recovery cursor emitting an out-of-order
+    // duplicate: the bootstrap reconcile pass (`abort_hanging_lifecycles`)
+    // synthesizes `ExecutionFinished { process_restart }` events
+    // transactionally, and the same execution that was running before the
+    // process exit can legitimately be terminalized again by its own
+    // `drive_registered` cleanup once the new process takes over. Both
+    // events report a failure. Keep the earlier projection (and its
+    // revision) authoritative and merely re-run the terminal side effects
+    // so a late event cannot leave an open part or activity behind.
+    if matches!(payload.outcome, ExecutionOutcome::Failed { .. })
+        && existing_status == status
+        && existing_revision <= revision_seq
+    {
+        terminalize_reply_operations(db, payload, revision_seq).await?;
+        cancel_reply_interactions(db, payload, revision_seq).await?;
         return Ok(reply_waits_for_user);
     }
     Err(DbErr::Custom(format!(

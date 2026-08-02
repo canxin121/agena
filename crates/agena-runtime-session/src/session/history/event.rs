@@ -106,8 +106,5 @@ pub struct ToolCallCompleted {
     pub run_id: RunId,
     /// Stable name of the tool that produced this result.
     pub tool_name: SmolStr,
-    /// Authoritative completed operation part, including attachments and
-    /// provider-specific blocks.
-    pub part: MessagePart,
     pub completed_at: DateTime<Utc>,
 }

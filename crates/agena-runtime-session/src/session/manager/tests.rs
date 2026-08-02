@@ -2033,7 +2033,7 @@ mod tests {
             .db
             .query_one(Statement::from_sql_and_values(
                 backend,
-                "SELECT COUNT(*) AS count FROM agena_activities WHERE owner_kind = 'assistant_reply' AND owner_id = ? AND state = 'failed'",
+                                "SELECT COUNT(*) AS count FROM agena_content_nodes WHERE owner_kind = 'assistant_reply' AND owner_id = ? AND state = 'failed'",
                 [seed_reply_id.to_string().into()],
             ))
             .await
@@ -2982,7 +2982,7 @@ mod tests {
             .db
             .query_one(Statement::from_sql_and_values(
                 manager.store.db.get_database_backend(),
-                "SELECT payload_json FROM agena_activities WHERE activity_id = ?",
+                                "SELECT payload_json FROM agena_content_nodes WHERE node_id = ?",
                 [operation_activity_id.to_string().into()],
             ))
             .await

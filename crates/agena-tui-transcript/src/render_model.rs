@@ -57,22 +57,22 @@ pub enum TranscriptContentId {
 }
 
 #[derive(Debug, Clone)]
-pub struct TranscriptEntryPart {
+pub struct TranscriptEntryPart<'a> {
     pub id: TranscriptContentId,
     pub status: PartExecutionStatusResource,
-    pub content: TranscriptPartContent,
+    pub content: TranscriptPartContent<'a>,
 }
 
 #[derive(Debug, Clone)]
-pub enum TranscriptPartContent {
+pub enum TranscriptPartContent<'a> {
     UserDocument(TranscriptUserDocument),
     Text(MessageTextPartResource),
-    Activity(TranscriptActivityContent),
+    Activity(TranscriptActivityContent<'a>),
 }
 
 #[derive(Debug, Clone)]
-pub enum TranscriptActivityContent {
-    Canonical(Box<ActivityPayload>),
+pub enum TranscriptActivityContent<'a> {
+    Canonical(&'a ActivityPayload),
     Reasoning(MessageReasoningPartResource),
     Attachment(MessageAttachmentPartResource),
     SkillReference(MessageSkillReferencePartResource),
@@ -141,7 +141,7 @@ pub struct TranscriptActivityPresentation {
     /// from this value and cannot accept an arbitrary diagnostic string.
     pub problem: Option<agena_failure::UserProblem>,
 }
-impl From<MessagePartDetailResource> for TranscriptPartContent {
+impl From<MessagePartDetailResource> for TranscriptPartContent<'static> {
     fn from(content: MessagePartDetailResource) -> Self {
         match content {
             MessagePartDetailResource::Text(value) => Self::Text(value),
@@ -168,17 +168,17 @@ impl From<MessagePartDetailResource> for TranscriptPartContent {
 }
 
 #[derive(Debug, Clone)]
-pub struct TranscriptEntry {
+pub struct TranscriptEntry<'a> {
     pub id: TranscriptEntryId,
     /// Message role when this entry is a Turn/Response. Session-owned
     /// activities are top-level Activity entries and therefore have no role.
     pub role: Option<MessageRole>,
     pub state: MessageStatus,
     pub created_at: DateTime<Utc>,
-    pub parts: Vec<TranscriptEntryPart>,
+    pub parts: Vec<TranscriptEntryPart<'a>>,
 }
 
-impl From<&MessageResource> for TranscriptEntry {
+impl<'a> From<&'a MessageResource> for TranscriptEntry<'a> {
     fn from(message: &MessageResource) -> Self {
         Self {
             id: TranscriptEntryId::StoredMessage(message.id),

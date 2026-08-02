@@ -705,24 +705,6 @@ impl SessionManager {
             cancel_unanswered_request_parts_for_operation(&mut session, tool_call_id.as_ref())?;
         changed_part_ids.push(resolved.pending.part.part_id);
         let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
-        let completed_part = assistant_message
-            .parts
-            .iter()
-            .find(|part| {
-                matches!(
-                    part.content.as_ref(),
-                    Some(PartContent::Activity(
-                        crate::message::RuntimeActivity::Operation(_)
-                    ))
-                ) && part.operation_id.as_deref() == Some(tool_call_id.as_ref())
-            })
-            .cloned()
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "completed operation part missing for tool call {}",
-                    tool_call_id
-                ))
-            })?;
         let session = self
             .persist_session_changes_with_rules(
                 session,
@@ -740,7 +722,6 @@ impl SessionManager {
             call_id: tool_call_id,
             run_id: HistoryRunId::new(),
             tool_name: resolved.invocation.name.clone().into(),
-            part: completed_part,
             completed_at: Utc::now(),
         })];
         events.append(&mut terminal_events);

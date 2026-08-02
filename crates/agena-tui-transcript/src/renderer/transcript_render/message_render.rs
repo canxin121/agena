@@ -209,6 +209,18 @@ impl CanonicalActivityDetail {
     }
 }
 
+/// Read the persisted full outputs from the managed files referenced by
+/// `details.managed_outputs`. Files are only read when the expanded
+/// Operation renders its managed-output section, so large bodies stay lazy;
+/// `None` entries mean the file could not be read back.
+fn managed_output_contents(details: &agena_domain::ToolOutput) -> Vec<Option<String>> {
+    details
+        .managed_outputs
+        .iter()
+        .map(|managed| std::fs::read_to_string(&managed.path).ok())
+        .collect()
+}
+
 fn canonical_activity_details(
     payload: &agena_domain::ActivityPayload,
     summary: &str,
@@ -373,16 +385,22 @@ fn canonical_activity_details(
                 has_result_presentation = true;
             }
             if !operation.details.managed_outputs.is_empty() {
+                // The persisted full outputs live only in the managed files;
+                // read them lazily so the user sees the complete content
+                // instead of only the truncated preview and a bare path.
+                // Each file is collapsible so large bodies stay lazy.
+                let managed_contents = managed_output_contents(&operation.details);
+                let mut body = Vec::new();
+                for (index, output) in operation.details.managed_outputs.iter().enumerate() {
+                    body.push(output.path.clone());
+                    if let Some(Some(content)) = managed_contents.get(index) {
+                        body.push(content.clone());
+                    }
+                }
                 details.push(CanonicalActivityDetail::identified_section(
                     TranscriptActivitySection::ManagedOutputs,
                     "Managed outputs",
-                    operation
-                        .details
-                        .managed_outputs
-                        .iter()
-                        .map(|output| output.path.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
+                    body.join("\n"),
                     CanonicalActivityDetailFormat::Plain,
                     true,
                 ));
@@ -1040,7 +1058,7 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
                 details.as_slice(),
                 error_text,
                 !matches!(
-                    payload.as_ref(),
+                    payload,
                     agena_domain::ActivityPayload::Operation(_)
                 ),
             ))
@@ -1441,7 +1459,7 @@ pub(crate) fn render_part_node(
             let mut children = Vec::new();
             let mut detail_index = 0_usize;
             let is_operation = matches!(
-                payload.as_ref(),
+                payload,
                 agena_domain::ActivityPayload::Operation(_)
             );
             let render_summary =
@@ -1498,7 +1516,7 @@ pub(crate) fn render_part_node(
                         children.push(child);
                     }
                 }
-                if let agena_domain::ActivityPayload::Resource(resource) = payload.as_ref() {
+                if let agena_domain::ActivityPayload::Resource(resource) = payload {
                     let section_start = out.len();
                     let attachment = canonical_resource_attachment(resource);
                     let _ = render_attachment_image(out, "    ", &attachment, width);

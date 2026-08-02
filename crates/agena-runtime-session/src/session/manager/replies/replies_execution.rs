@@ -2148,7 +2148,11 @@ impl SessionManager {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Session, AppError> {
                         let stream_id = stream.stream_id.clone();
-        const DELTA_BATCH_MS: u64 = 100;
+        // Durable checkpoint cadence: deltas accumulate in memory and are
+        // persisted at most every 2s (plus the terminal flush), so a long
+        // streaming tool output no longer writes a full-content checkpoint
+        // into the event log every 100ms.
+        const DELTA_BATCH_MS: u64 = 2_000;
         const TITLE_REFRESH_MS: u64 = 2_000;
         let mut batch_started = std::time::Instant::now();
         let mut last_title_refresh = std::time::Instant::now();
@@ -2440,7 +2444,29 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let authorization = operation_authorization(&session, &resolved);
-        let tool_output = execution.output.clone();
+        let mut tool_output = execution.output.clone();
+        // The executor compacts the model-visible payload when it exceeds the
+        // model boundary, but the user-facing Operation must keep the complete
+        // result. apply_patch carries the full diff outside the compacted
+        // payload; restore it so the terminal renders the real diff instead of
+        // the truncated one.
+        if let Some(apply_patch) = execution.apply_patch.as_ref()
+            && let Some(mut payload) = tool_output.to_json_payload()
+            && let Some(object) = payload.as_object_mut()
+        {
+            object.insert("diff".to_owned(), serde_json::json!(apply_patch.diff));
+            object.insert(
+                "inverse_patch".to_owned(),
+                serde_json::json!(apply_patch.inverse_patch),
+            );
+            object.insert(
+                "progress".to_owned(),
+                serde_json::json!(apply_patch.progress),
+            );
+            if let Ok(restored) = agena_domain::ToolOutput::from_json_payload(Some(&payload)) {
+                tool_output = restored;
+            }
+        }
         let mut summary = execution.summary();
         let attributed_usage = summary
             .metadata

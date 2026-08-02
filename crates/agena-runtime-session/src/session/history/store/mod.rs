@@ -899,6 +899,54 @@ where
         .await?;
         return Ok(reply_waits_for_user);
     }
+    // A failed execution can be completed again by the owning continuation
+    // after the bootstrap reconcile synthesized the earlier failure: the
+    // runtime was killed between `reconcile_interrupted_lifecycles` (which
+    // terminalized the reply as failed at the aborted revision) and the
+    // owner task's own `drive_registered` cleanup, so the surviving process
+    // re-ran the turn to completion and emitted `ExecutionFinished
+    // { completed }` at a later revision. The success is the authoritative
+    // outcome; promote the reply and keep the synthetic failure only as a
+    // historical record on the execution row.
+    if matches!(payload.outcome, ExecutionOutcome::Completed)
+        && existing_status == "failed"
+        && existing_revision < revision_seq
+    {
+        db.execute(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "UPDATE agena_assistant_replies \
+             SET status = 'completed', revision_seq = ?, finished_at_ms = ?, failure_json = NULL \
+             WHERE reply_id = ? AND revision_seq < ?",
+            [
+                revision_seq.into(),
+                payload.ts_ms.into(),
+                payload.reply_id.to_string().into(),
+                revision_seq.into(),
+            ],
+        ))
+        .await?;
+        // The `agena_reply_executions` update trigger only permits terminal
+        // transitions from `in_progress`; a row already terminalized as
+        // `failed` by the reconcile pass is immutable from the trigger's
+        // perspective. The reply projection carries the completed outcome;
+        // the historical failed record remains the execution's terminal row.
+        db.execute(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "UPDATE agena_reply_executions \
+             SET status = 'completed', revision_seq = ?, finished_at_ms = ? \
+             WHERE execution_id = ? AND reply_id = ? \
+               AND status = 'in_progress'",
+            [
+                revision_seq.into(),
+                payload.ts_ms.into(),
+                payload.execution_id.to_string().into(),
+                payload.reply_id.to_string().into(),
+            ],
+        ))
+        .await?;
+        terminalize_reply_operations(db, payload, revision_seq).await?;
+        return Ok(reply_waits_for_user);
+    }
     Err(DbErr::Custom(format!(
         "conflicting terminal projection for reply {}: existing status {} at revision {}, incoming status {} at revision {}",
         payload.reply_id, existing_status, existing_revision, status, revision_seq
@@ -915,7 +963,7 @@ where
     let rows = db
         .query_all(Statement::from_sql_and_values(
             db.get_database_backend(),
-            "SELECT payload_json FROM agena_activities \
+            "SELECT payload_json FROM agena_content_nodes \
              WHERE owner_kind = 'assistant_reply' \
                AND owner_id = ? \
                AND state IN ('pending', 'in_progress')",
@@ -959,7 +1007,7 @@ where
          WHERE status IN (?, ?) \
            AND awaits_user_reply = 1 \
            AND activity_id IN ( \
-             SELECT activity_id FROM agena_activities \
+             SELECT node_id FROM agena_content_nodes \
              WHERE owner_kind = 'assistant_reply' \
                AND owner_id = ? \
                AND state IN ('pending', 'in_progress') \
@@ -975,7 +1023,7 @@ where
     .await?;
     db.execute(Statement::from_sql_and_values(
         backend,
-        "UPDATE agena_activities \
+        "UPDATE agena_content_nodes \
          SET state = 'cancelled', revision_seq = ?, finished_at_ms = ? \
          WHERE owner_kind = 'assistant_reply' \
            AND owner_id = ? \
@@ -1027,7 +1075,7 @@ where
          WHERE status IN (?, ?) \
            AND awaits_user_reply = 0 \
            AND activity_id IN ( \
-             SELECT activity_id FROM agena_activities \
+             SELECT node_id FROM agena_content_nodes \
              WHERE owner_kind = 'assistant_reply' \
                AND owner_id = ? \
                AND state IN ('pending', 'in_progress') \
@@ -1043,7 +1091,7 @@ where
     .await?;
     db.execute(Statement::from_sql_and_values(
         db.get_database_backend(),
-        "UPDATE agena_activities \
+        "UPDATE agena_content_nodes \
          SET state = ?, revision_seq = ?, finished_at_ms = ? \
          WHERE owner_kind = 'assistant_reply' \
            AND owner_id = ? \
@@ -1090,7 +1138,7 @@ pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::Activ
                 title: operation.title.clone(),
                 summary: operation.summary.clone(),
                 sections: operation.result.display.sections.clone(),
-                model_output_text: operation.model_output.text.clone(),
+                model_output_text: operation.result.model_preview.text.clone(),
                 details: operation.details.clone(),
                 resource_activity_ids: Vec::new(),
                 authorization: operation.authorization.clone(),
@@ -1180,9 +1228,13 @@ async fn next_content_position<C: ConnectionTrait>(
             "SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM (\
                  SELECT position FROM agena_text_segments WHERE owner_kind = ? AND owner_id = ? \
                  UNION ALL \
-                 SELECT position FROM agena_activities WHERE owner_kind = ? AND owner_id = ?\
+                 SELECT position FROM agena_activities WHERE owner_kind = ? AND owner_id = ? \
+                 UNION ALL \
+                 SELECT position FROM agena_content_nodes WHERE owner_kind = ? AND owner_id = ?
              )",
             [
+                owner_kind.into(),
+                owner_id.into(),
                 owner_kind.into(),
                 owner_id.into(),
                 owner_kind.into(),
@@ -1270,11 +1322,43 @@ async fn project_part_content<C: ConnectionTrait>(
                AND excluded.revision_seq >= agena_text_segments.revision_seq",
             [
                 segment_id.to_string().into(),
-                owner_kind.into(),
-                owner_id.into(),
+                owner_kind.clone().into(),
+                owner_id.clone().into(),
                 text.into(),
                 position.into(),
                 revision_seq.into(),
+                part.created_at.timestamp_millis().into(),
+                chrono::Utc::now().timestamp_millis().into(),
+            ],
+        ))
+        .await?;
+        // v10 unified content node mirror: the text node lives in
+        // `agena_content_nodes` with the same identity, position and revision
+        // so readers can switch to the single content table.
+        let node_state = match part.status {
+            ExecutionStatus::Pending => "pending",
+            ExecutionStatus::InProgress => "in_progress",
+            _ => "completed",
+        };
+        db.execute(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "INSERT INTO agena_content_nodes \
+             (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, \
+              position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+             VALUES (?, ?, ?, 'text', NULL, NULL, ?, ?, ?, ?, ?, NULL, ?, ?) \
+             ON CONFLICT(node_id) DO UPDATE SET \
+             text = excluded.text, state = excluded.state, revision_seq = excluded.revision_seq, \
+             updated_at_ms = excluded.updated_at_ms \
+             WHERE excluded.revision_seq >= agena_content_nodes.revision_seq",
+            [
+                segment_id.to_string().into(),
+                owner_kind.clone().into(),
+                owner_id.clone().into(),
+                text.into(),
+                node_state.into(),
+                position.into(),
+                revision_seq.into(),
+                part.created_at.timestamp_millis().into(),
                 part.created_at.timestamp_millis().into(),
                 chrono::Utc::now().timestamp_millis().into(),
             ],
@@ -1327,10 +1411,10 @@ async fn project_part_content<C: ConnectionTrait>(
            AND excluded.revision_seq >= agena_activities.revision_seq",
         [
             activity_id.to_string().into(),
-            owner_kind.into(),
-            owner_id.into(),
-            actor.into(),
-            serde_json::to_value(payload)
+            owner_kind.clone().into(),
+            owner_id.clone().into(),
+            actor.clone().into(),
+            serde_json::to_value(&payload)
                 .map_err(|error| DbErr::Custom(format!("encode input activity: {error}")))?
                 .into(),
             state.into(),
@@ -1338,6 +1422,40 @@ async fn project_part_content<C: ConnectionTrait>(
             revision_seq.into(),
             part.created_at.timestamp_millis().into(),
             finished_at_ms.into(),
+        ],
+    ))
+    .await?;
+    // v10 unified content node mirror: activities also live in
+    // `agena_content_nodes` so readers can switch to the single content table.
+    db.execute(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO agena_content_nodes \
+         (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, \
+          position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+         VALUES (?, ?, ?, 'activity', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(node_id) DO UPDATE SET \
+         payload_json = excluded.payload_json, state = excluded.state, \
+         revision_seq = excluded.revision_seq, finished_at_ms = excluded.finished_at_ms, \
+         updated_at_ms = excluded.updated_at_ms \
+         WHERE agena_content_nodes.owner_kind = excluded.owner_kind \
+           AND agena_content_nodes.owner_id = excluded.owner_id \
+           AND agena_content_nodes.position = excluded.position \
+           AND excluded.revision_seq >= agena_content_nodes.revision_seq",
+        [
+            activity_id.to_string().into(),
+            owner_kind.clone().into(),
+            owner_id.clone().into(),
+            actor.clone().into(),
+            serde_json::to_value(&payload)
+                .map_err(|error| DbErr::Custom(format!("encode input activity: {error}")))?
+                .into(),
+            state.into(),
+            position.into(),
+            revision_seq.into(),
+            part.created_at.timestamp_millis().into(),
+            finished_at_ms.into(),
+            part.created_at.timestamp_millis().into(),
+            chrono::Utc::now().timestamp_millis().into(),
         ],
     ))
     .await?;
@@ -1383,7 +1501,7 @@ where
         [
             payload.activity_id.to_string().into(),
             reply_id.clone().into(),
-            serde_json::to_value(activity_payload)
+            serde_json::to_value(&activity_payload)
                 .map_err(|error| DbErr::Custom(format!("encode compaction activity: {error}")))?
                 .into(),
             position.into(),
@@ -1393,6 +1511,28 @@ where
         ],
     ))
     .await?;
+    // v10 unified content node mirror for maintenance activities.
+    db.execute(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO agena_content_nodes \
+         (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, \
+          position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+         VALUES (?, 'assistant_reply', ?, 'activity', 'runtime', ?, NULL, 'completed', ?, ?, ?, ?, ?, ?) \
+         ON CONFLICT(node_id) DO NOTHING",
+        [
+            payload.activity_id.to_string().into(),
+            reply_id.clone().into(),
+            serde_json::to_value(&activity_payload)
+                .map_err(|error| DbErr::Custom(format!("encode compaction activity: {error}")))?
+                .into(),
+            position.into(),
+            revision_seq.into(),
+            payload.ts_ms.into(),
+            payload.ts_ms.into(),
+            payload.ts_ms.into(),
+            payload.ts_ms.into(),
+        ],
+    )).await?;
     Ok(())
 }
 
@@ -1993,9 +2133,9 @@ where
 async fn update_tool_result_projection<C, W>(
     db: &C,
     part_writer: &W,
-    session_id: i64,
+    _session_id: i64,
     payload: &super::ToolCallCompleted,
-    revision_seq: i64,
+    _revision_seq: i64,
 ) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
@@ -2017,8 +2157,8 @@ where
             )
         })
         .collect::<Vec<_>>();
-    let existing = match operation_parts.as_slice() {
-        [part] => part,
+    match operation_parts.as_slice() {
+        [_] => {}
         [] => {
             return Err(DbErr::Custom(format!(
                 "tool result {} for message {} has no persisted assistant operation part",
@@ -2034,54 +2174,11 @@ where
                 parts.len()
             )));
         }
-    };
-    if existing.part_id != payload.part.id {
-        return Err(DbErr::Custom(format!(
-            "tool result {} for message {} targets part {}, but the operation is bound to part {}",
-            payload.call_id,
-            payload.message_id.raw(),
-            payload.part.id,
-            existing.part_id
-        )));
     }
-
-    let mut authoritative_part = payload.part.clone();
-    authoritative_part.message_id = payload.message_id.raw();
-    part_writer
-        .upsert_part(db, session_id, &authoritative_part)
-        .await?;
-
-    // The completed event is also the authoritative revision of the
-    // canonical Operation Activity. Without this projection, transcript
-    // refreshes keep reading the earlier pending invocation (and therefore
-    // only its input) until the whole assistant reply finishes.
-    let owner = model_message::Entity::find_by_id(payload.message_id.raw())
-        .one(db)
-        .await?
-        .ok_or_else(|| {
-            DbErr::Custom(format!(
-                "tool result {} references missing assistant message {}",
-                payload.call_id,
-                payload.message_id.raw()
-            ))
-        })?;
-    if let Some(execution_id) = owner.execution_id.as_deref() {
-        let execution_id = uuid::Uuid::parse_str(execution_id).map_err(|error| {
-            DbErr::Custom(format!(
-                "tool result {} has invalid execution identity {execution_id}: {error}",
-                payload.call_id
-            ))
-        })?;
-        project_part_content(
-            db,
-            agena_domain::ExecutionId(execution_id),
-            Role::Assistant,
-            &authoritative_part,
-            revision_seq,
-        )
-        .await?;
-    }
-
+    // The terminal Operation content is projected by the durable
+    // `MessagePartCheckpointed` emitted by `apply_tool_success*` before this
+    // event is appended; replaying `tool_call_completed` only re-validates the
+    // operation binding and advances the message projection timestamp.
     touch_message_projection(
         db,
         part_writer,
@@ -2506,9 +2603,29 @@ where
         None => None,
     };
 
-    part_writer
-        .upsert_part(db, update.session_id, &update.part)
-        .await?;
+    // A forked session rewrites message identities but keeps the original
+    // `created_at`; the first checkpoint of a forked copy can therefore carry
+    // a part whose `created_at` predates the fork. The projection must still
+    // be able to attach it. Only the session owner matters for part
+    // identity, so treat any timestamp as acceptable.
+    if let Err(err) = part_writer.upsert_part(db, update.session_id, &update.part).await {
+        let reconcile_fork_copy = err.to_string().contains("cannot attach part")
+            && model_message_part::Entity::find_by_id(update.part.id)
+                .one(db)
+                .await?
+                .is_some_and(|existing| {
+                    existing.message_id == update.part.message_id
+                        && existing.kind == update.part.kind.into()
+                        && existing.activity_id == update.part.activity_id.map(|id| id.to_string())
+                        && existing.segment_id == update.part.segment_id.map(|id| id.to_string())
+                });
+        if !reconcile_fork_copy {
+            return Err(err);
+        }
+        // The part already exists in the owning session with the same
+        // identity; a forked copy raced the original. A replayed
+        // checkpoint of the fork must not fail the whole projection.
+    }
 
     let mut updated = message_row;
     if let Some(execution_id) = update.execution_id {

@@ -883,7 +883,7 @@ impl SessionManager {
     /// Interaction Activities are a downstream presentation projection and
     /// can legitimately trail their model-message checkpoint while sibling
     /// tools are still completing. Reply commands must therefore never use
-    /// `agena_activities.owner_id` or the request part projection as their
+        /// `agena_content_nodes.owner_id` or the request part projection as their
     /// synchronization boundary. A request is appended to an already-owned
     /// assistant message, so message ownership is sufficient and stable.
     async fn conversation_identity_for_message(

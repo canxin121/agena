@@ -279,7 +279,7 @@ mod tests {
     use agena_domain::ExecutionStatus;
     use chrono::{DateTime, Utc};
 
-    fn operation_resource(part: &crate::TranscriptEntryPart) -> &crate::OperationPartResource {
+    fn operation_resource<'a>(part: &'a crate::TranscriptEntryPart<'a>) -> &'a crate::OperationPartResource {
         match &part.content {
             crate::TranscriptPartContent::Activity(
                 crate::TranscriptActivityContent::Operation(operation),
@@ -421,26 +421,27 @@ mod tests {
     #[test]
     fn failed_activity_is_persistent_visible_content() {
         let now = Utc::now();
+        let error_payload = agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
+            problem: agena_failure::Failure::new(
+                agena_failure::FailureCode::new("provider.unavailable"),
+                agena_failure::FailureCategory::DependencyUnavailable,
+                agena_failure::FailureResponsibility::Dependency,
+                agena_failure::RetryDirective::Backoff,
+                agena_failure::RecoveryDirective::Retry,
+                agena_failure::FailureImpact::OperationFailed,
+                agena_failure::UserPresentation::new(
+                    "provider-unavailable",
+                    "The provider is temporarily unavailable.",
+                ),
+            )
+            .into(),
+        });
         let parts = vec![TranscriptFixture::canonical_activity(
             21,
             7,
             now,
             ExecutionStatus::Failed,
-            agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
-                problem: agena_failure::Failure::new(
-                    agena_failure::FailureCode::new("provider.unavailable"),
-                    agena_failure::FailureCategory::DependencyUnavailable,
-                    agena_failure::FailureResponsibility::Dependency,
-                    agena_failure::RetryDirective::Backoff,
-                    agena_failure::RecoveryDirective::Retry,
-                    agena_failure::FailureImpact::OperationFailed,
-                    agena_failure::UserPresentation::new(
-                        "provider-unavailable",
-                        "The provider is temporarily unavailable.",
-                    ),
-                )
-                .into(),
-            }),
+            &error_payload,
         )];
         let content_id = parts[0].id;
         let message = entry(

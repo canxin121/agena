@@ -2496,11 +2496,11 @@ impl TranscriptState {
     }
 }
 
-fn weave_pending_user_entries(
-    snapshot: &agena_domain::TranscriptSnapshot,
-    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry>,
-    pending_messages: &[PendingUserMessage],
-) -> Vec<agena_tui_transcript::TranscriptEntry> {
+fn weave_pending_user_entries<'a>(
+    snapshot: &'a agena_domain::TranscriptSnapshot,
+    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'a>>,
+    pending_messages: &'a [PendingUserMessage],
+) -> Vec<agena_tui_transcript::TranscriptEntry<'a>> {
     let empty_active_replies = snapshot
         .turns
         .iter()

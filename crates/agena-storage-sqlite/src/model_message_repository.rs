@@ -18,6 +18,10 @@ const TABLE: &str = "agena_model_messages";
 const COLUMNS: &str = "message_id, model_turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count";
 const PART_TABLE: &str = "agena_model_message_parts";
 const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, awaits_user_reply, activity_id, segment_id, operation_id, created_at_ms, content";
+/// Header-only column list: collapsed queries must never read the large
+/// `content` JSON column from disk (SQLite reads the whole row otherwise),
+/// keeping the O(1) `name`/`summary`/`has_detail` fast path actually cheap.
+const PART_COLUMNS_HEADER_ONLY: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, awaits_user_reply, activity_id, segment_id, operation_id, created_at_ms";
 const PROJECTION_STATE_TABLE: &str = "agena_model_projection_states";
 
 /// SQLite's SeaORM JSON adapter for provider-owned completion accounting.
@@ -130,6 +134,16 @@ impl SeaModelMessageTransactionWriter {
                  "DELETE FROM agena_activities WHERE \
                  (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
                  OR (owner_kind = 'assistant_reply' AND owner_id IN (SELECT reply_id FROM agena_assistant_replies WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
+                    .to_owned(),
+                [session_id.into(), session_id.into()],
+            ))
+            .await
+            .map_err(map_error)?;
+        transaction
+            .execute(statement(
+                "DELETE FROM agena_content_nodes WHERE \
+                (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
+                OR (owner_kind = 'assistant_reply' AND owner_id IN (SELECT reply_id FROM agena_assistant_replies WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
                     .to_owned(),
                 [session_id.into(), session_id.into()],
             ))
@@ -561,8 +575,13 @@ impl ModelMessageRepository for SeaModelMessageRepository {
         let placeholders = std::iter::repeat_n("?", message_ids.len())
             .collect::<Vec<_>>()
             .join(", ");
+                let columns = if include_content {
+            PART_COLUMNS
+        } else {
+            PART_COLUMNS_HEADER_ONLY
+        };
         self.db.query_all(statement(
-            format!("SELECT {PART_COLUMNS} FROM {PART_TABLE} WHERE message_id IN ({placeholders}) ORDER BY message_id ASC, part_index ASC"),
+            format!("SELECT {columns} FROM {PART_TABLE} WHERE message_id IN ({placeholders}) ORDER BY message_id ASC, part_index ASC"),
             message_ids.iter().copied().map(Into::into),
         )).await.map_err(map_error)?.into_iter().map(|row| part_from_row(row, include_content)).collect()
     }

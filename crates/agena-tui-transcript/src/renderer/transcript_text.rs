@@ -12,11 +12,11 @@ use crate::{OperationBlockResource, OperationPartResource};
 use crate::{TranscriptEntryPart, TranscriptPartContent};
 use unicode_segmentation::UnicodeSegmentation;
 
-pub(crate) fn transcript_message_parts(message: &TranscriptEntry) -> &[TranscriptEntryPart] {
+pub(crate) fn transcript_message_parts<'a>(message: &'a TranscriptEntry<'a>) -> &'a [TranscriptEntryPart<'a>] {
     message.parts.as_slice()
 }
 
-pub(crate) fn transcript_part_content(part: &TranscriptEntryPart) -> &TranscriptPartContent {
+pub(crate) fn transcript_part_content<'a>(part: &'a TranscriptEntryPart<'a>) -> &'a TranscriptPartContent<'a> {
     &part.content
 }
 

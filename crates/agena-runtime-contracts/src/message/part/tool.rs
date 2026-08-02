@@ -989,20 +989,12 @@ pub struct OperationPart {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
-    #[serde(default)]
-    pub model_output: ModelVisibleOutput,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub blocks: Vec<OperationBlock>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactRef>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<AttachmentItem>,
     #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
     pub details: ToolOutput,
     #[serde(default, skip_serializing_if = "ToolResultEnvelope::is_empty")]
     pub result: ToolResultEnvelope,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub structured: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1064,13 +1056,9 @@ impl OperationPart {
             authorization: OperationAuthorization::default(),
             title: normalize_tool_title(title.into()),
             summary: String::new(),
-            model_output: ModelVisibleOutput::default(),
-            blocks: Vec::new(),
             artifacts: Vec::new(),
-            attachments: Vec::new(),
             details: ToolOutput::default(),
             result: ToolResultEnvelope::default(),
-            structured: None,
             metadata: BTreeMap::new(),
             error: None,
             raw: None,
@@ -1094,8 +1082,6 @@ impl OperationPart {
         } = completion;
         let title = normalize_tool_title(title);
         let summary = normalize_tool_summary(summary);
-        let structured = details.to_json_payload();
-        let truncated = details.is_model_truncated();
         let result = ToolResultEnvelope::completed(
             title.clone(),
             summary.clone(),
@@ -1110,17 +1096,9 @@ impl OperationPart {
             authorization: OperationAuthorization::default(),
             title,
             summary,
-            model_output: ModelVisibleOutput {
-                text: output_text,
-                attachments: attachments.clone(),
-                truncated,
-            },
-            blocks,
             artifacts: Vec::new(),
-            attachments,
             details,
             result,
-            structured,
             metadata: BTreeMap::new(),
             error: None,
             raw: None,
@@ -1137,8 +1115,6 @@ impl OperationPart {
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
-        let structured = details.to_json_payload();
-        let truncated = details.is_model_truncated();
         let result = ToolResultEnvelope::failed(
             failure.clone(),
             blocks.clone(),
@@ -1146,24 +1122,15 @@ impl OperationPart {
             &details,
         );
         let user_summary = normalize_tool_summary(&failure.user.fallback);
-        let model_output = model_visible_failure_text(&failure);
         Self {
             call_id,
             invocation,
             authorization: OperationAuthorization::default(),
             title: String::new(),
             summary: user_summary,
-            model_output: ModelVisibleOutput {
-                text: model_output,
-                attachments: attachments.clone(),
-                truncated,
-            },
-            blocks,
             artifacts: Vec::new(),
-            attachments,
             details,
             result,
-            structured,
             metadata: BTreeMap::new(),
             error: Some(OperationError { failure }),
             raw: None,
@@ -1256,7 +1223,6 @@ impl OperationPart {
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
-        let structured = details.to_json_payload();
         let result =
             ToolResultEnvelope::non_execution(state, output_text.clone(), blocks.clone(), &details);
         Self {
@@ -1265,17 +1231,9 @@ impl OperationPart {
             authorization: OperationAuthorization::default(),
             title: String::new(),
             summary: normalize_tool_summary(&output_text),
-            model_output: ModelVisibleOutput {
-                text: output_text,
-                attachments: Vec::new(),
-                truncated: false,
-            },
-            blocks,
             artifacts: Vec::new(),
-            attachments: Vec::new(),
             details,
             result,
-            structured,
             metadata: BTreeMap::new(),
             error: None,
             raw: None,
@@ -1353,11 +1311,8 @@ impl OperationPart {
     }
 
     pub fn output_text(&self) -> Option<&str> {
-        if !self.result.model_preview.text.is_empty() {
-            Some(self.result.model_preview.text.as_str())
-        } else {
-            (!self.model_output.text.is_empty()).then_some(self.model_output.text.as_str())
-        }
+        (!self.result.model_preview.text.is_empty())
+            .then_some(self.result.model_preview.text.as_str())
     }
 
     pub fn title(&self) -> Option<&str> {
@@ -1385,7 +1340,7 @@ impl OperationPart {
             ExecutionStatus::Failed
         } else if self.lifecycle.end_ms.is_some() {
             ExecutionStatus::Completed
-        } else if self.model_output.text.trim().is_empty() {
+        } else if self.result.model_preview.text.trim().is_empty() {
             ExecutionStatus::Pending
         } else {
             ExecutionStatus::InProgress
@@ -1393,16 +1348,8 @@ impl OperationPart {
     }
 
     pub fn append_output_delta(&mut self, delta: &str) -> bool {
-        self.model_output.text.push_str(delta);
         self.result.state = ToolResultState::Running;
         self.result.model_preview.text.push_str(delta);
-        if let Some(OperationBlock::Text { text }) = self.blocks.last_mut() {
-            text.push_str(delta);
-        } else {
-            self.blocks.push(OperationBlock::Text {
-                text: delta.to_string(),
-            });
-        }
         if let Some(OperationBlock::Text { text }) = self.result.content.last_mut() {
             text.push_str(delta);
         } else {

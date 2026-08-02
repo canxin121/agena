@@ -630,8 +630,8 @@ mod tests {
         let content = db
             .query_all(Statement::from_string(
                 db.get_database_backend(),
-                "SELECT owner_kind, owner_id, position, text \
-                 FROM agena_text_segments ORDER BY position"
+                                                                "SELECT owner_kind, owner_id, node_id, position, text \
+                 FROM agena_content_nodes WHERE node_type = 'text' ORDER BY position"
                     .to_owned(),
             ))
             .await
@@ -661,6 +661,119 @@ mod tests {
                     "after permission".to_owned(),
                 ),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn recovery_completed_terminal_event_overrides_synthetic_failure() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/recovery-completed-override")
+            .await
+            .expect("workspace");
+        let session = crate::db::crud::session::create_session(
+            &db,
+            workspace_id,
+            None,
+            "recovery completed override",
+        )
+        .await
+        .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+            1,
+        )
+        .await
+        .expect("started reply");
+
+        // Bootstrap reconcile terminalizes the interrupted execution as failed
+        // (revision 2) after a process restart.
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: interrupted_execution_problem(),
+                },
+                ts_ms: 20,
+            },
+            2,
+        )
+        .await
+        .expect("recovery failure terminal");
+
+        // The owning continuation survives and completes the same execution at
+        // a later revision (3). The completed outcome is authoritative.
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Completed,
+                ts_ms: 30,
+            },
+            3,
+        )
+        .await
+        .expect("completed terminal overrides synthetic failure");
+
+        let reply = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, revision_seq, finished_at_ms, failure_json \
+                 FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply")
+            .expect("reply");
+        assert_eq!(reply.try_get::<String>("", "status").unwrap(), "completed");
+        assert_eq!(reply.try_get::<i64>("", "revision_seq").unwrap(), 3);
+        assert_eq!(
+            reply
+                .try_get::<Option<String>>("", "failure_json")
+                .unwrap(),
+            None,
+            "a recovered reply must not keep its synthetic failure"
+        );
+        // The execution row is already terminal (the update trigger rejects
+        // further transitions), so it remains the historical failed record;
+        // the reply projection carries the completed outcome.
+        let persisted = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, revision_seq FROM agena_reply_executions WHERE execution_id = ?",
+                [execution_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply execution")
+            .expect("reply execution");
+        assert_eq!(
+            persisted.try_get::<String>("", "status").unwrap(),
+            "failed"
         );
     }
 
@@ -777,13 +890,10 @@ mod tests {
         let rows = db
             .query_all(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                "SELECT 'text' AS kind, segment_id AS id, position, NULL AS payload_json \
-                 FROM agena_text_segments WHERE owner_kind = 'turn_input' AND owner_id = ? \
-                 UNION ALL \
-                 SELECT 'activity' AS kind, activity_id AS id, position, payload_json \
-                 FROM agena_activities WHERE owner_kind = 'turn_input' AND owner_id = ? \
+                                "SELECT node_type AS kind, node_id AS id, position, payload_json \
+                 FROM agena_content_nodes WHERE owner_kind = 'turn_input' AND owner_id = ? \
                  ORDER BY position",
-                [turn_id.to_string().into(), turn_id.to_string().into()],
+                [turn_id.to_string().into()],
             ))
             .await
             .expect("canonical content rows");
@@ -932,16 +1042,16 @@ mod tests {
         let row = db
             .query_one(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                "SELECT activity_id, owner_kind, owner_id, actor, payload_json, state, \
+                                "SELECT node_id, owner_kind, owner_id, actor, payload_json, state, \
                         position, revision_seq, started_at_ms, finished_at_ms \
-                 FROM agena_activities WHERE activity_id = ?",
+                 FROM agena_content_nodes WHERE node_id = ?",
                 [activity_id.to_string().into()],
             ))
             .await
             .expect("query compaction activity")
             .expect("compaction activity");
         assert_eq!(
-            row.try_get::<String>("", "activity_id").unwrap(),
+                        row.try_get::<String>("", "node_id").unwrap(),
             activity_id.to_string()
         );
         assert_eq!(
@@ -1246,6 +1356,15 @@ mod tests {
             },
         );
         completed_part.set_content(crate::message::PartContent::operation(completed_operation));
+        // The durable checkpoint emitted by apply_tool_success projects the
+        // terminal content before tool_call_completed is appended; mirror that
+        // order here now that the completed event no longer embeds the part.
+        upsert_part_projection(&db, session.id, &completed_part)
+            .await
+            .expect("terminal part projection from checkpoint");
+        project_part_content(&db, execution_id, Role::Assistant, &completed_part, 2)
+            .await
+            .expect("terminal canonical activity from checkpoint");
         update_tool_result_projection(
             &db,
             &part_writer,
@@ -1255,10 +1374,9 @@ mod tests {
                 call_id,
                 run_id,
                 tool_name: "tools_list".into(),
-                part: completed_part,
                 completed_at: Utc::now(),
             },
-            2,
+            3,
         )
         .await
         .expect("project completed call");
@@ -1275,7 +1393,7 @@ mod tests {
         let canonical = db
             .query_one(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                "SELECT payload_json, state, revision_seq FROM agena_activities WHERE activity_id = ?",
+                                "SELECT payload_json, state, revision_seq FROM agena_content_nodes WHERE node_id = ?",
                 [operation_part
                     .activity_id
                     .expect("operation Activity identity")
@@ -1473,9 +1591,9 @@ mod tests {
         });
         db.execute(Statement::from_sql_and_values(
             db.get_database_backend(),
-            "INSERT INTO agena_activities \
-             (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
-             VALUES (?, 'assistant_reply', ?, 'assistant', ?, 'pending', 0, 1, 1, NULL)",
+                        "INSERT INTO agena_content_nodes \
+             (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+             VALUES (?, 'assistant_reply', ?, 'activity', 'assistant', ?, NULL, 'pending', 0, 1, 1, NULL, 1, 1)",
             [
                 operation_activity_id.to_string().into(),
                 reply_id.to_string().into(),

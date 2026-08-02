@@ -55,7 +55,7 @@ mod test_fixtures {
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
             text: impl Into<String>,
-        ) -> TranscriptEntryPart {
+        ) -> TranscriptEntryPart<'static> {
             Self::text_part_with_flags(id, message_id, created_at, status, text, false)
         }
 
@@ -66,7 +66,7 @@ mod test_fixtures {
             status: ExecutionStatus,
             text: impl Into<String>,
             synthetic: bool,
-        ) -> TranscriptEntryPart {
+        ) -> TranscriptEntryPart<'static> {
             let _ = (message_id, created_at);
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
@@ -86,7 +86,7 @@ mod test_fixtures {
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
             reasoning: agena_domain::ReasoningPart,
-        ) -> TranscriptEntryPart {
+        ) -> TranscriptEntryPart<'static> {
             let _ = (message_id, created_at);
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
@@ -107,7 +107,7 @@ mod test_fixtures {
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
             operation: OperationPartResource,
-        ) -> TranscriptEntryPart {
+        ) -> TranscriptEntryPart<'static> {
             let _ = (message_id, created_at);
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
@@ -118,19 +118,19 @@ mod test_fixtures {
             }
         }
 
-        pub(crate) fn canonical_activity(
+        pub(crate) fn canonical_activity<'a>(
             id: i64,
             message_id: i64,
             created_at: DateTime<Utc>,
             status: ExecutionStatus,
-            payload: agena_domain::ActivityPayload,
-        ) -> TranscriptEntryPart {
+            payload: &'a agena_domain::ActivityPayload,
+        ) -> TranscriptEntryPart<'a> {
             let _ = (message_id, created_at);
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
                 content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
-                    Box::new(payload),
+                    payload,
                 )),
             }
         }

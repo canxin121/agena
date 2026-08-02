@@ -23,7 +23,7 @@ use crate::{
     TranscriptUserActivityStyle, TranscriptUserDocument, TranscriptUserDocumentNode,
 };
 
-pub fn transcript_entries(snapshot: &TranscriptSnapshot) -> Vec<TranscriptEntry> {
+pub fn transcript_entries<'a>(snapshot: &'a TranscriptSnapshot) -> Vec<TranscriptEntry<'a>> {
     let mut entries = Vec::with_capacity(
         snapshot
             .turns
@@ -66,7 +66,7 @@ fn user_document_entry(
     turn_id: agena_domain::TurnId,
     created_at_ms: i64,
     document: &ContentDocument,
-) -> TranscriptEntry {
+) -> TranscriptEntry<'_> {
     let mut parts = document
         .nodes()
         .iter()
@@ -112,7 +112,7 @@ fn assistant_reply_document_entry(
     created_at_ms: i64,
     document: &ContentDocument,
     failure: Option<agena_failure::UserProblem>,
-) -> TranscriptEntry {
+) -> TranscriptEntry<'_> {
     let mut parts = assistant_reply_document_parts(document);
     if document.is_empty() || assistant_reply_state_requires_outcome(state) {
         parts.push(assistant_reply_lifecycle_part(reply_id, state, failure));
@@ -126,7 +126,7 @@ fn assistant_reply_document_entry(
     }
 }
 
-fn assistant_reply_document_parts(document: &ContentDocument) -> Vec<TranscriptEntryPart> {
+fn assistant_reply_document_parts(document: &ContentDocument) -> Vec<TranscriptEntryPart<'_>> {
     document
         .nodes()
         .iter()
@@ -160,7 +160,7 @@ fn assistant_reply_lifecycle_part(
     response_id: agena_domain::AssistantReplyId,
     state: MessageStatus,
     failure: Option<agena_failure::UserProblem>,
-) -> TranscriptEntryPart {
+) -> TranscriptEntryPart<'static> {
     let (status, lifecycle) = match state {
         MessageStatus::Pending | MessageStatus::InProgress => (
             PartExecutionStatusResource::InProgress,
@@ -192,11 +192,11 @@ fn assistant_reply_lifecycle_part(
     }
 }
 
-pub fn pending_user_entry(
+pub fn pending_user_entry<'a>(
     pending_id: u64,
     confirmed: bool,
-    document: &ComposerDocument,
-) -> TranscriptEntry {
+    document: &'a ComposerDocument,
+) -> TranscriptEntry<'a> {
     let mut parts = document
         .0
         .iter()
@@ -205,7 +205,7 @@ pub fn pending_user_entry(
                 id: TranscriptContentId::Activity(activity.id),
                 status: PartExecutionStatusResource::Completed,
                 content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
-                    Box::new(activity.payload.clone()),
+                    &activity.payload,
                 )),
             }),
             ComposerNode::Text { .. } => None,
@@ -283,7 +283,7 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
     }
 }
 
-fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart {
+fn activity_entry_part<'a>(activity: &'a ActivityNode) -> TranscriptEntryPart<'a> {
     let (_schema, title, summary, problem) = activity_presentation(&activity.payload);
     let _generic = TranscriptActivityPresentation {
         title,
@@ -293,9 +293,9 @@ fn activity_entry_part(activity: &ActivityNode) -> TranscriptEntryPart {
     TranscriptEntryPart {
         id: TranscriptContentId::Activity(activity.id),
         status: activity_status(activity.state),
-        content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(Box::new(
-            activity.payload.clone(),
-        ))),
+        content: TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(
+            &activity.payload,
+        )),
     }
 }
 
@@ -332,13 +332,13 @@ pub(crate) fn activity_presentation(
                 .label
                 .clone()
                 .unwrap_or_else(|| "Pasted text".to_owned()),
-            artifact.text.clone(),
+            bounded_presentation_summary(artifact.text.as_str()),
             None,
         ),
         ActivityPayload::Reasoning(reasoning) => (
             "reasoning".to_owned(),
             "Thinking".to_owned(),
-            reasoning.content.preferred_text(),
+            bounded_presentation_summary(reasoning.content.preferred_text().as_str()),
             None,
         ),
         ActivityPayload::Operation(operation) => (
@@ -430,6 +430,24 @@ pub(crate) fn activity_presentation(
     }
 }
 
+/// Bound headline/summary text so the collapsed row, copy text and export
+/// never carry arbitrarily large user pastes or reasoning bodies. The full
+/// content remains reachable through the expanded detail sections, which are
+/// rendered lazily.
+const PRESENTATION_SUMMARY_CHAR_LIMIT: usize = 512;
+
+fn bounded_presentation_summary(text: &str) -> String {
+    // Early-exit with `char_indices().nth()`: arbitrarily large pastes or
+    // reasoning bodies never require a full scan merely to build the
+    // collapsed headline. O(limit) instead of O(len).
+    let Some((boundary, _)) = text.char_indices().nth(PRESENTATION_SUMMARY_CHAR_LIMIT) else {
+        return text.to_owned();
+    };
+    let mut bounded = text[..boundary].to_owned();
+    bounded.push_str("\n... truncated ...");
+    bounded
+}
+
 fn operation_activity_title(operation: &agena_domain::OperationActivity) -> String {
     let title = operation.title.trim();
     if title.is_empty() {
@@ -505,11 +523,12 @@ mod tests {
     #[test]
     fn empty_running_reply_projects_lifecycle_as_activity_not_empty_message() {
         let response_id = agena_domain::AssistantReplyId::new();
+        let document = ContentDocument::default();
         let entry = assistant_reply_document_entry(
             response_id,
             MessageStatus::InProgress,
             1,
-            &ContentDocument::default(),
+            &document,
             None,
         );
         assert!(matches!(
@@ -1623,11 +1642,12 @@ mod tests {
         };
 
         let ordinary_title = "Process run Create a tiny test PNG with pure python";
+        let ordinary_document = operation_document(ordinary_title, &"PNG result details ".repeat(30));
         let ordinary = assistant_reply_document_entry(
             response_id,
             MessageStatus::Completed,
             1,
-            &operation_document(ordinary_title, &"PNG result details ".repeat(30)),
+            &ordinary_document,
             None,
         );
         let ordinary_rendered = crate::render_entry_detailed(
@@ -1650,11 +1670,12 @@ mod tests {
         assert!(unicode_width::UnicodeWidthStr::width(ordinary_headline.text.as_str()) <= 80);
 
         let long_title = format!("Inspect {}", "very-long-component-".repeat(8));
+        let long_document = operation_document(long_title.as_str(), "complete");
         let long = assistant_reply_document_entry(
             response_id,
             MessageStatus::Completed,
             1,
-            &operation_document(long_title.as_str(), "complete"),
+            &long_document,
             None,
         );
         let long_rendered = crate::render_entry_detailed(
@@ -1890,12 +1911,12 @@ mod tests {
         assert!(matches!(
             &entries[0].parts[0].content,
             TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
-                if matches!(payload.as_ref(), ActivityPayload::SkillReference(_))
+                if matches!(payload, ActivityPayload::SkillReference(_))
         ));
         assert!(matches!(
             &entries[0].parts[1].content,
             TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
-                if matches!(payload.as_ref(), ActivityPayload::Resource(_))
+                if matches!(payload, ActivityPayload::Resource(_))
         ));
         let TranscriptPartContent::UserDocument(document) = &entries[0].parts[2].content else {
             panic!("user input must project as one inline document");
@@ -1986,11 +2007,12 @@ mod tests {
                 "The reply was interrupted because the runtime restarted. Try again.",
             ),
         ));
+        let document = ContentDocument::default();
         let entry = assistant_reply_document_entry(
             response_id,
             MessageStatus::Failed,
             1,
-            &ContentDocument::default(),
+            &document,
             Some(problem),
         );
         let defaults = crate::TranscriptDetailDefaults {

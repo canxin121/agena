@@ -31,6 +31,7 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_reply_executions (execution_id TEXT PRIMARY KEY, reply_id TEXT NOT NULL REFERENCES agena_assistant_replies(reply_id) ON UPDATE CASCADE ON DELETE CASCADE, source TEXT NOT NULL, status TEXT NOT NULL, revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
     "CREATE TABLE IF NOT EXISTS agena_activities (activity_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, actor TEXT NOT NULL, payload_json JSON NOT NULL, state TEXT NOT NULL, position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)",
     "CREATE TABLE IF NOT EXISTS agena_text_segments (segment_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, text TEXT NOT NULL, position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_content_nodes (node_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, owner_id TEXT NOT NULL, node_type TEXT NOT NULL CHECK (node_type IN ('text','activity')), actor TEXT, payload_json JSON, text TEXT, state TEXT NOT NULL, position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, UNIQUE (owner_kind, owner_id, position), CHECK ((node_type = 'text' AND actor IS NULL AND payload_json IS NULL AND text IS NOT NULL) OR (node_type = 'activity' AND actor IS NOT NULL AND text IS NULL)))",
     "CREATE TABLE IF NOT EXISTS agena_model_messages (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, model_turn_id INTEGER NULL, execution_id TEXT NULL, run_id TEXT NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_message_parts (part_id INTEGER PRIMARY KEY, message_id INTEGER NOT NULL REFERENCES agena_model_messages(message_id) ON UPDATE CASCADE ON DELETE CASCADE, part_index INTEGER NOT NULL, status INTEGER NOT NULL, kind INTEGER NOT NULL, name TEXT NULL, summary TEXT NULL, has_detail BOOLEAN NOT NULL DEFAULT 0, awaits_user_reply BOOLEAN NOT NULL DEFAULT 0, activity_id TEXT NULL UNIQUE, segment_id TEXT NULL UNIQUE, operation_id TEXT NULL, created_at_ms INTEGER NOT NULL, content JSON NULL, CHECK ((activity_id IS NULL) OR (segment_id IS NULL)))",
     "CREATE TABLE IF NOT EXISTS agena_model_projection_states (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, last_seq_global INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
@@ -60,6 +61,7 @@ const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_reply_executions_reply ON agena_reply_executions(reply_id, started_at_ms)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_activities_owner_position ON agena_activities(owner_kind, owner_id, position)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_text_segments_owner_position ON agena_text_segments(owner_kind, owner_id, position)",
+    "CREATE INDEX IF NOT EXISTS idx_content_nodes_owner ON agena_content_nodes(owner_kind, owner_id, position)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_messages_session_created ON agena_model_messages(session_id, created_at_ms, message_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_messages_session_turn ON agena_model_messages(session_id, model_turn_id, message_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_message_parts_message_index ON agena_model_message_parts(message_id, part_index)",
@@ -428,5 +430,63 @@ mod tests {
                 .to_string()
                 .contains("invalid assistant reply execution")
         );
+    }
+
+    #[tokio::test]
+    async fn content_nodes_enforce_owner_lifecycle_and_cascade_deletes() {
+        let db = initialized_database().await;
+
+        // Activity node under a missing owner is rejected.
+        let error = execute(
+            &db,
+            "INSERT INTO agena_content_nodes \
+             (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, \
+              position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+             VALUES ('node-invalid', 'assistant_reply', 'missing-reply', 'activity', 'assistant', '{}', NULL, \
+                     'completed', 0, 1, 1, 1, 1, 1)",
+        )
+        .await
+        .expect_err("content node owner must exist");
+        assert!(error.to_string().contains("invalid content node owner or content position"));
+
+        // Text node requires text and no actor; lifecycle rejects completed without finish.
+        let error = execute(
+            &db,
+            "INSERT INTO agena_content_nodes \
+             (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, \
+              position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+             VALUES ('node-bad-lifecycle', 'assistant_reply', 'reply-1', 'activity', 'assistant', '{}', NULL, \
+                     'completed', 0, 1, 1, NULL, 1, 1)",
+        )
+        .await
+        .expect_err("completed activity node requires finished_at_ms");
+        assert!(error.to_string().contains("invalid content node lifecycle"));
+
+        // Text node may be completed without finished_at_ms.
+        execute(
+            &db,
+            "INSERT INTO agena_content_nodes \
+             (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, \
+              position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+             VALUES ('node-text', 'assistant_reply', 'reply-1', 'text', NULL, NULL, 'hello', \
+                     'completed', 0, 1, 1, NULL, 1, 1)",
+        )
+        .await
+        .expect("text node lifecycle allows completed without finish");
+
+        // Revision cannot decrease.
+        let error = execute(
+            &db,
+            "UPDATE agena_content_nodes SET revision_seq = 0 WHERE node_id = 'node-text'",
+        )
+        .await
+        .expect_err("revision cannot decrease");
+        assert!(error.to_string().contains("revision cannot decrease"));
+
+        // Deleting the reply cascades its content nodes.
+        execute(&db, "DELETE FROM agena_assistant_replies WHERE reply_id = 'reply-1'")
+            .await
+            .expect("delete reply");
+        assert_eq!(count(&db, "agena_content_nodes", "owner_id = 'reply-1'").await, 0);
     }
 }

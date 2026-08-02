@@ -97,7 +97,6 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
             EventKind::ToolCallIssued(value) => value.run_id = run(&mut maps, value.run_id),
             EventKind::ToolCallCompleted(value) => {
                 value.run_id = run(&mut maps, value.run_id);
-                part(&mut maps, &mut value.part);
             }
             EventKind::SubtaskStatusChanged(_)
             | EventKind::StreamError(_)
@@ -195,7 +194,6 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         EventKind::ToolCallIssued(p) => visit(p.message_id.raw()),
         EventKind::ToolCallCompleted(p) => {
             visit(p.message_id.raw());
-            visit(p.part.message_id);
         }
         EventKind::CompactionCompleted(p) => {
             visit(p.activity.compacted_through_message_id);
@@ -278,9 +276,7 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_)
         | EventKind::ToolCallIssued(_) => {}
-        EventKind::ToolCallCompleted(p) => {
-            visit(p.part.id);
-        }
+        EventKind::ToolCallCompleted(_) => {}
     }
 }
 
@@ -308,7 +304,6 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         }
         EventKind::ToolCallCompleted(p) => {
             p.message_id = MessageId(f(p.message_id.raw()));
-            p.part.message_id = f(p.part.message_id);
         }
         EventKind::CompactionCompleted(p) => {
             p.activity.compacted_through_message_id = f(p.activity.compacted_through_message_id);
@@ -392,9 +387,7 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::ToolCallIssued(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
-        EventKind::ToolCallCompleted(p) => {
-            p.part.id = f(p.part.id);
-        }
+        EventKind::ToolCallCompleted(_) => {}
     }
 }
 

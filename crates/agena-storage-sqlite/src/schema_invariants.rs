@@ -243,6 +243,70 @@ where
          BEFORE UPDATE OF revision_seq ON agena_text_segments \
          WHEN NEW.revision_seq < OLD.revision_seq \
          BEGIN SELECT RAISE(ABORT, 'text segment revision cannot decrease'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_owner_insert_valid \
+         BEFORE INSERT ON agena_content_nodes \
+         WHEN NEW.position < 0 OR NEW.revision_seq < 0 \
+           OR NOT ( \
+             (NEW.owner_kind = 'turn_input' AND EXISTS (SELECT 1 FROM agena_turns WHERE turn_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'assistant_reply' AND EXISTS (SELECT 1 FROM agena_assistant_replies WHERE reply_id = NEW.owner_id)) \
+             OR (NEW.owner_kind = 'activity' AND ( \
+                 EXISTS (SELECT 1 FROM agena_content_nodes WHERE node_id = NEW.owner_id AND node_type = 'activity') \
+                 OR EXISTS (SELECT 1 FROM agena_activities WHERE activity_id = NEW.owner_id) \
+             )) \
+             OR (NEW.owner_kind = 'session' AND EXISTS (SELECT 1 FROM agena_sessions WHERE CAST(id AS TEXT) = NEW.owner_id)) \
+           ) \
+         BEGIN SELECT RAISE(ABORT, 'invalid content node owner or content position'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_lifecycle_insert_valid \
+         BEFORE INSERT ON agena_content_nodes \
+         WHEN (NEW.node_type = 'activity' AND NEW.actor NOT IN ('user', 'assistant', 'runtime', 'tool', 'plugin')) \
+           OR NEW.state NOT IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.started_at_ms < 0 OR NEW.created_at_ms < 0 \
+           OR NEW.updated_at_ms < NEW.created_at_ms \
+           OR (NEW.node_type = 'activity' AND NEW.state IN ('completed', 'failed', 'cancelled') \
+               AND (NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.started_at_ms)) \
+           OR (NEW.node_type = 'activity' AND NEW.state IN ('pending', 'in_progress') AND NEW.finished_at_ms IS NOT NULL) \
+         BEGIN SELECT RAISE(ABORT, 'invalid content node lifecycle'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_lifecycle_update_valid \
+         BEFORE UPDATE OF state, revision_seq, finished_at_ms, updated_at_ms ON agena_content_nodes \
+         WHEN NEW.state NOT IN ('pending', 'in_progress', 'completed', 'failed', 'cancelled') \
+           OR NEW.revision_seq < OLD.revision_seq \
+           OR (NEW.node_type = 'activity' AND NEW.state IN ('completed', 'failed', 'cancelled') \
+               AND (NEW.finished_at_ms IS NULL OR NEW.finished_at_ms < NEW.started_at_ms)) \
+           OR (NEW.node_type = 'activity' AND NEW.state IN ('pending', 'in_progress') AND NEW.finished_at_ms IS NOT NULL) \
+           OR NEW.updated_at_ms < OLD.updated_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'invalid content node lifecycle'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_identity_immutable \
+         BEFORE UPDATE OF node_id, owner_kind, owner_id, node_type, actor, position, started_at_ms, created_at_ms ON agena_content_nodes \
+         WHEN OLD.node_id != NEW.node_id OR OLD.owner_kind != NEW.owner_kind \
+           OR OLD.owner_id != NEW.owner_id OR OLD.node_type != NEW.node_type \
+           OR OLD.actor IS NOT NEW.actor OR OLD.position != NEW.position \
+           OR OLD.started_at_ms != NEW.started_at_ms OR OLD.created_at_ms != NEW.created_at_ms \
+         BEGIN SELECT RAISE(ABORT, 'content node identity and ownership are immutable'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_revision_monotonic \
+         BEFORE UPDATE OF revision_seq ON agena_content_nodes \
+         WHEN NEW.revision_seq < OLD.revision_seq \
+         BEGIN SELECT RAISE(ABORT, 'content node revision cannot decrease'); END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_turn_delete \
+         AFTER DELETE ON agena_turns \
+         BEGIN \
+           DELETE FROM agena_content_nodes WHERE owner_kind = 'turn_input' AND owner_id = OLD.turn_id; \
+         END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_reply_delete \
+         AFTER DELETE ON agena_assistant_replies \
+         BEGIN \
+           DELETE FROM agena_content_nodes WHERE owner_kind = 'assistant_reply' AND owner_id = OLD.reply_id; \
+         END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_activity_children_delete \
+         AFTER DELETE ON agena_content_nodes \
+         WHEN OLD.node_type = 'activity' \
+         BEGIN \
+           DELETE FROM agena_content_nodes WHERE owner_kind = 'activity' AND owner_id = OLD.node_id; \
+         END",
+        "CREATE TRIGGER IF NOT EXISTS agena_content_nodes_session_delete \
+         AFTER DELETE ON agena_sessions \
+         BEGIN \
+           DELETE FROM agena_content_nodes WHERE owner_kind = 'session' AND owner_id = CAST(OLD.id AS TEXT); \
+         END",
         "CREATE TRIGGER IF NOT EXISTS agena_turn_content_delete \
          AFTER DELETE ON agena_turns \
          BEGIN \

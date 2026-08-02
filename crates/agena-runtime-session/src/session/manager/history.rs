@@ -14,115 +14,167 @@ fn uuid_value<T>(value: String, wrap: impl FnOnce(uuid::Uuid) -> T) -> Result<T,
         .map_err(|error| AppError::Internal(format!("invalid transcript UUID {value}: {error}")))
 }
 
-async fn transcript_document_for_role(
+/// Batch-load transcript documents for many owners with a query count that
+/// is independent of the number of owners (two queries per chunk of 400
+/// owners). `owners` lists `(owner_kind, owner_id)` pairs; the result map is
+/// keyed identically and contains every requested key, empty documents
+/// included.
+async fn transcript_documents_batch(
     db: &sea_orm::DatabaseConnection,
-    owner: agena_domain::ActivityOwner,
-) -> Result<agena_domain::ContentDocument, AppError> {
-    let (owner_kind, owner_id) = match owner {
-        agena_domain::ActivityOwner::TurnInput { turn_id } => ("turn_input", turn_id.to_string()),
-        agena_domain::ActivityOwner::AssistantReply { reply_id } => {
-            ("assistant_reply", reply_id.to_string())
-        }
-        agena_domain::ActivityOwner::Activity { parent_activity_id } => {
-            ("activity", parent_activity_id.to_string())
-        }
-        agena_domain::ActivityOwner::Session { session_id } => ("session", session_id.to_string()),
-    };
-    let text_rows = db
-        .query_all(Statement::from_sql_and_values(
-            db.get_database_backend(),
-            "SELECT segment_id, text, position, revision_seq \
-             FROM agena_text_segments WHERE owner_kind = ? AND owner_id = ? \
-             ORDER BY position, segment_id",
-            [owner_kind.into(), owner_id.clone().into()],
-        ))
-        .await?;
-    let mut positioned_nodes = Vec::new();
-    for row in text_rows {
-        let segment_id: String = row.try_get("", "segment_id")?;
-        let position: i64 = row.try_get("", "position")?;
-        let position = u32::try_from(position).map_err(|_| {
-            AppError::Internal(format!("invalid transcript text position {position}"))
-        })?;
-        positioned_nodes.push((
-            position,
-            segment_id.clone(),
-            agena_domain::ContentNode::text_at(
-                uuid_value(segment_id, agena_domain::TextSegmentId)?,
-                row.try_get::<String>("", "text")?,
-                position,
-                row.try_get("", "revision_seq")?,
-            ),
-        ));
-    }
+    owners: &[(String, String)],
+) -> Result<std::collections::HashMap<(String, String), agena_domain::ContentDocument>, AppError> {
+    const MAX_OWNERS_PER_QUERY: usize = 400;
 
-    let activity_rows = db
-        .query_all(Statement::from_sql_and_values(
-            db.get_database_backend(),
-            "SELECT activity_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms \
-             FROM agena_activities WHERE owner_kind = ? AND owner_id = ? \
-             ORDER BY position, activity_id",
-            [owner_kind.into(), owner_id.into()],
-        ))
-        .await?;
-    for row in activity_rows {
-        let activity_id: String = row.try_get("", "activity_id")?;
-        let actor: String = row.try_get("", "actor")?;
-        let state: String = row.try_get("", "state")?;
-        let position: i64 = row.try_get("", "position")?;
-        let activity = agena_domain::ActivityNode {
-            id: uuid_value(activity_id, agena_domain::ActivityId)?,
-            owner,
-            actor: match actor.as_str() {
-                "user" => agena_domain::ActivityActor::User,
-                "assistant" => agena_domain::ActivityActor::Assistant,
-                "runtime" => agena_domain::ActivityActor::Runtime,
-                "tool" => agena_domain::ActivityActor::Tool,
-                "plugin" => agena_domain::ActivityActor::Plugin,
+    let mut documents = owners
+        .iter()
+        .cloned()
+        .map(|owner| (owner, agena_domain::ContentDocument::default()))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    for chunk in owners.chunks(MAX_OWNERS_PER_QUERY) {
+        let tuples = chunk.iter().map(|_| "(?, ?)").collect::<Vec<_>>().join(", ");
+        let values = chunk
+            .iter()
+            .flat_map(|(kind, id)| [kind.clone().into(), id.clone().into()])
+            .collect::<Vec<sea_orm::Value>>();
+
+        let node_rows = db
+            .query_all(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                format!(
+                                        "SELECT owner_kind, owner_id, node_id, node_type, actor, payload_json, text, \
+                            state, position, revision_seq, started_at_ms, finished_at_ms \
+                     FROM agena_content_nodes \
+                     WHERE (owner_kind, owner_id) IN (VALUES {tuples}) \
+                     ORDER BY position, node_id"
+                ),
+                values,
+            ))
+            .await?;
+        let mut positioned_nodes = std::collections::HashMap::<_, Vec<_>>::new();
+        for row in node_rows {
+            let owner_key = (
+                row.try_get::<String>("", "owner_kind")?,
+                row.try_get::<String>("", "owner_id")?,
+            );
+            let node_id: String = row.try_get("", "node_id")?;
+            let position: i64 = row.try_get("", "position")?;
+            let node_type: String = row.try_get("", "node_type")?;
+            let node = match node_type.as_str() {
+                "text" => {
+                    let position = u32::try_from(position).map_err(|_| {
+                        AppError::Internal(format!("invalid transcript text position {position}"))
+                    })?;
+                    agena_domain::ContentNode::text_at(
+                        uuid_value(node_id.clone(), agena_domain::TextSegmentId)?,
+                        row.try_get::<String>("", "text")?,
+                        position,
+                        row.try_get("", "revision_seq")?,
+                    )
+                }
+                "activity" => {
+                    let owner = activity_owner_from_parts(&owner_key.0, &owner_key.1)?;
+                    agena_domain::ContentNode::activity(parse_activity_row(&row, owner)?)
+                }
                 other => {
                     return Err(AppError::Internal(format!(
-                        "invalid transcript activity actor {other}"
-                    )));
+                        "invalid transcript node type {other}"
+                    )))
                 }
-            },
-            payload: serde_json::from_value(row.try_get("", "payload_json")?)?,
-            state: match state.as_str() {
-                "pending" => agena_domain::ActivityState::Pending,
-                "in_progress" => agena_domain::ActivityState::InProgress,
-                "completed" => agena_domain::ActivityState::Completed,
-                "failed" => agena_domain::ActivityState::Failed,
-                "cancelled" => agena_domain::ActivityState::Cancelled,
-                other => {
-                    return Err(AppError::Internal(format!(
-                        "invalid transcript activity state {other}"
-                    )));
-                }
-            },
-            position: agena_domain::ContentPosition {
-                index: u32::try_from(position).map_err(|_| {
-                    AppError::Internal(format!("invalid transcript activity position {position}"))
-                })?,
-            },
-            revision_seq: row.try_get("", "revision_seq")?,
-            lifecycle: agena_domain::ActivityLifecycle {
-                started_at_ms: row.try_get("", "started_at_ms")?,
-                finished_at_ms: row.try_get("", "finished_at_ms")?,
-            },
-            provenance: Default::default(),
-        };
-        positioned_nodes.push((
-            u32::try_from(position).unwrap_or(u32::MAX),
-            activity.id.to_string(),
-            agena_domain::ContentNode::activity(activity),
-        ));
+            };
+            positioned_nodes.entry(owner_key).or_default().push((
+                u32::try_from(position).unwrap_or(u32::MAX),
+                node_id,
+                node,
+            ));
+        }
+
+        for (owner_key, mut nodes) in positioned_nodes {
+            nodes.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+            documents.insert(
+                owner_key,
+                agena_domain::ContentDocument::new(
+                    nodes.into_iter().map(|(_, _, node)| node).collect(),
+                ),
+            );
+        }
     }
-    positioned_nodes.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    Ok(agena_domain::ContentDocument::new(
-        positioned_nodes
-            .into_iter()
-            .map(|(_, _, node)| node)
-            .collect(),
-    ))
+    Ok(documents)
+}
+
+fn activity_owner_from_parts(
+    owner_kind: &str,
+    owner_id: &str,
+) -> Result<agena_domain::ActivityOwner, AppError> {
+    match owner_kind {
+        "turn_input" => Ok(agena_domain::ActivityOwner::TurnInput {
+            turn_id: uuid_value(owner_id.to_owned(), agena_domain::TurnId)?,
+        }),
+        "assistant_reply" => Ok(agena_domain::ActivityOwner::AssistantReply {
+            reply_id: uuid_value(owner_id.to_owned(), agena_domain::AssistantReplyId)?,
+        }),
+        "activity" => Ok(agena_domain::ActivityOwner::Activity {
+            parent_activity_id: uuid_value(owner_id.to_owned(), agena_domain::ActivityId)?,
+        }),
+        "session" => Ok(agena_domain::ActivityOwner::Session {
+            session_id: owner_id.parse().map_err(|error| {
+                AppError::Internal(format!("invalid transcript session owner id {owner_id}: {error}"))
+            })?,
+        }),
+        other => Err(AppError::Internal(format!(
+            "invalid transcript owner kind {other}"
+        ))),
+    }
+}
+
+fn parse_activity_row(
+    row: &sea_orm::QueryResult,
+    owner: agena_domain::ActivityOwner,
+) -> Result<agena_domain::ActivityNode, AppError> {
+        let activity_id: String = row.try_get("", "node_id")?;
+    let actor: String = row.try_get("", "actor")?;
+    let state: String = row.try_get("", "state")?;
+    let position: i64 = row.try_get("", "position")?;
+    Ok(agena_domain::ActivityNode {
+        id: uuid_value(activity_id, agena_domain::ActivityId)?,
+        owner,
+        actor: match actor.as_str() {
+            "user" => agena_domain::ActivityActor::User,
+            "assistant" => agena_domain::ActivityActor::Assistant,
+            "runtime" => agena_domain::ActivityActor::Runtime,
+            "tool" => agena_domain::ActivityActor::Tool,
+            "plugin" => agena_domain::ActivityActor::Plugin,
+            other => {
+                return Err(AppError::Internal(format!(
+                    "invalid transcript activity actor {other}"
+                )));
+            }
+        },
+        payload: serde_json::from_value(row.try_get("", "payload_json")?)?,
+        state: match state.as_str() {
+            "pending" => agena_domain::ActivityState::Pending,
+            "in_progress" => agena_domain::ActivityState::InProgress,
+            "completed" => agena_domain::ActivityState::Completed,
+            "failed" => agena_domain::ActivityState::Failed,
+            "cancelled" => agena_domain::ActivityState::Cancelled,
+            other => {
+                return Err(AppError::Internal(format!(
+                    "invalid transcript activity state {other}"
+                )));
+            }
+        },
+        position: agena_domain::ContentPosition {
+            index: u32::try_from(position).map_err(|_| {
+                AppError::Internal(format!("invalid transcript activity position {position}"))
+            })?,
+        },
+        revision_seq: row.try_get("", "revision_seq")?,
+        lifecycle: agena_domain::ActivityLifecycle {
+            started_at_ms: row.try_get("", "started_at_ms")?,
+            finished_at_ms: row.try_get("", "finished_at_ms")?,
+        },
+        provenance: Default::default(),
+    })
 }
 
 #[async_trait::async_trait]
@@ -749,6 +801,15 @@ impl SessionManager {
                 [session_id.into()],
             ))
             .await?;
+        let owners = rows
+            .iter()
+            .flat_map(|row| {
+                let turn_id = row.try_get::<String>("", "turn_id").unwrap_or_default();
+                let reply_id = row.try_get::<String>("", "reply_id").unwrap_or_default();
+                [("turn_input".to_owned(), turn_id), ("assistant_reply".to_owned(), reply_id)]
+            })
+            .collect::<Vec<_>>();
+        let documents = transcript_documents_batch(&self.store.db, &owners).await?;
         let mut turns = Vec::with_capacity(rows.len());
         for row in rows {
             let turn_id = uuid_value(row.try_get("", "turn_id")?, agena_domain::TurnId)?;
@@ -767,16 +828,14 @@ impl SessionManager {
                     )));
                 }
             };
-            let input = transcript_document_for_role(
-                &self.store.db,
-                agena_domain::ActivityOwner::TurnInput { turn_id },
-            )
-            .await?;
-            let reply_content = transcript_document_for_role(
-                &self.store.db,
-                agena_domain::ActivityOwner::AssistantReply { reply_id },
-            )
-            .await?;
+            let input = documents
+                .get(&("turn_input".to_owned(), turn_id.to_string()))
+                .cloned()
+                .unwrap_or_default();
+            let reply_content = documents
+                .get(&("assistant_reply".to_owned(), reply_id.to_string()))
+                .cloned()
+                .unwrap_or_default();
             turns.push(agena_domain::TurnSnapshot {
                 id: turn_id,
                 session_id,
@@ -815,11 +874,30 @@ impl SessionManager {
             .map(|row| row.try_get("", "seq_session"))
             .transpose()?
             .unwrap_or_default();
+        let session_activities = self
+            .store
+            .db
+            .query_all(Statement::from_sql_and_values(
+                self.store.db.get_database_backend(),
+                                "SELECT node_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms \
+                 FROM agena_content_nodes WHERE owner_kind = 'session' AND owner_id = ? \
+                 ORDER BY position, node_id",
+                [session_id.to_string().into()],
+            ))
+            .await?
+            .into_iter()
+            .map(|row| {
+                parse_activity_row(
+                    &row,
+                    agena_domain::ActivityOwner::Session { session_id },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(agena_domain::TranscriptSnapshot {
             session_id,
             seq_session,
             turns,
-            session_activities: Vec::new(),
+            session_activities,
         })
     }
 }
@@ -1216,17 +1294,23 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
 fn project_operation_part(
     value: &crate::message::OperationPart,
 ) -> agena_runtime::SessionProjectedOperationPart {
+    let details = value.details.clone();
     agena_runtime::SessionProjectedOperationPart {
         call_id: value.call_id,
         invocation: value.invocation.clone(),
         authorization: value.authorization.clone(),
         title: value.title.clone(),
         summary: value.summary.clone(),
-        model_output: project_model_visible_output(&value.model_output),
-        blocks: value.blocks.iter().map(project_operation_block).collect(),
+        model_output: project_model_visible_output(&value.result.model_preview),
+        blocks: value
+            .result
+            .content
+            .iter()
+            .map(project_operation_block)
+            .collect(),
         artifacts: value.artifacts.clone(),
-        attachments: value.attachments.clone(),
-        details: value.details.clone(),
+        attachments: value.result.attachments.clone(),
+        details,
         result: agena_runtime::SessionProjectedToolResult {
             state: value.result.state,
             structured: value.result.structured.clone(),
@@ -1244,7 +1328,7 @@ fn project_operation_part(
             metadata: value.result.metadata.clone(),
             raw: value.result.raw.clone(),
         },
-        structured: value.structured.clone(),
+        structured: value.result.structured.clone(),
         metadata: value.metadata.clone(),
         error: value.error.clone(),
         raw: value.raw.clone(),
@@ -1532,5 +1616,6 @@ mod tests {
 
         assert_eq!(descendant_cancellation_order(2, &tree), vec![3, 2]);
         assert_eq!(descendant_cancellation_order(1, &tree), vec![3, 4, 2, 1]);
-    }
+        }
 }
+

@@ -171,9 +171,16 @@ impl SessionManager {
 
     pub async fn get_session(&self, session_id: i64) -> Result<Session, AppError> {
         let state = self.execution_state();
-        self.store
+        let mut session = self
+            .store
             .load_session(session_id, state.cache_policy())
-            .await
+            .await?;
+        // The persisted runtime contains a historical effective-permission
+        // snapshot. It is not the source of truth after a config reload or a
+        // live session-permission edit. Rebuild it from the current shared
+        // overlays before any caller creates a scoped executor from it.
+        self.refresh_execution_policy(&mut session, &state);
+        Ok(session)
     }
 
     pub async fn rename_session(

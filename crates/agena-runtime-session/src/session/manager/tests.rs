@@ -13,8 +13,8 @@ mod tests {
     };
 
     use agena_domain::{
-        ExecutionStatus, FinishReason, PermissionAction, PermissionReplyKind, PermissionRiskLevel,
-        StructuredObject, TimeRange, UserInputQuestion, UserInputReplyKind,
+        ExecutionStatus, FinishReason, PermissionAction, PermissionDecision, PermissionReplyKind,
+        PermissionRiskLevel, StructuredObject, TimeRange, UserInputQuestion, UserInputReplyKind,
     };
     use chrono::Utc;
     use sea_orm::{ConnectionTrait, Database, Statement};
@@ -49,6 +49,7 @@ mod tests {
         SessionPluginCommandRequest, SessionPluginCommandService, SessionRewindRequest,
         SessionRunOptions, SessionToolExecutionService,
     };
+    use agena_tool::ToolPermissionCheck;
 
     #[test]
     fn system_prompt_merge_is_idempotent_for_an_already_applied_identity_prompt() {
@@ -276,6 +277,10 @@ mod tests {
         default_model: ModelId,
     }
 
+    struct ApprovalTestProvider {
+        default_model: ModelId,
+    }
+
     #[async_trait::async_trait]
     impl ModelRuntime for ReplyTestProvider {
         fn id(&self) -> &str {
@@ -307,11 +312,49 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
+    impl ModelRuntime for ApprovalTestProvider {
+        fn id(&self) -> &str {
+            "approval-test-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            Ok(CompletionResponse {
+                provider_id: agena_domain::ProviderId::new(self.id()),
+                model: self.default_model.clone(),
+                text: "ALLOW".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+    }
+
     async fn test_manager() -> SessionManager {
         test_manager_with_tool_policy(ToolPermissionPolicy::allow_all()).await
     }
 
     async fn test_manager_with_tool_policy(tool_policy: ToolPermissionPolicy) -> SessionManager {
+        test_manager_with_permission(tool_policy, Default::default()).await
+    }
+
+    async fn test_manager_with_permission(
+        tool_policy: ToolPermissionPolicy,
+        permission: agena_domain::PermissionConfig,
+    ) -> SessionManager {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let mut plugins_config = PluginsConfig::default();
         plugins_config.list.insert(
@@ -409,6 +452,9 @@ mod tests {
         providers.register(ReplyTestProvider {
             default_model: ModelId::new("reply-test-model"),
         });
+        providers.register(ApprovalTestProvider {
+            default_model: ModelId::new("approval-test-model"),
+        });
         let processor = SessionProcessor::new(
             Arc::new(providers),
             ContextGovernor::new(agena_domain::ContextPolicy::default()),
@@ -425,8 +471,106 @@ mod tests {
             database,
             processor,
             executor,
-            RuntimeSessionManagerConfig::default(),
+            RuntimeSessionManagerConfig {
+                permission,
+                ..RuntimeSessionManagerConfig::default()
+            },
         )
+    }
+
+    #[tokio::test]
+    async fn get_session_rebuilds_stale_effective_permission_after_reload() {
+        let manager = test_manager_with_permission(
+            ToolPermissionPolicy::allow_all(),
+            agena_domain::PermissionConfig::global_default(),
+        )
+        .await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "permission refresh".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create permission refresh session");
+
+        let mut stale = manager
+            .store
+            .load_session(session.id, manager.execution_state().cache_policy())
+            .await
+            .expect("load permission refresh session");
+        stale.runtime.execution.effective_permission = agena_domain::PermissionConfig {
+            path: Some(agena_domain::PathPermissionConfig {
+                workspace: Some(agena_domain::PathAccessModes {
+                    read: Some(agena_domain::PermissionMode::Ask),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        manager
+            .persist_session_changes(
+                stale,
+                Vec::new(),
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist stale permission snapshot");
+
+        let refreshed = manager
+            .get_session(session.id)
+            .await
+            .expect("reload permission refresh session");
+        assert_eq!(
+            refreshed
+                .runtime
+                .execution
+                .effective_permission
+                .path
+                .and_then(|path| path.workspace)
+                .and_then(|modes| modes.read),
+            Some(agena_domain::PermissionMode::Allow),
+            "a persisted old Ask snapshot must not survive a current config reload"
+        );
+    }
+
+    #[tokio::test]
+    async fn automatic_permission_uses_the_configured_model_and_returns_allow() {
+        let mut permission = agena_domain::PermissionConfig::global_default();
+        permission.approval_model = Some(agena_domain::ApprovalModelSelection {
+            provider_id: "approval-test-provider".to_owned(),
+            adapter_id: None,
+            model_id: "approval-test-model".to_owned(),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            parallel_tool_calls: None,
+        });
+        let manager =
+            test_manager_with_permission(ToolPermissionPolicy::allow_all(), permission).await;
+        let outcome = manager
+            .aggregate_permission_outcome(
+                None,
+                &[ToolPermissionCheck {
+                    action: PermissionAction::PathAccess {
+                        access_kind: "write".to_owned(),
+                        workspace_root: "/workspace".to_owned(),
+                        target_path: "/workspace/file.txt".to_owned(),
+                    },
+                    decision: PermissionDecision::Auto {
+                        reason: "workspace write is eligible for automatic approval".to_owned(),
+                    },
+                }],
+            )
+            .await
+            .expect("automatic approval should resolve");
+
+        assert!(matches!(
+            outcome,
+            super::replies::AggregatedPermissionOutcome::Allow
+        ));
     }
 
     async fn seed_canonical_assistant_reply(

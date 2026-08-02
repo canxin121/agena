@@ -494,6 +494,35 @@ mod permission_ceiling_tests {
     }
 
     #[test]
+    fn global_default_allows_workspace_reads_at_both_permission_boundaries() {
+        let principal = ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        )
+        .try_apply_permission_config(&PermissionConfig::global_default())
+        .expect("global permission policy");
+        let workspace = std::path::Path::new("/workspace");
+
+        assert_eq!(
+            principal.authorize_path_access(
+                AccessKind::Read,
+                workspace,
+                &workspace.join("README.md"),
+            ),
+            PermissionDecision::Allow,
+            "the built-in workspace read default must not open an approval request"
+        );
+        assert_eq!(
+            principal.authorize_tool_tags(
+                "agena.fs.read",
+                &[ToolTag::ReadOnly, ToolTag::FilesystemRead],
+            ),
+            PermissionDecision::Allow,
+            "filesystem read tools must retain their explicit allow tag"
+        );
+    }
+
+    #[test]
     fn parent_tool_rule_is_evaluated_independently_of_child_rule() {
         let allow = PermissionMode::Allow;
         let deny = PermissionMode::Deny;

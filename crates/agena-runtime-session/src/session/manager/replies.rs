@@ -497,10 +497,14 @@ impl SessionManager {
         session_id: i64,
     ) -> Result<(Arc<SessionManagerState>, Session), AppError> {
         let state = self.execution_state();
-        let session = self
+        let mut session = self
             .store
             .load_session(session_id, state.cache_policy())
             .await?;
+        // Permission replies can arrive after a global reload or a live
+        // session overlay update. Refresh before resolving the pending tool so
+        // an approval continuation cannot use a stale permission snapshot.
+        self.refresh_execution_policy(&mut session, &state);
         Ok((state, session))
     }
 

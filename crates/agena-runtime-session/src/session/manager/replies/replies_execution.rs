@@ -27,6 +27,42 @@ use tracing::Instrument;
 
 use super::super::StableRunContext;
 
+fn parse_automatic_permission_verdict(text: &str) -> Option<bool> {
+    // Providers occasionally wrap a one-token answer in a Markdown code
+    // fence or add terminal punctuation despite the strict prompt. Accept
+    // only those presentation wrappers; any explanatory text remains
+    // ambiguous and still falls back to interactive confirmation.
+    let cleaned = text.replace("```text", "").replace("```", "");
+    let normalized = cleaned
+        .trim()
+        .trim_matches(|character: char| matches!(character, '`' | '*' | '_' | '.' | '!' | ':'))
+        .trim();
+    match normalized.to_ascii_uppercase().as_str() {
+        "ALLOW" => Some(true),
+        "DENY" => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod automatic_permission_tests {
+    use super::parse_automatic_permission_verdict;
+
+    #[test]
+    fn accepts_only_a_single_verdict_with_presentation_wrappers() {
+        assert_eq!(parse_automatic_permission_verdict("ALLOW"), Some(true));
+        assert_eq!(
+            parse_automatic_permission_verdict("```text\nDENY\n```"),
+            Some(false)
+        );
+        assert_eq!(parse_automatic_permission_verdict("ALLOW."), Some(true));
+        assert_eq!(
+            parse_automatic_permission_verdict("ALLOW because this is safe"),
+            None
+        );
+    }
+}
+
 /// One member of a provider-emitted tool batch after preflight.
 ///
 /// Preflight deliberately separates permission discovery from execution. A
@@ -1256,6 +1292,10 @@ impl SessionManager {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<PreparedPendingToolExecution, PendingToolPreparationError> {
         self.refresh_execution_policy(session, state);
+        // `resolved` was created before this refresh in the sequential path.
+        // Carry the live execution context forward so the later execution
+        // phase cannot reintroduce the persisted stale permission snapshot.
+        resolved.session_runtime = session.runtime.clone();
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution)
@@ -1614,6 +1654,15 @@ impl SessionManager {
         }
         let resolution =
             resolve_permission_with_persisted_rules(check.decision.clone(), &persisted_rules);
+        tracing::debug!(
+            target: "agena::permission",
+            session_id,
+            action = key.as_str(),
+            static_decision = ?check.decision,
+            persisted_rule_count = persisted_rules.len(),
+            resolved_decision = ?resolution.decision,
+            "resolved tool permission"
+        );
         Ok(resolution)
     }
 
@@ -1676,7 +1725,26 @@ impl SessionManager {
             };
         };
         let model = match approval_model.model_ref() {
-            Ok(model) => model,
+            Ok(model) => match state.processor.provider_registry().resolve_model_selection(
+                model.provider_id.as_ref(),
+                model.adapter_id.as_ref().map(|adapter| adapter.as_ref()),
+                Some(model.model_id.as_ref()),
+            ) {
+                Ok(model) => model,
+                Err(error) => {
+                    tracing::warn!(
+                        target: "agena::permission",
+                        session_id,
+                        error = %error,
+                        "automatic approval model is not available in the active provider registry; falling back to interactive confirmation"
+                    );
+                    return PermissionDecision::Ask {
+                        reason: format!(
+                            "automatic approval model is unavailable; falling back to confirmation: {reason}"
+                        ),
+                    };
+                }
+            },
             Err(error) => {
                 tracing::warn!(
                     target: "agena::permission",
@@ -1786,12 +1854,12 @@ impl SessionManager {
             }
         };
 
-        match response.text.trim().to_ascii_uppercase().as_str() {
-            "ALLOW" => PermissionDecision::Allow,
-            "DENY" => PermissionDecision::Deny {
+        match parse_automatic_permission_verdict(response.text.as_str()) {
+            Some(true) => PermissionDecision::Allow,
+            Some(false) => PermissionDecision::Deny {
                 reason: format!("automatic approval model denied the action: {reason}"),
             },
-            _ => PermissionDecision::Ask {
+            None => PermissionDecision::Ask {
                 reason: format!(
                     "automatic approval model returned an ambiguous answer; falling back to confirmation: {reason}"
                 ),

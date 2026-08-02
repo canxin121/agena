@@ -342,8 +342,13 @@ pub struct App {
     pub(super) last_transcript_click: Option<TranscriptClick>,
     pub(super) mouse_events_seen: u64,
     pub(super) last_mouse_event: Option<String>,
-    pub(super) bootstrap_done: bool,
+        pub(super) bootstrap_done: bool,
     pub(super) last_refresh_at: Instant,
+    /// A refresh request that arrived while another refresh was already in
+    /// flight. `request_refresh` used to drop it, which could stall the
+    /// transcript until the next event or a restart; the refreshed handler
+    /// re-issues it once the in-flight request completes.
+    pub(super) pending_refresh: Option<(i64, bool)>,
     pub(super) pending_ui_action: Option<UiAction>,
     pub(super) current_lineage: Option<CurrentLineageState>,
     /// Monotonic id for usage dashboard loads. Keeping it on the app prevents

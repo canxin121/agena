@@ -226,8 +226,18 @@ impl App {
         });
     }
 
-    pub(crate) fn request_refresh(&mut self, session_id: i64, force: bool) {
+        pub(crate) fn request_refresh(&mut self, session_id: i64, force: bool) {
         if self.transcript.refreshing {
+            // A refresh is already in flight. Remember the request instead of
+            // dropping it: the transcript may have advanced past the snapshot
+            // the in-flight refresh was built from, and without a follow-up
+            // the UI would stall until the next event or a restart. Merge
+            // force upward so a permission/terminal event is never demoted.
+            let merged_force = match self.pending_refresh {
+                Some((_, pending_force)) => force || pending_force,
+                None => force,
+            };
+            self.pending_refresh = Some((session_id, merged_force));
             return;
         }
         self.transcript.refreshing = true;

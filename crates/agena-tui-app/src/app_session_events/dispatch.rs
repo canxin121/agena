@@ -251,16 +251,22 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_session_refreshed(
+        pub(crate) fn handle_session_refreshed(
         &mut self,
         session_id: i64,
         result: UiResult<SessionRefresh>,
     ) {
-        if self.transcript.session_id != Some(session_id) {
+                if self.transcript.session_id != Some(session_id) {
+            // A refresh for a session the user navigated away from is ignored.
+            // `open_session` resets the transcript (including `refreshing`),
+            // so there is nothing to restore here; clearing state would
+            // instead drop a pending refresh that belongs to the *current*
+            // session.
             return;
         }
 
         self.transcript.refreshing = false;
+        let pending = self.pending_refresh.take();
 
         match result {
             Ok(refresh) => {
@@ -268,6 +274,9 @@ impl App {
                     self.transcript.last_event_seq,
                     refresh.latest_event_seq,
                 ) {
+                    if let Some((pending_session_id, force)) = pending {
+                        self.request_refresh(pending_session_id, force);
+                    }
                     return;
                 }
                 if let Some(execution) = refresh.execution {
@@ -285,6 +294,12 @@ impl App {
                 }
             }
             Err(error) => self.flash_error(error),
+        }
+
+        // Re-issue a refresh that arrived while this one was in flight so no
+        // event that landed during the refresh window is ever lost.
+        if let Some((pending_session_id, force)) = pending {
+            self.request_refresh(pending_session_id, force);
         }
     }
 

@@ -6,8 +6,11 @@ impl App {
         self.session_controller.current_session_id = Some(session_id);
         self.session_controller.active = false;
         self.session_controller.sequence = None;
-        self.focus = Focus::Transcript;
+                self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
+        // A refresh requested for the previous session must not be re-issued
+        // against the newly opened one.
+        self.pending_refresh = None;
         // A model selection belongs to the session that produced it. Clear the
         // previous session's stack until this session's persisted execution
         // context arrives.

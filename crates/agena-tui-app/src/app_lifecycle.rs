@@ -104,10 +104,11 @@ impl App {
             last_transcript_click: None,
             mouse_events_seen: 0,
             last_mouse_event: None,
-            bootstrap_done: false,
+                        bootstrap_done: false,
             last_refresh_at: Instant::now()
                 .checked_sub(Duration::from_millis(REFRESH_INTERVAL_MS))
                 .unwrap_or_else(Instant::now),
+            pending_refresh: None,
             pending_ui_action: None,
             current_lineage: None,
             next_usage_request_id: 0,

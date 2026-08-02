@@ -6,11 +6,14 @@
 
 use std::path::Path;
 
+use agena_provider::AgenaToolMode;
+
 mod project_instructions;
 
 pub const AGENA_AGENT_ID: &str = "agena";
 
-pub const AGENA_CORE_PROMPT: &str = r#"# Identity
+/// Fixed head of the Agena identity prompt: identity and working model.
+pub const AGENA_CORE_PROMPT_HEAD: &str = r#"# Identity
 
 You are Agena, a general-purpose agent that takes the user's task from request to a complete, verified outcome using the capabilities available in the current runtime.
 
@@ -25,9 +28,14 @@ Start from the outcome the user is trying to achieve. Inspect the available envi
 - For change and build requests, carry the task through investigation, implementation, proportionate verification, and a clear handoff.
 - For monitoring or waiting requests, remain responsible for the requested terminal outcome rather than treating an unchanged intermediate state as completion.
 
-Do not stop at a plan or partial analysis when the user requested implementation. Do not claim completion while required work, verification, or a known blocking failure remains.
+Do not stop at a plan or partial analysis when the user requested implementation. Do not claim completion while required work, verification, or a known blocking failure remains."#;
 
-# Agena Tool API
+/// Tool API protocol rules for the five fixed gateway functions. Only
+/// `prompt_envelope` mode needs this prose in the system prompt: the
+/// `provider_protocol` mode carries the same discovery/help/call requirements
+/// inside the five Tool API function declarations and schemas, and `disabled`
+/// exposes no tool surface at all.
+pub const AGENA_TOOL_API_PROMPT: &str = r#"# Agena Tool API
 
 Treat the live runtime as the only source of truth for available tools, skills, resources, tool names, and input contracts. Execution tools are dynamic and may differ between sessions or change while Agena is running. Never invent an execution-tool name, reuse a name from another agent or product, or guess an input schema from memory.
 
@@ -41,9 +49,10 @@ When the five Tool API functions are available, use them as follows:
 
 Do not put a `tools_*` function name inside `tools_help.tool` or `tools_call.tool`. A list, search, or help receipt proves only discovery, not execution. Claim that an operation ran only after a successful `tools_call` result.
 
-If a tool name is unknown, do not select a suggestion and guess its arguments: call `tools_search`, choose an exact returned identifier, then call `tools_help`. If `tools_call` rejects an input and embeds complete help, read that attached help and retry `tools_call` directly with the corrected complete object; do not make a redundant `tools_help` call.
+If a tool name is unknown, do not select a suggestion and guess its arguments: call `tools_search`, choose an exact returned identifier, then call `tools_help`. If `tools_call` rejects an input and embeds complete help, read that attached help and retry `tools_call` directly with the corrected complete object; do not make a redundant `tools_help` call."#;
 
-# Skills
+/// Fixed tail of the Agena identity prompt: skills, delegation, and safety.
+pub const AGENA_CORE_PROMPT_TAIL: &str = r#"# Skills
 
 Skills are plain-text instruction packages, not modes or session state. They never become active, restrict tools, or change the model.
 
@@ -56,6 +65,12 @@ You may also discover a useful Skill yourself. When a reusable workflow may mate
 Use tools when they materially improve correctness or are required to perform the work. Verify important mutations and report concrete results.
 
 Delegated tasks run another Agena instance with an isolated context. Delegate only when isolation, parallelism, or a bounded independent task is useful. Describe the objective, relevant context, ownership, and completion criteria. A delegated instance is not a less capable identity and does not replace your responsibility for the final result.
+
+# Provider-issued tools
+
+The catalog may contain tools issued by a specific official provider that proxy its hosted services, such as `chatgpt.*`, `claude.*`, and `gemini.*`. Invoke them only when the current model itself is an official model of that provider; inspect your own model identity with `context.status` first.
+
+Matching the provider is necessary but not sufficient: credentials, plan, feature gating, or network problems can make such a tool unavailable at any time. A denial or unavailable result is a normal outcome — never claim success from a call that did not execute or complete, and fall back to other tools.
 
 # Safety and collaboration
 
@@ -77,8 +92,15 @@ pub fn system_prompt(
     delegated: bool,
     access: agena_domain::ExecutionAccess,
     workspace_root: &Path,
+    tool_mode: AgenaToolMode,
 ) -> String {
-    let mut prompt = AGENA_CORE_PROMPT.to_owned();
+    let mut prompt = AGENA_CORE_PROMPT_HEAD.to_owned();
+    if tool_mode.is_prompt_envelope() {
+        prompt.push_str("\n\n");
+        prompt.push_str(AGENA_TOOL_API_PROMPT);
+    }
+    prompt.push_str("\n\n");
+    prompt.push_str(AGENA_CORE_PROMPT_TAIL);
     if delegated {
         prompt.push_str("\n\n");
         prompt.push_str(DELEGATED_EXECUTION_PROMPT);
@@ -104,6 +126,7 @@ mod tests {
             true,
             agena_domain::ExecutionAccess::ReadOnly,
             Path::new("/path/that/does/not/exist"),
+            AgenaToolMode::PromptEnvelope,
         );
         assert!(prompt.contains("You are Agena"));
         assert!(prompt.contains("<delegated_execution>"));
@@ -117,6 +140,16 @@ mod tests {
         ] {
             assert!(prompt.contains(function));
         }
+        let tool_api_pos = prompt
+            .find("# Agena Tool API")
+            .expect("tool api section present in envelope mode");
+        let skills_pos = prompt.find("# Skills").expect("skills section present");
+        assert!(tool_api_pos < skills_pos);
+        assert!(prompt.contains("# Provider-issued tools"));
+        assert!(prompt.contains("inspect your own model identity with `context.status` first"));
+        assert!(prompt.contains("blocking failure remains.\n\n# Agena Tool API"));
+        assert!(prompt.contains("redundant `tools_help` call.\n\n# Skills"));
+        assert!(prompt.contains("remaining risk or blocker.\n\n<delegated_execution>"));
         assert!(prompt.contains("Never invent an execution-tool name"));
         assert!(prompt.contains("do not select a suggestion and guess its arguments"));
         assert!(prompt.contains("embeds complete help"));
@@ -128,6 +161,29 @@ mod tests {
         assert!(prompt.contains("Do not look for or claim a Skill activation/status lifecycle"));
         for obsolete in ["build agent", "explore agent", "verification agent"] {
             assert!(!prompt.to_ascii_lowercase().contains(obsolete));
+        }
+    }
+
+    #[test]
+    fn tool_api_section_is_omitted_outside_prompt_envelope() {
+        for tool_mode in [AgenaToolMode::ProviderProtocol, AgenaToolMode::Disabled] {
+            let prompt = system_prompt(
+                false,
+                agena_domain::ExecutionAccess::Inherit,
+                Path::new("/path/that/does/not/exist"),
+                tool_mode,
+            );
+            assert!(prompt.contains("You are Agena"));
+            assert!(prompt.contains("# Skills"));
+            assert!(prompt.contains("# Safety and collaboration"));
+            assert!(prompt.contains("agena.skills.list"));
+            assert!(prompt.contains("blocking failure remains.\n\n# Skills"));
+            assert!(prompt.contains("# Provider-issued tools"));
+            assert!(prompt.contains("`chatgpt.*`, `claude.*`, and `gemini.*`"));
+            assert!(!prompt.contains("# Agena Tool API"));
+            assert!(!prompt.contains("tools_list"));
+            assert!(!prompt.contains("Never invent an execution-tool name"));
+            assert!(!prompt.contains("embeds complete help"));
         }
     }
 }

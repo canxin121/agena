@@ -305,6 +305,7 @@ impl SessionManager {
                     session.is_subagent(),
                     session.runtime.execution.access,
                     state.tool_executor.workspace_root(),
+                    agena_tool_mode,
                 ))
             });
         let metadata = options

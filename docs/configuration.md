@@ -557,6 +557,10 @@ tool 名称或摘要索引注入 system prompt。模型需要了解当前能力�
 需要按用途定位目标时调用 `tools_search`，再按需使用 `tools_help` 和 `tools_call`。这样工具
 目录变更只影响实时协议定义与发现结果，不会污染或使 system prompt 失效。
 
+核心 system prompt 中的 `# Agena Tool API` 协议段落只随 `prompt_envelope` 模式包含：
+该模式没有原生 function-definition 通道，需要把五函数协议写进提示词；`provider_protocol`
+与 `disabled` 模式都不注入该段落，避免与 function 声明重复或描述不存在的工具面。
+
 有些网关虽然暴露 OpenAI、Anthropic 或 Gemini 的消息接口，却不接受相应 Provider
 协议的 `tools` / function declarations，也不会按该协议返回 tool call。对于这类后端，可以在
 具体 adapter 的具体 model 上把 `agena_tools.mode` 设为 `prompt_envelope`：

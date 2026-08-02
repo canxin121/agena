@@ -29,6 +29,34 @@ use agena_storage::GlobalIdAllocator;
 use agena_storage_sqlite::run_transaction_effects;
 
 impl SessionStore {
+    /// Backfill `failure_json` for replies that failed before the column
+    /// existed (schema v8 databases) using their last `execution_finished`
+    /// event. Idempotent: only rows with `NULL` are touched, so repeated
+    /// startups are harmless.
+    pub(crate) async fn backfill_reply_failure_projections(&self) -> Result<usize, AppError> {
+        use sea_orm::{ConnectionTrait, Statement};
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                self.db.get_database_backend(),
+                "UPDATE agena_assistant_replies AS r \
+                 SET failure_json = ( \
+                   SELECT json_extract(e.payload_json, '$.payload.outcome.failure') \
+                   FROM agena_events e \
+                   WHERE e.kind_tag = 'execution_finished' \
+                     AND json_extract(e.payload_json, '$.payload.reply_id') = r.reply_id \
+                     AND json_extract(e.payload_json, '$.payload.outcome.failure') IS NOT NULL \
+                   ORDER BY e.seq_session DESC \
+                   LIMIT 1 \
+                 ) \
+                 WHERE r.status = 'failed' AND r.failure_json IS NULL",
+                [],
+            ))
+            .await
+            .map_err(AppError::from)?;
+        Ok(result.rows_affected() as usize)
+    }
+
     pub(crate) async fn reconcile_interrupted_lifecycles(
         &self,
         session_id: i64,

@@ -360,10 +360,7 @@ mod tests {
             .await
             .expect("query reply execution")
             .expect("reply execution");
-        assert_eq!(
-            persisted.try_get::<String>("", "status").unwrap(),
-            "failed"
-        );
+        assert_eq!(persisted.try_get::<String>("", "status").unwrap(), "failed");
         assert_eq!(
             persisted.try_get::<i64>("", "revision_seq").unwrap(),
             2,
@@ -381,6 +378,116 @@ mod tests {
             .expect("reply");
         assert_eq!(reply.try_get::<String>("", "status").unwrap(), "failed");
         assert_eq!(reply.try_get::<i64>("", "revision_seq").unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn failed_execution_persists_structured_failure_projection_on_the_reply() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/failure-projection")
+            .await
+            .expect("workspace");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "failure projection")
+                .await
+                .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+            1,
+        )
+        .await
+        .expect("started reply");
+
+        let failure = interrupted_execution_problem();
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: failure.clone(),
+                },
+                ts_ms: 20,
+            },
+            2,
+        )
+        .await
+        .expect("failed execution");
+
+        let reply = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, failure_json \
+                 FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply")
+            .expect("reply");
+        assert_eq!(reply.try_get::<String>("", "status").unwrap(), "failed");
+        let stored: serde_json::Value = reply
+            .try_get::<Option<serde_json::Value>>("", "failure_json")
+            .unwrap()
+            .expect("failure projection persisted");
+        let decoded: agena_failure::UserProblem =
+            serde_json::from_value(stored).expect("valid failure projection");
+        assert_eq!(decoded.id, failure.id);
+        assert_eq!(decoded.code, failure.code);
+        assert_eq!(decoded.user, failure.user);
+
+        // Replaying the same terminal event must not corrupt the projection.
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: failure.clone(),
+                },
+                ts_ms: 30,
+            },
+            3,
+        )
+        .await
+        .expect("duplicate terminal event");
+        let again = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT failure_json FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply again")
+            .expect("reply");
+        let stored_again: serde_json::Value = again
+            .try_get::<Option<serde_json::Value>>("", "failure_json")
+            .unwrap()
+            .expect("failure projection retained");
+        let decoded_again: agena_failure::UserProblem =
+            serde_json::from_value(stored_again).expect("valid failure projection");
+        assert_eq!(decoded_again.id, failure.id);
     }
 
     #[tokio::test]

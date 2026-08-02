@@ -731,7 +731,8 @@ impl SessionManager {
                 self.store.db.get_database_backend(),
                 "SELECT t.turn_id, t.turn_seq, t.created_at_ms AS turn_created_at_ms, \
                         r.reply_id, r.status, r.revision_seq, \
-                        r.created_at_ms AS reply_created_at_ms, r.finished_at_ms \
+                        r.created_at_ms AS reply_created_at_ms, r.finished_at_ms, \
+                        r.failure_json \
                  FROM agena_turns t \
                  JOIN agena_assistant_replies r ON r.turn_id = t.turn_id \
                  WHERE t.session_id = ? ORDER BY t.turn_seq, r.created_at_ms",
@@ -779,6 +780,15 @@ impl SessionManager {
                     revision_seq: row.try_get("", "revision_seq")?,
                     created_at_ms: row.try_get("", "reply_created_at_ms")?,
                     finished_at_ms: row.try_get("", "finished_at_ms")?,
+                    failure: row
+                        .try_get::<Option<serde_json::Value>>("", "failure_json")?
+                        .map(serde_json::from_value)
+                        .transpose()
+                        .map_err(|error| {
+                            AppError::Internal(format!(
+                                "invalid assistant reply failure projection: {error}"
+                            ))
+                        })?,
                 },
                 created_at_ms: row.try_get("", "turn_created_at_ms")?,
             });

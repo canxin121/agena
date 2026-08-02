@@ -671,6 +671,12 @@ pub struct AssistantReplySnapshot {
     pub created_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at_ms: Option<i64>,
+    /// Structured failure projection for terminal failures. Present when the
+    /// reply reached a `Failed` terminal state so clients can render a
+    /// readable summary and a rich, expandable failure detail without
+    /// touching the diagnostic channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<agena_failure::UserProblem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -997,6 +1003,7 @@ mod tests {
             revision_seq: 1,
             created_at_ms: 10,
             finished_at_ms: None,
+            failure: None,
         };
         let mut snapshot = TranscriptSnapshot {
             session_id: 1,
@@ -1021,6 +1028,7 @@ mod tests {
                 revision_seq: 2,
                 created_at_ms: 10,
                 finished_at_ms: Some(5),
+                failure: None,
             },
         });
         assert_eq!(
@@ -1052,6 +1060,7 @@ mod tests {
                 revision_seq: 1,
                 created_at_ms: 100,
                 finished_at_ms: None,
+                failure: None,
             },
             created_at_ms: 100,
         };
@@ -1087,6 +1096,7 @@ mod tests {
                     // decide ordering or ownership.
                     created_at_ms: 100,
                     finished_at_ms: Some(50),
+                    failure: None,
                 },
             },
         ];
@@ -1115,6 +1125,7 @@ mod tests {
                     revision_seq: 4,
                     created_at_ms: 100,
                     finished_at_ms: Some(50),
+                    failure: None,
                 },
                 ..opened
             }],
@@ -1151,6 +1162,7 @@ mod tests {
                         revision_seq: sequence * 2 - 1,
                         created_at_ms: 100 - sequence,
                         finished_at_ms: None,
+                        failure: None,
                     },
                     created_at_ms: 100 - sequence,
                 },
@@ -1165,6 +1177,7 @@ mod tests {
                     revision_seq: sequence * 2,
                     created_at_ms: 100 - sequence,
                     finished_at_ms: Some(sequence),
+                    failure: None,
                 },
             });
         }
@@ -1199,6 +1212,7 @@ mod tests {
                 revision_seq: 1,
                 created_at_ms: 10,
                 finished_at_ms: None,
+                failure: None,
             },
             created_at_ms: 10,
         };
@@ -1228,6 +1242,7 @@ mod tests {
                     status: AssistantReplyStatus::Completed,
                     revision_seq: 4,
                     finished_at_ms: Some(20),
+                    failure: None,
                     ..opened.reply
                 },
                 ..opened
@@ -1267,6 +1282,7 @@ mod tests {
                     revision_seq: 5,
                     created_at_ms: 1,
                     finished_at_ms: None,
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -1290,6 +1306,7 @@ mod tests {
                 revision_seq: response_revision,
                 created_at_ms: 1,
                 finished_at_ms: status.is_terminal().then_some(response_revision),
+                failure: None,
             },
             created_at_ms: 1,
         };
@@ -1384,6 +1401,7 @@ mod tests {
                     revision_seq: 1,
                     created_at_ms: 1,
                     finished_at_ms: None,
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -1443,6 +1461,7 @@ mod tests {
                     revision_seq: 1,
                     created_at_ms: 1,
                     finished_at_ms: None,
+                    failure: None,
                 },
                 created_at_ms: 1,
             }],
@@ -1459,6 +1478,7 @@ mod tests {
                 revision_seq: 2,
                 created_at_ms: 1,
                 finished_at_ms: Some(2),
+                failure: None,
             },
         });
 
@@ -1476,6 +1496,7 @@ mod tests {
                 revision_seq: 3,
                 created_at_ms: 1,
                 finished_at_ms: Some(3),
+                failure: None,
             },
         });
         assert_eq!(

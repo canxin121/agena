@@ -749,6 +749,21 @@ where
     Ok(())
 }
 
+/// Serialize the structured failure carried by a failed execution for the
+/// `agena_assistant_replies.failure_json` projection column. Non-failed
+/// outcomes project `NULL` so a reply that recovers (for example a
+/// `reply_waits_for_user` continuation) clears its previous failure.
+fn failure_json_for_outcome(outcome: &ExecutionOutcome) -> sea_orm::Value {
+    match outcome {
+        ExecutionOutcome::Failed { failure } => serde_json::to_value(failure)
+            .map(Box::new)
+            .map(Some)
+            .map(sea_orm::Value::Json)
+            .unwrap_or(sea_orm::Value::Json(None)),
+        _ => sea_orm::Value::Json(None),
+    }
+}
+
 async fn project_execution_finished<C, W>(
     db: &C,
     _part_writer: &W,
@@ -766,6 +781,7 @@ where
         ExecutionOutcome::Cancelled => "cancelled",
         ExecutionOutcome::Failed { .. } => "failed",
     };
+    let failure_json = failure_json_for_outcome(&payload.outcome);
     let result = db
         .execute(Statement::from_sql_and_values(
             db.get_database_backend(),
@@ -786,7 +802,7 @@ where
             db.execute(Statement::from_sql_and_values(
                 db.get_database_backend(),
                 "UPDATE agena_assistant_replies \
-                 SET status = 'in_progress', revision_seq = ?, finished_at_ms = NULL \
+                 SET status = 'in_progress', revision_seq = ?, finished_at_ms = NULL, failure_json = NULL \
                  WHERE reply_id = ? AND revision_seq < ?",
                 [
                     revision_seq.into(),
@@ -799,12 +815,13 @@ where
             db.execute(Statement::from_sql_and_values(
                 db.get_database_backend(),
                 "UPDATE agena_assistant_replies \
-                 SET status = ?, revision_seq = ?, finished_at_ms = ? \
+                 SET status = ?, revision_seq = ?, finished_at_ms = ?, failure_json = ? \
                  WHERE reply_id = ? AND revision_seq < ?",
                 [
                     status.into(),
                     revision_seq.into(),
                     payload.ts_ms.into(),
+                    failure_json.clone(),
                     payload.reply_id.to_string().into(),
                     revision_seq.into(),
                 ],
@@ -869,6 +886,17 @@ where
     {
         terminalize_reply_operations(db, payload, revision_seq).await?;
         cancel_reply_interactions(db, payload, revision_seq).await?;
+        // The earlier projection is authoritative, but a synthetic reconcile
+        // finish may carry the first structured failure details: backfill the
+        // failure projection when it is still missing.
+        db.execute(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "UPDATE agena_assistant_replies \
+             SET failure_json = COALESCE(failure_json, ?) \
+             WHERE reply_id = ?",
+            [failure_json, payload.reply_id.to_string().into()],
+        ))
+        .await?;
         return Ok(reply_waits_for_user);
     }
     Err(DbErr::Custom(format!(

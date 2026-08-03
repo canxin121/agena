@@ -197,37 +197,58 @@ pub enum EventStoreError {
     Serde(#[from] serde_json::Error),
 }
 
-/// Process-local monotonic allocator for persisted event sequence numbers.
+/// Backend-neutral allocator for the monotonic identifiers Agena persists
+/// in SQLite (`seq_global`, per-session `seq_session`, projected
+/// `message_id` / `part_id`).
 ///
-/// The runtime initializes it from the event-store high watermark before
-/// publishing resumes. Storage owns this primitive because its value is part
-/// of the persistence contract, while the event publisher owns orchestration.
-#[derive(Debug)]
-pub struct SequenceAllocator {
-    next: AtomicI64,
+/// The SQLite implementation allocates atomically inside the database so
+/// multiple processes sharing one database file can never hand out a duplicate
+/// sequence. In-memory implementations are provided for tests.
+#[async_trait]
+pub trait SequenceAllocator: Send + Sync + std::fmt::Debug {
+    /// Allocate the next global event sequence number.
+    async fn next_seq_global(&self) -> Result<i64, EventStoreError>;
+    /// Allocate the next per-session event sequence number.
+    async fn next_seq_session(&self, session_id: i64) -> Result<i64, EventStoreError>;
+    /// Allocate the next projected message id.
+    async fn next_message_id(&self) -> Result<i64, EventStoreError>;
+    /// Allocate the next projected part id.
+    async fn next_part_id(&self) -> Result<i64, EventStoreError>;
+    /// Reserve a block of `count` consecutive message ids, returning
+    /// `first - 1` so the caller can assign ids `first..first+count`.
+    async fn reserve_message_id_block(&self, count: i64) -> Result<i64, EventStoreError>;
+    /// Reserve a block of `count` consecutive part ids, returning
+    /// `first - 1` so the caller can assign ids `first..first+count`.
+    async fn reserve_part_id_block(&self, count: i64) -> Result<i64, EventStoreError>;
+    /// Raise the global sequence floor to at least `high` (idempotent).
+    async fn seed_global(&self, high: i64) -> Result<(), EventStoreError>;
+    /// Raise the message-id floor to at least `high` (idempotent).
+    async fn seed_message_id(&self, high: i64) -> Result<(), EventStoreError>;
+    /// Raise the part-id floor to at least `high` (idempotent).
+    async fn seed_part_id(&self, high: i64) -> Result<(), EventStoreError>;
 }
 
-impl SequenceAllocator {
+/// Process-local implementation of [`SequenceAllocator`], for tests and any
+/// flow that must not touch the database. Single-process only: two
+/// instances restored from the same watermark would hand out duplicates.
+#[derive(Debug)]
+pub struct InMemorySequenceAllocator {
+    next_global: AtomicI64,
+    next_message_id: AtomicI64,
+    next_part_id: AtomicI64,
+}
+
+impl InMemorySequenceAllocator {
     pub fn new() -> Self {
         Self::from_high_watermark(0)
     }
 
     pub fn from_high_watermark(highest: i64) -> Self {
         Self {
-            next: AtomicI64::new(Self::next_after(highest)),
+            next_global: AtomicI64::new(Self::next_after(highest)),
+            next_message_id: AtomicI64::new(1),
+            next_part_id: AtomicI64::new(1),
         }
-    }
-
-    pub fn init_from(&self, highest: i64) {
-        self.next.store(Self::next_after(highest), Ordering::SeqCst);
-    }
-
-    pub fn next(&self) -> i64 {
-        self.next.fetch_add(1, Ordering::SeqCst)
-    }
-
-    pub fn peek(&self) -> i64 {
-        self.next.load(Ordering::SeqCst)
     }
 
     fn next_after(highest: i64) -> i64 {
@@ -235,9 +256,47 @@ impl SequenceAllocator {
     }
 }
 
-impl Default for SequenceAllocator {
+impl Default for InMemorySequenceAllocator {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[async_trait]
+impl SequenceAllocator for InMemorySequenceAllocator {
+    async fn next_seq_global(&self) -> Result<i64, EventStoreError> {
+        Ok(self.next_global.fetch_add(1, Ordering::SeqCst))
+    }
+    async fn next_seq_session(&self, _session_id: i64) -> Result<i64, EventStoreError> {
+        // In-memory tests use a single shared global sequence for sessions.
+        Ok(self.next_global.fetch_add(1, Ordering::SeqCst))
+    }
+    async fn next_message_id(&self) -> Result<i64, EventStoreError> {
+        Ok(self.next_message_id.fetch_add(1, Ordering::SeqCst))
+    }
+    async fn next_part_id(&self) -> Result<i64, EventStoreError> {
+        Ok(self.next_part_id.fetch_add(1, Ordering::SeqCst))
+    }
+    async fn reserve_message_id_block(&self, count: i64) -> Result<i64, EventStoreError> {
+        Ok(self.next_message_id.fetch_add(count, Ordering::SeqCst) - 1)
+    }
+    async fn reserve_part_id_block(&self, count: i64) -> Result<i64, EventStoreError> {
+        Ok(self.next_part_id.fetch_add(count, Ordering::SeqCst) - 1)
+    }
+    async fn seed_global(&self, high: i64) -> Result<(), EventStoreError> {
+        let target = Self::next_after(high);
+        self.next_global
+            .fetch_max(target, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn seed_message_id(&self, high: i64) -> Result<(), EventStoreError> {
+        self.next_message_id
+            .fetch_max(high + 1, Ordering::SeqCst);
+        Ok(())
+    }
+    async fn seed_part_id(&self, high: i64) -> Result<(), EventStoreError> {
+        self.next_part_id.fetch_max(high + 1, Ordering::SeqCst);
+        Ok(())
     }
 }
 
@@ -883,14 +942,6 @@ pub struct SequentialIdAllocator {
     next: i64,
 }
 
-/// In-memory state shared by session message/part ID allocators.
-#[derive(Debug, Default)]
-pub struct GlobalIdAllocator {
-    pub initialized: bool,
-    pub next_message_id: i64,
-    pub next_part_id: i64,
-}
-
 impl SequentialIdAllocator {
     pub fn starting_at(start: i64) -> Self {
         Self { next: start }
@@ -908,24 +959,23 @@ impl MessageIdAllocator for SequentialIdAllocator {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageIdAllocator, ModelCatalogCacheRecord, SequenceAllocator, SequentialIdAllocator,
+        InMemorySequenceAllocator, MessageIdAllocator, ModelCatalogCacheRecord,
+        SequenceAllocator, SequentialIdAllocator,
     };
 
-    #[test]
-    fn sequence_allocator_resumes_after_high_watermark() {
-        let allocator = SequenceAllocator::from_high_watermark(41);
-        assert_eq!(allocator.peek(), 42);
-        assert_eq!(allocator.next(), 42);
-        assert_eq!(allocator.next(), 43);
-        allocator.init_from(100);
-        assert_eq!(allocator.next(), 101);
+    #[tokio::test]
+    async fn sequence_allocator_resumes_after_high_watermark() {
+        let allocator = InMemorySequenceAllocator::from_high_watermark(41);
+        assert_eq!(allocator.next_seq_global().await.unwrap(), 42);
+        assert_eq!(allocator.next_seq_global().await.unwrap(), 43);
+        allocator.seed_global(100).await.unwrap();
+        assert_eq!(allocator.next_seq_global().await.unwrap(), 101);
     }
 
-    #[test]
-    fn sequence_allocator_never_returns_zero_for_negative_watermark() {
-        let allocator = SequenceAllocator::from_high_watermark(-1);
-        assert_eq!(allocator.peek(), 1);
-        assert_eq!(allocator.next(), 1);
+    #[tokio::test]
+    async fn sequence_allocator_never_returns_zero_for_negative_watermark() {
+        let allocator = InMemorySequenceAllocator::from_high_watermark(-1);
+        assert_eq!(allocator.next_seq_global().await.unwrap(), 1);
     }
 
     #[test]

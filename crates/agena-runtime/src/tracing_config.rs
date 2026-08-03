@@ -41,6 +41,15 @@ pub(crate) fn database_log_level(
     LevelFilter::from_str(config.database.trim())
 }
 
+/// Whether a database URL refers to an ephemeral in-memory SQLite database.
+///
+/// In-memory databases are per-connection: each pooled connection sees its own
+/// empty database. Connection-pool sizing must therefore leave such URLs at
+/// the default single connection, and journal/busy pragmas are unnecessary.
+pub(crate) fn is_in_memory_database(url: &str) -> bool {
+    url == "sqlite::memory:" || url.contains(":memory:")
+}
+
 pub(crate) async fn connect_database(
     url: &str,
     config: &RuntimeTracingConfiguration,
@@ -54,6 +63,21 @@ pub(crate) async fn connect_database(
     options.sqlx_logging(enable_sqlx_statement_logging);
     if enable_sqlx_statement_logging {
         options.sqlx_logging_level(level);
+    }
+    // SQLite connection hardening. These options apply to every connection in
+    // the pool, unlike the per-statement PRAGMAs in `initialize_schema` which
+    // only affect the connection that executes them.
+    if !is_in_memory_database(url) {
+        options.map_sqlx_sqlite_opts(|opts| {
+            use sea_orm::sqlx::sqlite::{SqliteJournalMode, SqliteSynchronous};
+            opts.journal_mode(SqliteJournalMode::Wal)
+                .synchronous(SqliteSynchronous::Normal)
+                .foreign_keys(true)
+                .busy_timeout(std::time::Duration::from_secs(15))
+        });
+        // A bounded connection pool lets concurrent reads proceed in parallel;
+        // writes remain serialized by SQLite and guarded by the busy timeout.
+        options.max_connections(8);
     }
     Database::connect(options).await
 }

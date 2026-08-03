@@ -77,6 +77,10 @@ impl App {
     pub(crate) fn submit_or_steer(&mut self) {
         let draft = self.take_composer_draft();
         if draft.is_empty() {
+            // Ctrl+Enter with nothing typed re-flushes a parked message
+            // once the run is over; while the run is still active the
+            // guard inside `try_send_pending` keeps it parked.
+            self.try_send_pending();
             return;
         }
         self.reset_prompt_history_recall();
@@ -111,11 +115,16 @@ impl App {
     }
 
     /// Secondary submit action (bare Enter by default). When the AI is idle,
-    /// sends immediately. When the AI is mid-run, the message is appended to
-    /// the local pending queue and drained on run completion.
+    /// sends immediately. When the AI is mid-run, the message is parked in the
+    /// single pending slot and delivered on run completion.
     pub(crate) fn queue_or_submit(&mut self) {
         let draft = self.take_composer_draft();
         if draft.is_empty() {
+            // A bare Enter with nothing typed re-flushes a parked message
+            // when the run has already ended but the terminal event hasn't
+            // drained it yet. While the run is still active the guard inside
+            // `try_send_pending` keeps the message parked.
+            self.try_send_pending();
             return;
         }
         self.reset_prompt_history_recall();
@@ -127,8 +136,15 @@ impl App {
             return;
         }
         if self.current_session_activity().is_busy() {
-            self.queue.enqueue(draft);
-            self.flash_info(ui_text::t(&self.i18n, "flash-message-queued"));
+            let replaced = self.queue.set(draft);
+            self.flash_info(ui_text::t(
+                &self.i18n,
+                if replaced {
+                    "flash-message-replaced"
+                } else {
+                    "flash-message-queued"
+                },
+            ));
             return;
         }
         self.restore_composer_draft(draft);

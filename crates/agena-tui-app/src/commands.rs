@@ -38,7 +38,6 @@ pub enum CommandId {
     Status,
     Usage,
     Btw,
-    Queue,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -354,13 +353,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["aside", "side"],
         arguments: "<question>",
         summary_key: "command-btw-summary",
-    },
-    CommandSpec {
-        id: CommandId::Queue,
-        name: "queue",
-        aliases: &["q"],
-        arguments: "[list|clear|pop]",
-        summary_key: "command-queue-summary",
     },
 ];
 

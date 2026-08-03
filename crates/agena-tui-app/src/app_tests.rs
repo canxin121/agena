@@ -2797,13 +2797,15 @@ mod live_transcript_tests {
         seq: i64,
     ) -> RuntimePresentationEvent {
         event(
-            RuntimePresentationEventKind::TranscriptPatch(TranscriptPatch::ContentUpserted {
-                seq_session: seq,
-                owner: ActivityOwner::AssistantReply {
-                    reply_id: response_id,
+            RuntimePresentationEventKind::TranscriptPatch(Box::new(
+                TranscriptPatch::ContentUpserted {
+                    seq_session: seq,
+                    owner: ActivityOwner::AssistantReply {
+                        reply_id: response_id,
+                    },
+                    node: ContentNode::text_at(segment_id, text, 0, seq),
                 },
-                node: ContentNode::text_at(segment_id, text, 0, seq),
-            }),
+            )),
             seq,
         )
     }
@@ -2925,11 +2927,13 @@ mod live_transcript_tests {
 
         assert!(!transcript.apply_presentation_event(
             &event(
-                RuntimePresentationEventKind::TranscriptPatch(TranscriptPatch::ContentUpserted {
-                    seq_session: 2,
-                    owner: ActivityOwner::TurnInput { turn_id },
-                    node: ContentNode::text("one live message"),
-                },),
+                RuntimePresentationEventKind::TranscriptPatch(Box::new(
+                    TranscriptPatch::ContentUpserted {
+                        seq_session: 2,
+                        owner: ActivityOwner::TurnInput { turn_id },
+                        node: ContentNode::text("one live message"),
+                    },
+                )),
                 2,
             ),
             80,

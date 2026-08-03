@@ -3,9 +3,10 @@ use agena_tui::i18n::I18n;
 
 #[test]
 fn visible_shortcut_hints_track_the_central_keymap() {
-    let english = I18n::english();
+        let english = I18n::english();
     let transcript = ui_text::t(&english, "status-transcript");
     let composer = ui_text::t(&english, "status-composer");
+    let composer_help = ui_text::t(&english, "help-composer-line-10");
     let global = ui_text::t(&english, "status-global");
     let help_hint = ui_text::t(&english, "context-help-global-hint");
     let provider_footer = ui_text::t(&english, "overlay-provider-studio-footer");
@@ -14,14 +15,19 @@ fn visible_shortcut_hints_track_the_central_keymap() {
     let permission_footer = ui_text::t(&english, "overlay-permission-studio-footer-nested");
     let permission_rule_footer = ui_text::t(&english, "overlay-permission-rule-studio-footer");
 
-    assert!(transcript.contains("i insert"));
+        assert!(transcript.contains("i insert"));
     assert!(composer.contains("Esc view"));
-    assert!(composer.contains("Ctrl+Up recover queued"));
+    assert!(!composer.contains("Ctrl+Up"));
+    assert!(!composer.contains("edit pending"));
     assert!(composer.contains("Up at start history"));
     assert!(!composer.contains("Ctrl+R/Alt+Up history"));
     assert!(composer.contains("Ctrl+G items"));
     assert!(composer.contains("Ctrl+R input"));
     assert!(composer.contains("Ctrl+L approval"));
+    // The pending-message edit shortcut is documented only in the Ctrl+H
+    // help window, not in the always-visible status line.
+    assert!(composer_help.contains("Ctrl+P edits the pending message"));
+    assert!(composer_help.contains("Ctrl+X cancels"));
     for removed in ["F2", "Alt+U", "Alt+A", "F3", "F4", "F6"] {
         assert!(
             !composer.contains(removed),

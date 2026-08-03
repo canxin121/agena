@@ -189,7 +189,7 @@ const fn fixture_part_status(
     }
 }
 use crate::commands::{CommandId, CommandSpec};
-use crate::composer_queue::{ComposerQueue, QueuePriority, QueuedMessage};
+use crate::composer_queue::ComposerQueue;
 use agena_application::dto::{
     CatalogModelResource, ModelCatalogListResponse, ModelCatalogResponse,
 };

@@ -7,17 +7,15 @@ impl App {
                 .and_then(|value| {
                     serde_json::from_value::<agena_domain::ModelSelectionConfig>(value).ok()
                 })
-        {
-            if let (Some(provider_id), Some(model_id)) =
+            && let (Some(provider_id), Some(model_id)) =
                 (selection.provider.as_deref(), selection.model.as_deref())
-            {
-                return Some(match selection.adapter.as_deref() {
-                    Some(adapter_id) => {
-                        ModelRef::new_with_adapter(provider_id, adapter_id, model_id)
-                    }
-                    None => ModelRef::new(provider_id, model_id),
-                });
-            }
+        {
+            return Some(match selection.adapter.as_deref() {
+                Some(adapter_id) => {
+                    ModelRef::new_with_adapter(provider_id, adapter_id, model_id)
+                }
+                None => ModelRef::new(provider_id, model_id),
+            });
         }
         let provider_id = get_json_path(&sources.effective, Some("providers.default"))
             .ok()

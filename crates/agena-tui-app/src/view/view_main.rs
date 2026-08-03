@@ -459,19 +459,13 @@ impl App {
     pub(crate) fn transcript_footer_text(&self) -> String {
         let mut parts = Vec::new();
         if !self.queue.is_empty() {
-            let preview = self.queue.first_preview(28).unwrap_or_default();
+            let preview = self.queue.preview(28).unwrap_or_default();
             if preview.is_empty() {
-                parts.push(self.i18n.text_args(
-                    "transcript-footer-queue",
-                    &agena_tui::fl_args!("count" => self.queue.len() as i64),
-                ));
+                parts.push(ui_text::t(&self.i18n, "transcript-footer-pending"));
             } else {
                 parts.push(self.i18n.text_args(
-                    "transcript-footer-queue-preview",
-                    &agena_tui::fl_args!(
-                        "count" => self.queue.len() as i64,
-                        "preview" => preview,
-                    ),
+                    "transcript-footer-pending-preview",
+                    &agena_tui::fl_args!("preview" => preview),
                 ));
             }
         }

@@ -150,9 +150,13 @@ impl App {
                         self.after_composer_text_mutated();
                         return;
                     }
-                    // An empty queue leaves Ctrl+Up as a no-op. Bare Up keeps
-                    // its normal cursor movement except at position zero,
-                    // where it opens prompt history.
+                    // No pending message leaves Ctrl+P as a no-op. Bare Up
+                    // keeps its normal cursor movement except at position
+                    // zero, where it opens prompt history.
+                }
+                ComposerAction::CancelPending => {
+                    self.cancel_pending_message();
+                    return;
                 }
                 ComposerAction::ClearInput => {
                     self.reset_prompt_history_recall();
@@ -709,16 +713,12 @@ impl App {
         (items, actions)
     }
 
-    /// UP / EditQueue binding: pull every editable queued message back into
-    /// the editor for editing. Returns true if anything was pulled (so the
-    /// caller skips the default cursor-up behavior).
+    /// Ctrl+P / EditQueue binding: pull the single pending message back into
+    /// the composer for editing from any cursor position. Returns true if
+    /// anything was pulled (so the caller skips the default cursor-up
+    /// behavior).
     pub(crate) fn try_pop_queue_into_editor(&mut self) -> bool {
-        // Only pull the queue when the cursor is at the top line of the
-        // editor — otherwise UP is a normal cursor movement.
-        if !self.composer.cursor_on_first_line() {
-            return false;
-        }
-        let Some(combined) = self.queue.pop_all_editable() else {
+        let Some(combined) = self.queue.take() else {
             return false;
         };
         // Merge the queued draft on top of whatever's already in the
@@ -733,6 +733,17 @@ impl App {
         existing.document.0.extend(combined.document.0);
         self.restore_composer_draft(existing);
         true
+    }
+
+    /// Cancel the single pending message (Ctrl+X). Shows a hint when there
+    /// is nothing to cancel so the key never silently disappears.
+    pub(crate) fn cancel_pending_message(&mut self) {
+        if self.queue.is_empty() {
+            self.flash_info(ui_text::t(&self.i18n, "flash-no-pending-message"));
+            return;
+        }
+        self.queue.clear();
+        self.flash_success(ui_text::t(&self.i18n, "flash-pending-cancelled"));
     }
 }
 use crate::{

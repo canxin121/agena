@@ -242,9 +242,16 @@ impl App {
         match result {
             Ok(execution) => {
                 let session_id = execution.session.id;
+                let execution_is_terminal = execution.active_execution.is_none();
                 if self.apply_transcript_execution(execution) {
                     self.sync_pending_interactive_after_execution(session_id);
                     self.sync_session_list_selection_to_current_execution();
+                }
+                // A session (re)open can deliver the terminal state of a run
+                // that finished while the user was elsewhere. Drain a parked
+                // message so it is not stranded in the pending slot.
+                if execution_is_terminal {
+                    self.try_send_pending();
                 }
             }
             Err(error) => self.flash_error(error),
@@ -281,9 +288,17 @@ impl App {
                 }
                 if let Some(execution) = refresh.execution {
                     let session_id = execution.session.id;
+                    let execution_is_terminal = execution.active_execution.is_none();
                     if self.apply_transcript_execution(execution) {
                         self.sync_pending_interactive_after_execution(session_id);
                         self.sync_session_list_selection_to_current_execution();
+                    }
+                    // A parked message is delivered when the run completes.
+                    // The terminal state usually arrives through this refresh
+                    // (the live event only schedules the refresh), so drain
+                    // here as well as in the direct execution response path.
+                    if execution_is_terminal {
+                        self.try_send_pending();
                     }
                 }
                 if refresh.event_count > 0 {
@@ -341,28 +356,28 @@ impl App {
                 self.flash_error(error);
                 // Pause draining: a failed run typically means the user
                 // wants to inspect the error rather than fire the next
-                // queued message blindly. They can press Ctrl+Up to recover
+                // queued message blindly. They can press Ctrl+P to recover
                 // the queue contents.
             }
         }
     }
 
-    /// Pop one editable message from the queue and submit it. Called
-    /// whenever an active execution completes successfully so the user sees
-    /// their pending messages run automatically.
-    pub(crate) fn try_drain_queue_one(&mut self) {
+    /// Send the single pending message as the next user turn. Called
+    /// whenever an active execution completes (or is successfully cancelled)
+    /// so the user's parked message runs automatically.
+    pub(crate) fn try_send_pending(&mut self) {
         if self.current_session_activity().is_busy()
             || self.current_session_pending_interactive_kind().is_some()
         {
             return;
         }
-        let Some(msg) = self.queue.pop_next() else {
+        let Some(draft) = self.queue.take() else {
             return;
         };
         // Reuse the normal submit path. We stash it into the editor
         // first so any error path can put the text back in front of the
         // user.
-        self.restore_composer_draft(msg.draft);
+        self.restore_composer_draft(draft);
         self.submit_composer();
     }
 
@@ -385,14 +400,24 @@ impl App {
             Err(error) => {
                 self.transcript
                     .remove_pending_user_message(pending_message_id);
-                // Backend rejected the steer (run no longer steerable).
-                // Don't drop the user's message — push it onto the front
-                // of the queue so it goes out at the next run boundary.
-                self.queue.push(QueuedMessage {
-                    draft,
-                    priority: QueuePriority::Now,
-                    editable: true,
-                });
+                if steer_failed_because_run_ended(&error) {
+                    // Borrowed from codex's steer flow: a steer aimed at a
+                    // turn that is already gone (race between the local busy
+                    // check and the backend response) falls through to a
+                    // fresh user turn instead of being parked in the queue
+                    // where nothing would drain it.
+                    self.request_submit_message(session_id, draft);
+                    return;
+                }
+                // Backend rejected the steer (run still active but not in
+                // a steerable phase). With a single pending slot, keep any
+                // already parked message and restore this draft to the
+                // composer so nothing is silently lost.
+                if self.queue.is_empty() {
+                    self.queue.set(draft);
+                } else {
+                    self.restore_composer_draft(draft);
+                }
                 self.flash_warning(format!(
                     "{}: {}",
                     ui_text::t(&self.i18n, "flash-steer-failed-fallback-queue"),
@@ -410,6 +435,12 @@ impl App {
         match result {
             Ok(()) => {
                 self.flash_info(ui_text::t(&self.i18n, "flash-run-cancelled"));
+                // Borrowed from codex's interrupt-and-send flow: cancelling
+                // the active run makes queued messages the next user turn.
+                // The terminal session event may arrive before or after this
+                // handler, so drain from both paths to avoid leaving the
+                // queue parked when the ordering is unfavourable.
+                self.try_send_pending();
             }
             Err(error) => {
                 // Even on error we already cleared local activity state —
@@ -440,7 +471,7 @@ impl App {
         }
         self.request_sessions(false);
         if transcript_is_target && execution_is_terminal {
-            self.try_drain_queue_one();
+            self.try_send_pending();
         }
     }
 
@@ -491,8 +522,57 @@ impl App {
     }
 }
 use crate::{
-    App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, QueuePriority, QueuedMessage,
-    RunActivityTarget, RunOperation, SessionExecutionResource, SessionLoadScope, SessionRefresh,
-    SessionResource, UiResult, execution_update_is_stale, ui_text,
+    App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, RunActivityTarget, RunOperation,
+    SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource, UiFailure,
+    UiResult, execution_update_is_stale, ui_text,
 };
 use agena_tui::main_focus::Focus;
+
+/// A steer that lands after the active run has already ended — for example a
+/// race between the local busy check and the backend response — is reported as
+/// `execution.not_active`. Mirroring codex's steer flow, the message must then
+/// fall through to a fresh user turn instead of being parked in the queue
+/// where nothing would drain it.
+fn steer_failed_because_run_ended(error: &UiFailure) -> bool {
+    error.failure.code.as_str() == "execution.not_active"
+}
+
+#[cfg(test)]
+mod steer_fallback_tests {
+    use agena_failure::{
+        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+        RecoveryDirective, RetryDirective, UserPresentation,
+    };
+
+    use super::steer_failed_because_run_ended;
+    use crate::UiFailure;
+
+    fn failure(code: &str) -> UiFailure {
+        UiFailure::from_failure(Failure::new(
+            FailureCode::new(code),
+            FailureCategory::NotFound,
+            FailureResponsibility::Caller,
+            RetryDirective::AfterRefresh,
+            RecoveryDirective::Refresh,
+            FailureImpact::RequestRejected,
+            UserPresentation::new(code, "test failure"),
+        ))
+    }
+
+    #[test]
+    fn run_ended_steer_is_detected_from_execution_not_active() {
+        assert!(steer_failed_because_run_ended(&failure(
+            "execution.not_active"
+        )));
+    }
+
+    #[test]
+    fn non_steerable_run_rejection_is_not_treated_as_run_ended() {
+        assert!(!steer_failed_because_run_ended(&failure(
+            "internal.unexpected"
+        )));
+        assert!(!steer_failed_because_run_ended(&failure(
+            "execution.already_active"
+        )));
+    }
+}

@@ -30,7 +30,7 @@ composer-placeholder = 輸入給 Agena。游標在開頭時按上鍵查看歷史
 status-global = / 向下搜尋 | ? 向上搜尋 | Ctrl+C 連按兩次離開
 status-sessions = 工作階段：/sessions
 status-transcript = 查看：i 進入插入 | j/k 捲動 | / 搜尋 | c 複製上一則 | y 複製
-status-composer = 插入：Esc 返回查看 | Ctrl+Enter 立即送出 | Ctrl+J 換行 | 開頭按上鍵查看歷史 | Ctrl+Up 取回佇列訊息 | / 指令 | Ctrl+G 項目 | Ctrl+R 輸入 | Ctrl+L 權限
+status-composer = 插入：Esc 返回查看 | Ctrl+Enter 立即送出 | Ctrl+J 換行 | 開頭按上鍵查看歷史 | / 指令 | Ctrl+G 項目 | Ctrl+R 輸入 | Ctrl+L 權限
 
 help-title = 說明
 help-header = Agena TUI
@@ -56,7 +56,7 @@ help-composer-line-6 = Ctrl+O 搜尋工作區檔案並附加
 help-composer-line-7 = Ctrl+E 用 $VISUAL/$EDITOR 開啟外部編輯器
 help-composer-line-8 = Ctrl+T 附加剪貼簿圖片
 help-composer-line-9 = 貼上的文字會直接插入輸入區；貼上單一檔案路徑會直接附加，附件保持原子化
-help-composer-line-10 = 游標位於輸入框開頭時按上鍵開啟歷史；Ctrl+Up 取回佇列訊息
+help-composer-line-10 = 游標位於輸入框開頭時按上鍵開啟歷史；Ctrl+P 編輯待發訊息、Ctrl+X 取消待發訊息
 help-section-actions = 操作
 help-actions-line-1 = Ctrl+N 建立工作階段；n/N 跳轉搜尋結果
 help-actions-line-2 = r 繼續被阻擋或待處理的工作階段；U 開啟用量統計

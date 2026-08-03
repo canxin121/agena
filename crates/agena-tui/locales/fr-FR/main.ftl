@@ -30,7 +30,7 @@ composer-placeholder = Message pour Agena. Haut au debut ouvre l'historique. / c
 status-global = / cherche en bas | ? cherche en haut | Ctrl+C deux fois quitte
 status-sessions = Sessions: /sessions
 status-transcript = VIEW: i saisie | j/k defile | / cherche | c copie dernier | y copie
-status-composer = INSERT: Esc retour | Ctrl+Enter envoie maintenant | Ctrl+J nouvelle ligne | Haut au debut historique | Ctrl+Up file | / commandes | Ctrl+G items | Ctrl+R entree | Ctrl+L approbation
+status-composer = INSERT: Esc retour | Ctrl+Enter envoie maintenant | Ctrl+J nouvelle ligne | Haut au debut historique | / commandes | Ctrl+G items | Ctrl+R entree | Ctrl+L approbation
 
 help-title = Aide
 help-header = Agena TUI
@@ -56,7 +56,7 @@ help-composer-line-6 = Ctrl+O recherche des fichiers du workspace a joindre
 help-composer-line-7 = Ctrl+E ouvre $VISUAL/$EDITOR pour la composition
 help-composer-line-8 = Ctrl+T joint une image du presse-papiers
 help-composer-line-9 = Le texte colle est insere directement ; un chemin de fichier unique est joint et les pieces jointes restent atomiques
-help-composer-line-10 = Haut ouvre l'historique quand le curseur est au debut ; Ctrl+Up recupere un message en attente
+help-composer-line-10 = Haut ouvre l'historique quand le curseur est au debut ; Ctrl+P edite le message en attente et Ctrl+X l'annule
 help-section-actions = Actions
 help-actions-line-1 = Ctrl+N cree une session ; n/N parcourt les resultats de recherche
 help-actions-line-2 = r continue une session bloquee ou en attente ; U ouvre les statistiques d’utilisation

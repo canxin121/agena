@@ -30,7 +30,7 @@ composer-placeholder = Agena へ入力。先頭で Up を押すと履歴。/ コ
 status-global = / 下方向検索 | ? 上方向検索 | Ctrl+C 2回で終了
 status-sessions = セッション: /sessions
 status-transcript = VIEW: i で入力 | j/k スクロール | / 検索 | c 最後をコピー | y コピー
-status-composer = INSERT: Esc で戻る | Ctrl+Enter 今すぐ送信 | Ctrl+J 改行 | 先頭で Up 履歴 | Ctrl+Up キュー回収 | / コマンド | Ctrl+G アイテム | Ctrl+R 入力 | Ctrl+L 承認
+status-composer = INSERT: Esc で戻る | Ctrl+Enter 今すぐ送信 | Ctrl+J 改行 | 先頭で Up 履歴 | / コマンド | Ctrl+G アイテム | Ctrl+R 入力 | Ctrl+L 承認
 
 help-title = ヘルプ
 help-header = Agena TUI
@@ -56,7 +56,7 @@ help-composer-line-6 = Ctrl+O でワークスペースファイルを検索し�
 help-composer-line-7 = Ctrl+E で $VISUAL/$EDITOR を開く
 help-composer-line-8 = Ctrl+T でクリップボード画像を添付
 help-composer-line-9 = 貼り付けたテキストは直接入力され、単一のファイルパスは添付になり、添付は原子的に扱われます
-help-composer-line-10 = カーソルが入力欄の先頭にあるとき Up で履歴を開き、Ctrl+Up でキューのメッセージを戻します
+help-composer-line-10 = カーソルが入力欄の先頭にあるとき Up で履歴を開き、Ctrl+P で保留メッセージを編集、Ctrl+X でキャンセルします
 help-section-actions = 操作
 help-actions-line-1 = Ctrl+N でセッション作成、n/N で検索結果を移動
 help-actions-line-2 = r ブロック中または保留中のセッションを続行、U 使用状況分析を開く

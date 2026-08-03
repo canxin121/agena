@@ -270,12 +270,12 @@ pub(crate) fn settings_studio_provider_approval_model_item(
     let current_summary = global_permission
         .approval_model
         .as_ref()
-        .map(|selection| approval_model_selection_summary(selection))
+        .map(approval_model_selection_summary)
         .unwrap_or_else(|| ui_text::t(i18n, "settings-source-unset"));
     let effective_summary = effective_permission
         .approval_model
         .as_ref()
-        .map(|selection| approval_model_selection_summary(selection))
+        .map(approval_model_selection_summary)
         .unwrap_or_else(|| ui_text::t(i18n, "value-unset"));
     let source_rows = settings_source_rows_for_config_path(
         i18n,

@@ -149,7 +149,8 @@ pub fn preset_specs(
                     editing,
                     vec![
                         ("↑ at start", "context-help-key-history"),
-                        ("Ctrl+Up", "context-help-key-recover"),
+                                                ("Ctrl+P", "context-help-key-recover"),
+                        ("Ctrl+X", "context-help-key-cancel-pending"),
                         ("Ctrl+C", "context-help-key-clear-composer"),
                         ("Ctrl+G", "context-help-key-items"),
                     ],

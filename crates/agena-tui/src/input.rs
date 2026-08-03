@@ -24,6 +24,7 @@ pub struct ComposerKeyBindings {
     pub queue: Vec<KeyChord>,
     pub newline: Vec<KeyChord>,
     pub edit_queue: Vec<KeyChord>,
+    pub cancel_pending: Vec<KeyChord>,
     pub clear_input: Vec<KeyChord>,
     pub focus_items: Vec<KeyChord>,
     pub insert_content: Vec<KeyChord>,
@@ -43,7 +44,8 @@ impl Default for ComposerKeyBindings {
                 KeyChord::new(KeyCode::Enter, KeyModifiers::SHIFT),
                 KeyChord::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
             ],
-            edit_queue: vec![KeyChord::new(KeyCode::Up, KeyModifiers::CONTROL)],
+                        edit_queue: vec![KeyChord::new(KeyCode::Char('p'), KeyModifiers::CONTROL)],
+            cancel_pending: vec![KeyChord::new(KeyCode::Char('x'), KeyModifiers::CONTROL)],
             clear_input: vec![KeyChord::new(KeyCode::Char('c'), KeyModifiers::CONTROL)],
             focus_items: vec![KeyChord::new(KeyCode::Char('g'), KeyModifiers::CONTROL)],
             insert_content: vec![KeyChord::new(KeyCode::Char('a'), KeyModifiers::CONTROL)],
@@ -118,6 +120,9 @@ impl ComposerKeyBindings {
         if self.edit_queue.iter().any(|chord| chord.matches(event)) {
             return Some(ComposerAction::EditQueue);
         }
+        if self.cancel_pending.iter().any(|chord| chord.matches(event)) {
+            return Some(ComposerAction::CancelPending);
+        }
         None
     }
 
@@ -139,6 +144,7 @@ pub enum ComposerAction {
     Queue,
     Newline,
     EditQueue,
+    CancelPending,
     ClearInput,
     FocusItems,
     InsertContent,
@@ -200,6 +206,39 @@ mod tests {
         assert_ne!(
             bindings.match_action(&KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL)),
             Some(ComposerAction::ClearInput)
+        );
+    }
+
+
+    #[test]
+    fn ctrl_p_edits_the_pending_message() {
+        let bindings = ComposerKeyBindings::default();
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::EditQueue)
+        );
+        // Arrow keys stay reserved for cursor movement and history; the
+        // pending-message edit shortcut is a discoverable Ctrl chord.
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL)),
+            Some(ComposerAction::EditQueue)
+        );
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE)),
+            Some(ComposerAction::EditQueue)
+        );
+    }
+
+    #[test]
+    fn ctrl_x_cancels_the_pending_message() {
+        let bindings = ComposerKeyBindings::default();
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::CancelPending)
+        );
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+            Some(ComposerAction::CancelPending)
         );
     }
 }

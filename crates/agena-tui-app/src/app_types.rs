@@ -360,7 +360,8 @@ pub struct App {
     /// session changes so we don't accumulate stale subscriptions.
     pub(super) active_subscription: Option<tokio::task::JoinHandle<()>>,
     /// Pending messages typed by the user while the AI was working. Drained
-    /// FIFO once the active run finishes. See `composer_queue.rs`.
+    /// Single pending message delivered once the active run finishes. See
+    /// `composer_queue.rs`.
     pub(super) queue: ComposerQueue,
     pub(super) status_line: Option<StatusLinePresentation>,
     pub(super) plugin_theme: Option<agena_plugin_host::HostThemePalette>,

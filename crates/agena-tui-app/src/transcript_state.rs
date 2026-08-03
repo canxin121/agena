@@ -163,9 +163,9 @@ impl TranscriptState {
         let refresh_needed = match &event.kind {
             agena_runtime::RuntimePresentationEventKind::TranscriptPatch(patch) => {
                 if transcript_patch_can_materialize_user_input(patch) {
-                    self.apply_snapshot_change(|snapshot| snapshot.apply(patch.clone()));
+                    self.apply_snapshot_change(|snapshot| snapshot.apply((**patch).clone()));
                 } else {
-                    self.snapshot.apply(patch.clone());
+                    self.snapshot.apply((**patch).clone());
                 }
                 self.invalidate_render();
                 false

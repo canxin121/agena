@@ -30,7 +30,7 @@ composer-placeholder = Nachricht an Agena. Up am Anfang oeffnet den Verlauf. / B
 status-global = / abwaerts suchen | ? aufwaerts suchen | Ctrl+C zweimal beendet
 status-sessions = Sitzungen: /sessions
 status-transcript = VIEW: i Eingabe | j/k scrollen | / suchen | c letzte kopieren | y kopieren
-status-composer = INSERT: Esc zurueck | Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Up am Anfang Verlauf | Ctrl+Up Warteschlange | / Befehle | Ctrl+G Items | Ctrl+R Eingabe | Ctrl+L Freigabe
+status-composer = INSERT: Esc zurueck | Ctrl+Enter jetzt senden | Ctrl+J neue Zeile | Up am Anfang Verlauf | / Befehle | Ctrl+G Items | Ctrl+R Eingabe | Ctrl+L Freigabe
 
 help-title = Hilfe
 help-header = Agena TUI
@@ -56,7 +56,7 @@ help-composer-line-6 = Ctrl+O sucht Workspace-Dateien zum Anhaengen
 help-composer-line-7 = Ctrl+E oeffnet $VISUAL/$EDITOR fuer die Eingabe
 help-composer-line-8 = Ctrl+T haengt ein Zwischenablagebild an
 help-composer-line-9 = Eingefuegter Text wird direkt eingefuegt; ein einzelner Dateipfad wird angehaengt, und Anhaenge bleiben atomar
-help-composer-line-10 = Up oeffnet am Anfang des Eingabefelds den Verlauf; Ctrl+Up holt eine wartende Nachricht zurueck
+help-composer-line-10 = Up oeffnet am Anfang des Eingabefelds den Verlauf; Ctrl+P bearbeitet die wartende Nachricht und Ctrl+X bricht sie ab
 help-section-actions = Aktionen
 help-actions-line-1 = Ctrl+N erstellt eine Sitzung; n/N navigiert Suchtreffer
 help-actions-line-2 = r setzt eine blockierte oder wartende Sitzung fort; U öffnet die Nutzungsstatistik

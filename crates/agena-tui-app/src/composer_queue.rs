@@ -1,34 +1,18 @@
-//! Pending-message queue for the composer.
+//! Single pending-message slot for the composer.
 //!
-//! Pending user input is grouped into three priority bands:
+//! While the AI is busy, at most one user message can be parked here. It is
+//! delivered when the active run finishes (or immediately after a successful
+//! cancel). The user can pull it back into the composer for editing (Ctrl+P)
+//! or discard it entirely (Ctrl+X).
 //!
-//! * `Now`   — pushed to the front (used for cancel/recovery edge cases).
-//! * `Next`  — normal user submissions while the AI is busy. FIFO.
-//!
-//! The queue is intentionally a plain in-memory structure with no async
-//! state — it lives inside `App` and is touched only from the UI thread.
-
-use std::collections::VecDeque;
+//! The slot is intentionally a plain in-memory structure with no async state
+//! — it lives inside `App` and is touched only from the UI thread.
 
 use crate::ComposerDraft;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QueuePriority {
-    Now,
-    Next,
-}
-
-#[derive(Debug, Clone)]
-pub struct QueuedMessage {
-    pub draft: ComposerDraft,
-    pub priority: QueuePriority,
-    pub editable: bool,
-}
-
 #[derive(Debug, Default)]
 pub struct ComposerQueue {
-    now: VecDeque<QueuedMessage>,
-    next: VecDeque<QueuedMessage>,
+    draft: Option<ComposerDraft>,
 }
 
 impl ComposerQueue {
@@ -36,73 +20,31 @@ impl ComposerQueue {
         Self::default()
     }
 
-    pub fn enqueue(&mut self, draft: ComposerDraft) {
-        self.push(QueuedMessage {
-            draft,
-            priority: QueuePriority::Next,
-            editable: true,
-        });
+    /// Park `draft` as the single pending message. Returns `true` when an
+    /// earlier pending message was replaced.
+    pub fn set(&mut self, draft: ComposerDraft) -> bool {
+        let replaced = self.draft.is_some();
+        self.draft = Some(draft);
+        replaced
     }
 
-    pub fn push(&mut self, msg: QueuedMessage) {
-        match msg.priority {
-            QueuePriority::Now => self.now.push_back(msg),
-            QueuePriority::Next => self.next.push_back(msg),
-        }
-    }
-
-    pub fn pop_next(&mut self) -> Option<QueuedMessage> {
-        self.now.pop_front().or_else(|| self.next.pop_front())
-    }
-
-    /// Pull every editable user message back into a single `ComposerDraft`,
-    /// preserving order, joined by a blank line. Non-editable system
-    /// messages are left in place. Returns `None` if no editable items.
-    pub fn pop_all_editable(&mut self) -> Option<ComposerDraft> {
-        let mut drafts: Vec<ComposerDraft> = Vec::new();
-        for bucket in [&mut self.now, &mut self.next] {
-            bucket.retain(|msg| {
-                if msg.editable {
-                    drafts.push(msg.draft.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-        }
-        if drafts.is_empty() {
-            return None;
-        }
-        let mut nodes = Vec::new();
-        for (idx, draft) in drafts.into_iter().enumerate() {
-            if idx > 0 {
-                nodes.push(agena_domain::ComposerNode::Text {
-                    text: "\n\n".to_owned(),
-                });
-            }
-            nodes.extend(draft.document.0);
-        }
-        Some(ComposerDraft {
-            document: agena_domain::ComposerDocument(nodes),
-        })
-    }
-
-    pub fn len(&self) -> usize {
-        self.now.len() + self.next.len()
+    /// Remove and return the pending message, if any.
+    pub fn take(&mut self) -> Option<ComposerDraft> {
+        self.draft.take()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.draft.is_none()
     }
 
     pub fn clear(&mut self) {
-        self.now.clear();
-        self.next.clear();
+        self.draft = None;
     }
 
-    pub fn first_preview(&self, max_chars: usize) -> Option<String> {
-        let head = self.now.front().or_else(|| self.next.front())?;
-        let text = head.draft.text();
+    /// First line of the pending message, truncated for a compact footer
+    /// hint. Returns `None` when nothing is pending.
+    pub fn preview(&self, max_chars: usize) -> Option<String> {
+        let text = self.draft.as_ref()?.text();
         let preview = text.lines().next().unwrap_or("").trim();
         let truncated: String = preview.chars().take(max_chars).collect();
         if preview.chars().count() > max_chars {

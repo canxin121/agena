@@ -65,7 +65,6 @@ impl App {
             }
             CommandId::Usage => self.open_usage_dashboard(),
             CommandId::Btw => self.handle_btw_command(args),
-            CommandId::Queue => self.handle_queue_command(args),
         }
     }
 
@@ -174,55 +173,6 @@ impl App {
             }
         });
         self.flash_info(ui_text::t(&self.i18n, "flash-btw-spawned"));
-    }
-
-    /// `/queue [list|clear|pop]` — inspect or manage the pending message
-    /// queue.
-    ///   * `list` (default): flash a one-liner showing how many entries
-    ///     and the first preview.
-    ///   * `clear`: drop every queued message.
-    ///   * `pop`: pull the head editable entry back into the editor.
-    pub(crate) fn handle_queue_command(&mut self, args: &str) {
-        let action = args.trim().to_lowercase();
-        match action.as_str() {
-            "" | "list" | "ls" | "show" => {
-                if self.queue.is_empty() {
-                    self.flash_info(ui_text::t(&self.i18n, "flash-queue-empty"));
-                    return;
-                }
-                let preview = self.queue.first_preview(60).unwrap_or_default();
-                self.flash_info(self.i18n.text_args(
-                    "flash-queue-list",
-                    &agena_tui::fl_args!(
-                        "count" => self.queue.len() as i64,
-                        "preview" => preview,
-                    ),
-                ));
-            }
-            "clear" | "drop" => {
-                if self.queue.is_empty() {
-                    self.flash_info(ui_text::t(&self.i18n, "flash-queue-empty"));
-                    return;
-                }
-                let count = self.queue.len();
-                self.queue.clear();
-                self.flash_success(self.i18n.text_args(
-                    "flash-queue-cleared",
-                    &agena_tui::fl_args!("count" => count as i64),
-                ));
-            }
-            "pop" | "edit" => {
-                if !self.try_pop_queue_into_editor() {
-                    self.flash_info(ui_text::t(&self.i18n, "flash-queue-empty"));
-                }
-            }
-            _ => {
-                self.flash_warning(self.i18n.text_args(
-                    "flash-command-usage",
-                    &agena_tui::fl_args!("usage" => "/queue [list|clear|pop]"),
-                ));
-            }
-        }
     }
 
     pub(crate) fn handle_review_command(&mut self, args: &str) {

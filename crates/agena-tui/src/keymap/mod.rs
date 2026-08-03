@@ -993,9 +993,13 @@ mod tests {
             bindings.match_action(&key(KeyCode::Up, KeyModifiers::NONE)),
             None
         );
+                assert_eq!(
+            bindings.match_action(&key(KeyCode::Char('p'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::EditQueue)
+        );
         assert_eq!(
             bindings.match_action(&key(KeyCode::Up, KeyModifiers::CONTROL)),
-            Some(ComposerAction::EditQueue)
+            None
         );
         assert_eq!(
             bindings.match_action(&key(KeyCode::Char('r'), KeyModifiers::CONTROL)),

@@ -5,7 +5,7 @@ use crate::plugins::provided::workflow::{
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, PluginCommandOutput, PluginUiAction,
+    InitContext, InitOutcome, PluginCommandOutput, PluginUiAction,
     Result as SdkResult, ToolInvokeOutput,
 };
 
@@ -63,11 +63,12 @@ impl SnapshotPlugin {
     }
 
     #[tool(
+        tags(query, snapshot),
         summary = "List active managed repository snapshots.",
         read_only,
         snapshot,
         display = brief,
-        capabilities(HostCapability::SnapshotRegistry)
+
     )]
     async fn status(&self) -> SdkResult<ToolInvokeOutput> {
         let response = self.inner.host()?.snapshot_list().await?;
@@ -99,12 +100,13 @@ impl SnapshotPlugin {
     }
 
     #[tool(
+        tags(mutate, snapshot),
         summary = "Enter a managed repository snapshot.",
         mutating,
-        filesystem_write,
+
         snapshot,
         display = brief,
-        capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
+
         path(requests = self.inner.permission_snapshot_enter(input).await?)
     )]
     async fn enter(&self, input: &EnterSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
@@ -112,12 +114,13 @@ impl SnapshotPlugin {
     }
 
     #[tool(
+        tags(mutate, snapshot),
         summary = "Exit a managed repository snapshot.",
         mutating,
-        filesystem_write,
+
         snapshot,
         display = brief,
-        capabilities(HostCapability::SnapshotRegistry, HostCapability::PluginStorage),
+
         path(requests = self.inner.permission_snapshot_exit(input).await?)
     )]
     async fn exit(&self, input: &ExitSnapshotCommandInput) -> SdkResult<ToolInvokeOutput> {
@@ -154,9 +157,13 @@ mod tests {
         assert_eq!(manifest.tools[0].name, "status");
         assert!(
             manifest.tools[0]
-                .permissions
                 .tags
-                .contains(&ToolTag::ReadOnly)
+                .contains(&ToolTag::Snapshot),
+            "snapshot remains a discovery/UI metadata tag"
+        );
+        assert!(
+            manifest.tools[0].permissions.read_only,
+            "read_only must remain an authority-bearing contract flag"
         );
     }
 }

@@ -478,13 +478,13 @@ impl SettingsPlugin {
         help = "Use `source=file` with `layer=global|workspace` for persisted values. Effective reads merge both files plus environment and CLI layers; prefer explicit `scope=config|meta` with a relative path.",
         display = brief,
         tags(
-            ToolTag::ReadOnly,
+            ToolTag::Query,
             ToolTag::Discovery,
+            ToolTag::Filesystem,
             settings_tag(),
-            settings_read_tag(),
-            ToolTag::FilesystemRead
+            settings_read_tag()
         ),
-        capabilities(agena_plugin_host::sdk::HostCapability::ReadConfig),
+
         path(requests = self.read_permission_paths(input.source, input.layer).await?),
         concurrency_safe
     )]
@@ -540,13 +540,13 @@ impl SettingsPlugin {
         summary = "List settings paths.",
         display = brief,
         tags(
-            ToolTag::ReadOnly,
+            ToolTag::Query,
             ToolTag::Discovery,
+            ToolTag::Filesystem,
             settings_tag(),
-            settings_read_tag(),
-            ToolTag::FilesystemRead
+            settings_read_tag()
         ),
-        capabilities(agena_plugin_host::sdk::HostCapability::ReadConfig),
+
         path(requests = self.read_permission_paths(input.source, input.layer).await?),
         concurrency_safe
     )]
@@ -613,13 +613,13 @@ impl SettingsPlugin {
         help = "Returns the persisted global value, persisted workspace value, effective merged value, source file paths, and applied-layer metadata. Secret values are always redacted.",
         display = brief,
         tags(
-            ToolTag::ReadOnly,
+            ToolTag::Query,
             ToolTag::Discovery,
+            ToolTag::Filesystem,
             settings_tag(),
-            settings_read_tag(),
-            ToolTag::FilesystemRead
+            settings_read_tag()
         ),
-        capabilities(agena_plugin_host::sdk::HostCapability::ReadConfig),
+
         path(requests = self.inspect_permission_paths().await?),
         concurrency_safe
     )]
@@ -651,15 +651,12 @@ impl SettingsPlugin {
         help = "Writes the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing; dry runs request read permission for both config files instead of write permission.",
         display = brief,
         tags(
-            ToolTag::Mutating,
-            ToolTag::FilesystemWrite,
+            ToolTag::Mutate,
+            ToolTag::Filesystem,
             settings_tag(),
             settings_write_tag()
         ),
-        capabilities(
-            agena_plugin_host::sdk::HostCapability::ReadConfig,
-            agena_plugin_host::sdk::HostCapability::ReloadConfig
-        ),
+
         path(requests = self.edit_permission_paths(input.layer, input.dry_run).await?)
     )]
     async fn set(&self, input: SettingsSetToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -693,15 +690,12 @@ impl SettingsPlugin {
         help = "Deletes from the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing.",
         display = brief,
         tags(
-            ToolTag::Mutating,
-            ToolTag::FilesystemWrite,
+            ToolTag::Mutate,
+            ToolTag::Filesystem,
             settings_tag(),
             settings_write_tag()
         ),
-        capabilities(
-            agena_plugin_host::sdk::HostCapability::ReadConfig,
-            agena_plugin_host::sdk::HostCapability::ReloadConfig
-        ),
+
         path(requests = self.edit_permission_paths(input.layer, input.dry_run).await?)
     )]
     async fn delete(&self, input: SettingsDeleteToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -734,15 +728,12 @@ impl SettingsPlugin {
         help = "Deep-merges a JSON object into the global or workspace config selected by `layer`, then validates the combined layered configuration; null object entries delete keys. Use `dry_run=true` to preview without writing.",
         display = brief,
         tags(
-            ToolTag::Mutating,
-            ToolTag::FilesystemWrite,
+            ToolTag::Mutate,
+            ToolTag::Filesystem,
             settings_tag(),
             settings_write_tag()
         ),
-        capabilities(
-            agena_plugin_host::sdk::HostCapability::ReadConfig,
-            agena_plugin_host::sdk::HostCapability::ReloadConfig
-        ),
+
         path(requests = self.edit_permission_paths(input.layer, input.dry_run).await?)
     )]
     async fn patch(&self, input: SettingsPatchToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -775,12 +766,12 @@ impl SettingsPlugin {
         summary = "Validate layered agena.json settings.",
         display = brief,
         tags(
-            ToolTag::ReadOnly,
+            ToolTag::Query,
+            ToolTag::Filesystem,
             settings_tag(),
-            settings_read_tag(),
-            ToolTag::FilesystemRead
+            settings_read_tag()
         ),
-        capabilities(agena_plugin_host::sdk::HostCapability::ReadConfig),
+
         path(requests = self.validate_permission_paths(input.layer).await?),
         concurrency_safe
     )]
@@ -1125,7 +1116,7 @@ mod tests {
     use crate::permission::ToolPermissionPolicy;
     use agena_domain::PermissionDecision;
     use agena_domain::PermissionMode;
-    use agena_plugin_host::sdk::{HostCapability, PathKind, Plugin};
+    use agena_plugin_host::sdk::{PathKind, Plugin};
     use serde_json::json;
     use std::collections::BTreeMap;
 
@@ -1188,10 +1179,9 @@ mod tests {
                 .iter()
                 .find(|tool| tool.name == name)
                 .expect("settings read tool exists");
-            assert_eq!(tool.capabilities, vec![HostCapability::ReadConfig]);
-            assert!(tool.permissions.tags.contains(&settings_read_tag()));
-            assert!(tool.permissions.tags.contains(&ToolTag::FilesystemRead));
-            assert!(!tool.permissions.tags.contains(&settings_write_tag()));
+            assert!(tool.tags.contains(&settings_read_tag()));
+            assert!(tool.tags.contains(&ToolTag::Filesystem));
+            assert!(!tool.tags.contains(&settings_write_tag()));
         }
 
         let set = manifest
@@ -1199,8 +1189,7 @@ mod tests {
             .iter()
             .find(|tool| tool.name == "set")
             .expect("settings set tool exists");
-        assert!(set.capabilities.contains(&HostCapability::ReloadConfig));
-        assert!(set.permissions.tags.contains(&settings_write_tag()));
+        assert!(set.tags.contains(&settings_write_tag()));
     }
 
     #[test]
@@ -1238,29 +1227,14 @@ mod tests {
     }
 
     #[test]
-    fn settings_tags_and_exact_names_use_the_existing_tool_policy() {
-        let manifest = SettingsPlugin::new().manifest();
-        let read_tags = &manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "inspect")
-            .expect("settings inspect tool exists")
-            .permissions
-            .tags;
-        let write_tags = &manifest
-            .tools
-            .iter()
-            .find(|tool| tool.name == "set")
-            .expect("settings set tool exists")
-            .permissions
-            .tags;
+    fn settings_exact_names_use_the_existing_tool_policy() {
         let config = ToolPermissionConfig {
             default: Some(PermissionMode::Auto),
-            tags: BTreeMap::from([
-                ("settings_read".to_string(), PermissionMode::Allow),
-                ("settings_write".to_string(), PermissionMode::Deny),
+            names: BTreeMap::from([
+                ("agena.settings.inspect".to_string(), PermissionMode::Allow),
+                ("agena.settings.patch".to_string(), PermissionMode::Deny),
+                ("agena.settings.set".to_string(), PermissionMode::Allow),
             ]),
-            names: BTreeMap::from([("agena.settings.set".to_string(), PermissionMode::Allow)]),
             ..Default::default()
         };
         let policy = crate::authorization::apply_tool_permission_config(
@@ -1268,17 +1242,18 @@ mod tests {
             ToolPermissionPolicy::new(PermissionMode::Auto),
         )
         .expect("valid settings policy");
+        let default_contract = agena_plugin_host::sdk::ToolPermissionContract::default();
 
         assert!(matches!(
-            policy.check_tool("agena.settings.inspect", None, read_tags),
+            policy.check_tool("agena.settings.inspect", None, &default_contract),
             PermissionDecision::Allow
         ));
         assert!(matches!(
-            policy.check_tool("agena.settings.patch", None, write_tags),
+            policy.check_tool("agena.settings.patch", None, &default_contract),
             PermissionDecision::Deny { .. }
         ));
         assert!(matches!(
-            policy.check_tool("agena.settings.set", None, write_tags),
+            policy.check_tool("agena.settings.set", None, &default_contract),
             PermissionDecision::Allow
         ));
     }

@@ -8,9 +8,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use agena_memory_index::{MemoryIndex, MemorySearchDocument};
-use agena_plugin_host::sdk::{
-    PluginCommandOutput, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{PluginCommandOutput, PluginUiAction, Result as SdkResult, ToolInvokeOutput};
 use agena_plugin_host::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, PluginError,
 };
@@ -287,6 +285,7 @@ impl MemoryPlugin {
     }
 
     #[tool(
+        tags(query, filesystem, discovery),
         summary = "Search durable memory records.",
         read_only,
         display = brief,
@@ -328,6 +327,7 @@ impl MemoryPlugin {
     }
 
     #[tool(
+        tags(query, filesystem),
         summary = "Read one durable memory record.",
         read_only,
         display = brief,
@@ -352,6 +352,7 @@ impl MemoryPlugin {
     }
 
     #[tool(
+        tags(query, filesystem, discovery),
         summary = "List durable memory records.",
         read_only,
         display = brief,
@@ -403,6 +404,7 @@ impl MemoryPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Write one durable memory record.",
         mutating,
         display = brief,
@@ -440,6 +442,7 @@ impl MemoryPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Delete one durable memory record.",
         mutating,
         display = brief,

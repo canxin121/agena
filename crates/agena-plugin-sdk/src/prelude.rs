@@ -36,7 +36,7 @@ pub use crate::host_api::{
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text};
 pub use crate::manifest::{
-    HookSubscription, HostCapability, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
+    HookSubscription, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
     PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition, PluginManifest,
     PluginSkillDefinition, PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
     PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiContentBlock,

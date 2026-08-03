@@ -10,7 +10,7 @@ use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
 use crate::registry::{
-    effective_capabilities_for_manifest, per_tool_capabilities, validate_tool_definition,
+    validate_tool_definition,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
@@ -257,21 +257,6 @@ async fn initialize_transport(
     )?;
     validate_manifest_config(plugin_id, &prefetched_manifest, configured_plugin.config())?;
     host_handle.set_plugin_manifest_name(plugin_key.clone(), prefetched_manifest.name.clone());
-    host_handle
-        .set_plugin_capabilities(
-            plugin_key.clone(),
-            effective_capabilities_for_manifest(
-                &prefetched_manifest.tools,
-                &prefetched_manifest.plugin_capabilities,
-            ),
-        )
-        .await;
-    host_handle
-        .set_plugin_tool_capabilities(
-            plugin_key.clone(),
-            per_tool_capabilities(&prefetched_manifest.tools),
-        )
-        .await;
 
     let init_ctx = InitContext {
         agena_version: agena_version.to_string(),

@@ -17,7 +17,7 @@ use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
 use crate::logs::{PluginLogRecord, PluginLogStore};
 use crate::registry::{
-    PluginToolRegistry, RegisteredTool, effective_capabilities_for_manifest,
+    PluginToolRegistry, RegisteredTool,
     validate_tool_definition,
 };
 use crate::sdk::host_api::{
@@ -51,7 +51,7 @@ use crate::sdk::{
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    HostCapability, NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput,
+    NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput,
     PluginCommandOutput, PluginError, PluginErrorKind, PluginKey, PluginManifest,
     PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostRunInput,
     PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
@@ -93,33 +93,11 @@ impl LoadedPlugin {
     }
 
     pub fn authority_summary(&self) -> PluginAuthoritySummary {
-        let plugin_capabilities = effective_capabilities_for_manifest(
-            &self.manifest.tools,
-            &self.manifest.plugin_capabilities,
-        )
-        .into_iter()
-        .map(|capability| format!("{capability:?}"))
-        .collect::<Vec<_>>();
-        let tool_capabilities = self
-            .manifest
-            .tools
-            .iter()
-            .filter(|tool| !tool.capabilities.is_empty())
-            .map(|tool| {
-                (
-                    tool.name.clone(),
-                    tool.capabilities
-                        .iter()
-                        .map(|capability| format!("{capability:?}"))
-                        .collect::<Vec<_>>(),
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
         PluginAuthoritySummary {
             trust_level: self.trust_level.clone(),
             provenance: self.provenance.clone(),
-            plugin_capabilities,
-            tool_capabilities,
+            plugin_capabilities: Vec::new(),
+            tool_capabilities: BTreeMap::new(),
         }
     }
 }
@@ -371,34 +349,6 @@ pub struct PluginHost {
     transferred_to_successor: tokio::sync::Mutex<std::collections::HashSet<PluginKey>>,
 }
 
-fn requires_long_lived_tool_invoke_timeout(capabilities: &[HostCapability]) -> bool {
-    capabilities.iter().any(|capability| {
-        matches!(
-            capability,
-            HostCapability::AskUser | HostCapability::RunSubtask | HostCapability::ImageGeneration
-        )
-    })
-}
-
-#[cfg(test)]
-mod timeout_tests {
-    use super::{HostCapability, requires_long_lived_tool_invoke_timeout};
-
-    #[test]
-    fn subtask_and_interactive_callbacks_receive_long_lived_timeouts() {
-        for capability in [
-            HostCapability::AskUser,
-            HostCapability::RunSubtask,
-            HostCapability::ImageGeneration,
-        ] {
-            assert!(requires_long_lived_tool_invoke_timeout(&[capability]));
-        }
-        assert!(!requires_long_lived_tool_invoke_timeout(&[
-            HostCapability::InvokeTool
-        ]));
-    }
-}
-
 fn tool_hook_context(
     plugin: &LoadedPlugin,
     tool_name: &str,
@@ -554,16 +504,6 @@ impl PluginHostBuildConfig {
 /// don't get callbacks (would require shared FFI surface).
 pub struct HostHandle {
     inner: tokio::sync::RwLock<Arc<dyn HostClient>>,
-    /// Plugin-level capability union. Used as a fallback when a host call
-    /// cannot be attributed to a specific tool (e.g. hook callbacks) or
-    /// when the plugin did not register per-tool capabilities.
-    capabilities: tokio::sync::RwLock<HashMap<PluginKey, Vec<HostCapability>>>,
-    /// Per-tool capability map: `plugin_id -> tool_name -> capabilities`.
-    /// `tool_invoke` paths look up capabilities by `tool_name` so a plugin
-    /// shipping multiple tools cannot have tool A's privileges leak to
-    /// callbacks coming back through tool B.
-    tool_capabilities:
-        tokio::sync::RwLock<BTreeMap<PluginKey, BTreeMap<String, Vec<HostCapability>>>>,
     /// Per-plugin bearer tokens for HTTP callbacks.
     tokens: tokio::sync::Mutex<HashMap<PluginKey, String>>,
     callback_base_url: Option<String>,

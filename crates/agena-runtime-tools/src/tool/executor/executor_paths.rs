@@ -187,7 +187,7 @@ impl ToolExecutor {
                 &canonical_workspace_root,
                 &canonical_target_path,
             ),
-            tags: Vec::new(),
+            contract: agena_domain::ToolPermissionContract::default(),
         });
     }
 
@@ -208,7 +208,7 @@ impl ToolExecutor {
                 port: target.port(),
             },
             decision: self.principal.authorize_network_connect(&target),
-            tags: Vec::new(),
+            contract: agena_domain::ToolPermissionContract::default(),
         });
         Ok(())
     }

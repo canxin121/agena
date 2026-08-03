@@ -32,12 +32,12 @@ use super::super::StableRunContext;
 /// declare filesystem effects, because their declared paths are derived
 /// from free-form input, not authoritative: a user who allows writes inside
 /// the workspace has not authorized arbitrary command execution.
-fn is_path_scoped_tool(tags: &[String]) -> bool {
-    let path_scoped = tags
-        .iter()
-        .any(|tag| tag == "filesystem_read" || tag == "filesystem_write");
-    let arbitrary_execution = tags.iter().any(|tag| tag == "shell" || tag == "process");
-    path_scoped && !arbitrary_execution
+///
+/// Driven by the tool's permission contract, never by tags: tags are
+/// metadata and carry no authority.
+fn is_path_scoped_tool(contract: &agena_domain::ToolPermissionContract) -> bool {
+    let path_scoped = !contract.input_paths.is_empty() || !contract.path_access.is_empty();
+    path_scoped && !contract.shell
 }
 
 /// One member of a provider-emitted tool batch after preflight.
@@ -1675,7 +1675,7 @@ impl SessionManager {
             .iter()
             .find(|check| matches!(check.action, PermissionAction::Tool { .. }))
             && matches!(tool_check.decision, PermissionDecision::Ask { .. })
-            && is_path_scoped_tool(&tool_check.tags)
+            && is_path_scoped_tool(&tool_check.contract)
         {
             let mut path_check_count = 0usize;
             let mut all_paths_allowed = true;
@@ -1724,8 +1724,8 @@ impl SessionManager {
             let was_auto = matches!(&resolution.decision, PermissionDecision::Auto { .. });
             if was_auto {
                 let mut spec = agena_domain::ActionSpec::from_action(&check.action);
-                if let agena_domain::ActionSpec::Tool { tags, .. } = &mut spec {
-                    *tags = check.tags.clone();
+                if let agena_domain::ActionSpec::Tool { contract, .. } = &mut spec {
+                    *contract = check.contract.clone();
                 }
                 match agena_permission::decide_sync(&resolution.decision, &spec, &context, &budget)
                 {

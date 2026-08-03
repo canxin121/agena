@@ -26,10 +26,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{
-    HostClient, InitContext, InitOutcome, Result as SdkResult, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{HostClient, InitContext, InitOutcome, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput};
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
 
@@ -1517,6 +1514,7 @@ impl SkillsPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "List discovered skills and slash commands.",
         read_only,
         discovery,
@@ -1599,6 +1597,7 @@ impl SkillsPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "Read one discovered skill or slash command.",
         read_only,
         discovery,
@@ -1646,10 +1645,11 @@ impl SkillsPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Create a workspace-managed Skill document.",
         help = "Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, user-global, and compatibility Skills remain read-only.",
         mutating,
-        filesystem_write,
+
         display = detailed
     )]
     async fn invoke_create(&self, input: &SkillsCreateInput) -> SdkResult<ToolInvokeOutput> {
@@ -1663,10 +1663,11 @@ impl SkillsPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Update a workspace-managed Skill document.",
         help = "Replaces an existing `.agena/skills/<name>/SKILL.md` document. The replacement frontmatter must keep the same canonical name.",
         mutating,
-        filesystem_write,
+
         display = detailed
     )]
     async fn invoke_update(&self, input: &SkillsUpdateInput) -> SdkResult<ToolInvokeOutput> {
@@ -1680,10 +1681,11 @@ impl SkillsPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Delete a workspace-managed Skill document.",
         help = "Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, user-global, and compatibility Skills cannot be deleted through this tool.",
         mutating,
-        filesystem_write,
+
         display = detailed
     )]
     async fn invoke_delete(&self, input: &SkillsDeleteInput) -> SdkResult<ToolInvokeOutput> {
@@ -1697,9 +1699,10 @@ impl SkillsPlugin {
     }
 
     #[tool(
+        tags(query, filesystem),
         summary = "Read a bounded UTF-8 resource contained by one skill package.",
         read_only,
-        filesystem_read,
+
         ui_display = detailed,
         concurrency_safe
     )]
@@ -1742,6 +1745,7 @@ impl SkillsPlugin {
     }
 
     #[tool(
+        tags(mutate, discovery),
         summary = "Rescan filesystem-backed Skills and report the catalog generation.",
         read_only,
         discovery,

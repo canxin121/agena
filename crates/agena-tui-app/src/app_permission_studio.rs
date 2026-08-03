@@ -1,6 +1,5 @@
 use super::{
     normalize_permission_config, permission_mode_choice_items, permission_studio_read_only_message,
-    permission_studio_selected_tool_tag_key,
 };
 
 pub(crate) fn apply_permission_studio_entries_mode(
@@ -11,9 +10,9 @@ pub(crate) fn apply_permission_studio_entries_mode(
 ) {
     let tools = permission.tools.get_or_insert_with(Default::default);
     match kind {
-        PermissionStudioCatalogKind::ToolTags => {
+        PermissionStudioCatalogKind::ToolCapabilities => {
             for entry in entries {
-                tools.tags.insert(entry, mode);
+                tools.capabilities.insert(entry, mode);
             }
         }
         PermissionStudioCatalogKind::ToolNames => {
@@ -45,13 +44,7 @@ impl App {
             }
             PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule,
             PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule,
-            PermissionStudioPage::ToolTags => {
-                self.open_permission_studio_catalog_selector(
-                    dialog,
-                    PermissionStudioCatalogKind::ToolTags,
-                );
-                return;
-            }
+            PermissionStudioPage::ToolCapabilities => PermissionStudioEditorAction::AddToolCapability,
             PermissionStudioPage::ToolNames => {
                 self.open_permission_studio_catalog_selector(
                     dialog,
@@ -71,11 +64,11 @@ impl App {
     ) {
         let catalog = self.backend.permission_tool_catalog();
         let existing = match kind {
-            PermissionStudioCatalogKind::ToolTags => dialog
+            PermissionStudioCatalogKind::ToolCapabilities => dialog
                 .permission
                 .tools
                 .as_ref()
-                .map(|tools| tools.tags.keys().cloned().collect::<BTreeSet<_>>())
+                .map(|tools| tools.capabilities.keys().cloned().collect::<BTreeSet<_>>())
                 .unwrap_or_default(),
             PermissionStudioCatalogKind::ToolNames => dialog
                 .permission
@@ -85,31 +78,21 @@ impl App {
                 .unwrap_or_default(),
         };
         let mut items = match kind {
-            PermissionStudioCatalogKind::ToolTags => {
-                let mut tools_by_tag = BTreeMap::<String, Vec<String>>::new();
-                for tool in &catalog {
-                    for tag in &tool.tags {
-                        tools_by_tag
-                            .entry(tag.clone())
-                            .or_default()
-                            .push(tool.name.clone());
-                    }
-                }
-                tools_by_tag
-                    .into_iter()
-                    .filter(|(tag, _)| !existing.contains(tag))
-                    .map(|(tag, tools)| ChoiceItem {
-                        label: tag.clone(),
-                        detail: self.i18n.text_args(
-                            "permission-studio-catalog-tag-detail",
-                            &agena_tui::fl_args!("count" => tools.len() as i64),
-                        ),
-                        value: tag.clone(),
-                        search_text: format!("{tag} {}", tools.join(" ")),
-                        current: false,
-                    })
-                    .collect::<Vec<_>>()
-            }
+            // Capabilities are a fixed set of authority-bearing contract
+            // keys; there is no tool-derived catalog for them.
+            PermissionStudioCatalogKind::ToolCapabilities => [
+                "read_only", "shell", "interactive", "task", "path_scoped",
+            ]
+            .into_iter()
+            .filter(|key| !existing.contains(*key))
+            .map(|key| ChoiceItem {
+                label: key.to_string(),
+                detail: String::new(),
+                value: key.to_string(),
+                search_text: key.to_string(),
+                current: false,
+            })
+            .collect::<Vec<_>>(),
             PermissionStudioCatalogKind::ToolNames => catalog
                 .into_iter()
                 .filter(|tool| !existing.contains(tool.name.as_str()))
@@ -130,15 +113,7 @@ impl App {
             current: false,
         });
         let mut selector = self.build_choice_overlay(
-            ui_text::t(
-                &self.i18n,
-                match kind {
-                    PermissionStudioCatalogKind::ToolTags => "permission-studio-catalog-tags-title",
-                    PermissionStudioCatalogKind::ToolNames => {
-                        "permission-studio-catalog-names-title"
-                    }
-                },
-            ),
+            ui_text::t(&self.i18n, "permission-studio-catalog-names-title"),
             ui_text::t(&self.i18n, "permission-studio-catalog-prompt"),
             None,
             items,
@@ -244,9 +219,17 @@ impl App {
                     ConfirmAction::PermissionStudioDeleteNetworkRule { target },
                 )
             }
-            PermissionStudioPage::ToolTags => {
-                let Some(key) = permission_studio_selected_tool_tag_key(dialog) else {
-                    self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-delete"));
+            PermissionStudioPage::ToolCapabilities => {
+                let Some(key) = selected_action.and_then(|action| match action {
+                    PermissionStudioAction::EditMode(
+                        PermissionStudioModeTarget::ToolCapability { key },
+                    ) => Some(key),
+                    _ => None,
+                }) else {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "flash-permission-studio-no-selection",
+                    ));
                     return;
                 };
                 (
@@ -258,7 +241,7 @@ impl App {
                             "value" => key.clone(),
                         ),
                     )],
-                    ConfirmAction::PermissionStudioDeleteToolTag { key },
+                    ConfirmAction::PermissionStudioDeleteToolCapability { key },
                 )
             }
             PermissionStudioPage::ToolNames => {
@@ -368,11 +351,11 @@ impl App {
         });
     }
 
-    pub(crate) fn delete_permission_studio_tool_tag(&mut self, key: &str) {
+    pub(crate) fn delete_permission_studio_tool_capability(&mut self, key: &str) {
         let key = key.to_string();
         self.delete_permission_studio_config(move |permission| {
             if let Some(tools) = permission.tools.as_mut() {
-                tools.tags.remove(key.as_str());
+                tools.capabilities.remove(key.as_str());
             }
         });
     }
@@ -744,7 +727,7 @@ impl App {
     }
 }
 use crate::{
-    App, BTreeMap, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction,
+    App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction,
     DialogHost, ModelCatalogStudioOverlay, Overlay, PERMISSION_STUDIO_CUSTOM_ENTRY,
     PermissionConfig, PermissionMode, PermissionStudioAction, PermissionStudioCatalogKind,
     PermissionStudioEditorAction, PermissionStudioFocus, PermissionStudioModeTarget,

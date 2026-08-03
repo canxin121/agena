@@ -12,9 +12,7 @@ use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput};
 use base64::Engine as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -337,11 +335,12 @@ impl OpenAiToolsPlugin {
     }
 
     #[tool(
+        tags(network, interactive),
         summary = "Search the public web through OpenAI's official Responses web-search service.",
         help = "This is an ordinary Agena execution tool. Discovery, help, permission checks, and invocation all go through tools_list/tools_search/tools_help/tools_call; only the implementation uses an OpenAI endpoint.",
         read_only,
-        network,
-        internet,
+
+
         discovery,
         display = detailed,
         examples(r#"{"query":"Latest Rust language release notes","model":"gpt-4.1"}"#)
@@ -391,12 +390,13 @@ impl OpenAiToolsPlugin {
     }
 
     #[tool(
+        tags(network, interactive),
         summary = "Generate an image through OpenAI's image generation endpoint.",
         help = "This is an ordinary openai.image_generation execution tool. It performs its own permission-checked OpenAI request and persists the returned base64 image into Agena's managed artifact directory.",
         mutating,
-        filesystem_write,
-        network,
-        internet,
+
+
+
         display = detailed,
         examples(r#"{"prompt":"A watercolor map of a floating city","size":"1536x1024","quality":"high"}"#)
     )]
@@ -432,13 +432,14 @@ impl OpenAiToolsPlugin {
     }
 
     #[tool(
+        tags(network, interactive),
         summary = "Edit permitted local images through OpenAI's image edit endpoint.",
         help = "Every source path is permission-checked before it is uploaded. The completed image is persisted as a managed local attachment, and this tool has the same catalog and permission status as every other Agena execution tool.",
         mutating,
-        filesystem_read,
-        filesystem_write,
-        network,
-        internet,
+
+
+
+
         display = detailed,
         path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         examples(r#"{"prompt":"Replace the sky with an aurora","images":["assets/source.png"]}"#)

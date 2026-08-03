@@ -63,10 +63,10 @@ pub fn permission_studio_mode_target_value(
             .network
             .as_ref()
             .and_then(|network| network.rules.get(target.as_str()).copied()),
-        PermissionStudioModeTarget::ToolTag { key } => permission
+        PermissionStudioModeTarget::ToolCapability { key } => permission
             .tools
             .as_ref()
-            .and_then(|tools| tools.tags.get(key.as_str()).copied()),
+            .and_then(|tools| tools.capabilities.get(key.as_str()).copied()),
         PermissionStudioModeTarget::ToolName { key } => permission
             .tools
             .as_ref()
@@ -243,15 +243,15 @@ pub fn rename_network_rule(permission: &mut PermissionConfig, from: &str, to: &s
     }
 }
 
-pub fn rename_tool_tag(permission: &mut PermissionConfig, from: &str, to: &str) {
+pub fn rename_tool_capability(permission: &mut PermissionConfig, from: &str, to: &str) {
     if from == to {
         return;
     }
     let Some(tools) = permission.tools.as_mut() else {
         return;
     };
-    if let Some(mode) = tools.tags.remove(from) {
-        tools.tags.insert(to.to_string(), mode);
+    if let Some(mode) = tools.capabilities.remove(from) {
+        tools.capabilities.insert(to.to_string(), mode);
     }
 }
 

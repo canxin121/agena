@@ -4,10 +4,7 @@ use std::sync::{Arc, OnceLock};
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{HostClient, HostContextStatusRequest};
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext,
-    ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 
 pub(crate) const CONTEXT_PLUGIN_ID: &str = "agena.context";
 
@@ -40,10 +37,11 @@ impl ContextPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "Inspect remaining context budget, model identity, and compaction health without exposing prompts.",
         read_only,
         display = detailed,
-        capabilities(HostCapability::SessionRegistry),
+
         concurrency_safe
     )]
     async fn status(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -69,8 +67,18 @@ impl ContextPlugin {
             (Some(provider), None, Some(model)) => format!("{provider}/{model}"),
             _ => "unknown".to_string(),
         };
+        let mut model_detail = vec![format!("Model: {model_identity}")];
+        if let Some(thinking) = status.thinking_mode.as_deref() {
+            model_detail.push(format!("thinking: {thinking}"));
+        }
+        if let Some(speed) = status.speed_mode.as_deref() {
+            model_detail.push(format!("speed: {speed}"));
+        }
+        if let Some(verbosity) = status.verbosity.as_deref() {
+            model_detail.push(format!("verbosity: {verbosity}"));
+        }
         let text = format!(
-            "Context: {} token(s) used; limit {}; remaining {}; generation {}; compacted={}; auto_compaction_disabled={}. Model: {model_identity}.",
+            "Context: {} token(s) used; limit {}; remaining {}; generation {}; compacted={}; auto_compaction_disabled={}. {}.",
             status.current_tokens,
             status
                 .limit_tokens
@@ -81,12 +89,16 @@ impl ContextPlugin {
             status.prompt_window_generation,
             status.compacted,
             status.auto_compaction_disabled,
+            model_detail.join("; "),
         );
         let payload = serde_json::json!({
             "session_id": status.session_id,
             "model_provider_id": status.model_provider_id,
             "model_adapter_id": status.model_adapter_id,
             "model_id": status.model_id,
+            "thinking_mode": status.thinking_mode,
+            "speed_mode": status.speed_mode,
+            "verbosity": status.verbosity,
             "current_tokens": status.current_tokens,
             "measured_prompt_tokens": status.measured_prompt_tokens,
             "projected_tokens": status.projected_tokens,

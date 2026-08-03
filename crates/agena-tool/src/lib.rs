@@ -10,7 +10,7 @@ use std::time::Duration;
 pub use agena_domain::ToolPresentationSection;
 use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, PermissionAction,
-    PermissionDecision, ToolInvocation,
+    PermissionDecision, ToolInvocation, ToolPermissionContract,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -335,10 +335,17 @@ pub struct CronRunSummary {
 pub struct ToolPermissionCheck {
     pub action: PermissionAction,
     pub decision: PermissionDecision,
-    /// Tool tags (e.g. `read_only`, `filesystem_read`) attached by the
-    /// executor. The decision pipeline uses them instead of tool-name
-    /// allowlists.
-    pub tags: Vec<String>,
+    /// The tool's full permission contract: shell/interactive/read_only/task
+    /// flags plus declared path/network specs. The decision pipeline reads
+    /// these directly; never tool tags (tags are metadata for discovery/UI).
+    pub contract: ToolPermissionContract,
+}
+
+impl ToolPermissionCheck {
+    /// Whether the contract is path-scoped (declares concrete path specs).
+    pub fn is_path_scoped(&self) -> bool {
+        !self.contract.input_paths.is_empty() || !self.contract.path_access.is_empty()
+    }
 }
 
 /// Invocation after tool lookup/presentation has prepared it for execution.

@@ -1,8 +1,7 @@
 use super::permission_studio_sections;
 use super::{
-    I18n, PermissionStudioAction, PermissionStudioFocus, PermissionStudioModeTarget,
-    PermissionStudioOverlay, PermissionStudioPage, PermissionStudioPaneFocus,
-    PermissionStudioSectionId, SectionedListState, SelectableListState,
+    I18n, PermissionStudioFocus, PermissionStudioOverlay, PermissionStudioPage,
+    PermissionStudioPaneFocus, PermissionStudioSectionId, SectionedListState, SelectableListState,
 };
 use crate::ui_text;
 pub(crate) use agena_tui_permission_studio::permission_studio::{
@@ -93,7 +92,7 @@ pub(crate) fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage)
         | PermissionStudioPage::PathRules
         | PermissionStudioPage::NetworkZones
         | PermissionStudioPage::NetworkRules
-        | PermissionStudioPage::ToolTags
+        | PermissionStudioPage::ToolCapabilities
         | PermissionStudioPage::ToolNames
         | PermissionStudioPage::ToolCommandRules => {
             ui_text::t(i18n, "overlay-permission-studio-footer-nested")
@@ -123,19 +122,12 @@ pub(crate) fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioP
         PermissionStudioPage::NetworkRules => {
             ui_text::t(i18n, "permission-studio-page-network-rules")
         }
-        PermissionStudioPage::ToolTags => ui_text::t(i18n, "permission-studio-page-tool-tags"),
+        PermissionStudioPage::ToolCapabilities => {
+            ui_text::t(i18n, "permission-studio-page-tags")
+        }
         PermissionStudioPage::ToolNames => ui_text::t(i18n, "permission-studio-page-tool-names"),
         PermissionStudioPage::ToolCommandRules => {
             ui_text::t(i18n, "permission-studio-page-tool-command-rules")
         }
-    }
-}
-
-pub(crate) fn permission_studio_selected_tool_tag_key(
-    dialog: &PermissionStudioOverlay,
-) -> Option<String> {
-    match dialog.state.selected_item()?.action.clone() {
-        PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolTag { key }) => Some(key),
-        _ => None,
     }
 }

@@ -421,9 +421,6 @@ fn tool_input_enum_variant_permissions_are_optional_at_root() {
     let tool = tool_by_name(&manifest, "variant_semantic");
     assert_eq!(tool.permissions.input_paths, paths);
     assert_eq!(tool.permissions.input_networks, networks);
-    assert!(tool.has_tag(ToolTag::FilesystemRead));
-    assert!(tool.has_tag(ToolTag::Network));
-    assert!(tool.has_tag(ToolTag::Internet));
 }
 
 #[test]

@@ -281,12 +281,25 @@ struct AvailableToolRecord {
     name: String,
     summary: String,
     tags: Vec<String>,
+    plugin_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct ToolTagRecord {
     tag: String,
     tool_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    plugin_count: Option<usize>,
+}
+
+/// One loaded plugin projected for discovery (plugins_* family).
+#[derive(Debug, Clone)]
+pub(crate) struct AvailablePluginRecord {
+    pub plugin_id: String,
+    pub summary: String,
+    pub version: String,
+    pub tags: Vec<String>,
+    pub tools: Vec<String>,
 }
 
 impl WorkflowPlugin {
@@ -520,7 +533,7 @@ mod tests {
             "name": "format"
         }))
         .expect("tool definition");
-        tool.permissions.tags.push(tag);
+        tool.tags.push(tag);
         HostRegisteredToolDescriptor {
             plugin,
             tool_key,
@@ -534,19 +547,21 @@ mod tests {
             AvailableToolRecord {
                 name: "agena.fs/read".to_string(),
                 summary: "Read file".to_string(),
-                tags: vec!["read_only".to_string(), "filesystem_read".to_string()],
+                tags: vec!["query".to_string(), "filesystem".to_string()],
+                plugin_id: "agena.fs".to_string(),
             },
             AvailableToolRecord {
                 name: "agena.web/search".to_string(),
                 summary: "Search web".to_string(),
-                tags: vec!["read_only".to_string(), "network".to_string()],
+                tags: vec!["query".to_string(), "network".to_string()],
+                plugin_id: "agena.web".to_string(),
             },
         ];
 
         let filtered = WorkflowPlugin::filter_available_tools_by_tag(
             records,
-            Some("read_only"),
-            Some(&["filesystem_read".to_string()]),
+            Some("query"),
+            Some(&["filesystem".to_string()]),
         );
 
         assert_eq!(filtered.len(), 1);
@@ -557,14 +572,14 @@ mod tests {
     fn duplicate_execution_tool_names_are_rejected_instead_of_picking_one() {
         let tools = vec![
             ToolDescriptor {
-                name: "notes.format".to_string(),
+                name: "notes.format".to_string(), plugin_id: None,
                 summary: None,
                 help: None,
                 examples: Vec::new(),
                 input_schema: None,
             },
             ToolDescriptor {
-                name: "notes.format".to_string(),
+                name: "notes.format".to_string(), plugin_id: None,
                 summary: None,
                 help: None,
                 examples: Vec::new(),
@@ -586,20 +601,20 @@ mod tests {
         let tags = WorkflowPlugin::tool_tags_by_visible_name(
             &visible,
             [
-                registered_tool("alpha", ToolTag::ReadOnly),
-                registered_tool("beta", ToolTag::Mutating),
+                registered_tool("alpha", ToolTag::Query),
+                registered_tool("beta", ToolTag::Mutate),
             ],
         );
 
-        assert_eq!(tags["alpha.notes.format"], vec!["read_only"]);
-        assert_eq!(tags["beta.notes.format"], vec!["mutating"]);
+        assert_eq!(tags["alpha.notes.format"], vec!["query"]);
+        assert_eq!(tags["beta.notes.format"], vec!["mutate"]);
         assert!(!tags.contains_key("notes.format"));
     }
 
     #[test]
     fn execution_tools_require_exact_tool_names() {
         let tools = vec![ToolDescriptor {
-            name: "web.fetch".to_string(),
+            name: "web.fetch".to_string(), plugin_id: None,
             summary: None,
             help: None,
             examples: Vec::new(),
@@ -623,14 +638,14 @@ mod tests {
     fn unknown_tool_requires_search_and_help_instead_of_suggestion_guessing() {
         let tools = vec![
             ToolDescriptor {
-                name: "shell.run".to_string(),
+                name: "shell.run".to_string(), plugin_id: None,
                 summary: Some("Run one shell process.".to_string()),
                 help: None,
                 examples: Vec::new(),
                 input_schema: None,
             },
             ToolDescriptor {
-                name: "shell.logs".to_string(),
+                name: "shell.logs".to_string(), plugin_id: None,
                 summary: Some("Read process logs.".to_string()),
                 help: None,
                 examples: Vec::new(),
@@ -717,7 +732,7 @@ mod tests {
             .find(|tool| tool.name == "run")
             .expect("shell.run manifest");
         let descriptor = ToolDescriptor {
-            name: "shell.run".to_string(),
+            name: "shell.run".to_string(), plugin_id: None,
             summary: Some("Run one shell process.".to_string()),
             help: None,
             examples: Vec::new(),

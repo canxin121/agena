@@ -4,16 +4,6 @@ impl ScopedHostClient {
         context.plugin_id = Some(self.plugin_id.clone());
         context
     }
-
-    async fn require_capability(
-        &self,
-        method: &str,
-        capability: HostCapability,
-    ) -> crate::sdk::Result<()> {
-        self.handle
-            .require_capability(Some(&self.plugin_id), method, capability)
-            .await
-    }
 }
 
 #[async_trait::async_trait]
@@ -25,29 +15,17 @@ impl HostClient for ScopedHostClient {
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_EVENT_PUBLISH, HostCapability::PublishEvent)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.publish_event(env)).await
     }
 
     async fn subscribe_events(&self, filter: EventFilter) -> crate::sdk::Result<EventSubscription> {
-        self.require_capability(
-            method::HOST_EVENT_SUBSCRIBE,
-            HostCapability::SubscribeEvents,
-        )
-        .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.subscribe_events(filter)).await
     }
 
     async fn unsubscribe_events(&self, subscription_id: String) -> crate::sdk::Result<()> {
-        self.require_capability(
-            method::HOST_EVENT_UNSUBSCRIBE,
-            HostCapability::SubscribeEvents,
-        )
-        .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(
             self.context(),
             inner.unsubscribe_events(subscription_id),
@@ -56,16 +34,12 @@ impl HostClient for ScopedHostClient {
     }
 
     async fn read_config(&self, path: Option<String>) -> crate::sdk::Result<serde_json::Value> {
-        self.require_capability(method::HOST_CONFIG_READ, HostCapability::ReadConfig)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.read_config(path)).await
     }
 
     async fn reload_config(&self) -> crate::sdk::Result<HostConfigReloadResponse> {
-        self.require_capability(method::HOST_CONFIG_RELOAD, HostCapability::ReloadConfig)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.reload_config()).await
     }
 
@@ -74,23 +48,17 @@ impl HostClient for ScopedHostClient {
         tool: String,
         input: serde_json::Value,
     ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.require_capability(method::HOST_TOOL_INVOKE, HostCapability::InvokeTool)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.invoke_tool(tool, input)).await
     }
 
     async fn ask_user(&self, req: AskUserRequest) -> crate::sdk::Result<AskUserResponse> {
-        self.require_capability(method::HOST_ASK_USER, HostCapability::AskUser)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.ask_user(req)).await
     }
 
     async fn run_subtask(&self, req: RunSubtaskRequest) -> crate::sdk::Result<RunSubtaskResponse> {
-        self.require_capability(method::HOST_SUBTASK_RUN, HostCapability::RunSubtask)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.run_subtask(req)).await
     }
 
@@ -98,9 +66,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: CancelSubtaskRequest,
     ) -> crate::sdk::Result<SubtaskControlResponse> {
-        self.require_capability(method::HOST_SUBTASK_CANCEL, HostCapability::RunSubtask)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.cancel_subtask(req)).await
     }
 
@@ -108,9 +74,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: MessageSubtaskRequest,
     ) -> crate::sdk::Result<SubtaskControlResponse> {
-        self.require_capability(method::HOST_SUBTASK_MESSAGE, HostCapability::RunSubtask)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.message_subtask(req)).await
     }
 
@@ -118,16 +82,12 @@ impl HostClient for ScopedHostClient {
         &self,
         req: ReadSubtaskOutputRequest,
     ) -> crate::sdk::Result<ReadSubtaskOutputResponse> {
-        self.require_capability(method::HOST_SUBTASK_OUTPUT, HostCapability::RunSubtask)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.read_subtask_output(req)).await
     }
 
     async fn list_tools(&self) -> crate::sdk::Result<Vec<ToolDescriptor>> {
-        self.require_capability(method::HOST_TOOL_LIST, HostCapability::ListTools)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.list_tools()).await
     }
 
@@ -135,9 +95,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostContextStatusRequest,
     ) -> crate::sdk::Result<HostContextStatusResponse> {
-        self.require_capability(method::HOST_CONTEXT_STATUS, HostCapability::SessionRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.get_context_status(req)).await
     }
 
@@ -145,9 +103,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: crate::sdk::host_api::HostGetSessionRequest,
     ) -> crate::sdk::Result<crate::sdk::host_api::HostGetSessionResponse> {
-        self.require_capability("host/session.get", HostCapability::SessionRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.get_session(req)).await
     }
 
@@ -155,9 +111,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: crate::sdk::host_api::HostRenameSessionRequest,
     ) -> crate::sdk::Result<crate::sdk::host_api::HostRenameSessionResponse> {
-        self.require_capability("host/session.rename", HostCapability::SessionRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.rename_session(req)).await
     }
 
@@ -165,12 +119,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: crate::sdk::host_api::HostSetSessionModelRequest,
     ) -> crate::sdk::Result<crate::sdk::host_api::HostSetSessionModelResponse> {
-        self.require_capability(
-            crate::sdk::rpc::method::HOST_SESSION_SET_MODEL,
-            HostCapability::SessionRegistry,
-        )
-        .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.set_session_model(req)).await
     }
 
@@ -178,9 +127,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostImageExecuteRequest,
     ) -> crate::sdk::Result<HostImageExecuteResponse> {
-        self.require_capability(method::HOST_IMAGE_EXECUTE, HostCapability::ImageGeneration)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.image_execute(req)).await
     }
 
@@ -188,12 +135,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostEnterSnapshotRequest,
     ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.require_capability(
-            method::HOST_SNAPSHOT_ENTER,
-            HostCapability::SnapshotRegistry,
-        )
-        .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.enter_snapshot(req)).await
     }
 
@@ -201,23 +143,17 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostExitSnapshotRequest,
     ) -> crate::sdk::Result<ToolInvokeOutput> {
-        self.require_capability(method::HOST_SNAPSHOT_EXIT, HostCapability::SnapshotRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.exit_snapshot(req)).await
     }
 
     async fn monitor_start(&self, req: MonitorStartRequest) -> crate::sdk::Result<MonitorHandle> {
-        self.require_capability(method::HOST_MONITOR_START, HostCapability::MonitorRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.monitor_start(req)).await
     }
 
     async fn monitor_list(&self) -> crate::sdk::Result<Vec<MonitorHandle>> {
-        self.require_capability(method::HOST_MONITOR_LIST, HostCapability::MonitorRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.monitor_list()).await
     }
 
@@ -225,16 +161,12 @@ impl HostClient for ScopedHostClient {
         &self,
         req: MonitorReadRequest,
     ) -> crate::sdk::Result<MonitorReadResponse> {
-        self.require_capability(method::HOST_MONITOR_READ, HostCapability::MonitorRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.monitor_read(req)).await
     }
 
     async fn monitor_stop(&self, req: MonitorStopRequest) -> crate::sdk::Result<MonitorHandle> {
-        self.require_capability(method::HOST_MONITOR_STOP, HostCapability::MonitorRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.monitor_stop(req)).await
     }
 
@@ -242,12 +174,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostToolRegisterRequest,
     ) -> crate::sdk::Result<HostToolMutationResponse> {
-        self.require_capability(
-            method::HOST_TOOL_REGISTRY_REGISTER,
-            HostCapability::ToolRegistry,
-        )
-        .await?;
-        self.handle
+                self.handle
             .tool_upsert_for_plugin(&self.plugin_id, req.tool)
     }
 
@@ -255,12 +182,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostToolUpdateRequest,
     ) -> crate::sdk::Result<HostToolMutationResponse> {
-        self.require_capability(
-            method::HOST_TOOL_REGISTRY_UPDATE,
-            HostCapability::ToolRegistry,
-        )
-        .await?;
-        self.handle
+                self.handle
             .tool_upsert_for_plugin(&self.plugin_id, req.tool)
     }
 
@@ -268,45 +190,33 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostToolRemoveRequest,
     ) -> crate::sdk::Result<HostToolMutationResponse> {
-        self.require_capability(
-            method::HOST_TOOL_REGISTRY_REMOVE,
-            HostCapability::ToolRegistry,
-        )
-        .await?;
-        self.handle
+                self.handle
             .tool_remove_for_plugin(&self.plugin_id, &req.name, req.by_model_name)
     }
 
     async fn list_registered_tools(&self) -> crate::sdk::Result<HostRegisteredToolListResponse> {
-        self.require_capability(
-            method::HOST_TOOL_REGISTRY_LIST,
-            HostCapability::ToolRegistry,
-        )
-        .await?;
-        self.handle.registered_tool_list_response()
+                self.handle.registered_tool_list_response()
+    }
+
+    async fn list_plugins(&self) -> crate::sdk::Result<crate::sdk::HostPluginListResponse> {
+        Ok(self.handle.plugin_list_response())
     }
 
     async fn storage_get(
         &self,
         req: HostStorageGetRequest,
     ) -> crate::sdk::Result<HostStorageGetResponse> {
-        self.require_capability(method::HOST_STORAGE_GET, HostCapability::PluginStorage)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.storage_get(req)).await
     }
 
     async fn storage_set(&self, req: HostStorageSetRequest) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_STORAGE_SET, HostCapability::PluginStorage)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.storage_set(req)).await
     }
 
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_STORAGE_DELETE, HostCapability::PluginStorage)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.storage_delete(req)).await
     }
 
@@ -314,9 +224,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostStorageListRequest,
     ) -> crate::sdk::Result<HostStorageListResponse> {
-        self.require_capability(method::HOST_STORAGE_LIST, HostCapability::PluginStorage)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.storage_list(req)).await
     }
 
@@ -324,55 +232,38 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostSecretGetRequest,
     ) -> crate::sdk::Result<HostSecretGetResponse> {
-        self.require_capability(method::HOST_SECRET_GET, HostCapability::PluginSecrets)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.secret_get(req)).await
     }
 
     async fn secret_set(&self, req: HostSecretSetRequest) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_SECRET_SET, HostCapability::PluginSecrets)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.secret_set(req)).await
     }
 
     async fn secret_delete(&self, req: HostSecretDeleteRequest) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_SECRET_DELETE, HostCapability::PluginSecrets)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.secret_delete(req)).await
     }
 
     async fn secret_list(&self) -> crate::sdk::Result<HostSecretListResponse> {
-        self.require_capability(method::HOST_SECRET_LIST, HostCapability::PluginSecrets)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.secret_list()).await
     }
 
     async fn plugin_status_list(&self) -> crate::sdk::Result<HostPluginStatusListResponse> {
-        self.require_capability(
-            method::HOST_PLUGIN_STATUS_LIST,
-            HostCapability::PluginStatus,
-        )
-        .await?;
-        Ok(self.handle.plugin_status_list_response())
+                Ok(self.handle.plugin_status_list_response())
     }
 
     async fn plugin_status_get(
         &self,
         req: HostPluginStatusGetRequest,
     ) -> crate::sdk::Result<HostPluginStatusGetResponse> {
-        self.require_capability(method::HOST_PLUGIN_STATUS_GET, HostCapability::PluginStatus)
-            .await?;
-        Ok(self.handle.plugin_status_get_response(&req.plugin_id))
+                Ok(self.handle.plugin_status_get_response(&req.plugin_id))
     }
 
     async fn lsp_list_servers(&self) -> crate::sdk::Result<HostLspListServersResponse> {
-        self.require_capability(method::HOST_LSP_LIST_SERVERS, HostCapability::LspRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.lsp_list_servers()).await
     }
 
@@ -380,27 +271,18 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostLspListDiagnosticsRequest,
     ) -> crate::sdk::Result<HostLspListDiagnosticsResponse> {
-        self.require_capability(
-            method::HOST_LSP_LIST_DIAGNOSTICS,
-            HostCapability::LspRegistry,
-        )
-        .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.lsp_list_diagnostics(req))
             .await
     }
 
     async fn snapshot_list(&self) -> crate::sdk::Result<HostSnapshotListResponse> {
-        self.require_capability(method::HOST_SNAPSHOT_LIST, HostCapability::SnapshotRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.snapshot_list()).await
     }
 
     async fn scheduler_list(&self) -> crate::sdk::Result<HostSchedulerListResponse> {
-        self.require_capability(method::HOST_SCHEDULER_LIST, HostCapability::Scheduler)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.scheduler_list()).await
     }
 
@@ -408,9 +290,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostSchedulerCreateRequest,
     ) -> crate::sdk::Result<HostSchedulerCreateResponse> {
-        self.require_capability(method::HOST_SCHEDULER_CREATE, HostCapability::Scheduler)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.scheduler_create(req)).await
     }
 
@@ -418,29 +298,21 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostSchedulerDeleteRequest,
     ) -> crate::sdk::Result<HostSchedulerDeleteResponse> {
-        self.require_capability(method::HOST_SCHEDULER_DELETE, HostCapability::Scheduler)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.scheduler_delete(req)).await
     }
 
     async fn hook_list(&self) -> crate::sdk::Result<HostHookListResponse> {
-        self.require_capability(method::HOST_HOOK_LIST, HostCapability::HookRegistry)
-            .await?;
-        Ok(self.handle.hook_list_response().await)
+                Ok(self.handle.hook_list_response().await)
     }
 
     async fn mcp_list_servers(&self) -> crate::sdk::Result<HostMcpListServersResponse> {
-        self.require_capability(method::HOST_MCP_LIST_SERVERS, HostCapability::McpRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.mcp_list_servers()).await
     }
 
     async fn mcp_add_server(&self, req: HostMcpAddServerRequest) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_MCP_ADD_SERVER, HostCapability::McpRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.mcp_add_server(req)).await
     }
 
@@ -448,9 +320,7 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostMcpRemoveServerRequest,
     ) -> crate::sdk::Result<HostMcpRemoveServerResponse> {
-        self.require_capability(method::HOST_MCP_REMOVE_SERVER, HostCapability::McpRegistry)
-            .await?;
-        let inner = self.handle.inner.read().await.clone();
+                let inner = self.handle.inner.read().await.clone();
         host_api::run_in_host_callback_context(self.context(), inner.mcp_remove_server(req)).await
     }
 
@@ -458,61 +328,43 @@ impl HostClient for ScopedHostClient {
         &self,
         req: HostStatuslineContributeRequest,
     ) -> crate::sdk::Result<()> {
-        self.require_capability(
-            method::HOST_UI_STATUSLINE_CONTRIBUTE,
-            HostCapability::Statusline,
-        )
-        .await?;
-        self.handle.statusline_contribute(&self.plugin_id, req);
+                self.handle.statusline_contribute(&self.plugin_id, req);
         Ok(())
     }
 
     async fn ui_statusline_list(&self) -> crate::sdk::Result<HostStatuslineListResponse> {
-        self.require_capability(method::HOST_UI_STATUSLINE_LIST, HostCapability::Statusline)
-            .await?;
-        Ok(self.handle.statusline_list_response())
+                Ok(self.handle.statusline_list_response())
     }
 
     async fn ui_statusline_remove(
         &self,
         req: HostStatuslineRemoveRequest,
     ) -> crate::sdk::Result<HostStatuslineRemoveResponse> {
-        self.require_capability(
-            method::HOST_UI_STATUSLINE_REMOVE,
-            HostCapability::Statusline,
-        )
-        .await?;
-        let removed = self
+                let removed = self
             .handle
             .statusline_remove(&self.plugin_id, &req.segment_id);
         Ok(HostStatuslineRemoveResponse { removed })
     }
 
     async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::sdk::Result<()> {
-        self.require_capability(method::HOST_UI_THEME_REGISTER, HostCapability::Theme)
-            .await?;
-        self.handle.theme_register(&self.plugin_id, req)
+                self.handle.theme_register(&self.plugin_id, req)
     }
 
     async fn ui_theme_list(&self) -> crate::sdk::Result<HostThemeListResponse> {
-        self.require_capability(method::HOST_UI_THEME_LIST, HostCapability::Theme)
-            .await?;
-        Ok(self.handle.theme_list_response())
+                Ok(self.handle.theme_list_response())
     }
 
     async fn ui_theme_remove(
         &self,
         req: HostThemeRemoveRequest,
     ) -> crate::sdk::Result<HostThemeRemoveResponse> {
-        self.require_capability(method::HOST_UI_THEME_REMOVE, HostCapability::Theme)
-            .await?;
-        let removed = self.handle.theme_remove(&self.plugin_id, &req.id);
+                let removed = self.handle.theme_remove(&self.plugin_id, &req.id);
         Ok(HostThemeRemoveResponse { removed })
     }
 }
 use super::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventEnvelope, EventFilter,
-    EventSubscription, HostCallbackContext, HostCapability, HostClient, HostConfigReloadResponse,
+    EventSubscription, HostCallbackContext, HostClient, HostConfigReloadResponse,
     HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
     HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
     HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
@@ -530,5 +382,5 @@ use super::{
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
     ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput, host_api, method,
+    ScopedHostClient, SubtaskControlResponse, ToolDescriptor, ToolInvokeOutput, host_api,
 };

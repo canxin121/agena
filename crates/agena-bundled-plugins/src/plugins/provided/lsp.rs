@@ -12,9 +12,7 @@ use crate::message::{
 use crate::plugins::provided::router;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{HostClient, HostLspListServersResponse};
-use agena_plugin_host::sdk::{
-    HostCapability, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 
 fn lsp_config_schema() -> serde_json::Value {
     agena_runtime_tools::tool::definition::json_schema_for_default_with_metadata(
@@ -179,10 +177,11 @@ impl LspPlugin {
     }
 
     #[tool(
+        tags(query, lsp, discovery),
         summary = "List configured language servers.",
         read_only,
         lsp,
-        capabilities(HostCapability::LspRegistry),
+
         display = brief,
         concurrency_safe
     )]
@@ -213,11 +212,12 @@ impl LspPlugin {
     }
 
     #[tool(
+        tags(query, lsp, filesystem),
         summary = "Resolve symbol definitions.",
         read_only,
-        filesystem_read,
+
         lsp,
-        capabilities(HostCapability::LspRegistry),
+
         display = brief,
         concurrency_safe
     )]
@@ -230,11 +230,12 @@ impl LspPlugin {
     }
 
     #[tool(
+        tags(query, lsp, filesystem),
         summary = "Find symbol references.",
         read_only,
-        filesystem_read,
+
         lsp,
-        capabilities(HostCapability::LspRegistry),
+
         display = brief,
         concurrency_safe
     )]
@@ -247,11 +248,12 @@ impl LspPlugin {
     }
 
     #[tool(
+        tags(query, lsp, filesystem),
         summary = "Fetch hover text.",
         read_only,
-        filesystem_read,
+
         lsp,
-        capabilities(HostCapability::LspRegistry),
+
         display = brief,
         concurrency_safe
     )]
@@ -264,11 +266,12 @@ impl LspPlugin {
     }
 
     #[tool(
+        tags(query, lsp, filesystem),
         summary = "Fetch file diagnostics.",
         read_only,
-        filesystem_read,
+
         lsp,
-        capabilities(HostCapability::LspRegistry),
+
         display = brief,
         concurrency_safe
     )]

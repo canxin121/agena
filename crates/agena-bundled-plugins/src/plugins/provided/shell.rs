@@ -60,6 +60,7 @@ pub(crate) struct ProcessStopInput {
 )]
 impl ShellPlugin {
     #[tool(
+        tags(execute),
         summary = "Run one shell process.",
         help = "Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.",
         mutating,
@@ -86,6 +87,7 @@ impl ShellPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "List active background processes.",
         read_only,
         shell,
@@ -102,6 +104,7 @@ impl ShellPlugin {
     }
 
     #[tool(
+        tags(query),
         summary = "Read background process logs.",
         read_only,
         shell,
@@ -127,6 +130,7 @@ impl ShellPlugin {
     }
 
     #[tool(
+        tags(mutate, execute),
         summary = "Stop one background process.",
         mutating,
         shell,

@@ -432,8 +432,8 @@ impl App {
             ConfirmAction::PermissionStudioDeleteNetworkRule { target } => {
                 self.delete_permission_studio_network_rule(target.as_str())
             }
-            ConfirmAction::PermissionStudioDeleteToolTag { key } => {
-                self.delete_permission_studio_tool_tag(key.as_str())
+            ConfirmAction::PermissionStudioDeleteToolCapability { key } => {
+                self.delete_permission_studio_tool_capability(key.as_str())
             }
             ConfirmAction::PermissionStudioDeleteToolName { key } => {
                 self.delete_permission_studio_tool_name(key.as_str())

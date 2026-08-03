@@ -157,26 +157,13 @@ pub(crate) fn plugin_tools_text(
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(format!(
-            "Permission tags: {}",
-            if tool.permissions.tags.is_empty() {
+            "Tags: {}",
+            if tool.tags.is_empty() {
                 "none declared".to_owned()
             } else {
-                tool.permissions
-                    .tags
+                tool.tags
                     .iter()
                     .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            }
-        )));
-        lines.push(Line::from(format!(
-            "Host capabilities: {}",
-            if tool.capabilities.is_empty() {
-                "none declared".to_owned()
-            } else {
-                tool.capabilities
-                    .iter()
-                    .map(|capability| format!("{capability:?}"))
                     .collect::<Vec<_>>()
                     .join(", ")
             }

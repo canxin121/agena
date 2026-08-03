@@ -271,8 +271,8 @@ impl App {
                     self.open_permission_studio_creator(
                         &mut parent,
                         match kind {
-                            PermissionStudioCatalogKind::ToolTags => {
-                                PermissionStudioEditorAction::AddToolTag
+                            PermissionStudioCatalogKind::ToolCapabilities => {
+                                PermissionStudioEditorAction::AddToolCapability
                             }
                             PermissionStudioCatalogKind::ToolNames => {
                                 PermissionStudioEditorAction::AddToolName
@@ -313,8 +313,8 @@ impl App {
                     self.open_permission_studio_creator(
                         &mut parent,
                         match kind {
-                            PermissionStudioCatalogKind::ToolTags => {
-                                PermissionStudioEditorAction::AddToolTag
+                            PermissionStudioCatalogKind::ToolCapabilities => {
+                                PermissionStudioEditorAction::AddToolCapability
                             }
                             PermissionStudioCatalogKind::ToolNames => {
                                 PermissionStudioEditorAction::AddToolName

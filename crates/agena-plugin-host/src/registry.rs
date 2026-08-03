@@ -3,9 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::sdk::manifest::UiTextDisplayMode;
-use crate::sdk::{
-    HostCapability, PluginKey, ToolDefinition, ToolDescriptionMode, ToolKey, ToolTag,
-};
+use crate::sdk::{PluginKey, ToolDefinition, ToolDescriptionMode, ToolKey, ToolTag};
+
 
 pub fn validate_tool_definition(
     plugin_key: &PluginKey,
@@ -318,45 +317,7 @@ impl PluginToolRegistry {
     }
 }
 
-pub fn effective_capabilities(
-    manifest_capabilities: &[HostCapability],
-    tool_capabilities: &[HostCapability],
-) -> Vec<HostCapability> {
-    let mut capabilities = Vec::new();
-    for capability in manifest_capabilities
-        .iter()
-        .chain(tool_capabilities.iter())
-        .copied()
-    {
-        if !capabilities.contains(&capability) {
-            capabilities.push(capability);
-        }
-    }
-    capabilities
-}
 
-pub fn effective_capabilities_for_manifest(
-    tools: &[ToolDefinition],
-    manifest_capabilities: &[HostCapability],
-) -> Vec<HostCapability> {
-    let mut capabilities = manifest_capabilities.to_vec();
-    for tool in tools {
-        for capability in &tool.capabilities {
-            if !capabilities.contains(capability) {
-                capabilities.push(*capability);
-            }
-        }
-    }
-    capabilities
-}
-
-pub fn per_tool_capabilities(tools: &[ToolDefinition]) -> BTreeMap<String, Vec<HostCapability>> {
-    tools
-        .iter()
-        .filter(|tool| !tool.capabilities.is_empty())
-        .map(|tool| (tool.name.clone(), tool.capabilities.clone()))
-        .collect()
-}
 
 impl Default for PluginToolRegistry {
     fn default() -> Self {

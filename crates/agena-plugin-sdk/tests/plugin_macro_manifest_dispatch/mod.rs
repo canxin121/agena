@@ -1558,7 +1558,7 @@ fn hook_macro_filters_by_tool_and_command() {
     let tagged = runtime
         .block_on(Plugin::tool_execute_before(
             &plugin,
-            tool_before_input_with_tags("dynamic", vec![ToolTag::FilesystemWrite], json!({})),
+            tool_before_input_with_tags("dynamic", vec![ToolTag::Filesystem], json!({})),
         ))
         .expect("tagged tool hook dispatch should succeed")
         .expect("tagged hook should match");

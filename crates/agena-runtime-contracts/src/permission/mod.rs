@@ -2,18 +2,20 @@ use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
 };
+use agena_plugin_host::sdk::ToolPermissionContract;
 use path_clean::PathClean;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-use agena_plugin_host::sdk::ToolTag;
-
 #[derive(Debug, Clone)]
 pub struct ToolPermissionPolicy {
     pub(crate) default_mode: PermissionMode,
-    pub(crate) tag_modes: HashMap<String, PermissionMode>,
+    /// Modes keyed by tool capability (`read_only`, `shell`, `interactive`,
+    /// `task`). Capabilities are authority-bearing; tool tags are metadata
+    /// and never consulted by the policy engine.
+    pub(crate) capability_modes: HashMap<String, PermissionMode>,
     pub(crate) tool_modes: HashMap<String, PermissionMode>,
     pub(crate) bash_pattern_rules: Vec<BashPatternRule>,
     pub(crate) bash_deny_rules: Vec<BashPatternRule>,
@@ -170,10 +172,10 @@ fn bash_rule_qualifier_reverse(command: &str, rules: &[BashPatternRule]) -> Opti
 pub fn tool_action(
     tool_name: &str,
     command: Option<&str>,
-    tags: &[ToolTag],
+    contract: &ToolPermissionContract,
     policy: Option<&ToolPermissionPolicy>,
 ) -> PermissionAction {
-    let qualifier = if is_shell_tool(&[tool_name], tags) {
+    let qualifier = if is_shell_tool(&[tool_name], contract) {
         command.and_then(|command| bash_permission_qualifier(command, policy))
     } else {
         None
@@ -188,7 +190,7 @@ impl ToolPermissionPolicy {
     pub fn new(default_mode: PermissionMode) -> Self {
         Self {
             default_mode,
-            tag_modes: HashMap::new(),
+            capability_modes: HashMap::new(),
             tool_modes: HashMap::new(),
             bash_pattern_rules: Vec::new(),
             bash_deny_rules: Vec::new(),
@@ -225,9 +227,9 @@ impl ToolPermissionPolicy {
         &self,
         names: &[&str],
         command: Option<&str>,
-        tags: &[ToolTag],
+        contract: &ToolPermissionContract,
     ) -> PermissionDecision {
-        if is_shell_tool(names, tags)
+        if is_shell_tool(names, contract)
             && let Some(command) = command
         {
             if let Some(decision) = self.evaluate_bash_deny(command) {
@@ -240,19 +242,23 @@ impl ToolPermissionPolicy {
                 return decision;
             }
         }
-        self.check_tool_mode_with_names(names, tags)
+        self.check_tool_mode_with_names(names, contract)
     }
 
     pub fn check_tool(
         &self,
         name: &str,
         command: Option<&str>,
-        tags: &[ToolTag],
+        contract: &ToolPermissionContract,
     ) -> PermissionDecision {
-        self.check_tool_with_names(&[name], command, tags)
+        self.check_tool_with_names(&[name], command, contract)
     }
 
-    fn check_tool_mode_with_names(&self, names: &[&str], tags: &[ToolTag]) -> PermissionDecision {
+    fn check_tool_mode_with_names(
+        &self,
+        names: &[&str],
+        contract: &ToolPermissionContract,
+    ) -> PermissionDecision {
         if let Some((matched_name, mode)) = names.iter().find_map(|name| {
             self.tool_modes
                 .get(*name)
@@ -261,11 +267,18 @@ impl ToolPermissionPolicy {
         }) {
             return self.decision_for_mode(matched_name, mode);
         }
-        let matched = tags
+        let mode = self
+            .capability_modes
             .iter()
-            .filter_map(|tag| self.tag_modes.get(tag.as_ref()).copied())
-            .reduce(combine_permission_modes);
-        let mode = matched.unwrap_or(self.default_mode);
+            .filter_map(|(key, mode)| {
+                if capability_matches(key, contract) {
+                    Some(*mode)
+                } else {
+                    None
+                }
+            })
+            .reduce(combine_permission_modes)
+            .unwrap_or(self.default_mode);
         let name = names.first().copied().unwrap_or("tool");
         self.decision_for_mode(name, mode)
     }
@@ -372,8 +385,24 @@ impl ToolPermissionPolicy {
     }
 }
 
-fn is_shell_tool(names: &[&str], tags: &[ToolTag]) -> bool {
-    names.contains(&"bash") || tags.iter().any(|tag| matches!(tag, ToolTag::Shell))
+fn is_shell_tool(names: &[&str], contract: &ToolPermissionContract) -> bool {
+    names.contains(&"bash") || contract.shell
+}
+
+/// Whether a capability key from configuration matches a tool's permission
+/// contract. A tool matches a key when it carries the capability flag (e.g.
+/// `read_only`) or, for `path_scoped`, when it is scoped to declared paths.
+fn capability_matches(key: &str, contract: &ToolPermissionContract) -> bool {
+    match key {
+        "read_only" => contract.read_only && !contract.shell && !contract.interactive,
+        "shell" => contract.shell,
+        "interactive" => contract.interactive,
+        "task" => contract.task,
+        "path_scoped" => {
+            !contract.input_paths.is_empty() || !contract.path_access.is_empty()
+        }
+        _ => false,
+    }
 }
 
 pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> PermissionMode {
@@ -708,24 +737,32 @@ fn ipv4_to_u32(addr: Ipv4Addr) -> u32 {
 mod tests {
     use agena_domain::PermissionAction;
 
-    use super::{PermissionMode, ToolPermissionPolicy, ToolTag, tool_action};
+    use super::{PermissionMode, ToolPermissionPolicy, tool_action};
     use agena_domain::PermissionDecision;
+    use agena_plugin_host::sdk::ToolPermissionContract;
+
+    fn shell_contract() -> ToolPermissionContract {
+        ToolPermissionContract {
+            shell: true,
+            ..ToolPermissionContract::default()
+        }
+    }
 
     #[test]
-    fn shell_tag_applies_command_patterns_to_shell_runner() {
+    fn shell_capability_applies_command_patterns_to_shell_runner() {
         let mut policy = ToolPermissionPolicy::new(PermissionMode::Ask);
         policy.add_bash_overlay_rule("git status", PermissionMode::Allow);
         policy.add_bash_overlay_rule("git push *", PermissionMode::Deny);
 
         assert!(matches!(
-            policy.check_tool("agena.shell.run", Some("git status"), &[ToolTag::Shell],),
+            policy.check_tool("agena.shell.run", Some("git status"), &shell_contract()),
             PermissionDecision::Allow
         ));
         assert!(matches!(
             policy.check_tool(
                 "agena.shell.run",
                 Some("git push origin main"),
-                &[ToolTag::Shell],
+                &shell_contract(),
             ),
             PermissionDecision::Deny { .. }
         ));
@@ -733,7 +770,7 @@ mod tests {
             tool_action(
                 "agena.shell.run",
                 Some("git status"),
-                &[ToolTag::Shell],
+                &shell_contract(),
                 Some(&policy),
             ),
             PermissionAction::Tool {

@@ -112,8 +112,7 @@ impl NotesPlugin {
         name = "write",
         summary = "Write formatted text to a file.",
         help = "Writes the formatted text to the provided path. Path permission is declared directly on the input field.",
-        mutating,
-        filesystem_write
+        mutating
     )]
     async fn write(&self, input: &WriteNoteInput) -> Result<WriteNoteOutput> {
         let rendered = self.render(input.text.as_str());

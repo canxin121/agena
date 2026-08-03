@@ -88,6 +88,7 @@ impl SchemaLabPlugin {
 )]
 impl SchemaLabPlugin {
     #[tool(
+        tags(query),
         summary = "Inspect the schema lab fixture without mutating external state.",
         help = "Summarize one schema lab config section. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
         read_only,
@@ -100,6 +101,7 @@ impl SchemaLabPlugin {
     }
 
     #[tool(
+        tags(query),
         summary = "Echo schema lab input without mutating external state.",
         help = "Round-trip a label and arbitrary payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
         read_only,

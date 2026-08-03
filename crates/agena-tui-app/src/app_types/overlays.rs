@@ -90,7 +90,7 @@ pub(crate) enum PermissionStudioEditorAction {
     Text(PermissionStudioTextTarget),
     AddPathRule,
     AddNetworkRule,
-    AddToolTag,
+    AddToolCapability,
     AddToolName,
     AddToolRule,
     AddToolCommandPattern { tool_name: String },
@@ -102,7 +102,7 @@ pub(crate) use agena_tui_permission_studio::PermissionStudioModeTarget;
 pub(crate) enum PermissionStudioTextTarget {
     PathRulePattern { pattern: String },
     NetworkRuleTarget { target: String },
-    ToolTagKey { key: String },
+    ToolCapabilityKey { key: String },
     ToolNameKey { key: String },
     ToolRuleName { tool_name: String },
 }
@@ -144,7 +144,7 @@ pub(crate) enum ChoiceOverlayAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PermissionStudioCatalogKind {
-    ToolTags,
+    ToolCapabilities,
     ToolNames,
 }
 
@@ -320,7 +320,7 @@ pub(crate) enum ConfirmAction {
     PermissionStudioDeleteNetworkRule {
         target: String,
     },
-    PermissionStudioDeleteToolTag {
+    PermissionStudioDeleteToolCapability {
         key: String,
     },
     PermissionStudioDeleteToolName {

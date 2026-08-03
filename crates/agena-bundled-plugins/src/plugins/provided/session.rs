@@ -4,9 +4,7 @@ use crate::plugins::provided::workflow::{
     SessionRenameToolInput, WorkflowPlugin, WorkflowPluginConfig,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 
 pub(crate) const SESSION_PLUGIN_ID: &str = "agena.session";
 
@@ -38,10 +36,11 @@ impl SessionPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "Inspect the current session metadata.",
         read_only,
         display = brief,
-        capabilities(HostCapability::SessionRegistry),
+
         concurrency_safe
     )]
     async fn get(&self) -> SdkResult<ToolInvokeOutput> {
@@ -49,10 +48,11 @@ impl SessionPlugin {
     }
 
     #[tool(
+        tags(mutate),
         summary = "Rename the current session.",
         mutating,
         display = brief,
-        capabilities(HostCapability::SessionRegistry)
+
     )]
     async fn rename(&self, input: &SessionRenameToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_rename_session(input).await

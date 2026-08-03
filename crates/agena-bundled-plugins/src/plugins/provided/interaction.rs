@@ -3,9 +3,7 @@ use std::sync::Arc;
 use crate::message::{AskUserToolInput, InteractionNotifyToolInput};
 use crate::plugins::provided::workflow::{WorkflowPlugin, WorkflowPluginConfig};
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 
 pub(crate) const INTERACTION_PLUGIN_ID: &str = "agena.interaction";
 
@@ -37,16 +35,18 @@ impl InteractionPlugin {
     }
 
     #[tool(
+        tags(interactive),
         summary = "Ask the user for short structured input.",
         interactive,
         display = brief,
-        capabilities(HostCapability::AskUser)
+
     )]
     async fn ask(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_ask_user(input).await
     }
 
     #[tool(
+        tags(interactive),
         summary = "Show a non-blocking Markdown notification to the user.",
         display = detailed,
         concurrency_safe

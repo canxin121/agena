@@ -4,15 +4,18 @@ use crate::PermissionScope;
 
 /// Structured decision input for the permission pipeline. Unlike
 /// [`PermissionAction`] (the wire/UI contract), an `ActionSpec` carries the
-/// tool tags the policy engine needs, so decisions never depend on tool-name
-/// allowlists.
+/// tool's full [`ToolPermissionContract`] so decisions never depend on
+/// tool-name allowlists and never depend on tool tags: tags are metadata for
+/// discovery/UI, while the contract is the authority-bearing declaration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionSpec {
     Tool {
         tool_name: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        tags: Vec<String>,
+        /// The tool's full permission contract: `read_only`, `shell`,
+        /// `interactive`, `task` flags plus declared path/network specs.
+        #[serde(default)]
+        contract: ToolPermissionContract,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command: Option<String>,
     },
@@ -37,7 +40,7 @@ impl ActionSpec {
                 qualifier,
             } => Self::Tool {
                 tool_name: tool_name.clone(),
-                tags: Vec::new(),
+                contract: ToolPermissionContract::default(),
                 command: qualifier.clone(),
             },
             PermissionAction::PathAccess {
@@ -57,6 +60,15 @@ impl ActionSpec {
         }
     }
 }
+
+/// The tool's full permission contract: authority-bearing declarations of
+/// what the tool can do. The permission engine consumes this instead of tool
+/// tags: a tag is metadata (discovery, search, UI), while a contract flag or
+/// declared path/network spec is a declaration the permission engine may act
+/// on. `read_only` is only trusted when the contract contains no shell,
+/// interactive, network, or write access, so the automatic fast path never
+/// auto-approves arbitrary execution or remote effects.
+pub use crate::tool_permission_contract::ToolPermissionContract;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

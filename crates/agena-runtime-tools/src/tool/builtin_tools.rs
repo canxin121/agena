@@ -1,5 +1,4 @@
 use agena_plugin_host::registry::RegisteredTool;
-use agena_plugin_host::sdk::ToolTag;
 
 use agena_tool::BuiltinToolProfile;
 
@@ -22,14 +21,19 @@ impl BuiltinToolSet {
         if crate::tool::is_tool_api_handler(tool) {
             return true;
         }
-        self.are_tags_enabled(&tool.effective_tags())
+        self.is_contract_enabled(&tool.definition.permissions)
     }
 
-    pub fn are_tags_enabled(&self, tags: &[ToolTag]) -> bool {
+    /// Model-profile gating reads the permission contract directly: the
+    /// declared `read_only` and `task` flags are authority-bearing and never
+    /// come from tags.
+    pub fn is_contract_enabled(&self, contract: &agena_plugin_host::sdk::ToolPermissionContract) -> bool {
         match self.profile {
             BuiltinToolProfile::Full => true,
-            BuiltinToolProfile::ReadOnly => tags.iter().any(|tag| tag == &ToolTag::ReadOnly),
-            BuiltinToolProfile::NoTask => !tags.iter().any(|tag| tag == &ToolTag::Task),
+            BuiltinToolProfile::ReadOnly => {
+                contract.read_only && !contract.shell && !contract.interactive
+            }
+            BuiltinToolProfile::NoTask => !contract.task,
         }
     }
 }

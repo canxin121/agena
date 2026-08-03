@@ -5,10 +5,7 @@ use crate::plugins::provided::workflow::{
     planning_plugin_config_schema,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    CommandBeforeInput, CommandBeforeResponse, HostCapability, InitContext, InitOutcome,
-    Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{CommandBeforeInput, CommandBeforeResponse, InitContext, InitOutcome, Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput};
 
 pub(crate) const PLAN_PLUGIN_ID: &str = "agena.plan";
 
@@ -22,8 +19,7 @@ pub(crate) struct PlanPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Plan orchestration and plan-autorun tools.",
     config_schema = planning_plugin_config_schema(),
-    display = brief_detailed,
-    plugin_capabilities(HostCapability::PluginStorage, HostCapability::Statusline)
+    display = brief_detailed
 )]
 impl PlanPlugin {
     pub(crate) fn new() -> Self {
@@ -52,15 +48,12 @@ impl PlanPlugin {
     }
 
     #[tool(
+        tags(query, planning),
         summary = "Inspect the current plan state.",
         planning,
         read_only,
         display = brief,
-        capabilities(
-            HostCapability::AskUser,
-            HostCapability::PluginStorage,
-            HostCapability::Statusline
-        ),
+
         concurrency_safe
     )]
     async fn get(&self, input: &PlanGetInput) -> SdkResult<ToolInvokeOutput> {
@@ -68,46 +61,37 @@ impl PlanPlugin {
     }
 
     #[tool(
+        tags(mutate, planning),
         summary = "Create or replace the current plan.",
         planning,
         mutating,
         display = brief,
-        capabilities(
-            HostCapability::AskUser,
-            HostCapability::PluginStorage,
-            HostCapability::Statusline
-        )
+
     )]
     async fn set(&self, input: &PlanSetInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_plan_set(input).await
     }
 
     #[tool(
+        tags(mutate, planning),
         summary = "Update the current plan.",
         help = "Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
         planning,
         mutating,
         display = brief,
-        capabilities(
-            HostCapability::AskUser,
-            HostCapability::PluginStorage,
-            HostCapability::Statusline
-        )
+
     )]
     async fn update(&self, input: &PlanUpdateInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_plan_update(input).await
     }
 
     #[tool(
+        tags(mutate, planning),
         summary = "Remove the current plan.",
         planning,
         mutating,
         display = brief,
-        capabilities(
-            HostCapability::AskUser,
-            HostCapability::PluginStorage,
-            HostCapability::Statusline
-        )
+
     )]
     async fn clear(&self) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_plan_clear().await

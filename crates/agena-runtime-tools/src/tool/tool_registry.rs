@@ -96,6 +96,9 @@ fn tool_api_function_for_registered(tool: &RegisteredTool) -> Option<ToolApiFunc
         "help" => Some(ToolApiFunction::Help),
         "tags" => Some(ToolApiFunction::Tags),
         "call" => Some(ToolApiFunction::Call),
+        "plugins_list" => Some(ToolApiFunction::PluginsList),
+        "plugins_search" => Some(ToolApiFunction::PluginsSearch),
+        "plugins_tags" => Some(ToolApiFunction::PluginsTags),
         _ => None,
     }
 }
@@ -211,6 +214,15 @@ fn tool_api_description(function: ToolApiFunction) -> &'static str {
         }
         ToolApiFunction::Call => {
             "Run one known Agena execution tool. Never invent the tool name or guess its input schema. Set tool to an exact current-session identifier established by tools_list or tools_search, and set input to one complete object derived from live tools_help or reusable embedded help. If the tool is unknown, return to tools_search; if validation embeds complete help, read it and retry tools_call directly. The provider function name is always tools_call; all ordinary tools execute through this gateway."
+        }
+        ToolApiFunction::PluginsList => {
+            "Enumerate the current live plugin inventory. Each result lists the plugin id, version, summary, metadata tags, and the number of tools it publishes. Use this whenever the request asks which plugins or extensions are available; never answer plugin inventory from memory."
+        }
+        ToolApiFunction::PluginsSearch => {
+            "Locate a live plugin by the capability it provides, exact or partial plugin id, summary, or tag. Useful before choosing a plugin or understanding which plugin owns a tool. Returns the same fields as plugins_list."
+        }
+        ToolApiFunction::PluginsTags => {
+            "List tags used by the plugins loaded in this session. Use returned tags to filter plugins_list or plugins_search."
         }
     }
 }

@@ -83,7 +83,7 @@ impl ExecutorBackedShellAdapter {
     summary = "Definition-only filesystem adapter regression fixture."
 )]
 impl ExecutorBackedFsAdapter {
-    #[tool(name = "read", summary = "Read a file.", read_only, filesystem_read)]
+    #[tool(name = "read", summary = "Read a file.", read_only)]
     async fn read(&self, _input: &crate::message::ReadToolInput) -> String {
         "plugin adapter must not execute".to_owned()
     }

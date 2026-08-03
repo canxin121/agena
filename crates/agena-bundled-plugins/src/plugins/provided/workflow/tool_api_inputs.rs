@@ -18,7 +18,11 @@ pub(crate) struct ToolApiListInput {
     /// Maximum number of tools to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// Optional single tag filter such as `read_only` or `network`.
+    /// Optional plugin filter: only list tools published by this plugin id,
+    /// such as `agena.fs` or `agena.web`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    /// Optional single tag filter such as `query` or `network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
     /// Optional tag filters. When present, all normalized tags must match.
@@ -39,7 +43,11 @@ pub(crate) struct ToolApiSearchInput {
     /// Maximum number of search results to return.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
-    /// Optional single tag filter such as `read_only` or `network`.
+    /// Optional plugin filter: only search tools published by this plugin id,
+    /// such as `agena.fs` or `agena.web`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<String>,
+    /// Optional single tag filter such as `query` or `network`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
     /// Optional tag filters. When present, all normalized tags must match.

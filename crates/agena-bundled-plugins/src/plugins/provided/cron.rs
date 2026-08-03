@@ -12,7 +12,7 @@ use crate::message::{
 use crate::plugins::provided::router;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{HostCapability, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
 
 pub(crate) const CRON_PLUGIN_ID: &str = "agena.cron";
 
@@ -58,10 +58,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(query, scheduler, discovery),
         summary = "List registered cron jobs and wakeups.",
         read_only,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = brief,
         concurrency_safe
     )]
@@ -81,10 +82,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(mutate, scheduler),
         summary = "Create one cron schedule.",
         mutating,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = brief
     )]
     async fn invoke_create(
@@ -103,10 +105,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(mutate, scheduler),
         summary = "Delete one cron schedule.",
         mutating,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = brief
     )]
     async fn invoke_delete(
@@ -125,10 +128,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(mutate, scheduler),
         summary = "Update the prompt or schedule parameters of one retained job.",
         mutating,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = brief
     )]
     async fn invoke_update(
@@ -147,10 +151,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(mutate, scheduler),
         summary = "Pause one scheduled job without deleting it.",
         mutating,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = brief
     )]
     async fn invoke_pause(
@@ -169,10 +174,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(mutate, scheduler),
         summary = "Resume one paused scheduled job.",
         mutating,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = brief
     )]
     async fn invoke_resume(
@@ -191,10 +197,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(query, scheduler),
         summary = "Inspect bounded persisted delivery history for scheduled jobs.",
         read_only,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = detailed,
         concurrency_safe
     )]
@@ -214,10 +221,11 @@ impl CronPlugin {
     }
 
     #[tool(
+        tags(mutate, scheduler),
         summary = "Create one one-shot wakeup.",
         mutating,
         scheduler,
-        capabilities(HostCapability::Scheduler),
+
         display = brief
     )]
     async fn invoke_wakeup(

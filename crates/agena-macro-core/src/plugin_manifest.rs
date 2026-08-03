@@ -150,15 +150,10 @@ pub fn expand_plugin_layer_manifest(
         .as_ref()
         .map(|mode| quote! { manifest.ui_display_mode = Some(#mode); })
         .unwrap_or_default();
-    let plugin_capabilities_expr_assignment = config
-        .plugin_capabilities_expr
-        .as_ref()
-        .map(|capabilities| quote! { manifest.add_plugin_capabilities(#capabilities); })
-        .unwrap_or_default();
-    let plugin_capability_assignments = config
-        .plugin_capabilities
+    let plugin_tag_assignments = config
+        .plugin_tags
         .iter()
-        .map(|capability| quote! { manifest.add_plugin_capability(#capability); })
+        .map(|tag| quote! { manifest.tags.push(#tag); })
         .collect::<Vec<_>>();
     let tool_definition_assignments = tools
         .iter()
@@ -185,8 +180,7 @@ pub fn expand_plugin_layer_manifest(
             #skills_assignment
             #tool_description_mode_assignment
             #ui_display_mode_assignment
-            #plugin_capabilities_expr_assignment
-            #(#plugin_capability_assignments)*
+            #(#plugin_tag_assignments)*
             #(#tool_definition_assignments)*
             #(#command_definition_assignments)*
             manifest

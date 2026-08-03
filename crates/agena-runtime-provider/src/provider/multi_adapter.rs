@@ -1133,7 +1133,7 @@ mod tests {
             runtime: Default::default(),
             permissions: Default::default(),
             display: Default::default(),
-            capabilities: Vec::new(),
+            tags: Vec::new(),
         };
         ToolApiBinding::from_registered_tool(
             RegisteredTool::new(plugin, definition).expect("registered Tool API handler"),

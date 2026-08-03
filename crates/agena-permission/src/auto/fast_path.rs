@@ -2,9 +2,9 @@
 //! in-workspace reads, managed project-state writes, and exact no-op shell
 //! commands are allowed without a model call.
 //!
-//! Read-only detection is tag-driven (`read_only` + `filesystem_read`),
-//! never tool-name allowlists, so MCP and future plugins are covered
-//! automatically.
+//! Read-only detection is capability-driven ([`ToolCapabilities::read_only`]),
+//! never tool-name allowlists and never tool tags, so MCP and future plugins
+//! are covered automatically.
 
 use agena_domain::ActionSpec;
 
@@ -31,7 +31,7 @@ pub fn auto_fast_path(action: &ActionSpec, managed_project_root: Option<&str>) -
     match action {
         ActionSpec::Tool {
             tool_name,
-            tags,
+            contract,
             command,
         } => {
             if is_interaction_tool(tool_name) {
@@ -40,7 +40,7 @@ pub fn auto_fast_path(action: &ActionSpec, managed_project_root: Option<&str>) -
                         .to_owned(),
                 };
             }
-            if is_read_only_tool(tags) {
+            if contract.read_only && !contract.shell && !contract.interactive {
                 return AutoFastPath::Allow;
             }
             if command.as_deref().is_some_and(is_exact_noop_command) {
@@ -71,10 +71,6 @@ fn is_interaction_tool(tool_name: &str) -> bool {
     name == "interaction.ask" || name.starts_with("interaction.")
 }
 
-fn is_read_only_tool(tags: &[String]) -> bool {
-    tags.iter().any(|tag| tag == "read_only") && tags.iter().any(|tag| tag == "filesystem_read")
-}
-
 /// Exact no-op shell commands: they cannot change anything.
 fn is_exact_noop_command(command: &str) -> bool {
     matches!(command.trim(), "true" | ":" | "false")
@@ -99,12 +95,12 @@ pub(crate) fn path_is_within_workspace(target: &str, workspace_root: &str) -> bo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_domain::ActionSpec;
+    use agena_domain::{ActionSpec, ToolPermissionContract};
 
-    fn tool(name: &str, tags: &[&str], command: Option<&str>) -> ActionSpec {
+    fn tool(name: &str, contract: ToolPermissionContract, command: Option<&str>) -> ActionSpec {
         ActionSpec::Tool {
             tool_name: name.to_owned(),
-            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            contract,
             command: command.map(ToOwned::to_owned),
         }
     }
@@ -117,34 +113,50 @@ mod tests {
         }
     }
 
+    fn read_only_contract() -> ToolPermissionContract {
+        ToolPermissionContract {
+            read_only: true,
+            input_paths: vec![agena_domain::InputPathSpec {
+                jsonpath: "$.path".to_owned(),
+                kind: agena_domain::PathKind::Read,
+                fallback: None,
+                optional: false,
+            }],
+            ..ToolPermissionContract::default()
+        }
+    }
+
     #[test]
     fn asks_for_interactive_tools() {
         for name in ["interaction.ask", "agena.interaction.ask"] {
             assert!(matches!(
-                auto_fast_path(&tool(name, &[], None), None),
+                auto_fast_path(&tool(name, ToolPermissionContract::default(), None), None),
                 AutoFastPath::Ask { .. }
             ));
         }
     }
 
     #[test]
-    fn allows_read_only_tagged_tools_without_name_allowlists() {
+    fn allows_read_only_contract_tools_without_name_allowlists() {
         assert_eq!(
-            auto_fast_path(
-                &tool("any.plugin.read", &["read_only", "filesystem_read"], None),
-                None
-            ),
+            auto_fast_path(&tool("any.plugin.read", read_only_contract(), None), None),
             AutoFastPath::Allow
         );
         assert_eq!(
-            auto_fast_path(
-                &tool("mcp.read_file", &["read_only", "filesystem_read"], None),
-                None
-            ),
+            auto_fast_path(&tool("mcp.read_file", read_only_contract(), None), None),
             AutoFastPath::Allow
         );
+        let write_contract = ToolPermissionContract {
+            input_paths: vec![agena_domain::InputPathSpec {
+                jsonpath: "$.path".to_owned(),
+                kind: agena_domain::PathKind::Write,
+                fallback: None,
+                optional: false,
+            }],
+            ..ToolPermissionContract::default()
+        };
         assert_eq!(
-            auto_fast_path(&tool("fs.write", &["filesystem_write"], None), None),
+            auto_fast_path(&tool("fs.write", write_contract, None), None),
             AutoFastPath::Defer
         );
     }
@@ -174,9 +186,13 @@ mod tests {
 
     #[test]
     fn allows_exact_noop_commands() {
+        let shell_contract = ToolPermissionContract {
+            shell: true,
+            ..ToolPermissionContract::default()
+        };
         for command in ["true", ":", "false"] {
             assert_eq!(
-                auto_fast_path(&tool("shell.run", &["shell"], Some(command)), None),
+                auto_fast_path(&tool("shell.run", shell_contract.clone(), Some(command)), None),
                 AutoFastPath::Allow
             );
         }

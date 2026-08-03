@@ -40,11 +40,8 @@ pub trait HostClient: Send + Sync + 'static {
 
     // ---------------- Host workflow capabilities ----------------
     //
-    // These are optional host APIs that any plugin can request via
-    // `HostCapability`. Hosts that don't expose a capability should return
-    // `HostUnavailable`.
-
-    /// Prompt the user for input via the active session UI (used by the
+    // These are optional host APIs any plugin may call; hosts that do not
+    // implement one return `HostUnavailable`.    /// Prompt the user for input via the active session UI (used by the
     /// `ask_user` tool).
     async fn ask_user(&self, _req: AskUserRequest) -> Result<AskUserResponse> {
         Err(unavailable())
@@ -170,6 +167,13 @@ pub trait HostClient: Send + Sync + 'static {
 
     /// Dynamic tool registry — list all registered tools known to the plugin host.
     async fn list_registered_tools(&self) -> Result<HostRegisteredToolListResponse> {
+        Err(unavailable())
+    }
+
+    /// List every plugin loaded by the host, with manifest metadata (id,
+    /// version, summary, tags) so plugins can discover each other without
+    /// static host-capability gating.
+    async fn list_plugins(&self) -> Result<HostPluginListResponse> {
         Err(unavailable())
     }
 
@@ -616,6 +620,9 @@ pub struct ReadSubtaskOutputResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDescriptor {
     pub name: String,
+    /// Fully qualified plugin id that publishes this tool, e.g. `agena.fs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -670,6 +677,12 @@ pub struct HostContextStatusResponse {
     pub model_adapter_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verbosity: Option<String>,
     pub prompt_window_generation: u64,
     pub compacted: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1090,6 +1103,28 @@ pub struct HostPluginStatus {
 pub struct HostPluginStatusListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<HostPluginStatus>,
+}
+
+/// One loaded plugin's manifest metadata plus its tool names, used for
+/// plugin discovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostPluginDescriptor {
+    pub plugin_id: PluginKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Canonical names of every execution tool this plugin publishes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HostPluginListResponse {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<HostPluginDescriptor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

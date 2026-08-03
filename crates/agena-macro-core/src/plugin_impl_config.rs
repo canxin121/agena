@@ -21,8 +21,7 @@ pub struct PluginImplConfig {
     pub ui_display: Option<Ident>,
     pub tool_description_mode: Option<Expr>,
     pub ui_display_mode: Option<Expr>,
-    pub plugin_capabilities_expr: Option<Expr>,
-    pub plugin_capabilities: Vec<Expr>,
+    pub plugin_tags: Vec<Expr>,
     pub export: Option<Ident>,
     pub export_bind: Option<Expr>,
 }
@@ -45,8 +44,7 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut ui_display = None;
     let mut tool_description_mode = None;
     let mut ui_display_mode = None;
-    let mut plugin_capabilities_expr = None;
-    let mut plugin_capabilities = Vec::new();
+    let mut plugin_tags = Vec::new();
     let mut export = None;
     let mut export_bind = None;
     for meta in metas {
@@ -83,8 +81,12 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                             ident,
                             "plugin-level `commands = ...` was removed; define commands with method-level #[command(...)]",
                         ));
+                    }                    "tags" => {
+                        return Err(syn::Error::new_spanned(
+                            ident,
+                            "plugin-level `tags(...)` is not supported; declare plugin metadata tags with `tags(ToolTag::...)` on the plugin attribute list",
+                        ));
                     }
-                    "plugin_capabilities" => plugin_capabilities_expr = Some(value.value),
                     "hooks" => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -105,9 +107,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                 let Some(ident) = list.path.get_ident() else {
                     return Err(syn::Error::new_spanned(list.path, "expected identifier"));
                 };
-                match ident.to_string().as_str() {
-                    "plugin_capabilities" => {
-                        plugin_capabilities.extend(parse_expr_list(list.tokens)?)
+                match ident.to_string().as_str() {                    "tags" => {
+                        plugin_tags.extend(parse_expr_list(list.tokens)?);
                     }
                     other => {
                         return Err(syn::Error::new_spanned(
@@ -179,8 +180,7 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
         ui_display,
         tool_description_mode,
         ui_display_mode,
-        plugin_capabilities_expr,
-        plugin_capabilities,
+        plugin_tags,
         export,
         export_bind,
     })

@@ -90,6 +90,7 @@ impl ReportPlugin {
     }
 
     #[tool(
+        tags(mutate, discovery),
         name = "findings",
         summary = "Publish structured file-and-line findings for UI and integrations.",
         read_only,

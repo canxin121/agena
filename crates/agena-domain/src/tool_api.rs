@@ -19,10 +19,25 @@ pub enum ToolApiFunction {
     Tags,
     #[serde(rename = "tools_call")]
     Call,
+    #[serde(rename = "plugins_list")]
+    PluginsList,
+    #[serde(rename = "plugins_search")]
+    PluginsSearch,
+    #[serde(rename = "plugins_tags")]
+    PluginsTags,
 }
 
 impl ToolApiFunction {
-    pub const ALL: [Self; 5] = [Self::List, Self::Search, Self::Help, Self::Tags, Self::Call];
+    pub const ALL: [Self; 8] = [
+        Self::List,
+        Self::Search,
+        Self::Help,
+        Self::Tags,
+        Self::Call,
+        Self::PluginsList,
+        Self::PluginsSearch,
+        Self::PluginsTags,
+    ];
 
     /// The exact function name advertised to and accepted from providers.
     pub const fn function_name(self) -> &'static str {
@@ -32,6 +47,9 @@ impl ToolApiFunction {
             Self::Help => "tools_help",
             Self::Tags => "tools_tags",
             Self::Call => "tools_call",
+            Self::PluginsList => "plugins_list",
+            Self::PluginsSearch => "plugins_search",
+            Self::PluginsTags => "plugins_tags",
         }
     }
 
@@ -42,6 +60,9 @@ impl ToolApiFunction {
             "tools_help" => Some(Self::Help),
             "tools_tags" => Some(Self::Tags),
             "tools_call" => Some(Self::Call),
+            "plugins_list" => Some(Self::PluginsList),
+            "plugins_search" => Some(Self::PluginsSearch),
+            "plugins_tags" => Some(Self::PluginsTags),
             _ => None,
         }
     }

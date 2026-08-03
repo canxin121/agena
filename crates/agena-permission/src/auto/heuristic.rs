@@ -209,7 +209,10 @@ mod tests {
     fn shell(command: &str) -> ActionSpec {
         ActionSpec::Tool {
             tool_name: "shell.run".to_owned(),
-            tags: vec!["shell".to_owned()],
+            contract: agena_domain::ToolPermissionContract {
+                shell: true,
+                ..agena_domain::ToolPermissionContract::default()
+            },
             command: Some(command.to_owned()),
         }
     }

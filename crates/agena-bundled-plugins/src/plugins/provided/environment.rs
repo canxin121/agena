@@ -87,10 +87,11 @@ impl EnvironmentPlugin {
     }
 
     #[tool(
+        tags(query, filesystem, network),
         summary = "Wait until a path, TCP endpoint, or HTTP health check is ready.",
         read_only,
-        filesystem_read,
-        network,
+
+
         display = detailed,
         concurrency_safe
     )]

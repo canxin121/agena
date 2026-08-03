@@ -2,17 +2,19 @@
 
 use std::path::Path;
 
-use agena_domain::{AccessKind, AccessSelector, NetworkTarget, PermissionDecision, PermissionMode};
+use agena_domain::{
+    AccessKind, AccessSelector, NetworkTarget, PermissionDecision, PermissionMode,
+};
 pub use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
     PermissionConfig, ToolPermissionConfig, ToolPermissionRules,
 };
+use agena_plugin_host::sdk::ToolPermissionContract;
 use indexmap::IndexMap;
 
 use crate::permission::{
     NetworkPermissionPolicy, PermissionConfigError, PermissionPolicy, ToolPermissionPolicy,
 };
-use agena_plugin_host::sdk::ToolTag;
 
 pub fn apply_to_permission_policy(
     config: &PermissionConfig,
@@ -155,10 +157,12 @@ pub fn apply_tool_permission_config(
     if let Some(mode) = value.default {
         base.default_mode = mode;
     }
-    for (tag, mode) in &value.tags {
-        if let Some(tag) = ToolTag::from_tag(tag) {
-            base.tag_modes.insert(tag.as_ref().to_string(), *mode);
+    for (capability, mode) in &value.capabilities {
+        let capability = capability.trim();
+        if capability.is_empty() {
+            continue;
         }
+        base.capability_modes.insert(capability.to_string(), *mode);
     }
     for (tool_name, mode) in value.names.iter().chain(value.plugin.iter()) {
         let name = tool_name.trim();
@@ -339,17 +343,22 @@ impl ExecutionPrincipal {
         &self,
         tool_name: &str,
         command: Option<&str>,
-        tags: &[ToolTag],
+        contract: &ToolPermissionContract,
     ) -> PermissionDecision {
         if self.blocked {
             return PermissionDecision::Deny {
                 reason: "execution principal is blocked".to_owned(),
             };
         }
-        let decision = self.tool_policy.check_tool(tool_name, command, tags);
+        let decision = self
+            .tool_policy
+            .check_tool(tool_name, command, contract);
         match self.tool_ceiling_policy.as_ref() {
             Some(ceiling) => {
-                restrictive_decision(decision, ceiling.check_tool(tool_name, command, tags))
+                restrictive_decision(
+                    decision,
+                    ceiling.check_tool(tool_name, command, contract),
+                )
             }
             None => decision,
         }
@@ -359,7 +368,7 @@ impl ExecutionPrincipal {
         &self,
         tool_names: &[&str],
         command: Option<&str>,
-        tags: &[ToolTag],
+        contract: &ToolPermissionContract,
     ) -> PermissionDecision {
         if self.blocked {
             return PermissionDecision::Deny {
@@ -368,27 +377,31 @@ impl ExecutionPrincipal {
         }
         let decision = self
             .tool_policy
-            .check_tool_with_names(tool_names, command, tags);
+            .check_tool_with_names(tool_names, command, contract);
         match self.tool_ceiling_policy.as_ref() {
             Some(ceiling) => restrictive_decision(
                 decision,
-                ceiling.check_tool_with_names(tool_names, command, tags),
+                ceiling.check_tool_with_names(tool_names, command, contract),
             ),
             None => decision,
         }
     }
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
-        self.authorize_tool_tags(tool_name, &[])
+        self.authorize_tool(tool_name, None, &ToolPermissionContract::default())
     }
 
-    pub fn authorize_tool_tags(&self, tool_name: &str, tags: &[ToolTag]) -> PermissionDecision {
+    pub fn authorize_tool_contract(
+        &self,
+        tool_name: &str,
+        contract: &ToolPermissionContract,
+    ) -> PermissionDecision {
         if self.blocked {
             return PermissionDecision::Deny {
                 reason: "execution principal is blocked".to_owned(),
             };
         }
-        self.authorize_tool(tool_name, None, tags)
+        self.authorize_tool(tool_name, None, contract)
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {
@@ -460,9 +473,12 @@ mod permission_ceiling_tests {
 
         for tool in ["agena.web.search", "agena.web.fetch"] {
             assert_eq!(
-                principal.authorize_tool_tags(
+                principal.authorize_tool_contract(
                     tool,
-                    &[ToolTag::ReadOnly, ToolTag::Network, ToolTag::Internet],
+                    &ToolPermissionContract {
+                        read_only: true,
+                        ..ToolPermissionContract::default()
+                    },
                 ),
                 PermissionDecision::Allow,
             );
@@ -513,12 +529,15 @@ mod permission_ceiling_tests {
             "the built-in workspace read default must not open an approval request"
         );
         assert_eq!(
-            principal.authorize_tool_tags(
+            principal.authorize_tool_contract(
                 "agena.fs.read",
-                &[ToolTag::ReadOnly, ToolTag::FilesystemRead],
+                &ToolPermissionContract {
+                    read_only: true,
+                    ..ToolPermissionContract::default()
+                },
             ),
             PermissionDecision::Allow,
-            "filesystem read tools must retain their explicit allow tag"
+            "filesystem read tools must remain allowed without any tag coupling"
         );
     }
 

@@ -8,9 +8,7 @@ use crate::plugins::provided::router;
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
-use agena_plugin_host::sdk::{
-    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -125,10 +123,11 @@ pub(crate) fn new_plugin() -> FsPlugin {
 )]
 impl FsPlugin {
     #[tool(
+        tags(query, filesystem),
         summary = "Read workspace files.",
         help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
         read_only,
-        filesystem_read,
+
         display = detailed,
         examples(r#"{"path":"Cargo.toml"}"#),
         concurrency_safe
@@ -142,10 +141,11 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(query, filesystem, discovery),
         summary = "Find paths with glob patterns.",
         help = "Use `glob` for focused path discovery before reading or editing files. Results are paginated (default 200, maximum 1000) and dependency/VCS/build directories are skipped unless `include_ignored` is true or the base path explicitly names one.",
         read_only,
-        filesystem_read,
+
         discovery,
         display = detailed,
         examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
@@ -160,10 +160,11 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(query, filesystem, discovery),
         summary = "Search file contents with regex.",
         help = "Use `grep` for regex text search across files in the workspace.",
         read_only,
-        filesystem_read,
+
         discovery,
         display = detailed,
         examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
@@ -178,10 +179,11 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Apply a text patch.",
         help = "Use `apply_patch` for explicit text patch operations against workspace files.",
         mutating,
-        filesystem_write,
+
         display = detailed,
         path(requests = permission_paths_internal("apply_patch", input)?),
         concurrency_safe
@@ -195,10 +197,11 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Create a UTF-8 text file or replace one at an expected revision.",
         help = "Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites.",
         mutating,
-        filesystem_write,
+
         display = detailed,
         path(requests = vec![PathRequest::write(input.path.clone())]),
         concurrency_safe
@@ -269,10 +272,11 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(mutate, filesystem),
         summary = "Replace exact UTF-8 text with occurrence and revision checks.",
         mutating,
-        filesystem_read,
-        filesystem_write,
+
+
         display = detailed,
         path(requests = vec![PathRequest::read(input.path.clone()), PathRequest::write(input.path.clone())]),
         concurrency_safe
@@ -336,9 +340,10 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(query, filesystem),
         summary = "Read multiple UTF-8 files within one bounded byte budget.",
         read_only,
-        filesystem_read,
+
         display = detailed,
         path(requests = input.paths.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         concurrency_safe
@@ -404,9 +409,10 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(query, filesystem),
         summary = "Inspect file metadata and an optional SHA-256 revision.",
         read_only,
-        filesystem_read,
+
         display = detailed,
         path(requests = vec![PathRequest::read(input.path.clone())]),
         concurrency_safe
@@ -464,9 +470,10 @@ impl FsPlugin {
     }
 
     #[tool(
+        tags(query, filesystem),
         summary = "Attach a local image for visual inspection with an explicit detail hint.",
         read_only,
-        filesystem_read,
+
         display = detailed,
         path(requests = vec![PathRequest::read(input.path.clone())]),
         concurrency_safe

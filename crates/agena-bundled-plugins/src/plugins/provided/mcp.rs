@@ -21,10 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::message::{AttachmentItem, OperationBlock};
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{
-    InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch,
-    ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput};
 
 pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
@@ -165,6 +162,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(query, mcp, discovery),
         name = "resources.list",
         summary = "List MCP resources from one server.",
         read_only,
@@ -185,6 +183,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(query, mcp, discovery),
         name = "resources.templates.list",
         summary = "List MCP resource templates from one server.",
         read_only,
@@ -211,6 +210,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(query, mcp),
         name = "resources.read",
         summary = "Read one MCP resource by URI.",
         read_only,
@@ -237,6 +237,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(query, mcp, discovery),
         name = "prompts.list",
         summary = "List MCP prompt templates from one server.",
         read_only,
@@ -257,6 +258,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(query, mcp),
         name = "prompts.get",
         summary = "Fetch one MCP prompt template.",
         read_only,
@@ -280,6 +282,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(execute, mcp),
         name = "tools.call",
         summary = "Call one discovered MCP tool.",
         mutating,
@@ -306,6 +309,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(query, mcp, discovery),
         name = "tools.search",
         summary = "Search the current MCP tool index without expanding all schemas.",
         read_only,
@@ -399,6 +403,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(query, mcp, discovery),
         name = "servers.status",
         summary = "Inspect configured MCP connection health and discovered tool counts.",
         read_only,
@@ -483,6 +488,7 @@ impl McpPlugin {
     }
 
     #[tool(
+        tags(mutate, mcp),
         name = "servers.reconnect",
         summary = "Reconnect one configured MCP server and refresh its tool cache.",
         mutating,

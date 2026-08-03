@@ -80,9 +80,29 @@ mod tests {
     use agena_domain::ActionSpec;
 
     fn tool(name: &str, tags: &[&str], command: Option<&str>) -> ActionSpec {
+        let mut contract = agena_domain::ToolPermissionContract::default();
+        for tag in tags {
+            match *tag {
+                "read_only" => contract.read_only = true,
+                "filesystem_read" | "filesystem_write" => {
+                    contract.input_paths.push(agena_domain::InputPathSpec {
+                        jsonpath: "$.path".to_owned(),
+                        kind: if *tag == "filesystem_write" {
+                            agena_domain::PathKind::Write
+                        } else {
+                            agena_domain::PathKind::Read
+                        },
+                        fallback: None,
+                        optional: false,
+                    });
+                }
+                "shell" => contract.shell = true,
+                _ => {}
+            }
+        }
         ActionSpec::Tool {
             tool_name: name.to_owned(),
-            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            contract,
             command: command.map(ToOwned::to_owned),
         }
     }

@@ -18,13 +18,24 @@ pub struct PermissionConfig {
     pub path: Option<PathPermissionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<NetworkPermissionConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_tools"
+    )]
     pub tools: Option<ToolPermissionConfig>,
     /// Model used to make an automatic permission decision. The runtime must
     /// fail closed to an interactive `ask` when this reference is absent or
     /// cannot be resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_model: Option<ApprovalModelSelection>,
+}
+
+fn deserialize_tools<'de, D>(deserializer: D) -> Result<Option<ToolPermissionConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<ToolPermissionConfig>::deserialize(deserializer)
 }
 
 impl PermissionConfig {
@@ -50,7 +61,7 @@ impl PermissionConfig {
             }),
             tools: Some(ToolPermissionConfig {
                 default: Some(auto),
-                tags: BTreeMap::from([("filesystem_read".to_string(), PermissionMode::Allow)]),
+                capabilities: BTreeMap::from([("read_only".to_string(), PermissionMode::Allow)]),
                 names: BTreeMap::from([
                     ("agena.web.search".to_string(), PermissionMode::Allow),
                     ("agena.web.fetch".to_string(), PermissionMode::Allow),

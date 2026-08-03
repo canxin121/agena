@@ -3,8 +3,8 @@ use super::{
     parse_permission_studio_optional_mode_input, path_access_modes_summary, path_rule_modes,
     permission_mode_input_text, permission_mode_label, permission_mode_token_text,
     permission_rule_count_summary, permission_studio_mode_target_value, rename_network_rule,
-    rename_path_rule, rename_tool_name, rename_tool_rule, rename_tool_tag, set_path_default_mode,
-    tool_permission_rules_summary,
+    rename_path_rule, rename_tool_capability, rename_tool_name, rename_tool_rule,
+    set_path_default_mode, tool_permission_rules_summary,
 };
 
 pub(crate) fn permission_studio_sections(
@@ -208,15 +208,15 @@ pub(crate) fn permission_studio_sections(
                 items: rule_items,
             }]
         }
-        PermissionStudioPage::ToolTags => {
+        PermissionStudioPage::ToolCapabilities => {
             let mut keys = dialog
                 .permission
                 .tools
                 .as_ref()
-                .map(|tools| tools.tags.keys().cloned().collect::<Vec<_>>())
+                .map(|tools| tools.capabilities.keys().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             keys.sort();
-            let mut tag_items = vec![
+            let mut capability_items = vec![
                 permission_studio_new_rule_item(i18n),
                 PermissionStudioItem {
                     label: ui_text::t(i18n, "permission-studio-tool-default"),
@@ -233,7 +233,7 @@ pub(crate) fn permission_studio_sections(
                     ),
                 },
             ];
-            tag_items.extend(
+            capability_items.extend(
                 keys.into_iter()
                     .map(|key| PermissionStudioItem {
                         label: key.clone(),
@@ -242,19 +242,19 @@ pub(crate) fn permission_studio_sections(
                                 .permission
                                 .tools
                                 .as_ref()
-                                .and_then(|tools| tools.tags.get(key.as_str()).copied()),
+                                .and_then(|tools| tools.capabilities.get(key.as_str()).copied()),
                             i18n,
                         ),
                         action: PermissionStudioAction::EditMode(
-                            PermissionStudioModeTarget::ToolTag { key },
+                            PermissionStudioModeTarget::ToolCapability { key },
                         ),
                     })
                     .collect::<Vec<_>>(),
             );
             vec![PermissionStudioSection {
-                id: PermissionStudioSectionId::ToolTags,
+                id: PermissionStudioSectionId::ToolCapabilities,
                 label: ui_text::t(i18n, "permission-studio-page-tags"),
-                items: tag_items,
+                items: capability_items,
             }]
         }
         PermissionStudioPage::ToolNames => {
@@ -462,7 +462,7 @@ pub(crate) fn permission_studio_sections(
                                 .permission
                                 .tools
                                 .as_ref()
-                                .map(|tools| tools.tags.len())
+                                .map(|tools| tools.capabilities.len())
                                 .unwrap_or_default(),
                         ),
                         action: PermissionStudioAction::Noop,
@@ -531,7 +531,7 @@ pub(crate) fn permission_studio_mode_target_label(
             PermissionStudioModeTarget::PathRuleRead { .. } => "permission-studio-rule-pattern",
             PermissionStudioModeTarget::PathRuleWrite { .. } => "permission-studio-rule-pattern",
             PermissionStudioModeTarget::NetworkRule { .. } => "permission-studio-rule-target",
-            PermissionStudioModeTarget::ToolTag { .. }
+            PermissionStudioModeTarget::ToolCapability { .. }
             | PermissionStudioModeTarget::ToolName { .. }
             | PermissionStudioModeTarget::ToolRule { .. }
             | PermissionStudioModeTarget::ToolCommandPattern { .. } => "permission-studio-rule-key",
@@ -558,7 +558,7 @@ pub(crate) fn permission_studio_text_target_label(
         match target {
             PermissionStudioTextTarget::PathRulePattern { .. } => "permission-studio-rule-pattern",
             PermissionStudioTextTarget::NetworkRuleTarget { .. } => "permission-studio-rule-target",
-            PermissionStudioTextTarget::ToolTagKey { .. }
+            PermissionStudioTextTarget::ToolCapabilityKey { .. }
             | PermissionStudioTextTarget::ToolNameKey { .. }
             | PermissionStudioTextTarget::ToolRuleName { .. } => "permission-studio-rule-key",
         },
@@ -571,7 +571,7 @@ pub(crate) fn permission_studio_text_target_input_text(
     match target {
         PermissionStudioTextTarget::PathRulePattern { pattern }
         | PermissionStudioTextTarget::NetworkRuleTarget { target: pattern }
-        | PermissionStudioTextTarget::ToolTagKey { key: pattern }
+        | PermissionStudioTextTarget::ToolCapabilityKey { key: pattern }
         | PermissionStudioTextTarget::ToolNameKey { key: pattern }
         | PermissionStudioTextTarget::ToolRuleName { tool_name: pattern } => pattern.clone(),
     }
@@ -596,8 +596,11 @@ pub(crate) fn permission_studio_creator_spec(
             ),
             String::new(),
         ),
-        PermissionStudioEditorAction::AddToolTag => (
-            settings_edit_title(i18n, ui_text::t(i18n, "permission-studio-add-tag").as_str()),
+        PermissionStudioEditorAction::AddToolCapability => (
+            settings_edit_title(
+                i18n,
+                ui_text::t(i18n, "permission-studio-add-tag").as_str(),
+            ),
             String::new(),
         ),
         PermissionStudioEditorAction::AddToolName => (
@@ -708,15 +711,15 @@ pub(crate) fn apply_permission_studio_mode_input(
                 network.rules.shift_remove(target.as_str());
             }
         }
-        PermissionStudioModeTarget::ToolTag { key } => {
+        PermissionStudioModeTarget::ToolCapability { key } => {
             if let Some(mode) = mode {
                 permission
                     .tools
                     .get_or_insert_with(Default::default)
-                    .tags
+                    .capabilities
                     .insert(key.clone(), mode);
             } else if let Some(tools) = permission.tools.as_mut() {
-                tools.tags.remove(key.as_str());
+                tools.capabilities.remove(key.as_str());
             }
         }
         PermissionStudioModeTarget::ToolName { key } => {
@@ -788,9 +791,9 @@ pub(crate) fn apply_permission_studio_text_input(
             rename_network_rule(permission, target.as_str(), value.as_str());
             PermissionStudioPage::NetworkRules
         }
-        PermissionStudioTextTarget::ToolTagKey { key } => {
-            rename_tool_tag(permission, key.as_str(), value.as_str());
-            PermissionStudioPage::ToolTags
+        PermissionStudioTextTarget::ToolCapabilityKey { key } => {
+            rename_tool_capability(permission, key.as_str(), value.as_str());
+            PermissionStudioPage::ToolCapabilities
         }
         PermissionStudioTextTarget::ToolNameKey { key } => {
             rename_tool_name(permission, key.as_str(), value.as_str());
@@ -844,7 +847,7 @@ mod tests {
         for page in [
             PermissionStudioPage::PathRules,
             PermissionStudioPage::NetworkRules,
-            PermissionStudioPage::ToolTags,
+            PermissionStudioPage::ToolCapabilities,
             PermissionStudioPage::ToolNames,
             PermissionStudioPage::ToolCommandRules,
         ] {

@@ -130,21 +130,6 @@ impl PluginHost {
                     .write()
                     .map_err(|_| HostError::Config("plugin name registry lock poisoned".into()))?
                     .insert(reused.key(), reused.manifest.name.clone());
-                host_handle
-                    .set_plugin_capabilities(
-                        reused.key(),
-                        effective_capabilities_for_manifest(
-                            &reused.manifest.tools,
-                            &reused.manifest.plugin_capabilities,
-                        ),
-                    )
-                    .await;
-                host_handle
-                    .set_plugin_tool_capabilities(
-                        reused.key(),
-                        crate::registry::per_tool_capabilities(&reused.manifest.tools),
-                    )
-                    .await;
                 host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&reused));
                 if let Some(previous_status) = previous
                     .as_ref()
@@ -194,21 +179,6 @@ impl PluginHost {
                             HostError::Config("plugin name registry lock poisoned".into())
                         })?
                         .insert(plugin.key(), plugin.manifest.name.clone());
-                    host_handle
-                        .set_plugin_capabilities(
-                            plugin.key(),
-                            effective_capabilities_for_manifest(
-                                &plugin.manifest.tools,
-                                &plugin.manifest.plugin_capabilities,
-                            ),
-                        )
-                        .await;
-                    host_handle
-                        .set_plugin_tool_capabilities(
-                            plugin.key(),
-                            crate::registry::per_tool_capabilities(&plugin.manifest.tools),
-                        )
-                        .await;
                     host_handle.set_plugin_hook_catalog(hook_registration_for_plugin(&plugin));
                     let status_kind = plugin.kind;
                     let initial = crate::status::PluginStatus::initial(&plugin.key(), status_kind);
@@ -256,6 +226,6 @@ impl PluginHost {
 use super::{
     Arc, ConfiguredPlugin, HashMap, HostError, HostHandle, LoadedPlugin, NoopHostClient,
     PluginHost, PluginHostBuildConfig, PluginKey, PluginLogStore, PluginToolRegistry, RwLock,
-    StaticRegistration, effective_capabilities_for_manifest, hook_registration_for_plugin,
+    StaticRegistration, hook_registration_for_plugin,
     load_entry,
 };

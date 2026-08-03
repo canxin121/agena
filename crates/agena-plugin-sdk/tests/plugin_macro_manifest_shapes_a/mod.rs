@@ -7,7 +7,6 @@ fn tool_input_flatten_shape_propagates_declarative_permissions() {
         "$.file_path"
     );
     assert_eq!(FlattenSemanticOuter::input_paths()[0].kind, PathKind::Read);
-    assert!(FlattenSemanticOuter::input_tags().contains(&ToolTag::FilesystemRead));
 }
 
 #[test]
@@ -61,9 +60,6 @@ fn tool_input_enum_flatten_shape_propagates_declarative_permissions() {
     let tool = tool_by_name(&manifest, "variant_flatten_semantic");
     assert_eq!(tool.permissions.input_paths, paths);
     assert_eq!(tool.permissions.input_networks, networks);
-    assert!(tool.has_tag(ToolTag::FilesystemRead));
-    assert!(tool.has_tag(ToolTag::Network));
-    assert!(tool.has_tag(ToolTag::Internet));
 }
 
 #[test]
@@ -89,9 +85,6 @@ fn tool_input_nested_shape_propagates_declarative_permissions() {
         schema.pointer("/properties/payload/properties/endpoint/x-agena-network"),
         Some(&json!("internet"))
     );
-    assert!(NestedSemanticOuter::input_tags().contains(&ToolTag::FilesystemRead));
-    assert!(NestedSemanticOuter::input_tags().contains(&ToolTag::Network));
-    assert!(NestedSemanticOuter::input_tags().contains(&ToolTag::Internet));
 }
 
 #[test]

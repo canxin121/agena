@@ -1564,8 +1564,10 @@ impl NetworkPermissionConfigResource {
 pub struct ToolPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<PermissionMode>,
+    /// Modes keyed by tool capability (`read_only`, `shell`, `interactive`,
+    /// `task`). Tool tags are metadata and never carry authority.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tags: BTreeMap<String, PermissionMode>,
+    pub capabilities: BTreeMap<String, PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub names: BTreeMap<String, PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1575,7 +1577,7 @@ pub struct ToolPermissionConfigResource {
 impl ToolPermissionConfigResource {
     pub fn is_empty(&self) -> bool {
         self.default.is_none()
-            && self.tags.is_empty()
+            && self.capabilities.is_empty()
             && self.names.is_empty()
             && self.rules.is_empty()
     }

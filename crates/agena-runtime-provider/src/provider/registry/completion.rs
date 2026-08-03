@@ -389,7 +389,12 @@ fn validate_tool_api_argument_semantics(
             }
             Ok(())
         }
-        ToolApiFunction::List | ToolApiFunction::Search | ToolApiFunction::Tags => Ok(()),
+        ToolApiFunction::List
+        | ToolApiFunction::Search
+        | ToolApiFunction::Tags
+        | ToolApiFunction::PluginsList
+        | ToolApiFunction::PluginsSearch
+        | ToolApiFunction::PluginsTags => Ok(()),
     }
 }
 

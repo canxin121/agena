@@ -740,8 +740,8 @@ pub fn permission_config_resource_from_domain(
             .as_ref()
             .map(|tools| ToolPermissionConfigResource {
                 default: tools.default.map(permission_mode_resource_from_domain),
-                tags: tools
-                    .tags
+                capabilities: tools
+                    .capabilities
                     .iter()
                     .map(|(name, mode)| (name.clone(), permission_mode_resource_from_domain(*mode)))
                     .collect(),

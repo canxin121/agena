@@ -65,6 +65,7 @@ mod tool_invocation;
 mod tool_output;
 mod tool_permission;
 mod tool_permission_config;
+mod tool_permission_contract;
 mod tool_result;
 mod usage_period;
 mod usage_query;
@@ -182,6 +183,10 @@ pub use tool_invocation::{ToolApiCall, ToolInvocation};
 pub use tool_output::{ToolManagedOutput, ToolOutput};
 pub use tool_permission::ToolPermissionRules;
 pub use tool_permission_config::ToolPermissionConfig;
+pub use tool_permission_contract::{
+    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
+    ToolPermissionContract,
+};
 pub use tool_result::{ToolPresentationSection, ToolResultDisplay, ToolResultState};
 pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;

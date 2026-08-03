@@ -7,6 +7,10 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use agena_domain::{
+    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
+    ToolPermissionContract,
+};
 pub use super::manifest_support::normalize_tool_tag_name;
 use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 
@@ -41,18 +45,16 @@ pub struct PluginManifest {
     pub tools: Vec<ToolDefinition>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<PluginCommandDefinition>,
+    /// Metadata tags describing what this plugin does for discovery/search/UI.
+    /// Tags are metadata only and never carry authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<ToolTag>,
     /// Declarative Skill packages contributed by this plugin. They are data
     /// carried in the already-validated plugin manifest, not arbitrary paths
     /// for the host to scan. Hosts must still apply their normal Skill trust,
     /// activation, and allowed-tool policies before injecting instructions.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<PluginSkillDefinition>,
-    /// Plugin-level host capabilities. Useful for plugins that need to
-    /// call host APIs without exposing any model-visible tool. These are merged
-    /// into the effective capability set alongside the per-tool
-    /// definitions.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plugin_capabilities: Vec<HostCapability>,
     /// UI contributions owned by this plugin. TUI-facing content and Studio
     /// Web-facing views/controls are intentionally split so each host can
     /// consume only the view it can render.
@@ -92,26 +94,43 @@ pub struct PluginSkillDefinition {
     pub aliases: Vec<String>,
 }
 
+/// Metadata tags describing what a tool *does* for discovery, search, UI
+/// badges, and workflow hints. Tags are function/category metadata only and
+/// are fully decoupled from the permission contract: a tag never carries
+/// authority, and the permission engine never reads a tag.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ToolTag {
-    ReadOnly,
-    Mutating,
-    Task,
-    FilesystemRead,
-    FilesystemWrite,
+    /// Query/read-style tools (fetch data, inspect state).
+    Query,
+    /// State-changing tools (create, update, delete).
+    Mutate,
+    /// Execute or run something (shell commands, code execution).
+    Execute,
+    /// Operates on files/paths in the workspace.
+    Filesystem,
+    /// Talks to remote services (web, APIs, network targets).
     Network,
-    Internet,
-    Shell,
-    Interactive,
+    /// Reads/consumes a remote service without changing it.
+    Fetch,
+    /// Discovers or lists things (search, list, index, help).
     Discovery,
+    /// Interacts with a live process, server, or human session.
+    Interactive,
+    /// Supports planning / plan-locked workflows.
     Planning,
+    /// Goal-driven or long-horizon task tools.
     Goal,
+    /// Works with snapshots/checkpoints.
     Snapshot,
+    /// Scheduled/background automation.
     Scheduler,
+    /// Language-server-backed code intelligence.
     Lsp,
+    /// MCP bridge tools.
     Mcp,
+    /// Spawns or manages subtasks.
     Subtask,
-    PrivateNetwork,
+    /// Custom extension tags contributed by a plugin.
     Custom(String),
 }
 
@@ -124,16 +143,14 @@ impl ToolTag {
     pub fn from_tag(tag: impl AsRef<str>) -> Option<Self> {
         let normalized = normalize_tool_tag_name(tag)?;
         Some(match normalized.as_str() {
-            "read_only" => Self::ReadOnly,
-            "mutating" => Self::Mutating,
-            "task" => Self::Task,
-            "filesystem_read" => Self::FilesystemRead,
-            "filesystem_write" => Self::FilesystemWrite,
+            "query" => Self::Query,
+            "mutate" => Self::Mutate,
+            "execute" => Self::Execute,
+            "filesystem" => Self::Filesystem,
             "network" => Self::Network,
-            "internet" => Self::Internet,
-            "shell" => Self::Shell,
-            "interactive" => Self::Interactive,
+            "fetch" => Self::Fetch,
             "discovery" => Self::Discovery,
+            "interactive" => Self::Interactive,
             "planning" => Self::Planning,
             "goal" => Self::Goal,
             "snapshot" => Self::Snapshot,
@@ -141,23 +158,20 @@ impl ToolTag {
             "lsp" => Self::Lsp,
             "mcp" => Self::Mcp,
             "subtask" => Self::Subtask,
-            "private_network" => Self::PrivateNetwork,
             other => Self::Custom(other.to_string()),
         })
     }
 
     fn label(&self) -> &str {
         match self {
-            Self::ReadOnly => "read_only",
-            Self::Mutating => "mutating",
-            Self::Task => "task",
-            Self::FilesystemRead => "filesystem_read",
-            Self::FilesystemWrite => "filesystem_write",
+            Self::Query => "query",
+            Self::Mutate => "mutate",
+            Self::Execute => "execute",
+            Self::Filesystem => "filesystem",
             Self::Network => "network",
-            Self::Internet => "internet",
-            Self::Shell => "shell",
-            Self::Interactive => "interactive",
+            Self::Fetch => "fetch",
             Self::Discovery => "discovery",
+            Self::Interactive => "interactive",
             Self::Planning => "planning",
             Self::Goal => "goal",
             Self::Snapshot => "snapshot",
@@ -165,7 +179,6 @@ impl ToolTag {
             Self::Lsp => "lsp",
             Self::Mcp => "mcp",
             Self::Subtask => "subtask",
-            Self::PrivateNetwork => "private_network",
             Self::Custom(value) => value.as_str(),
         }
     }
@@ -223,8 +236,15 @@ pub struct ToolDefinition {
     pub permissions: ToolPermissionContract,
     #[serde(default)]
     pub display: ToolDisplay,
+
+    ///
+    /// Tags are metadata only and never carry authority. Permission decisions
+    /// read [`ToolPermissionContract`]; a tag must never be treated as a
+    /// permission. `effective_tags` augments these declared tags with display
+    /// tags derived from the permission contract for the same discovery/UI
+    /// purposes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<HostCapability>,
+    pub tags: Vec<ToolTag>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -266,20 +286,6 @@ pub struct ToolRuntimePolicy {
     pub streaming: ToolStreamingMode,
     #[serde(default, skip_serializing_if = "ToolResultPolicy::is_default")]
     pub result_policy: ToolResultPolicy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub struct ToolPermissionContract {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub input_paths: Vec<InputPathSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub input_networks: Vec<InputNetworkSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub path_access: Vec<PathAccessSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub network_access: Vec<NetworkAccessSpec>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<ToolTag>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -472,30 +478,11 @@ impl ToolDefinition {
     }
 
     pub fn effective_tags(&self) -> Vec<ToolTag> {
-        let mut tags = normalize_tags(self.permissions.tags.iter().cloned());
-        let mut push_normalized_tag = |tag: ToolTag| {
-            if !tags.iter().any(|existing| existing == &tag) {
-                tags.push(tag);
-            }
-        };
-        for spec in &self.permissions.input_paths {
-            match spec.kind {
-                PathKind::Read => push_normalized_tag(ToolTag::FilesystemRead),
-                PathKind::Write => push_normalized_tag(ToolTag::FilesystemWrite),
-            }
-        }
-        for spec in &self.permissions.path_access {
-            match spec.kind {
-                PathKind::Read => push_normalized_tag(ToolTag::FilesystemRead),
-                PathKind::Write => push_normalized_tag(ToolTag::FilesystemWrite),
-            }
-        }
-        if !self.permissions.input_networks.is_empty()
-            || !self.permissions.network_access.is_empty()
-        {
-            push_normalized_tag(ToolTag::Network);
-        }
-        tags
+        // Declared metadata tags only. Tags describe what the tool does for
+        // discovery/UI/workflow hints and are fully decoupled from the
+        // permission contract: authority lives exclusively in
+        // [`ToolPermissionContract`] and is never derived from a tag.
+        normalize_tags(self.tags.iter().cloned())
     }
 
     pub fn has_tag(&self, tag: ToolTag) -> bool {
@@ -505,12 +492,6 @@ impl ToolDefinition {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum PathKind {
-    Read,
-    Write,
-}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -594,34 +575,6 @@ impl ToolDisplayPreset {
             Self::Compact => UiTextDisplayMode::Summary,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum HostCapability {
-    AskUser,
-    RunSubtask,
-    ListTools,
-    SessionRegistry,
-    MonitorRegistry,
-    ReadConfig,
-    ReloadConfig,
-    InvokeTool,
-    PublishEvent,
-    SubscribeEvents,
-    Scheduler,
-    SnapshotRegistry,
-    LspRegistry,
-    ToolRegistry,
-    PluginStorage,
-    PluginSecrets,
-    PluginStatus,
-    CronScheduler,
-    HookRegistry,
-    McpRegistry,
-    Statusline,
-    Theme,
-    ImageGeneration,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -940,50 +893,9 @@ fn default_studio_view_kind() -> String {
     "markdown".to_string()
 }
 
-/// Single declarative path extraction rule. `jsonpath` is a subset:
-/// dot-paths (`$.path`, `$.files[*].path`). The host extracts each match
-/// from the tool input JSON, classifies it under [`PathKind`], and runs it
-/// through the permission auditor before the tool body executes.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InputPathSpec {
-    pub jsonpath: String,
-    pub kind: PathKind,
-    /// Value used when `jsonpath` has no matches. This is useful for inputs
-    /// whose omitted field has a meaningful permission target, such as the
-    /// workspace root represented by an empty path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback: Option<String>,
-    /// If true, missing matches are silently ignored instead of erroring.
-    #[serde(default)]
-    pub optional: bool,
-}
 
-/// Single declarative network extraction rule. `jsonpath` uses the same subset
-/// as [`InputPathSpec`]. Each match must resolve to a string URL, host, or
-/// host:port target.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct InputNetworkSpec {
-    pub jsonpath: String,
-    /// Value used when `jsonpath` has no matches.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback: Option<String>,
-    /// If true, missing matches are silently ignored instead of erroring.
-    #[serde(default)]
-    pub optional: bool,
-}
 
-/// One static filesystem target used by a plugin tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PathAccessSpec {
-    pub path: String,
-    pub kind: PathKind,
-}
 
-/// One static outbound network target used by a plugin tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct NetworkAccessSpec {
-    pub target: String,
-}
 
 #[cfg(test)]
 mod tests {
@@ -1174,8 +1086,8 @@ impl PluginManifest {
             hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
             tools: Vec::new(),
             commands: Vec::new(),
+            tags: Vec::new(),
             skills: Vec::new(),
-            plugin_capabilities: Vec::new(),
             ui: PluginUiContributions::default(),
             config_schema: None,
             config_schema_i18n: BTreeMap::new(),
@@ -1185,21 +1097,6 @@ impl PluginManifest {
     pub fn set_display(&mut self, preset: ToolDisplayPreset) {
         self.tool_description_mode = Some(preset.tool_description_mode());
         self.ui_display_mode = Some(preset.ui_display_mode());
-    }
-
-    pub fn add_plugin_capability(&mut self, capability: HostCapability) {
-        if !self.plugin_capabilities.contains(&capability) {
-            self.plugin_capabilities.push(capability);
-        }
-    }
-
-    pub fn add_plugin_capabilities(
-        &mut self,
-        capabilities: impl IntoIterator<Item = HostCapability>,
-    ) {
-        for capability in capabilities {
-            self.add_plugin_capability(capability);
-        }
     }
 
     pub fn summary_text(&self) -> Option<&str> {

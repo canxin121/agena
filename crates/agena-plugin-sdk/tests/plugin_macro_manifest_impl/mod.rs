@@ -1085,7 +1085,7 @@ impl ManifestPlugin {
         }
     }
 
-    #[hook(tool.before, plugins("test.manifest"), tags(filesystem_write), priority = 20)]
+    #[hook(tool.before, plugins("test.manifest"), tags(filesystem), priority = 20)]
     fn write_tag_before(&self, _input: ToolBeforeInput) -> ToolBeforePatch {
         ToolBeforePatch {
             title_override: Some("write".to_string()),

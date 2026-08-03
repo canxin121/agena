@@ -12,10 +12,7 @@ use agena_plugin_host::sdk::host_api::{
     RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskResponse,
     RunSubtaskStatus, run_in_host_callback_context,
 };
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, SessionEndInput,
-    ToolInvokeContext, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, SessionEndInput, ToolInvokeContext, ToolInvokeOutput};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -190,22 +187,24 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, execute),
         summary = "Create or resume a delegated subagent task.",
         task,
         subtask,
         display = detailed,
-        capabilities(HostCapability::RunSubtask, HostCapability::PluginStorage)
+
     )]
     async fn run(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_task(input).await
     }
 
     #[tool(
+        tags(subtask, mutate),
         summary = "Create a delegated subagent task in the background.",
         task,
         subtask,
         display = detailed,
-        capabilities(HostCapability::RunSubtask, HostCapability::PluginStorage)
+
     )]
     async fn create(
         &self,
@@ -293,12 +292,13 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, query, discovery),
         summary = "List delegated background tasks.",
         read_only,
         task,
         display = detailed,
         concurrency_safe,
-        capabilities(HostCapability::PluginStorage)
+
     )]
     async fn list(
         &self,
@@ -329,12 +329,13 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, query),
         summary = "Get delegated task metadata and terminal result.",
         read_only,
         task,
         display = detailed,
         concurrency_safe,
-        capabilities(HostCapability::PluginStorage)
+
     )]
     async fn get(
         &self,
@@ -353,12 +354,13 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, query),
         summary = "Read incremental delegated-task transcript output after a cursor.",
         read_only,
         task,
         display = detailed,
         concurrency_safe,
-        capabilities(HostCapability::RunSubtask, HostCapability::PluginStorage)
+
     )]
     async fn output(
         &self,
@@ -420,11 +422,12 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, mutate),
         summary = "Cancel a running delegated task and its child execution.",
         task,
         subtask,
         display = detailed,
-        capabilities(HostCapability::RunSubtask, HostCapability::PluginStorage)
+
     )]
     async fn cancel(
         &self,
@@ -466,11 +469,12 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, mutate),
         summary = "Send additional guidance to a running delegated task.",
         task,
         subtask,
         display = detailed,
-        capabilities(HostCapability::RunSubtask, HostCapability::PluginStorage)
+
     )]
     async fn message(
         &self,
@@ -503,11 +507,12 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, mutate),
         summary = "Resume a terminal delegated task with a follow-up prompt.",
         task,
         subtask,
         display = detailed,
-        capabilities(HostCapability::RunSubtask, HostCapability::PluginStorage)
+
     )]
     async fn followup(
         &self,
@@ -570,12 +575,13 @@ impl TasksPlugin {
     }
 
     #[tool(
+        tags(subtask, query),
         summary = "Wait for any or all delegated tasks to finish.",
         read_only,
         task,
         display = detailed,
         concurrency_safe,
-        capabilities(HostCapability::PluginStorage)
+
     )]
     async fn wait(
         &self,
@@ -984,7 +990,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::message::{TaskAccess, TaskToolInput};
-    use agena_plugin_host::sdk::{HostCapability, Plugin};
+    use agena_plugin_host::sdk::{Plugin};
 
     use super::{AsyncTaskEntry, AsyncTaskState, TasksPlugin, lock_state};
 
@@ -993,7 +999,6 @@ mod tests {
         let manifest = TasksPlugin::new().manifest();
         let tool = manifest.tools.first().expect("task tool");
         assert_eq!(tool.name, "run");
-        assert!(tool.capabilities.contains(&HostCapability::RunSubtask));
         let schema = &tool.contract.input_schema;
         assert!(schema.pointer("/properties/access").is_some());
         assert!(schema.pointer("/properties/profile").is_none());
@@ -1024,13 +1029,10 @@ mod tests {
             ]
         );
         for name in ["create", "output", "cancel", "message", "followup"] {
-            let tool = manifest
-                .tools
-                .iter()
-                .find(|tool| tool.name == name)
-                .expect("task lifecycle tool");
-            assert!(tool.capabilities.contains(&HostCapability::RunSubtask));
-            assert!(tool.capabilities.contains(&HostCapability::PluginStorage));
+            assert!(
+                manifest.tools.iter().any(|tool| tool.name == name),
+                "missing task lifecycle tool `{name}`"
+            );
         }
     }
 

@@ -40,8 +40,8 @@ mod permission_studio_tests {
 
         apply_permission_studio_entries_mode(
             &mut permission,
-            PermissionStudioCatalogKind::ToolTags,
-            vec!["filesystem".to_owned(), "network".to_owned()],
+            PermissionStudioCatalogKind::ToolCapabilities,
+            vec!["shell".to_owned(), "task".to_owned()],
             PermissionMode::Deny,
         );
         apply_permission_studio_entries_mode(
@@ -54,8 +54,8 @@ mod permission_studio_tests {
         let tools = permission
             .tools
             .expect("tool permissions should be created");
-        assert_eq!(tools.tags.get("filesystem"), Some(&PermissionMode::Deny));
-        assert_eq!(tools.tags.get("network"), Some(&PermissionMode::Deny));
+        assert_eq!(tools.capabilities.get("shell"), Some(&PermissionMode::Deny));
+        assert_eq!(tools.capabilities.get("task"), Some(&PermissionMode::Deny));
         assert_eq!(
             tools.names.get("agena.shell.run"),
             Some(&PermissionMode::Allow)

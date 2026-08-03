@@ -562,7 +562,7 @@ mod tests {
                     decision: PermissionDecision::Auto {
                         reason: "workspace write is eligible for automatic approval".to_owned(),
                     },
-                    tags: Vec::new(),
+                    contract: agena_domain::ToolPermissionContract::default(),
                 }],
             )
             .await
@@ -620,7 +620,15 @@ mod tests {
                     decision: PermissionDecision::Auto {
                         reason: "tool is eligible for automatic approval".to_owned(),
                     },
-                    tags: vec!["filesystem_write".to_owned()],
+                    contract: agena_domain::ToolPermissionContract {
+                            input_paths: vec![agena_domain::InputPathSpec {
+                                jsonpath: "$.path".to_owned(),
+                                kind: agena_domain::PathKind::Write,
+                                fallback: None,
+                                optional: false,
+                            }],
+                            ..agena_domain::ToolPermissionContract::default()
+                        },
                 }],
             )
             .await
@@ -652,7 +660,15 @@ mod tests {
                             reason: "tool 'fs.apply_patch' requires confirmation by policy"
                                 .to_owned(),
                         },
-                        tags: vec!["filesystem_write".to_owned()],
+                        contract: agena_domain::ToolPermissionContract {
+                            input_paths: vec![agena_domain::InputPathSpec {
+                                jsonpath: "$.path".to_owned(),
+                                kind: agena_domain::PathKind::Write,
+                                fallback: None,
+                                optional: false,
+                            }],
+                            ..agena_domain::ToolPermissionContract::default()
+                        },
                     },
                     ToolPermissionCheck {
                         action: PermissionAction::PathAccess {
@@ -661,7 +677,7 @@ mod tests {
                             target_path: "/workspace/crates/x.rs".to_owned(),
                         },
                         decision: PermissionDecision::Allow,
-                        tags: Vec::new(),
+                        contract: agena_domain::ToolPermissionContract::default(),
                     },
                 ],
             )
@@ -693,7 +709,15 @@ mod tests {
                             reason: "tool 'fs.apply_patch' requires confirmation by policy"
                                 .to_owned(),
                         },
-                        tags: vec!["filesystem_write".to_owned()],
+                        contract: agena_domain::ToolPermissionContract {
+                            input_paths: vec![agena_domain::InputPathSpec {
+                                jsonpath: "$.path".to_owned(),
+                                kind: agena_domain::PathKind::Write,
+                                fallback: None,
+                                optional: false,
+                            }],
+                            ..agena_domain::ToolPermissionContract::default()
+                        },
                     },
                     ToolPermissionCheck {
                         action: PermissionAction::PathAccess {
@@ -702,7 +726,7 @@ mod tests {
                             target_path: "/workspace/inside.rs".to_owned(),
                         },
                         decision: PermissionDecision::Allow,
-                        tags: Vec::new(),
+                        contract: agena_domain::ToolPermissionContract::default(),
                     },
                     ToolPermissionCheck {
                         action: PermissionAction::PathAccess {
@@ -713,7 +737,7 @@ mod tests {
                         decision: PermissionDecision::Ask {
                             reason: "external write requires confirmation".to_owned(),
                         },
-                        tags: Vec::new(),
+                        contract: agena_domain::ToolPermissionContract::default(),
                     },
                 ],
             )
@@ -748,7 +772,10 @@ mod tests {
                             reason: "bash command matches deny pattern and is unconditionally blocked"
                                 .to_owned(),
                         },
-                        tags: vec!["shell".to_owned()],
+                        contract: agena_domain::ToolPermissionContract {
+                            shell: true,
+                            ..agena_domain::ToolPermissionContract::default()
+                        },
                     },
                     ToolPermissionCheck {
                         action: PermissionAction::PathAccess {
@@ -757,7 +784,7 @@ mod tests {
                             target_path: "/workspace/out".to_owned(),
                         },
                         decision: PermissionDecision::Allow,
-                        tags: Vec::new(),
+                        contract: agena_domain::ToolPermissionContract::default(),
                     },
                 ],
             )
@@ -788,7 +815,16 @@ mod tests {
                         decision: PermissionDecision::Ask {
                             reason: "tool 'shell.run' requires confirmation by policy".to_owned(),
                         },
-                        tags: vec!["shell".to_owned(), "filesystem_write".to_owned()],
+                        contract: agena_domain::ToolPermissionContract {
+                            shell: true,
+                            input_paths: vec![agena_domain::InputPathSpec {
+                                jsonpath: "$.path".to_owned(),
+                                kind: agena_domain::PathKind::Write,
+                                fallback: None,
+                                optional: false,
+                            }],
+                            ..agena_domain::ToolPermissionContract::default()
+                        },
                     },
                     ToolPermissionCheck {
                         action: PermissionAction::PathAccess {
@@ -797,7 +833,7 @@ mod tests {
                             target_path: "/workspace/out.txt".to_owned(),
                         },
                         decision: PermissionDecision::Allow,
-                        tags: Vec::new(),
+                        contract: agena_domain::ToolPermissionContract::default(),
                     },
                 ],
             )

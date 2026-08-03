@@ -172,6 +172,9 @@ fn terminal_operation_title(invocation: &ToolInvocation) -> String {
         Some(ToolApiFunction::Help) => "Inspect tool".to_owned(),
         Some(ToolApiFunction::Tags) => "List tool tags".to_owned(),
         Some(ToolApiFunction::Call) => invocation.name.clone(),
+        Some(ToolApiFunction::PluginsList) => "List plugins".to_owned(),
+        Some(ToolApiFunction::PluginsSearch) => "Search plugins".to_owned(),
+        Some(ToolApiFunction::PluginsTags) => "List plugin tags".to_owned(),
         None => tool_name(invocation),
     }
 }

@@ -67,6 +67,7 @@ pub(super) fn render_tool_descriptor(
     let input_schema = Some(tool.input_schema());
     ToolDescriptor {
         name: crate::tool::compact_tool_call_name(tool.canonical_name().as_str()),
+        plugin_id: Some(tool.plugin_key().to_string()),
         summary,
         help,
         examples: tool.definition.model.examples.clone(),

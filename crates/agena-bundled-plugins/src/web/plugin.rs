@@ -947,8 +947,8 @@ impl WebPlugin {
         summary = "Fetch one web page and inspect its actual content.",
         help = "Use this tool after search when you need evidence from the actual page rather than search snippets. If you already know what facts you need, set `prompt` so Agena prioritizes the most relevant excerpts from the page in the returned text output.",
         read_only,
-        network,
-        internet,
+
+
         display = detailed,
         examples(
             r#"{"url":"https://openai.com"}"#,
@@ -983,8 +983,8 @@ impl WebPlugin {
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
         mutating,
-        network,
-        internet,
+
+
         discovery,
         ui_display = detailed,
         path(write = self.store_write_permission_path()?),
@@ -1044,8 +1044,8 @@ impl WebPlugin {
         summary = "Find candidate public-web pages to fetch.",
         help = "Use this tool to discover candidate pages, not to answer from result snippets alone. After searching, fetch 1-3 relevant result URLs before answering when the user needs facts, summaries, comparisons, or latest information. Use allowed_domains and blocked_domains to steer source quality.",
         read_only,
-        network,
-        internet,
+
+
         discovery,
         display = detailed,
         examples(
@@ -1116,11 +1116,12 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, interactive, mutate),
         name = "browser_open",
         summary = "Open a page in a managed interactive browser session.",
         read_only,
-        network,
-        internet,
+
+
         display = detailed
     )]
     async fn browser_open(&self, input: &BrowserOpenInput) -> SdkResult<ToolInvokeOutput> {
@@ -1189,10 +1190,11 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, query, discovery),
         name = "browser_list",
         summary = "List open page targets in the managed interactive browser.",
         read_only,
-        network,
+
         display = detailed,
         concurrency_safe
     )]
@@ -1232,10 +1234,11 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, mutate),
         name = "browser_close",
         summary = "Close one page target in the managed interactive browser.",
         mutating,
-        network,
+
         display = detailed
     )]
     async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
@@ -1263,10 +1266,11 @@ impl WebPlugin {
         ))
     }
     #[tool(
+        tags(network, query),
         name = "browser_snapshot",
         summary = "Inspect visible text and interactive elements in a browser session.",
         read_only,
-        network,
+
         display = detailed,
         concurrency_safe
     )]
@@ -1289,10 +1293,11 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, interactive, mutate),
         name = "browser_click",
         summary = "Click a browser element selected by CSS or the latest snapshot ref.",
         mutating,
-        network,
+
         display = detailed
     )]
     async fn browser_click(&self, input: &BrowserClickInput) -> SdkResult<ToolInvokeOutput> {
@@ -1314,10 +1319,11 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, interactive, mutate),
         name = "browser_type",
         summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
         mutating,
-        network,
+
         display = detailed
     )]
     async fn browser_type(&self, input: &BrowserTypeInput) -> SdkResult<ToolInvokeOutput> {
@@ -1341,10 +1347,11 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, query),
         name = "browser_wait",
         summary = "Wait for page readiness, a CSS selector, or visible text.",
         read_only,
-        network,
+
         display = detailed,
         concurrency_safe
     )]
@@ -1372,11 +1379,12 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, mutate, filesystem),
         name = "browser_screenshot",
         summary = "Capture a browser screenshot and return it as an image attachment.",
         mutating,
-        filesystem_write,
-        network,
+
+
         display = detailed
     )]
     async fn browser_screenshot(
@@ -1454,11 +1462,12 @@ impl WebPlugin {
     }
 
     #[tool(
+        tags(network, mutate, filesystem),
         name = "browser_download",
         summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
         mutating,
-        filesystem_write,
-        network,
+
+
         display = detailed
     )]
     async fn browser_download(&self, input: &BrowserDownloadInput) -> SdkResult<ToolInvokeOutput> {

@@ -142,6 +142,37 @@ impl WorkflowPlugin {
         )
     }
 
+    pub(in crate::plugins::provided::workflow) fn plugin_search_document(
+        record: &AvailablePluginRecord,
+    ) -> ToolSearchDocument {
+        ToolSearchDocument::new(
+            record.plugin_id.clone(),
+            record.summary.clone(),
+            record.tags.clone(),
+            Some(record.plugin_id.clone()),
+        )
+    }
+
+    pub(in crate::plugins::provided::workflow) fn filter_available_plugins_by_tag(
+        mut records: Vec<AvailablePluginRecord>,
+        tag: Option<&str>,
+        tags: Option<&[String]>,
+    ) -> Vec<AvailablePluginRecord> {
+        let required_tags = Self::normalized_tag_filters(tag, tags);
+        if required_tags.is_empty() {
+            return records;
+        }
+        records.retain(|record| {
+            required_tags.iter().all(|required_tag| {
+                record
+                    .tags
+                    .iter()
+                    .any(|candidate| candidate.eq_ignore_ascii_case(required_tag.as_str()))
+            })
+        });
+        records
+    }
+
     pub(in crate::plugins::provided::workflow) fn normalized_tag_filters(
         tag: Option<&str>,
         tags: Option<&[String]>,
@@ -202,11 +233,31 @@ impl WorkflowPlugin {
                 tags: tags_by_name.remove(&tool.name).unwrap_or_default(),
                 name: tool.name,
                 summary: tool.summary.unwrap_or_default(),
+                plugin_id: tool.plugin_id.unwrap_or_default(),
             })
             .collect::<Vec<_>>();
         records.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(records)
     }
+
+    /// Filter the tool inventory by plugin id, fully qualified plugin id,
+    /// or trailing plugin segment (e.g. `agena.fs`, `fs`).
+    pub(in crate::plugins::provided::workflow) fn filter_available_tools_by_plugin(
+        records: Vec<AvailableToolRecord>,
+        plugin: Option<&str>,
+    ) -> Vec<AvailableToolRecord> {
+        let Some(plugin) = plugin.map(str::trim).filter(|value| !value.is_empty()) else {
+            return records;
+        };
+        let normalized = plugin.trim_end_matches('.');
+        records.into_iter().filter(|record| {
+            let id = record.plugin_id.as_str();
+            id == normalized
+                || id.strip_suffix(normalized).is_some_and(|prefix| prefix.ends_with('.'))
+                || id.rsplit('.').next() == Some(normalized)
+        }).collect()
+    }
+
 
     pub(in crate::plugins::provided::workflow) fn tool_tags_by_visible_name(
         visible: &HashSet<String>,
@@ -268,7 +319,11 @@ impl WorkflowPlugin {
         }
         counts
             .into_iter()
-            .map(|(tag, tool_count)| ToolTagRecord { tag, tool_count })
+            .map(|(tag, tool_count)| ToolTagRecord {
+                tag,
+                tool_count,
+                plugin_count: None,
+            })
             .collect()
     }
 
@@ -1450,12 +1505,9 @@ impl WorkflowPlugin {
     }
 }
 use super::{
-    Arc, AskUserRequest, AskUserToolInput, AvailableToolRecord, BTreeMap, HashMap, HashSet,
-    HostAskUserOption, HostAskUserQuestion, HostClient, HostGetSessionRequest,
-    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
-    HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
+    Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
+    HashMap, HashSet, HostAskUserOption, HostAskUserQuestion, HostClient, HostGetSessionRequest,
+    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility, OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,

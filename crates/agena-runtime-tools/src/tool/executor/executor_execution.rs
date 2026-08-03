@@ -100,6 +100,10 @@ impl ToolExecutor {
             .as_ref()
             .map(|definition| invocation_effective_tags(definition, invocation))
             .unwrap_or_default();
+        let contract = definition
+            .as_ref()
+            .map(|definition| definition.definition.permissions.clone())
+            .unwrap_or_default();
 
         let hooked = self
             .plugins
@@ -110,6 +114,7 @@ impl ToolExecutor {
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
                     tags: effective_tags,
+                    contract: contract.clone(),
                     input: input_value,
                     title_override: None,
                     metadata: Default::default(),
@@ -168,25 +173,20 @@ impl ToolExecutor {
         }
         let (tool_name, decision) = self.authorize_invocation(invocation)?;
         let command = shell_command_from_invocation(invocation);
-        let tags = self
+        let contract = self
             .invocation_definition(invocation)
-            .map(|definition| invocation_effective_tags(&definition, invocation))
+            .map(|definition| definition.definition.permissions.clone())
             .unwrap_or_default();
         let action = crate::permission::tool_action(
             tool_name.as_str(),
             command.as_deref(),
-            tags.as_slice(),
+            &contract,
             Some(&self.principal.tool_policy),
         );
-        let tag_labels = tags
-            .iter()
-            .map(agena_plugin_host::sdk::ToolTag::as_ref)
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
         let mut checks = vec![ToolPermissionCheck {
             action,
             decision,
-            tags: tag_labels,
+            contract: contract.clone(),
         }];
 
         if let Some(inspector) = self.permission_inspector.as_ref() {
@@ -195,7 +195,7 @@ impl ToolExecutor {
 
         if let Some(resolution) = self.plugin_resolution_for_invocation(invocation) {
             let input_value = resolved_tool_input_value(&resolution, invocation);
-            if resolution.has_tag(agena_plugin_host::sdk::ToolTag::Shell) {
+            if resolution.definition.permissions.shell {
                 self.collect_declared_filesystem_effect_checks(
                     &mut checks,
                     tool_name.as_str(),

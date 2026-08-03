@@ -4,7 +4,7 @@ impl ToolExecutor {
             return false;
         };
         entry.definition.runtime.concurrency_safe
-            && !entry.has_tag(agena_plugin_host::sdk::ToolTag::Interactive)
+            && !entry.definition.permissions.interactive
             && is_concurrency_safe_tool_invocation(
                 &entry,
                 &PluginInvocation::from_tool_invocation(invocation),
@@ -117,8 +117,7 @@ impl ToolExecutor {
                 },
             )));
         }
-        let tags = invocation_effective_tags(&definition, invocation);
-        if !self.builtin_tool_set().are_tags_enabled(&tags) {
+        if !self.builtin_tool_set().is_tool_enabled(&definition) {
             return Err(ToolError::CapabilityUnavailable(Box::new(
                 agena_domain::CapabilityUnavailableResult {
                     capability: "model_tool_profile".to_string(),
@@ -140,8 +139,11 @@ impl ToolExecutor {
         }
         Ok((
             tool_name.clone(),
-            self.principal
-                .authorize_tool_names(&tool_name_aliases, command.as_deref(), &tags),
+            self.principal.authorize_tool_names(
+                &tool_name_aliases,
+                command.as_deref(),
+                &definition.definition.permissions,
+            ),
         ))
     }
 
@@ -381,8 +383,7 @@ use super::{
     SdkNetworkAccessSpec, SdkPathAccessSpec, SdkPathKind, SdkToolStreamingMode, ToolError,
     ToolExecutor, ToolInvocation, ToolPermissionCheck, canonical_tool_name,
     extract_input_network_requests, extract_input_path_requests, filesystem_effects_from_input,
-    invocation_effective_tags, invocation_name, is_concurrency_safe_tool_invocation,
-    sdk_path_kind_to_access_kind, shell_command_from_invocation, unique_registered_tool_match,
-    validate_shell_filesystem_effects,
+    invocation_name, is_concurrency_safe_tool_invocation, sdk_path_kind_to_access_kind,
+    shell_command_from_invocation, unique_registered_tool_match, validate_shell_filesystem_effects,
 };
 use agena_domain::FilesystemEffect;

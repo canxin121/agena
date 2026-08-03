@@ -1019,7 +1019,6 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             let skill_key_for = |entry: &agena_plugin_host::registry::RegisteredTool| {
                 entry
                     .definition
-                    .permissions
                     .tags
                     .iter()
                     .find_map(|tag| match tag {
@@ -1034,7 +1033,6 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
                                   expected: &str| {
                 entry
                     .definition
-                    .permissions
                     .tags
                     .iter()
                     .any(|tag| match tag {

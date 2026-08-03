@@ -87,10 +87,6 @@ fn tool_input_field_semantics_generate_declarative_permissions() {
         tool.permissions.input_networks,
         SemanticInput::input_networks()
     );
-    assert!(tool.has_tag(ToolTag::FilesystemWrite));
-    assert!(tool.has_tag(ToolTag::FilesystemRead));
-    assert!(tool.has_tag(ToolTag::Network));
-    assert!(tool.has_tag(ToolTag::Internet));
 
     let schema = SemanticInput::input_schema();
     assert_eq!(
@@ -156,9 +152,6 @@ fn tool_input_field_semantics_generate_declarative_permissions() {
     assert_eq!(inline.permissions.input_paths[0].kind, PathKind::Read);
     assert_eq!(inline.permissions.input_networks.len(), 1);
     assert_eq!(inline.permissions.input_networks[0].jsonpath, "$.host");
-    assert!(inline.has_tag(ToolTag::FilesystemRead));
-    assert!(inline.has_tag(ToolTag::Network));
-    assert!(inline.has_tag(ToolTag::PrivateNetwork));
     assert_eq!(
         inline
             .contract

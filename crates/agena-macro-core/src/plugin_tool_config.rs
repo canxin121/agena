@@ -251,7 +251,25 @@ fn parse_plugin_inline_tool_config(
                     "choices" => spec
                         .choices
                         .push(parse_path_expr_list_constraint(list.tokens, "choices")?),
-                    "tags" => spec.tags = parse_expr_list(list.tokens)?,
+                    "tags" => {
+                        let exprs = parse_expr_list(list.tokens)?;
+                        for expr in &exprs {
+                            let ident = match expr {
+                                Expr::Path(path) => path
+                                    .path
+                                    .get_ident()
+                                    .map(Ident::to_string),
+                                _ => None,
+                            };
+                            if let Some(ident) = ident {
+                                if let Some(tag) = inline_tool_tag_expr(ident.as_str()) {
+                                    spec.tags.push(tag);
+                                    continue;
+                                }
+                            }
+                            spec.tags.push(expr.clone());
+                        }
+                    }
                     "capabilities" => spec.capabilities = parse_expr_list(list.tokens)?,
                     "output" => spec.output_ty = Some(parse_type_list(list.tokens, "output")?),
                     "permission" => {
@@ -262,27 +280,10 @@ fn parse_plugin_inline_tool_config(
                     }
                     "path" => {
                         let rules = parse_inline_path_permission_rules(list.tokens)?;
-                        for rule in &rules {
-                            spec.tags.push(match rule {
-                                PluginToolPathPermissionRule::Read(_)
-                                | PluginToolPathPermissionRule::Reads(_) => {
-                                    parse_quote!(::agena_plugin_sdk::ToolTag::FilesystemRead)
-                                }
-                                PluginToolPathPermissionRule::Write(_)
-                                | PluginToolPathPermissionRule::Writes(_) => {
-                                    parse_quote!(::agena_plugin_sdk::ToolTag::FilesystemWrite)
-                                }
-                                PluginToolPathPermissionRule::Requests(_) => continue,
-                            });
-                        }
                         permission_path_rules.extend(rules);
                     }
                     "network" => {
                         let rules = parse_inline_network_permission_rules(list.tokens)?;
-                        if !rules.is_empty() {
-                            spec.tags
-                                .push(parse_quote!(::agena_plugin_sdk::ToolTag::Network));
-                        }
                         permission_network_rules.extend(rules);
                     }
                     "command" => {
@@ -316,6 +317,15 @@ fn parse_plugin_inline_tool_config(
                             return Err(syn::Error::new_spanned(ident, "duplicate command config"));
                         }
                     }
+                    // Authority-bearing capability flags. These live on the
+                    // permission contract, never as tags: tags are metadata.
+                    "mutating" => spec.mutating = true,
+                    "read_only" => spec.read_only = true,
+                    "shell" => spec.shell = true,
+                    "interactive" => spec.interactive = true,
+                    "task" => spec.task = true,
+                    // Function/category metadata tags: describe what the tool
+                    // does, never what it is allowed to do.
                     tag if inline_tool_tag_expr(tag).is_some() => {
                         spec.tags
                             .push(inline_tool_tag_expr(tag).expect("tag checked as present"));
@@ -490,16 +500,17 @@ fn parse_inline_network_permission_rules(
 
 fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
     let variant = match tag {
-        "read_only" => quote! { ::agena_plugin_sdk::ToolTag::ReadOnly },
-        "mutating" => quote! { ::agena_plugin_sdk::ToolTag::Mutating },
-        "task" => quote! { ::agena_plugin_sdk::ToolTag::Task },
-        "filesystem_read" => quote! { ::agena_plugin_sdk::ToolTag::FilesystemRead },
-        "filesystem_write" => quote! { ::agena_plugin_sdk::ToolTag::FilesystemWrite },
+        // Function/category metadata only. Tags describe what a tool does for
+        // discovery/UI/workflow hints and carry no authority: permission
+        // declarations live on the tool contract, never on a tag.
+        "query" => quote! { ::agena_plugin_sdk::ToolTag::Query },
+        "mutate" => quote! { ::agena_plugin_sdk::ToolTag::Mutate },
+        "execute" => quote! { ::agena_plugin_sdk::ToolTag::Execute },
+        "filesystem" => quote! { ::agena_plugin_sdk::ToolTag::Filesystem },
         "network" => quote! { ::agena_plugin_sdk::ToolTag::Network },
-        "internet" => quote! { ::agena_plugin_sdk::ToolTag::Internet },
-        "shell" => quote! { ::agena_plugin_sdk::ToolTag::Shell },
-        "interactive" => quote! { ::agena_plugin_sdk::ToolTag::Interactive },
+        "fetch" => quote! { ::agena_plugin_sdk::ToolTag::Fetch },
         "discovery" => quote! { ::agena_plugin_sdk::ToolTag::Discovery },
+        "interactive" => quote! { ::agena_plugin_sdk::ToolTag::Interactive },
         "planning" => quote! { ::agena_plugin_sdk::ToolTag::Planning },
         "goal" => quote! { ::agena_plugin_sdk::ToolTag::Goal },
         "snapshot" => quote! { ::agena_plugin_sdk::ToolTag::Snapshot },
@@ -507,7 +518,6 @@ fn inline_tool_tag_expr(tag: &str) -> Option<Expr> {
         "lsp" => quote! { ::agena_plugin_sdk::ToolTag::Lsp },
         "mcp" => quote! { ::agena_plugin_sdk::ToolTag::Mcp },
         "subtask" => quote! { ::agena_plugin_sdk::ToolTag::Subtask },
-        "private_network" => quote! { ::agena_plugin_sdk::ToolTag::PrivateNetwork },
         _ => return None,
     };
     Some(parse_quote!(#variant))

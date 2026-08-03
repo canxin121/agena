@@ -5,9 +5,7 @@ use crate::plugins::provided::workflow::{
     WorkflowPlugin, WorkflowPluginConfig, tool_discovery_config_schema,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{
-    HostCapability, InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput,
-};
+use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
 
 pub(crate) const TOOL_API_PLUGIN_ID: &str = "agena.tools";
 
@@ -50,11 +48,12 @@ impl ToolApiPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "Enumerate current tools.",
         read_only,
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
+
         concurrency_safe
     )]
     async fn list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
@@ -62,11 +61,12 @@ impl ToolApiPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "Search the Agena execution tools available in this session.",
         read_only,
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
+
         concurrency_safe
     )]
     async fn search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -74,37 +74,74 @@ impl ToolApiPlugin {
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "Get reusable schema, examples, and usage notes for one Agena execution tool.",
         read_only,
         discovery,
         ui_display = detailed,
-        capabilities(
-            HostCapability::ListTools,
-            HostCapability::ToolRegistry
-        ),
-        concurrency_safe
+                concurrency_safe
     )]
     async fn help(&self, input: &ToolApiHelpInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_tool_api_help(input).await
     }
 
     #[tool(
+        tags(query, discovery),
         summary = "List tool tags with pagination.",
         read_only,
         discovery,
         ui_display = detailed,
-        capabilities(HostCapability::ListTools, HostCapability::ToolRegistry),
+
         concurrency_safe
     )]
     async fn tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_tool_api_tags(input).await
+    }
+
+    #[tool(
+        tags(query, discovery),
+        summary = "Enumerate the current live plugin inventory with version, summary, tags, and tool count.",
+        read_only,
+        discovery,
+        ui_display = detailed,
+
+        concurrency_safe
+    )]
+    async fn plugins_list(&self, input: &ToolApiListInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_plugins_list(input).await
+    }
+
+    #[tool(
+        tags(query, discovery),
+        summary = "Search the loaded plugins by id, summary, or tag.",
+        read_only,
+        discovery,
+        ui_display = detailed,
+
+        concurrency_safe
+    )]
+    async fn plugins_search(&self, input: &ToolApiSearchInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_plugins_search(input).await
+    }
+
+    #[tool(
+        tags(query, discovery),
+        summary = "List plugin tags with pagination.",
+        read_only,
+        discovery,
+        ui_display = detailed,
+
+        concurrency_safe
+    )]
+    async fn plugins_tags(&self, input: &ToolApiTagsInput) -> SdkResult<ToolInvokeOutput> {
+        self.inner.invoke_plugins_tags(input).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ToolApiPlugin;
-    use agena_plugin_host::sdk::{HostCapability, Plugin, ToolDefinition};
+    use agena_plugin_host::sdk::{Plugin, ToolDefinition};
 
     fn definition_for(tool_name: &str) -> ToolDefinition {
         ToolApiPlugin::new()
@@ -113,18 +150,6 @@ mod tests {
             .into_iter()
             .find(|tool| tool.name == tool_name)
             .unwrap_or_else(|| panic!("missing tools plugin tool `{tool_name}`"))
-    }
-
-    fn capabilities_for(tool_name: &str) -> Vec<HostCapability> {
-        definition_for(tool_name).capabilities
-    }
-
-    #[test]
-    fn help_declares_every_host_capability_it_uses() {
-        let help = capabilities_for("help");
-        assert!(help.contains(&HostCapability::ListTools));
-        assert!(help.contains(&HostCapability::ToolRegistry));
-        assert!(!help.contains(&HostCapability::PluginStorage));
     }
 
     #[test]

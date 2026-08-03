@@ -5,7 +5,7 @@ use crate::plugin_impl_config::sanitize_generated_ident_label;
 
 use super::{
     PluginCommandHandlerPlan, PluginCommandInputPlan, PluginCommandPlan, PluginGeneratedToolInput,
-    PluginInputNetworkSpec, PluginInputPathSpec, PluginNetworkSemantic, PluginPathPermissionKind,
+    PluginInputNetworkSpec, PluginInputPathSpec, PluginPathPermissionKind,
     built_in_normalization_tokens, built_in_post_parse_normalization_tokens,
     built_in_validation_tokens, doc_summary, expand_flatten_shape_schema_normalize_expr,
     expand_generated_input_post_parse_tokens, expand_input_alias_normalize_tokens,
@@ -124,42 +124,6 @@ pub fn expand_input_network_specs(specs: &[PluginInputNetworkSpec]) -> proc_macr
         }
     });
     quote! { vec![#(#items),*] }
-}
-
-pub fn expand_input_tags(
-    paths: &[PluginInputPathSpec],
-    networks: &[PluginInputNetworkSpec],
-) -> proc_macro2::TokenStream {
-    let mut tags = Vec::new();
-    for path in paths {
-        tags.push(match path.kind {
-            PluginPathPermissionKind::Read => {
-                quote! { ::agena_plugin_sdk::ToolTag::FilesystemRead }
-            }
-            PluginPathPermissionKind::Write => {
-                quote! { ::agena_plugin_sdk::ToolTag::FilesystemWrite }
-            }
-        });
-    }
-    for network in networks {
-        tags.push(quote! { ::agena_plugin_sdk::ToolTag::Network });
-        match network.semantic {
-            PluginNetworkSemantic::Internet => {
-                tags.push(quote! { ::agena_plugin_sdk::ToolTag::Internet });
-            }
-            PluginNetworkSemantic::Private => {
-                tags.push(quote! { ::agena_plugin_sdk::ToolTag::PrivateNetwork });
-            }
-            PluginNetworkSemantic::Network
-            | PluginNetworkSemantic::Url
-            | PluginNetworkSemantic::Host => {}
-        }
-    }
-    if tags.is_empty() {
-        quote! { ::std::vec::Vec::new() }
-    } else {
-        quote! { vec![#(#tags),*] }
-    }
 }
 
 pub fn expand_plugin_tool_definition(
@@ -299,28 +263,10 @@ pub fn expand_plugin_tool_definition(
     } else {
         quote! { None }
     };
-    let tags_expr = if spec.tags.is_empty() {
-        quote! { ::std::vec::Vec::new() }
-    } else {
-        let tags = &spec.tags;
-        quote! { vec![#(#tags),*] }
-    };
     let spec_input_paths_expr = expand_input_path_specs(&spec.input_paths);
     let spec_input_networks_expr = expand_input_network_specs(&spec.input_networks);
-    let spec_input_tags_expr = expand_input_tags(&spec.input_paths, &spec.input_networks);
     let nested_paths_expr = expand_nested_shape_path_specs_expr(&nested_shapes, false);
     let nested_networks_expr = expand_nested_shape_network_specs_expr(&nested_shapes, false);
-    let flatten_tag_exprs = flatten_shapes.iter().map(|ty| {
-        quote! {
-            __tags.extend(<#ty as ::agena_plugin_sdk::ToolInput>::input_tags());
-        }
-    });
-    let nested_tag_exprs = nested_shapes.iter().map(|field| {
-        let ty = &field.spec.inner_ty;
-        quote! {
-            __tags.extend(<#ty as ::agena_plugin_sdk::ToolInput>::input_tags());
-        }
-    });
     let input_paths_expr = if let Some(input_shape_ty) = spec.input_shape.as_ref() {
         quote! {{
             let mut __items = <#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_paths();
@@ -357,42 +303,25 @@ pub fn expand_plugin_tool_definition(
             __items
         }}
     };
-    let tags_expr = if let Some(input_shape_ty) = spec.input_shape.as_ref() {
-        quote! {{
-            let mut __tags = #tags_expr;
-            __tags.extend(#spec_input_tags_expr);
-            __tags.extend(<#input_shape_ty as ::agena_plugin_sdk::ToolInput>::input_tags());
-            ::agena_plugin_sdk::macro_support::dedupe_tool_tags(&mut __tags);
-            __tags
-        }}
-    } else if flatten_shapes.is_empty() && nested_shapes.is_empty() {
-        quote! {{
-            let mut __tags = #tags_expr;
-            __tags.extend(#spec_input_tags_expr);
-            ::agena_plugin_sdk::macro_support::dedupe_tool_tags(&mut __tags);
-            __tags
-        }}
-    } else {
-        quote! {{
-            let mut __tags = #tags_expr;
-            __tags.extend(#spec_input_tags_expr);
-            #(#flatten_tag_exprs)*
-            #(#nested_tag_exprs)*
-            ::agena_plugin_sdk::macro_support::dedupe_tool_tags(&mut __tags);
-            __tags
-        }}
-    };
-    let capabilities_expr = if spec.capabilities.is_empty() {
+    // Tags are declaration-only: only the tags(...) explicitly declared on
+    // the tool attribute are used. Nothing is derived from path/network
+    // specs or from the permission contract.
+    let tags_expr = if spec.tags.is_empty() {
         quote! { ::std::vec::Vec::new() }
     } else {
-        let capabilities = &spec.capabilities;
-        quote! { vec![#(#capabilities),*] }
+        let tags = &spec.tags;
+        quote! { vec![#(#tags),*] }
     };
     let streaming_expr = if spec.streaming {
         quote! { ::agena_plugin_sdk::ToolStreamingMode::Streaming }
     } else {
         quote! { ::agena_plugin_sdk::ToolStreamingMode::default() }
     };
+    let mutating_flag = spec.mutating;
+    let read_only_flag = spec.read_only;
+    let shell_flag = spec.shell;
+    let interactive_flag = spec.interactive;
+    let task_flag = spec.task;
 
     Ok(quote! {{
         let input_schema = #input_schema_expr;
@@ -422,13 +351,17 @@ pub fn expand_plugin_tool_definition(
                 input_networks: #input_networks_expr,
                 path_access: ::std::vec::Vec::new(),
                 network_access: ::std::vec::Vec::new(),
-                tags: #tags_expr,
+                shell: #shell_flag,
+                interactive: #interactive_flag,
+                read_only: #read_only_flag,
+                task: #task_flag,
+                mutating: #mutating_flag,
             },
             display: ::agena_plugin_sdk::manifest::ToolDisplay {
                 description_mode: #description_mode_expr,
                 ui_display_mode: #ui_display_mode_expr,
             },
-            capabilities: #capabilities_expr,
+            tags: #tags_expr,
         }
     }})
 }

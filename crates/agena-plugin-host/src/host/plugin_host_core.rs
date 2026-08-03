@@ -452,11 +452,12 @@ impl PluginHost {
 
     pub(super) fn tool_invoke_timeout(&self, registered_tool: &RegisteredTool) -> Duration {
         let base = self.timeouts.tool_invoke_or(Duration::from_secs(300));
-        if requires_long_lived_tool_invoke_timeout(&registered_tool.definition.capabilities) {
+        // Interactive and subtask tools need long-lived budgets; these are
+        // declared on the tool's permission contract, not static capabilities.
+        let contract = &registered_tool.definition.permissions;
+        if contract.interactive || contract.task {
             return base.max(Duration::from_secs(60 * 60 * 24));
         }
-        // Nested InvokeTool callbacks deliberately keep the ordinary finite
-        // budget. Only genuine user interaction and subtasks are long-lived.
         base
     }
 
@@ -1620,6 +1621,6 @@ use super::{
     UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
     block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
     block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
-    merge_json, method, requires_long_lived_tool_invoke_timeout, shutdown_transport,
+    merge_json, method, shutdown_transport,
     tool_hook_context, transport_to_plugin_error,
 };

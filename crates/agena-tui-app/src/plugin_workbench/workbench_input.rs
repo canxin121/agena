@@ -336,29 +336,19 @@ impl App {
             .as_deref()
             .or(tool.docs.summary.as_deref())
             .unwrap_or("Run this plugin tool.");
-        let permission_tags = if tool.permissions.tags.is_empty() {
+        let metadata_tags = if tool.tags.is_empty() {
             "none declared".to_owned()
         } else {
-            tool.permissions
-                .tags
+            tool.tags
                 .iter()
                 .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let host_capabilities = if tool.capabilities.is_empty() {
-            "none declared".to_owned()
-        } else {
-            tool.capabilities
-                .iter()
-                .map(|capability| format!("{capability:?}"))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
         dialog.tool_editor = Some(EditorDialogState::new(
             format!("Run {} / {}", plugin.plugin_id, tool.name),
             format!(
-                "{summary} Permission tags: {permission_tags}. Host capabilities: {host_capabilities}. Edit the JSON arguments below. Submitting is a one-shot approval for this exact tool call; persisted deny rules still apply."
+                "{summary} Tags: {metadata_tags}. Edit the JSON arguments below. Submitting is a one-shot approval for this exact tool call; persisted deny rules still apply."
             ),
             "Ctrl+S validate and run · Esc cancel · Enter newline".to_owned(),
             true,

@@ -4,7 +4,7 @@ use quote::quote;
 use syn::{Attribute, Data, LitStr, Result, Type};
 
 use crate::plugin_tooling::{
-    expand_input_network_specs, expand_input_path_specs, expand_input_tags,
+    expand_input_network_specs, expand_input_path_specs,
 };
 
 use super::{
@@ -162,42 +162,10 @@ pub fn expand_input_tags_expr(
     paths: &[PluginInputPathSpec],
     networks: &[PluginInputNetworkSpec],
 ) -> Result<proc_macro2::TokenStream> {
-    let own = expand_input_tags(paths, networks);
-    let struct_flatten_shapes = struct_flatten_shape_types(data)?;
-    let enum_flatten_shapes = enum_flatten_shape_types(data)?;
-    let struct_nested_shapes = struct_nested_shape_fields(attrs, data)?;
-    let enum_nested_shapes = enum_nested_shape_fields(attrs, data)?;
-    if struct_flatten_shapes.is_empty()
-        && enum_flatten_shapes.is_empty()
-        && struct_nested_shapes.is_empty()
-        && enum_nested_shapes.is_empty()
-    {
-        return Ok(own);
-    }
-    let struct_nested_tag_exprs = struct_nested_shapes.iter().map(|field| {
-        let ty = &field.spec.inner_ty;
-        quote! {
-            __items.extend(<#ty as ::agena_plugin_sdk::ToolInput>::input_tags());
-        }
-    });
-    let enum_nested_tag_exprs = enum_nested_shapes.iter().map(|field| {
-        let ty = &field.spec.inner_ty;
-        quote! {
-            __items.extend(<#ty as ::agena_plugin_sdk::ToolInput>::input_tags());
-        }
-    });
-    Ok(quote! {{
-        let mut __items = #own;
-        #(
-            __items.extend(<#struct_flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_tags());
-        )*
-        #(
-            __items.extend(<#enum_flatten_shapes as ::agena_plugin_sdk::ToolInput>::input_tags());
-        )*
-        #(#struct_nested_tag_exprs)*
-        #(#enum_nested_tag_exprs)*
-        __items
-    }})
+    // Tags are declaration-only. Nothing is derived from path/network specs
+    // or nested input shapes; `input_tags()` always returns empty.
+    let _ = (attrs, data, paths, networks);
+    Ok(quote! { ::std::vec::Vec::new() })
 }
 
 pub fn expand_nested_shape_schema_normalize_expr(

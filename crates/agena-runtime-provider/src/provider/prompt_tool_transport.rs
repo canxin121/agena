@@ -1001,7 +1001,7 @@ mod tests {
             runtime: Default::default(),
             permissions: Default::default(),
             display: Default::default(),
-            capabilities: Vec::new(),
+            tags: Vec::new(),
         };
         agena_plugin_host::registry::RegisteredTool::new(plugin, definition)
             .expect("registered Tool API handler")

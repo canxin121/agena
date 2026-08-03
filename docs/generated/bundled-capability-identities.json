@@ -1,14 +1,13 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 133,
+    "execution_tools": 136,
     "gateway_tools": 4,
     "plugins": 24,
-    "tools": 137
+    "tools": 140
   },
   "plugins": [
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -18,248 +17,206 @@
       "tools": [
         {
           "canonical_name": "agena.chatgpt.apply_patch",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "6f3a61cf4981f926414418214536ec7fcf81bd0dc81a0e5c71131dff8afb92e6",
+          "definition_identity": "c3c53de8c560d02b6f0a66eed9ef48c4d8773f6adf643fd3e72fdaf8f8782c5e",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_read",
-            "filesystem_write",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.code_interpreter",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "445a039551f35f1704ea360e7e712b7a9fe6c8f87653c83c0e9e45f8d145561c",
+          "definition_identity": "22b8ad5ea492a672da1073cf04f9e5d7d0f241e4fe25f2670fe073880227d4d0",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.computer",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "0e6291edec0134aace42999a70553eecd170929ede5621b0330bc485600f733b",
+          "definition_identity": "43b1dd5241b2a11b733d40721f4971493a9b295a4f9cde69e567a6f6bc89c353",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.computer_use_preview",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "9e3c1e975096f9589353190a07a403a0ca19adaf78f509f532ee30924dcd9065",
+          "definition_identity": "5b58ac25b7a6dbd796fcb7fd4123133307f8cfa684ccfec4ff2c23972f8abb14",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.custom",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "29ea95d7379b582350a00314c7d82903d428ebc656975a630c42578baefeda2d",
+          "definition_identity": "0c99ceda406df20974d1e62c1f3847136d022107ae789bfc0994360c9310413d",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.file_search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "a8c0753e05e4b6142dee2c3c3f98b07a18fc4aaabcb7281956c5f0b89a0250a1",
+          "definition_identity": "b9e1c4b957126cc54751a63a2091f00614943a71fb8cdf5830033dbfdafa7ef3",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.function",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "04f42726d3da758f2b72bf85ddcd016194c25cf51111668fa14d24eb2854089c",
+          "definition_identity": "0273ee2a242b5e9462564b7a045d3371266f002987bacd07509cf62e94a60e9e",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.image_edit",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "592c30bf3632d28e3977bbfd816ffaf529b9488c38246af70183ebe5f6395187",
+          "definition_identity": "62bc09529a1543f1948392cd5add16364cfddc7c81b4b479c405890d9b0ab884",
           "gateway": false,
           "input_schema_sha256": "8243bf48504a3ef3f425d2c04f186f154029e516fee2df15d436de2f23cc147f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutating",
-            "filesystem_read",
-            "filesystem_write",
-            "network",
-            "internet"
-          ]
+          "tags": []
         },
         {
           "canonical_name": "agena.chatgpt.image_generation",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "4ea1570dad4cb0a14728aa56d0e003aa5b43ce467eecf78bc3c13b4628842800",
+          "definition_identity": "a01604115aae2ed569a01915aa24a10a195fc03dc8700c7f0c59bc02159aef46",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.local_shell",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "2fb06ea178ed0e463a9ea873f9074f96df66f0b3384fa8879f90a77556714e82",
+          "definition_identity": "3270895c10175c4bf92e9c64d76a14a1a41141fce8c2b9e4b1c7363c7b59979c",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.mcp",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "9edf447fbcdcf3351042d41a05f58436bbb5fd5eeb4a24c8ea2a30543badcbc1",
+          "definition_identity": "ef919f960722cccdce89e820761680534a11fd87af364ea4b0d105f98bea0201",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.namespace",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "d32c52f16ae48ab820972987f34c8b0c97b2e2e5a0d4318c62e1926ebd7b971b",
+          "definition_identity": "b804c88eecb4f5ef887729edecd78bfa6474b16900b39a98d26aa68d2459292e",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.programmatic_tool_calling",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "057d8d229b85fa5ce17a3e7e98925870f5d7ef5a2b95cee5022f4189f1a44bec",
+          "definition_identity": "ad6bbf77fc1dd076fa90239b28688fcfa016e6e533f7e4618497f69c436f47ba",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.shell",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "00aa33a01db6eb50943c9f46dd965b0607ddb19e75669f688f1d4795e7bbaca5",
+          "definition_identity": "be46befb3a5d261b1064b7231edb8514f7c5977185cb6ca1fd0d0dc254afd5e4",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.tool_search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "1291078c66831ae730ba4d4f83d979969568ecb1c320001bcd48c331e7e49153",
+          "definition_identity": "bbce22dfc5e441945224b8bd7eed5b2abb6558613df6abf39b4cf85781f891c0",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.web_search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "addf424d0b5d0d641299bbb65df555653f35d9d8bc33cf848335d4a50b07b254",
+          "definition_identity": "68c4bf688a1456cdcb2f11de24f620ab468cdf25000fb1da63adb99eed8f2417",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.chatgpt.web_search_preview",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "09cb5e03f16876f66bd9d429aacdee4fed12c1fb62c22151fc87e67a7e46c359",
+          "definition_identity": "e1cc5575e4d95957017cba6fd200e22bfbf2b92ed7b640c19ea5c5fdc7ef96e2",
           "gateway": false,
           "input_schema_sha256": "c65b986d4bb71b73b312d4b553ce48a15b4b99192be423677cdc28888d68c45d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         }
@@ -267,7 +224,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -277,161 +233,137 @@
       "tools": [
         {
           "canonical_name": "agena.claude.advisor",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "1abc51e92683755e7f5ed67f7ccff16ce9acf5dcb6339aef64fbedbefd362ac1",
+          "definition_identity": "f012b37698b0693c823b8bc65e641187581c532bc8401fd6efc1b3319f7a4987",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.claude.bash",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "844c450864268f25b069a8aeb5aa1faea6795e14a54764084f556dae3a1b9e29",
+          "definition_identity": "567ce9fa5739b80d2a29ae5aabc72fb7420d425dd24c9699989df5028bd72653",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.claude.code_execution",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "3ff370035511b0f665055bea022b1f5f9edb5f5e54c1fb1d9ea0bf893ddc165d",
+          "definition_identity": "52de574701f8f8501ef7c33c8b8d69bf5697d439eff7a51411479e8cf4950e54",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.claude.computer",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "874684570c9e6bdf4dc4a1142658add33cee3e30b6f0a55b833ae3c492e8fdc0",
+          "definition_identity": "34cf5b6ab71b1333bc197801df03b621404841d7019c4bf196e3ae36faacc5ec",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.claude.mcp_toolset",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "457e4187a415a95790708ea17f3fd65492e3dc42e2a4965c66014765e4f98890",
+          "definition_identity": "7fb19928ec27de7e976a64de9241060ec999b2760801832033739f89acaa9407",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.claude.memory",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "b87b4e276123b150224a71b05aa9b2b8b64a20f9d86cfd7d811550446d01f9b6",
+          "definition_identity": "f20062aa38e56f1de2c1020842ee0699810ffea5c4d059e0ca5d8f8cabeb558a",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.claude.text_editor",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "0b011daf9a1364ef699159e58b22208bb5c702c352401526889ac7827d7fb0fe",
+          "definition_identity": "ee2349ba2e27b05788ff2311a55c8c2a3873c5abe5077a312c7a2b17d6bf91bd",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_read",
-            "filesystem_write",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.claude.tool_search_bm25",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "d0e687beec15fbabbc99361d041083fbe19f499adbb863ef06ed276d176c962e",
+          "definition_identity": "b76c5bf2ccfc64b4e8b708d59c180babbf972fd9832aa30c81248824a46b4178",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.claude.tool_search_regex",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "3fdfb956c5a39aea8e6cddd6f0a456d42df8c4ca821b6659f3fe31a63ffe4ef8",
+          "definition_identity": "18dc569070d8cc7cb8d6e3a41891c6854fd4413a4723ba0f1df20844a4bd133d",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.claude.web_fetch",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "83a2b0ad210bb027a55a13f38f5d297da1afed921fb2e0c37c989a4ed299ac25",
+          "definition_identity": "c6f5b0cd1b4fa38d5bf57238bd2a07f60ae88986a58dd5ed1df5904fc36a772a",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.claude.web_search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "2a90d74b9bd8a9e56094b89a523b57ab43e4c45a25d7864b7569c7125ece4276",
+          "definition_identity": "e11ba5b9fcaa38892f1a7df32eb47ae1796727d0f1e7e22e7a9bf8688a852e8d",
           "gateway": false,
           "input_schema_sha256": "c234c862907885ffbee4c3fe7eff79d0fae8b7ae8fefe099af0246ed2d2b6f5f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         }
@@ -439,7 +371,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "tool.invoke"
@@ -448,29 +379,27 @@
       "tools": [
         {
           "canonical_name": "agena.code.search_ast",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "47ec3a802c8c44678bdd5a82ef0a8d3660688969dca8517fda709ffdf3f167d8",
+          "definition_identity": "6202e4f14cb78b9f1f72efcd750978212a62f925a9f213acdc9a881dff6fc901",
           "gateway": false,
           "input_schema_sha256": "fc912fbff1a3035e8b06423b398a49618fc1ffe04fa51b1b9db9d07d5765b520",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
+            "query",
+            "filesystem",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.code.syntax_tree",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "6e5b8c497df5e29c22dc10de8e7bbb3f0b40c3798a2f3eb33e575f23106564ca",
+          "definition_identity": "eab381f24d2f6cd08d2cd84d341d5cfae29a339cc82ce1f079aa5ea0df664d1b",
           "gateway": false,
           "input_schema_sha256": "d89af02327b9f5ae32dfa22c18c0862b92688a45d01120eb3c56f04b612a743c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
+            "query",
+            "filesystem",
             "discovery"
           ]
         }
@@ -478,7 +407,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -488,23 +416,20 @@
       "tools": [
         {
           "canonical_name": "agena.context.status",
-          "capabilities": [
-            "session_registry"
-          ],
           "conditional": null,
-          "definition_identity": "1494e47df0f1c1bab3460a0eb7a3df261bf84c34654b1edeb76c5abee0a123c7",
+          "definition_identity": "4330da3604a18c14e5b40b5087cb12e28b9ffb1783254e1f76dad3356ceffd9a",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only"
+            "query",
+            "discovery"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -514,121 +439,98 @@
       "tools": [
         {
           "canonical_name": "agena.cron.create",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "b507a5f7119601620e680cabad6221b93103bb181782a3a8fe2c805688fd61bf",
+          "definition_identity": "f6e4fec000ddcd1210df843fc7b20b0d03bd51252ac1e786a4c3b859e0dda33e",
           "gateway": false,
           "input_schema_sha256": "130464ea1aa11c61277eba24cfab88a880694aa780e1ef1a9b4e1629a459b3e0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
+            "mutate",
             "scheduler"
           ]
         },
         {
           "canonical_name": "agena.cron.delete",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "6da207f8c75dbceebc398e5b61f37c82de8faad4c946fd97e34bcc5c0a1257b9",
+          "definition_identity": "5cd98ea0cdc13085f2db56dc218019eb8ebb167a2fca2b706e16dab72dd86da4",
           "gateway": false,
           "input_schema_sha256": "90953aa3049bd6def0441a575178e441854f67e34e4ced60a80d1a6a4969711a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
+            "mutate",
             "scheduler"
           ]
         },
         {
           "canonical_name": "agena.cron.history",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "b0a7a24ec53436a60da6fd3cb4012855d33bf5807e44e67c0deadd387c05941c",
+          "definition_identity": "c16f60bd481484a1c32ea0fb4ece0004b541a8da97c3af7dc8373e217cf54fa4",
           "gateway": false,
           "input_schema_sha256": "4a3be7ed3ab838f83d7a6d0e9158305e916f6537754f5279627cbf63b15e955e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "scheduler"
           ]
         },
         {
           "canonical_name": "agena.cron.list",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "2fc785175d144be4a084293746a5dac67ef9a6608dddce4aaa326fb4bffd48c6",
+          "definition_identity": "a2f1dd2c6a163e42b25c463a635fee5b7ba0e2dc6be06fb3f4c71fcb58054a44",
           "gateway": false,
           "input_schema_sha256": "efddc7bd8bbcef73a14eb1ace1ffdaec81e518ef1e13c1e9271d0b8acb694a49",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "scheduler"
+            "query",
+            "scheduler",
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.cron.pause",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "a423d512f0134f9faddcb3fa3a8d5c703c57b5ec9257272d34bd0e96b438ebe0",
+          "definition_identity": "6edb1df4ff879d6d7adfa654e6623d6b8bcc8e4922d685bb0eac543a4d105d07",
           "gateway": false,
           "input_schema_sha256": "90953aa3049bd6def0441a575178e441854f67e34e4ced60a80d1a6a4969711a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
+            "mutate",
             "scheduler"
           ]
         },
         {
           "canonical_name": "agena.cron.resume",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "8142c07a5a82c2ed048090633fdefee6f54f2ffd41d99560aa355fe6901fd70c",
+          "definition_identity": "d9410b8a43dfcea98f34a9e859f1ada6a1de873b424cab0037c8a7e4681d6b17",
           "gateway": false,
           "input_schema_sha256": "90953aa3049bd6def0441a575178e441854f67e34e4ced60a80d1a6a4969711a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
+            "mutate",
             "scheduler"
           ]
         },
         {
           "canonical_name": "agena.cron.update",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "7a61c23fe63996a34c6c7a02b8b138be6d04f10ffd4c5eeba43c863522183ffd",
+          "definition_identity": "4babff38ecd36bd75c8b940b89f84c042874ff2c8862606453daeb5e4b81d651",
           "gateway": false,
           "input_schema_sha256": "4a563625e4d467b56e24cb795d8df9a99e480d0e3bfea8aa0025428512b9185f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
+            "mutate",
             "scheduler"
           ]
         },
         {
           "canonical_name": "agena.cron.wakeup",
-          "capabilities": [
-            "scheduler"
-          ],
           "conditional": null,
-          "definition_identity": "4caf6b495267ba1cce2938beab90997e7575ce73897c9563a3660daf06b42c61",
+          "definition_identity": "0d5529464f30b3814171a68c14a58fecc3d22e057bc204612e8a3bd7629d56cd",
           "gateway": false,
           "input_schema_sha256": "9b165f526be5fbdbc457f1e703b278dd94037b7f60ba1b3e4fff84b523418a45",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
+            "mutate",
             "scheduler"
           ]
         }
@@ -636,7 +538,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -646,15 +547,14 @@
       "tools": [
         {
           "canonical_name": "agena.environment.wait",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "59442cc19d4cb014c37546a93887cb12519a141874e3a086782c17da033ca7ae",
+          "definition_identity": "9aa6586551b01b093920b1b54b31bccaf355097b56401cae219d4b9b5d2ce57f",
           "gateway": false,
           "input_schema_sha256": "b3d89f70dfdfd4a12ce38c0372440a75acdb2380b009e72c7cf1fb02da5a6575",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
+            "query",
+            "filesystem",
             "network"
           ]
         }
@@ -662,7 +562,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "tool.invoke"
@@ -671,129 +570,118 @@
       "tools": [
         {
           "canonical_name": "agena.fs.apply_patch",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "95ef7c252267eee6f48aae92b3c6b93ecd83c8ea7575b188c55b07cdf727ef86",
+          "definition_identity": "417276cd66955e08ec36488a087a95ed8eeccfaaa01400a8c0bd0a1f7aab071d",
           "gateway": false,
           "input_schema_sha256": "5d4d1dfc1e7fbb1f582fc5a40a103bf2d4cc7a7a5d3587d3adb6842373db5406",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.fs.glob",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "8de6d1dca27b890dd6597403bf284818fee75a36d2b826246ddcd5977501b36a",
+          "definition_identity": "09f3ac345853e0563ac4bfe328c57576a2b11bb5dfae7d01777b5327f7a56ea0",
           "gateway": false,
           "input_schema_sha256": "e2fd104316efd06cc1e2ed8c87eb21e047fef1c19cf62369d200bcb0c455ed5d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
+            "query",
+            "filesystem",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.fs.grep",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "259518fbb869d0aae4df5aa9d6b89db86e81df9dcf84b78b619f5cda077cb12d",
+          "definition_identity": "c7fd96b6831c7f0f663ba57812a51b66895f1761a55115a7d2cbb3a9714c5ced",
           "gateway": false,
           "input_schema_sha256": "9327859b77b798d6bb85185349b8632cddcbdd7f771886b03219906cec5a7619",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
+            "query",
+            "filesystem",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.fs.read",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "2d043e076ea360045d7519b33378d453a5158a374af2285018298368ac5f2467",
+          "definition_identity": "49d99ce0aeb1f6eff648bf8f4a6cded300ea58b45a84029e132fb9f5828fcf6f",
           "gateway": false,
           "input_schema_sha256": "33a5995adf361501fbb3432ec4263d74907b240068a8f550747f8f5d05881c94",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read"
+            "query",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.fs.read_many",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "98c10ae3e201a02ce80e1f0f179cccf01ad72d56d5f0e52c94919af157b6ef98",
+          "definition_identity": "0ca7003721a2987e5dd32a6f3f53ee1feee73092718e37e48cd1cb55a5fbb9c8",
           "gateway": false,
           "input_schema_sha256": "0175a15e309568465ce137c3937620ced7ffecabe5821537fc3901b38a326b14",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read"
+            "query",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.fs.replace",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "cf04e2e5eac8710bccd925392beb2528099bc85ee4b612cb39f10a3efdaf911a",
+          "definition_identity": "1d7e0638b0a211c7efa1c6fc017e668d6aa170b0c16b7fe90e2bce25255af1e1",
           "gateway": false,
           "input_schema_sha256": "88d18c17e6527c7f6a677f6eb08d0b524550e1d5a38c82e348da14b490ea6a5b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_read",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.fs.stat",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "138cd4c175d0408557a9962e1eb2e1d7a591e2eceb17da55c30f029c03545ee7",
+          "definition_identity": "99f5b77e76e114297832e4dd65a9faea99a30d0126166a8017f811aface4e095",
           "gateway": false,
           "input_schema_sha256": "e05e14eb17bcba9f8816b7235ead177c0620c47f20cc1206cc569d263bdad52a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read"
+            "query",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.fs.view_image",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "2974d4ee8db1ad92ce83fff3cf999dcd3974df71e9b2c142068beb9a2fd245e2",
+          "definition_identity": "65e04241a8459ae9251ce69c7f9cf340dd2b67256ce2cde2524fa428dff765d5",
           "gateway": false,
           "input_schema_sha256": "40261067ff1f020d3a5ee79c2a79493f15f3f67c3e1d4b2706817dd975b08ce9",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read"
+            "query",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.fs.write",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "d6279b1c6e25f33be66d4b2fb698c98d8a2f076564a1c35d519e6ba8f76c4c5d",
+          "definition_identity": "1c302fdfbbbdae46371d454901000de2e74362118c7d33be0a9cde70e40fce0d",
           "gateway": false,
           "input_schema_sha256": "fcd1c856818a0e58a6f65052c5dc917b4b8af7e85ef9a728e61a3e1552d5e50e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -803,163 +691,135 @@
       "tools": [
         {
           "canonical_name": "agena.gemini.code_execution",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "8c69012a970f557e615456f081d8b4b33c7370e80c5f0f042dea0fe211c38d6b",
+          "definition_identity": "88231eff2ba749c50271d43df70118c8b477ee046696562e9e0f8e1c1c3ad3ba",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.gemini.computer_use",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "21f33ac8604f8ad69c09775ebcfd343c02b3c2db9bd2f727836bd23d72a27a66",
+          "definition_identity": "48d0914041fe846fcef75feb443d09b36943ab2ef2844307515e8febc3c236ed",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.gemini.file_search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "8f081b6f22b2891b198db8d1ffbda57b0af7715f748043fbd63b7c074ed2ecea",
+          "definition_identity": "d162109478f35fb2469bd7dd95bd42c5fadd055b5f6c8e428b3d07fa40190e61",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.gemini.function",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "77f96b326397bf04fac743d5d51a8dcc3b2222d306176352b3889ae2b6efa8fa",
+          "definition_identity": "0f8e033513db49463502e08bfd4cbf43ba188940076e0ca00e302d0fa30b9278",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.gemini.google_maps",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "dec6b89abad5f3759eb2eec43e6edd69312c0ab01f50993b07662dc98fea612c",
+          "definition_identity": "3756ee14a01ec1efcf5971743c2c8781efc42e24d68569c9740c94d274190b04",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.gemini.google_search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "f04c3b8448d818af9966ce0c59182a38ed0e4951d97931a891c94eef88589a86",
+          "definition_identity": "875119ae3badbe0c5ad600a0720f78ec00b6ef8983a9594c736f1f69b386c495",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.gemini.image_edit",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "17ffa54e9e4e74ebaaf5ab88d6f4e2bc37066c4d1c532dba6f81457a0819c018",
+          "definition_identity": "3321836d412f976ecc005ef2bcb0e248e6c44ddb963d9e313a07d913a81141f0",
           "gateway": false,
           "input_schema_sha256": "fec6470323277fd28c497dbf6162eee6e5dd9c4a2f47462b7c4323fd0f73c9bc",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutating",
-            "filesystem_read",
-            "filesystem_write",
-            "network",
-            "internet"
-          ]
+          "tags": []
         },
         {
           "canonical_name": "agena.gemini.image_generation",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "2d5010a8298783aefb4788256007c425033524802013f5f701a0e6097a2485fc",
+          "definition_identity": "bf4b1f35a44c3886aaa50cad94f68d821616615ab11cafb76a9699d0c8e25969",
           "gateway": false,
           "input_schema_sha256": "31e09ca2bc4e9357f22ead7c96fa074aeee01b81299d716e867717c7659334bb",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.gemini.mcp_server",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "f66a220c71e3c956b8eff47261e39464c88a0a276cfa119846169841d18f0a18",
+          "definition_identity": "5876f93e50790747fd2eb0c2dc03e30d8f9730fd8a622e0bf5c7aa2fd5ad5db2",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
             "network",
-            "internet"
+            "interactive"
           ]
         },
         {
           "canonical_name": "agena.gemini.retrieval",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "ed36385a9a17bddd1ea4b3e7f8daef88358aa38d7ab19e5ed7a56fee05921309",
+          "definition_identity": "ab8509bdea6088b069c8b1101b2dff84768751838e54524d88abb00e4f8c03c1",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.gemini.url_context",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "4707f3fb2ddbee5cb875e34f2e5817e202d61728cacf6bdefc63a000c2252932",
+          "definition_identity": "c6d5b087d890b816b2b5f36e08ed821fbed837725e90155f19e8f57c9eeff19b",
           "gateway": false,
           "input_schema_sha256": "0fdb8d9ef9f336727df3d157d8ed1aa646b6d122040fa5e86fc7a225a103fe03",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet",
+            "interactive",
             "discovery"
           ]
         }
@@ -967,7 +827,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -977,9 +836,6 @@
       "tools": [
         {
           "canonical_name": "agena.interaction.ask",
-          "capabilities": [
-            "ask_user"
-          ],
           "conditional": null,
           "definition_identity": "155935f8033940d0a8d09371744bc9a1530dd3c1b312f7002f29dd6a798ef230",
           "gateway": false,
@@ -991,19 +847,19 @@
         },
         {
           "canonical_name": "agena.interaction.notify",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "1179df0d324f09029397621173e219bae78d62274d233f9e922553714fee2b8e",
+          "definition_identity": "6d2ae1d606d72da8e8df88ab2fd67873e50e1e34f3c2d65ece01ad9bb4fde3fa",
           "gateway": false,
           "input_schema_sha256": "1069265329b38d72f697883b73f6d1430fccebd658136fdf9c62e0f5e857e48d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": []
+          "tags": [
+            "interactive"
+          ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -1013,88 +869,73 @@
       "tools": [
         {
           "canonical_name": "agena.lsp.definition",
-          "capabilities": [
-            "lsp_registry"
-          ],
           "conditional": null,
-          "definition_identity": "add4b8fc74264ebbf5c800e9b3fc45b8ec3db0c3d8b82baa6a87e30aa1758065",
+          "definition_identity": "1535594c41d2604e36a7fee73dc915b6de82b38090d53752efb192cbfc37e979",
           "gateway": false,
           "input_schema_sha256": "da3ef753608100310b510ecad5c714c1cd78d8cfe916f8b8ec8d97a311df31f6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
-            "lsp"
+            "query",
+            "lsp",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.lsp.diagnostics",
-          "capabilities": [
-            "lsp_registry"
-          ],
           "conditional": null,
-          "definition_identity": "d351c61ebae0baea8ba0bd0828837616ffe005d2be2159bebafd9368db7bef04",
+          "definition_identity": "66420c190c7f25f3f4e4d13ac7c763492c7d21621f6973909e7f0049fa401b2a",
           "gateway": false,
           "input_schema_sha256": "d147ac2fc3d554513d28c1457b1e6a7b7a1f029135e9f236c1cb0e135898e718",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
-            "lsp"
+            "query",
+            "lsp",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.lsp.hover",
-          "capabilities": [
-            "lsp_registry"
-          ],
           "conditional": null,
-          "definition_identity": "6a2ae30f5c794c67c295ef3b4332f348450e0071f6fd4378d7a362c26dc52e1f",
+          "definition_identity": "498cd02eb394876bd46304dfd67f0baa3ec69da0e9d634ea756020fb4f4817ca",
           "gateway": false,
           "input_schema_sha256": "da3ef753608100310b510ecad5c714c1cd78d8cfe916f8b8ec8d97a311df31f6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
-            "lsp"
+            "query",
+            "lsp",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.lsp.references",
-          "capabilities": [
-            "lsp_registry"
-          ],
           "conditional": null,
-          "definition_identity": "de21be00cdca8a5484453051f6c80da15c2f48ff8060d1e2ba4994558da317fa",
+          "definition_identity": "6ea788320c0b411a9f22db497113f5dd7120371924d2ee7079f8c7cb1f83a96b",
           "gateway": false,
           "input_schema_sha256": "f769f1b225cdb65f93c82004d302382f07ba21d94bdbb5a5b602550abb6812af",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read",
-            "lsp"
+            "query",
+            "lsp",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.lsp.servers",
-          "capabilities": [
-            "lsp_registry"
-          ],
           "conditional": null,
-          "definition_identity": "dc3d6d6517ba107c4cfb8ed994b8994a1701d335dee099b9dcb6a896fb985122",
+          "definition_identity": "52f4b734b0fd5538b05cee1ca320b5a251d1227606718c6771ad51d7c193a12b",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "lsp"
+            "query",
+            "lsp",
+            "discovery"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": "runtime:mcp-manager",
       "hooks": [
         "init",
@@ -1105,125 +946,113 @@
       "tools": [
         {
           "canonical_name": "agena.mcp.prompts.get",
-          "capabilities": [],
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "7d7cdb604fd3434ed8d23890dc62b0b08cebf974fc01a2bc82535146bf7ae960",
+          "definition_identity": "8cae8d7a9c6f4eb123ea81a104327fb5b83d5d53c57e93cd44cd9a913885d8db",
           "gateway": false,
           "input_schema_sha256": "b86156a17e739bf3e34de4e26e0f8bc65683a106cf2766056f8f8f5e438cb63e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "mcp",
-            "network"
-          ]
-        },
-        {
-          "canonical_name": "agena.mcp.prompts.list",
-          "capabilities": [],
-          "conditional": "runtime:mcp-manager",
-          "definition_identity": "b00f69db2f271151b0acc77937c02bbd2917e4dceb3a0c635c519cc1a1315370",
-          "gateway": false,
-          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only",
-            "mcp",
-            "network"
-          ]
-        },
-        {
-          "canonical_name": "agena.mcp.resources.list",
-          "capabilities": [],
-          "conditional": "runtime:mcp-manager",
-          "definition_identity": "3b8a72775d517bd5e3fbcd0f729b6af3b5da845ad85e3e59f379f8b2d160fa12",
-          "gateway": false,
-          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only",
-            "mcp",
-            "network"
-          ]
-        },
-        {
-          "canonical_name": "agena.mcp.resources.read",
-          "capabilities": [],
-          "conditional": "runtime:mcp-manager",
-          "definition_identity": "0e22e478388f4dc710063dd6c3795d04602b371e2bc40fd80213e70f2e408d18",
-          "gateway": false,
-          "input_schema_sha256": "a843fd3fdbe2e1fcf3ddc8eb92ef1e020980fa6a94a70a8f02957f76085c7266",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only",
-            "mcp",
-            "network"
-          ]
-        },
-        {
-          "canonical_name": "agena.mcp.resources.templates.list",
-          "capabilities": [],
-          "conditional": "runtime:mcp-manager",
-          "definition_identity": "bdcabd77533389855671de3bacce44029ac485fde886e8c37d912bf9b4e85c8f",
-          "gateway": false,
-          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only",
-            "mcp",
-            "network"
-          ]
-        },
-        {
-          "canonical_name": "agena.mcp.servers.reconnect",
-          "capabilities": [],
-          "conditional": "runtime:mcp-manager",
-          "definition_identity": "70dc842518cba092822902a511868f5d9ac2010202342c937710814484ecad42",
-          "gateway": false,
-          "input_schema_sha256": "3c1f826a995a04dd4f2fd1263d35a8fa7fdfd3a21b84ff589231d11e89313303",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "mutating",
-            "mcp",
-            "network"
-          ]
-        },
-        {
-          "canonical_name": "agena.mcp.servers.status",
-          "capabilities": [],
-          "conditional": "runtime:mcp-manager",
-          "definition_identity": "f2d485390b134ced29d727b68d56294598120e9d57d10b40cb108cefdc959271",
-          "gateway": false,
-          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only",
+            "query",
             "mcp"
           ]
         },
         {
-          "canonical_name": "agena.mcp.tools.call",
-          "capabilities": [],
+          "canonical_name": "agena.mcp.prompts.list",
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "8acb2f3b19c832beec3c3cc2b3467c7bdaacbfc1f83f5813a2b8b13d7f803c47",
+          "definition_identity": "7afd6bb4806ea897d5aea4f8223bbdaf7dea5661d361a377db65e88d40715054",
+          "gateway": false,
+          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.resources.list",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "2beb521b03664d48e1e98997ad0cd3858f26e868ffdca7448df068871a8d9e28",
+          "gateway": false,
+          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.resources.read",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "754d33755486a78694a4b8e7cfba8e98e4c3ed5e052876a5dac1b34263d922e9",
+          "gateway": false,
+          "input_schema_sha256": "a843fd3fdbe2e1fcf3ddc8eb92ef1e020980fa6a94a70a8f02957f76085c7266",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.resources.templates.list",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "9c56eaa8d31e7439420980064fbc260d48c725c27e6cd06b24473bf607881306",
+          "gateway": false,
+          "input_schema_sha256": "bf33595a71542b7502f3883bc8cfda621a850e0d89b205b590cbfbb5c5fbfc1e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.servers.reconnect",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "9be427284dbcc792bba134ac535bcc541abfb523ec432ac715966a9c0ce88161",
+          "gateway": false,
+          "input_schema_sha256": "3c1f826a995a04dd4f2fd1263d35a8fa7fdfd3a21b84ff589231d11e89313303",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "mutate",
+            "mcp"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.servers.status",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "f3846bceaaf379522618c4b430bd5ae209ae278bafea7454a913d10812ea22fd",
+          "gateway": false,
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "mcp",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.mcp.tools.call",
+          "conditional": "runtime:mcp-manager",
+          "definition_identity": "1380a9708e71ee0e3004038272da9a77b0275f1e655c0cfba3750a7e69f914ed",
           "gateway": false,
           "input_schema_sha256": "357f3d68484ffe42a59022a7a47c749847fc27810bd719a58483f44290d57701",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "mcp",
-            "network"
+            "execute",
+            "mcp"
           ]
         },
         {
           "canonical_name": "agena.mcp.tools.search",
-          "capabilities": [],
           "conditional": "runtime:mcp-manager",
-          "definition_identity": "94d85be43d551ecd37f15571aa4aaae6c16590c467fc018c62551041a9272eab",
+          "definition_identity": "71a2f579c46120871f9867680359b1505dcc1c534fed729773a39398ec2cdce1",
           "gateway": false,
           "input_schema_sha256": "f8f0bc4489e6744fa924327f64502984e1c463eb88146473da3db70292463f98",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "mcp",
             "discovery"
           ]
@@ -1232,7 +1061,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -1243,74 +1071,70 @@
       "tools": [
         {
           "canonical_name": "agena.memory.delete",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "f290bcc465be7c70e9e2d5eb9bbbf1d5aaf857e98195a374f6e9b943e683dff8",
+          "definition_identity": "753ee559bf53a0ec8e2f5d4123d759ca687641b3903dffc70dcb0d321a7e4651",
           "gateway": false,
           "input_schema_sha256": "4f023e49026389b25306cfb9661862030f771ce5c03db73de2a5b5dc5d534892",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.memory.get",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "e666635a86b24bb9078c61952d6c1707cde4134bc19efd816d8b29e5aa0ffaa7",
+          "definition_identity": "f82605c91019d22de526303975b17d1d3fa358bd62a904a3534fb7f04d1aab81",
           "gateway": false,
           "input_schema_sha256": "4f023e49026389b25306cfb9661862030f771ce5c03db73de2a5b5dc5d534892",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read"
+            "query",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.memory.list",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "4057c835eebe5128488949c1aac109f9e751093382eba6b8dd39b110d5abf18b",
+          "definition_identity": "f191ce8189bd1f257c403473c7720b592278c2a3149424cb7e3d3ed895174905",
           "gateway": false,
           "input_schema_sha256": "160f560c7e86c5b459174c6d5ddb5db3e37aed0e396ee5177fbf9c0991cf8eae",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read"
+            "query",
+            "filesystem",
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.memory.search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "1a2ce235754efdacc6aaa290ec817c4a795d32a844f1c283b44e9eb63dde1645",
+          "definition_identity": "a5d3a78ae81574dfe0a06b8ce7a4cb4315c42a75fe0f5031e13014ac311c38ff",
           "gateway": false,
           "input_schema_sha256": "cd3f345548c959a0a30a7723f97a9a9d5ce3de5c797d5fc345a2c48854a401d6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_write"
+            "query",
+            "filesystem",
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.memory.write",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "7bba97d954188dcfe18008441f9220446403c0c942038cf0e34579b4c7bb3697",
+          "definition_identity": "22a92fc48492d88f3c4ee5012a4181c7388009aed8b325eaac2818e4174af582",
           "gateway": false,
           "input_schema_sha256": "a71d31a0d3576a78d856aec46f090c811ed8690dceb69052a85b20e62ca033d5",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "tool.invoke"
@@ -1319,26 +1143,20 @@
       "tools": [
         {
           "canonical_name": "agena.notebook.edit_cell",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "77df7c2fd3dcdca43e29c77f5be7380f20f50bdd351020713cd27d36eb6fc41e",
+          "definition_identity": "e9e9ec975896b322367058f948e81c5823fe2eb4490cf694112186300a329f7f",
           "gateway": false,
           "input_schema_sha256": "5cf7ca569c8ea6b16856a58ec0f3eb15509e6f463133ac4ddf30f339df609870",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_read",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [
-        "plugin_storage",
-        "statusline"
-      ],
       "conditional": null,
       "hooks": [
         "init",
@@ -1351,77 +1169,56 @@
       "tools": [
         {
           "canonical_name": "agena.plan.clear",
-          "capabilities": [
-            "ask_user",
-            "plugin_storage",
-            "statusline"
-          ],
           "conditional": null,
-          "definition_identity": "b59120ab3344e268be8fc8ee7d56504b7af17bfb5173032a0c690ccbbf0496de",
+          "definition_identity": "64135f7d066fa6cc50400f7db371b4440fa6f781c1bd7eda9c52018a78540f9e",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "planning",
-            "mutating"
+            "mutate",
+            "planning"
           ]
         },
         {
           "canonical_name": "agena.plan.get",
-          "capabilities": [
-            "ask_user",
-            "plugin_storage",
-            "statusline"
-          ],
           "conditional": null,
-          "definition_identity": "efe5eababfcdfeb1c5bae1be5318c8a508cf203c47451b7ab294a0f45d59219a",
+          "definition_identity": "1e6049dd09c9011eb201dd706e5a0bf3427a31140e636a6d73cc94884390af9c",
           "gateway": false,
           "input_schema_sha256": "2ac2cbd1b28b0cc77bc1fa5b5483c0ff8c38a502f769df1499fea8717a809340",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "planning",
-            "read_only"
+            "query",
+            "planning"
           ]
         },
         {
           "canonical_name": "agena.plan.set",
-          "capabilities": [
-            "ask_user",
-            "plugin_storage",
-            "statusline"
-          ],
           "conditional": null,
-          "definition_identity": "2afedb674be75dc32a8da73c716b16830f97eed547b71f4e1beee9535ad25c8c",
+          "definition_identity": "d2fd7677174028a6cf7dae28ff87d316d6ea4acbaec705780660b535cf4f39e6",
           "gateway": false,
           "input_schema_sha256": "b3788f6ded4486eaffde8835c3e268a60d70e6c0f2425b56a938185e4bfdb985",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "planning",
-            "mutating"
+            "mutate",
+            "planning"
           ]
         },
         {
           "canonical_name": "agena.plan.update",
-          "capabilities": [
-            "ask_user",
-            "plugin_storage",
-            "statusline"
-          ],
           "conditional": null,
-          "definition_identity": "74ff9120670957a4a3a64119057fb65c6665ddce687cc28d84135d77abb97e84",
+          "definition_identity": "b495efce66534c26d443fd221125c2cda3f264de68cafba0a68b5a3fa4fc3de4",
           "gateway": false,
           "input_schema_sha256": "5f12e727510c6b2e3cec10446a6d59a01e5890517fd83337056493ac2e2ed9b8",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "planning",
-            "mutating"
+            "mutate",
+            "planning"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "tool.invoke"
@@ -1430,21 +1227,20 @@
       "tools": [
         {
           "canonical_name": "agena.report.findings",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "3989b2187c9197fac070e66de4dd0e840da132175d1542b2ee9f74bb54d527ce",
+          "definition_identity": "36db7555031640fc518055b228fa6507771a445498ef04415c9a3e70643f5466",
           "gateway": false,
           "input_schema_sha256": "137ac77f007b17155ad113da431cb50df849900a51b960371bf38a53bfba0d31",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only"
+            "mutate",
+            "discovery"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": "feature:schema-lab",
       "hooks": [
         "tool.invoke"
@@ -1453,27 +1249,25 @@
       "tools": [
         {
           "canonical_name": "agena.schema_lab.echo",
-          "capabilities": [],
           "conditional": "feature:schema-lab",
-          "definition_identity": "ae0ec66e5da2f4020de8648c90d0cf60bf841382a986a663bb4ddb0018d49dde",
+          "definition_identity": "7e436c889e9a2b2b6ec5bc2c5f1f6a6f28c228fcfef65d69057b75d45ab56d43",
           "gateway": false,
           "input_schema_sha256": "5a7ab0daa0fc32628512d572f2a5b1b142c758bfeec67e5f624bc8ac0d2f392b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.schema_lab.inspect",
-          "capabilities": [],
           "conditional": "feature:schema-lab",
-          "definition_identity": "91cc0534d5fbd261bd99f0aeb903b2667a665d086dc6268a5cc6f406e897ef7e",
+          "definition_identity": "2fe22211463f8074f7add57667d2fa202633bbd3d39eb5175ac80402082acdb0",
           "gateway": false,
           "input_schema_sha256": "f301afcd9d66a8754c00a9e9653501a418542557140d35164278bb8934f272dc",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery"
           ]
         }
@@ -1481,7 +1275,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -1491,37 +1284,31 @@
       "tools": [
         {
           "canonical_name": "agena.session.get",
-          "capabilities": [
-            "session_registry"
-          ],
           "conditional": null,
-          "definition_identity": "a18207d105409e5aa589b92ae6ad998dae9117c68d771787c5e284cf249830bd",
+          "definition_identity": "664ff96a70d830149288aab6d7c8ea9ac31a35212e7917a0181c92f63204eaac",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only"
+            "query",
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.session.rename",
-          "capabilities": [
-            "session_registry"
-          ],
           "conditional": null,
-          "definition_identity": "6af40e2fd01fd08748ad2102697648d729d412fdfe7c550c241fef451a1316bc",
+          "definition_identity": "c4963742e2d0d363984923367ef62d727e57ac085e829972d3e2344007ffe8e9",
           "gateway": false,
           "input_schema_sha256": "e363a38abbad60413752d7875feed95636e6d5743b4e5b4aa20a1616a59b6fb0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating"
+            "mutate"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -1531,134 +1318,109 @@
       "tools": [
         {
           "canonical_name": "agena.settings.delete",
-          "capabilities": [
-            "read_config",
-            "reload_config"
-          ],
           "conditional": null,
-          "definition_identity": "458ef50d60c4bd7786c317381e280bcedf2593837e1815869ddc2ce59168092d",
+          "definition_identity": "21caeff3e598dff26685511ce95e3439861eb110d500f19b6a0c1e2ec211b8d8",
           "gateway": false,
           "input_schema_sha256": "014cf473e30563c824ed6da45aaef0acbff119e9ac54388a90796c01196fdad8",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
+            "mutate",
+            "filesystem",
             "settings",
             "settings_write"
           ]
         },
         {
           "canonical_name": "agena.settings.get",
-          "capabilities": [
-            "read_config"
-          ],
           "conditional": null,
-          "definition_identity": "dba67b3d3e4f87e04cb33e9c1c699e8a102dbc50b9b9d38c8f0ae6c5b1160ea0",
+          "definition_identity": "77462fe82720b6c03d6377b0df46872fe9ca2369f476cb6789d87fe2a546b794",
           "gateway": false,
           "input_schema_sha256": "e12b2dc8309a66c140f580469b3358e492ebe8ba2a5ba9e6b4e50d6673a49636",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery",
+            "filesystem",
             "settings",
-            "settings_read",
-            "filesystem_read"
+            "settings_read"
           ]
         },
         {
           "canonical_name": "agena.settings.inspect",
-          "capabilities": [
-            "read_config"
-          ],
           "conditional": null,
-          "definition_identity": "b8c1ff6d649d70b9e352c667b0b75b482ef2c148870651f8bf3b51b10e2b9637",
+          "definition_identity": "2ba85182d41b6c5f7a09ea76816f849e655b72905e604f0af9714c27b2d5b98c",
           "gateway": false,
           "input_schema_sha256": "870ed17d2948df7bcbc9557504cdb66fbb15b1c047b437c3e79a86ec8d2fc1c4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery",
+            "filesystem",
             "settings",
-            "settings_read",
-            "filesystem_read"
+            "settings_read"
           ]
         },
         {
           "canonical_name": "agena.settings.list",
-          "capabilities": [
-            "read_config"
-          ],
           "conditional": null,
-          "definition_identity": "9ade640ad2c752348a4f882693809a3d8ea6db4d8f2f8d6992e432bdd059d4d6",
+          "definition_identity": "0dbc349f21b55dacc614dadcfae9158803b9d9c61f126053dd1903f13735d3da",
           "gateway": false,
           "input_schema_sha256": "969dc8bd40ca94ec8776219b2ad8e9a6fe8cbf2e459f03fa6b3f5b2b66d92f47",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery",
+            "filesystem",
             "settings",
-            "settings_read",
-            "filesystem_read"
+            "settings_read"
           ]
         },
         {
           "canonical_name": "agena.settings.patch",
-          "capabilities": [
-            "read_config",
-            "reload_config"
-          ],
           "conditional": null,
-          "definition_identity": "a855b7bdd27741dc819b164774e896d12eefde46b36a88071269eb6be0e016aa",
+          "definition_identity": "d89afeb749782e9fee6c783e7a9cc5f2c0bac3645ece682e9a27338d6a2c3acf",
           "gateway": false,
           "input_schema_sha256": "f30d2bb3034e23a12ef6f2cc8214971888477950538e6fe73f07ff985e394b3d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
+            "mutate",
+            "filesystem",
             "settings",
             "settings_write"
           ]
         },
         {
           "canonical_name": "agena.settings.set",
-          "capabilities": [
-            "read_config",
-            "reload_config"
-          ],
           "conditional": null,
-          "definition_identity": "f4fdd29825dbe4905c35afcc53844436f4bd0cc9f2acf7bc2cd4d4f38e0d3f50",
+          "definition_identity": "54040650403008318a5f9912d4da9aefc51b07e321ea02719f6f5ebd59825dd6",
           "gateway": false,
           "input_schema_sha256": "002c1fce52ab2313eea5d9566ec808bc0e87ed8fb38dbecc4ce7be72a7a9b738",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
+            "mutate",
+            "filesystem",
             "settings",
             "settings_write"
           ]
         },
         {
           "canonical_name": "agena.settings.validate",
-          "capabilities": [
-            "read_config"
-          ],
           "conditional": null,
-          "definition_identity": "d26ff81d2518533f183237e350179c12e5462894f34a1adc349aca6dd6e82566",
+          "definition_identity": "e312b612e5890dc03050418139aac68eacc768d6c9c48b77256234e0ee03e717",
           "gateway": false,
           "input_schema_sha256": "d5f699227f54167a562ab3fde33a3c4a434b3ec80608f99a5b99689850e0bf70",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
+            "filesystem",
             "settings",
-            "settings_read",
-            "filesystem_read"
+            "settings_read"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "tool.invoke"
@@ -1667,63 +1429,54 @@
       "tools": [
         {
           "canonical_name": "agena.shell.list",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "2d98e94dd0f487790b7c693e1ad85b5b93cd79afbeefeb57f8d3d8dca4c402ac",
+          "definition_identity": "573ba2398e575c3392a0417428830b187eab1c041b29c11339043273b4a4a7ea",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "shell"
+            "query",
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.shell.logs",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "c54ca025d7fb13b82d2ced1e41bdaa3948a47e838de6d52c78aa97dfa3e3977b",
+          "definition_identity": "0bb61df186e9afb3176849918fe3c752b5ae2c3a9c1e5ccad227e86118378013",
           "gateway": false,
           "input_schema_sha256": "9c38213613cd17a4e0182e19dd3665e984734960958ec6d86f99c81bfbceba75",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "shell"
+            "query"
           ]
         },
         {
           "canonical_name": "agena.shell.run",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "7bb154189dec4a7e5ce2e499634a8c837ab8dff938489e94cd8f0ab4fce95b2b",
+          "definition_identity": "508b794803f238f49a45169be04edfbf9c65bbfcab0e0615ca25b2040ec65cd9",
           "gateway": false,
           "input_schema_sha256": "f6c944822aa89df0da878ac686db9ac3b1648684c7ec35a7b247b86305888fc4",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "shell",
-            "network",
-            "filesystem_read"
+            "execute"
           ]
         },
         {
           "canonical_name": "agena.shell.stop",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "4782b0496d78b615feb37efef9302ba9587d0769fcdbb45bdfe76d02d9b148b8",
+          "definition_identity": "2fd8fa4b056432eb6c917b379a57848a52aebac0b1c7a0be3a8ab8ae043ad785",
           "gateway": false,
           "input_schema_sha256": "0b746767db7a0e15810a548b448efe51100c66972c397740ed4f45568831d06e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "shell"
+            "mutate",
+            "execute"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -1734,100 +1487,92 @@
       "tools": [
         {
           "canonical_name": "agena.skills.create",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "ccf4f2b54e469826fbd2401916bf244a384b80171bd218d08a6c082489359c8a",
+          "definition_identity": "dec01755c48251f69244df7b5d0d29d45085912841fe4805c17c678ddebc9e09",
           "gateway": false,
           "input_schema_sha256": "e4220dbf12d4d9b0e04525045bc91820baa06518e7fb25586ff7995c45531e02",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.skills.delete",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "c7aad68386da0e4d55fd46196b4655b824ee5474fca8284133eb87602361b030",
+          "definition_identity": "62ce1db1e5b3a2d5813a8a76db980aed3f04998b3c69b010ac6a6839f4ebc849",
           "gateway": false,
           "input_schema_sha256": "a86c982774269c9ea7312d0bda1f309bda3b39af8b78e50ca3a35e2edff877e3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.skills.get",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "9a78f7dac8ee014390e2e801706c7ec9abc16fa9e9e9dbb185abd3ebf274705d",
+          "definition_identity": "5e24cc61eb1a6fcc934b8807bb054c0aa5fba58e05c889ae7dddb1d4de0f8087",
           "gateway": false,
           "input_schema_sha256": "8c3a43fa516b0cc8116b145c135e031bdcb19ee7444a7cd7ddf2035854187064",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.skills.list",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "cc3146ab87d3191ca0c8d072be4ab1397b1fd90f7481c42f48d0e5f473bb3595",
+          "definition_identity": "bb4d63da1bd59dd857f4ab32ffe2c135812d4b17ecc41f566bbff6a555296f8d",
           "gateway": false,
           "input_schema_sha256": "7a35355d9e7d5898b7f1cc6a6448f61f914e08af8dbf6846281f5554f3b067af",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.skills.read_resource",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "a8e03733cd6c40a373cc804400f4b0e43b38ffc6d1999657b90b990b92daf085",
+          "definition_identity": "bcb9353b66e59c7d9cbabb86731cb054c70e63ddb68a8dc83e239eb17b086131",
           "gateway": false,
           "input_schema_sha256": "01438ab91287dcfe1fe646a624ec01d29cc40fa4b788a0426f0e4b826740a262",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "filesystem_read"
+            "query",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.skills.refresh",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "a16f4d1e5b243041fbd732efdf20d53e487468993be2b28ebc55b8d7f44380fd",
+          "definition_identity": "b6ac7ba621a0e8bb2fcf1ca5e6f63b9ed020497998b2122de0e0ccb99c4ed295",
           "gateway": false,
           "input_schema_sha256": "1814e2e835d6ff7acd1fcf09c13b783f9c5726b818f42d242813caeb164dd4a7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "mutate",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.skills.update",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "1670cfb0e236b60a4953f79a90dc1c501d72101b5c9ad70c58870f0b9996975c",
+          "definition_identity": "6dff5683dad29de1e9aec4bb727e371081cb1167a68684ca53387439936df17a",
           "gateway": false,
           "input_schema_sha256": "fb568179e2c742ddd781ea3cb7e81b242499c55c88b27686cbf40ce8ba23e062",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write"
+            "mutate",
+            "filesystem"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -1837,50 +1582,37 @@
       "tools": [
         {
           "canonical_name": "agena.snapshot.enter",
-          "capabilities": [
-            "snapshot_registry",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "c4a49ae55b179d18dce3cd53db2d027bbd90e3f621f595c0483316a282ebc4ef",
+          "definition_identity": "81f00e349c6a38914aeda9d2a76116ba784e36078aff83dd1b7349762da95265",
           "gateway": false,
           "input_schema_sha256": "f96e6d13867cb962a07417c4843325347deda2a8e81112e1b147ab0bd3ddf9fc",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
+            "mutate",
             "snapshot"
           ]
         },
         {
           "canonical_name": "agena.snapshot.exit",
-          "capabilities": [
-            "snapshot_registry",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "e71caa17046dba27cd31cf8d2a5dba9eeee912287c611e4432520d7ed1e1781e",
+          "definition_identity": "258485194dd219bf38f31b9833ff1b762bdff3687990687b52db2c4ec1d5909d",
           "gateway": false,
           "input_schema_sha256": "c72b252403db7242c8d9b4e410bed1639269ed00754f2443011addfc735c51c2",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
+            "mutate",
             "snapshot"
           ]
         },
         {
           "canonical_name": "agena.snapshot.status",
-          "capabilities": [
-            "snapshot_registry"
-          ],
           "conditional": null,
-          "definition_identity": "1cee6971d5a88ca1aa9aa0e33d556a0cedfd5752e835fedce7b96faf731cf941",
+          "definition_identity": "c42505874b05f42a9be9988b68513c1753a322a8110df101028361f419ccddcd",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "snapshot"
           ]
         }
@@ -1888,7 +1620,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -1899,150 +1630,117 @@
       "tools": [
         {
           "canonical_name": "agena.tasks.cancel",
-          "capabilities": [
-            "run_subtask",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "f998b0e022eaf77b5d4d146a3b8781de9098ab0a04188a5daad57f45285fd7c3",
+          "definition_identity": "7ecd6b8ecde2bf2095259efcb07f3df3900485d1f7088b58df50f554812b0de1",
           "gateway": false,
           "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "task",
-            "subtask"
+            "subtask",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.tasks.create",
-          "capabilities": [
-            "run_subtask",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "47b13b08330236c5e641c828ff5becb96e2ed6ff9a2fce678e8b71043e73c064",
+          "definition_identity": "05247d2673415c7a9337388682f4c5c5a0e8183e38e34fcc37b5688a82c5f142",
           "gateway": false,
           "input_schema_sha256": "cfd5db33e7e507b8b8242392e1289ea36d4ee8c4d6482075d9616740506c64ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "task",
-            "subtask"
+            "subtask",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.tasks.followup",
-          "capabilities": [
-            "run_subtask",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "2ef4eb3bfac093b5df8f91b82bf8fb2edfbc27c6661ddcbb7a299b6b290f99e5",
+          "definition_identity": "f1cecea5ca3777c59537b836099d428f6db6b5701eec165336f4f44e74d1b678",
           "gateway": false,
           "input_schema_sha256": "517332e4fe23c700629ee24f46598105e4e40c40fd5bb8a236b69a45856a2a59",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "task",
-            "subtask"
+            "subtask",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.tasks.get",
-          "capabilities": [
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "43d68b1504aac0dd2988a4b5705344689237963c14107152bbfbaacb6ca78df7",
+          "definition_identity": "2e56396fab506ffa133b9f0d1079b69c6c51886c4e7cb7156c949b10ec2e579f",
           "gateway": false,
           "input_schema_sha256": "0cfba126d9c07ecb0fcf04c937ac5f7971c2a10ad8716b2070555f17e1c85b62",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "task"
+            "subtask",
+            "query"
           ]
         },
         {
           "canonical_name": "agena.tasks.list",
-          "capabilities": [
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "f8823d97b793948277f4cb066be2ece0ee20d817df2a702e98947f1ca57658ae",
+          "definition_identity": "1d1fc7db952586a91d25570e2b3f339ab401a48f57b7b816bfc3f5f046e159a3",
           "gateway": false,
           "input_schema_sha256": "6a7af1b86b1dd945d0b003eb61ba513e87666af36362201ae03501fc6e4c714f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "task"
+            "subtask",
+            "query",
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.tasks.message",
-          "capabilities": [
-            "run_subtask",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "17f3ed99b962d36fc3ed837ea7fb87522270fdd7e6f76afacfb0c72e77908abe",
+          "definition_identity": "17f829f8cfeecfe2221b9da9d86d8e422558f99ed42c0cb242d30d8a7bcfad83",
           "gateway": false,
           "input_schema_sha256": "3b7d2cecfa5269f529c60ca41973d18ce44348bc8922b50e8051c62e52b259a6",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "task",
-            "subtask"
+            "subtask",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.tasks.output",
-          "capabilities": [
-            "run_subtask",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "d81a62b2bd826a2cc517a191a092f3fcb7a356b519b258390317c0b59fa13db3",
+          "definition_identity": "c91f8cbe93110bdf92fb5246da11f883ea5399433cda8cb31c3097d97ee02e8c",
           "gateway": false,
           "input_schema_sha256": "cbdc8ef8fe8839d6ce02a65f7e4a0bc25307cfb7e228b4efc052cee708e4b55b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "task"
+            "subtask",
+            "query"
           ]
         },
         {
           "canonical_name": "agena.tasks.run",
-          "capabilities": [
-            "run_subtask",
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "b60c3d2c58b041dad9a2686ffa22fbd81f59f1fc54adcd689a0e96e915db3898",
+          "definition_identity": "d51325f7d2264c2180aa8beb39f3e060ff5190ef1525191caf13788bf4a4dfc8",
           "gateway": false,
           "input_schema_sha256": "cfd5db33e7e507b8b8242392e1289ea36d4ee8c4d6482075d9616740506c64ef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "task",
-            "subtask"
+            "subtask",
+            "execute"
           ]
         },
         {
           "canonical_name": "agena.tasks.wait",
-          "capabilities": [
-            "plugin_storage"
-          ],
           "conditional": null,
-          "definition_identity": "a0aa35f8dc5c17c1a5be3d558e238de55dfa9f1deb55db9c1c74ed42d958a037",
+          "definition_identity": "9746e66f98588f883805f080c39414434aa5f776034224b594eb038a69cef6a8",
           "gateway": false,
           "input_schema_sha256": "4a7e0505883550bbd78d205e5aa034d4ea30d2a871645aa2831078c02e82992f",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "task"
+            "subtask",
+            "query"
           ]
         }
       ],
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -2052,65 +1750,85 @@
       "tools": [
         {
           "canonical_name": "agena.tools.help",
-          "capabilities": [
-            "list_tools",
-            "tool_registry"
-          ],
           "conditional": null,
-          "definition_identity": "7e62e2011fea166b5a893f5526fd63cd3cbe38b523671fad5f3146cfe08e983a",
+          "definition_identity": "52f9a15ed824793551293b5f226e5d11eb434c6ba90628fd683782eb476a5a1b",
           "gateway": true,
           "input_schema_sha256": "31fc21c170fe3932de0e330225c7778842cdf486571f068d2c72b7a11af8246e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.tools.list",
-          "capabilities": [
-            "list_tools",
-            "tool_registry"
-          ],
           "conditional": null,
-          "definition_identity": "97ee1c7c1254a305c8840cb038582b480c6f4f8c7ce55805ccaf1ea968ac30b3",
+          "definition_identity": "835d34d9882e71b86a3664b0b2f7d6c89d9f807779f82745d64d279b4bf39d0f",
           "gateway": true,
-          "input_schema_sha256": "da1e0db270159fb9bc25dfcdd233238b910f0b38a29354648029d1ad63b74574",
+          "input_schema_sha256": "8f7be0278cbcda9663b600f71c5d68874d439b4c970ef90585c72e9ea6cc0f8d",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.tools.plugins_list",
+          "conditional": null,
+          "definition_identity": "a070e87292925b821a06f2dd7f72549571739dfc996e6b58c3a3ffac0a98cd06",
+          "gateway": false,
+          "input_schema_sha256": "8f7be0278cbcda9663b600f71c5d68874d439b4c970ef90585c72e9ea6cc0f8d",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.tools.plugins_search",
+          "conditional": null,
+          "definition_identity": "526e327cead2a1212ed6d70f9f01b9b9d14c859bcc8c5f6189f96d3e3605dd2f",
+          "gateway": false,
+          "input_schema_sha256": "0ad10ac290bb88e684c8ea761c32cf348017efe1980357d18c8a7ece647df3a2",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery"
+          ]
+        },
+        {
+          "canonical_name": "agena.tools.plugins_tags",
+          "conditional": null,
+          "definition_identity": "e388e61ef480c7edef7c63533aee0ed6cf8625a792e10163a76b68cd66c441e8",
+          "gateway": false,
+          "input_schema_sha256": "07218d5adf5a947043ee38f03590aea0b3c27e1c996091649e378dc5de9957a0",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.tools.search",
-          "capabilities": [
-            "list_tools",
-            "tool_registry"
-          ],
           "conditional": null,
-          "definition_identity": "571c03731b7b60d282e2a0b63b50ee58351054c198620dbb6183321f48026d44",
+          "definition_identity": "72afa464c2ec5ac1d3c8ec9a9c136e155b26bb763f7d3e8e4e7892947b30939a",
           "gateway": true,
-          "input_schema_sha256": "5883f96eda6bde84e05c416414626ec90f5c5a6e833595842f9f363f30d212b4",
+          "input_schema_sha256": "0ad10ac290bb88e684c8ea761c32cf348017efe1980357d18c8a7ece647df3a2",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery"
           ]
         },
         {
           "canonical_name": "agena.tools.tags",
-          "capabilities": [
-            "list_tools",
-            "tool_registry"
-          ],
           "conditional": null,
-          "definition_identity": "9550621903184b23f9c7bfbe822d7683571b715379f5d3e0893a8b442e9b5d2c",
+          "definition_identity": "284100852483516aeb195eae28cb4b753de1344c3ea4c83edef696f166f4a03c",
           "gateway": true,
           "input_schema_sha256": "07218d5adf5a947043ee38f03590aea0b3c27e1c996091649e378dc5de9957a0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
+            "query",
             "discovery"
           ]
         }
@@ -2118,7 +1836,6 @@
       "version": "0.1.0"
     },
     {
-      "capabilities": [],
       "conditional": null,
       "hooks": [
         "init",
@@ -2128,166 +1845,146 @@
       "tools": [
         {
           "canonical_name": "agena.web.browser_click",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "843694472688b0eae17d0073b0a7230482d98a159b907bf59bc851c4a7b7fbab",
+          "definition_identity": "4168b11396c202060469e601048b88fd4ae5128c69c808ea27b53bed712c1566",
           "gateway": false,
           "input_schema_sha256": "d3b2b07daedf329a189459a53822c7f4960124113d288d74f87ae1042c8b329b",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "network"
+            "network",
+            "interactive",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.web.browser_close",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "9fc4927b0c497fb31481b3f34a79ae24e0e19370d2ebff56cef7dc7431ccf2e0",
+          "definition_identity": "5c4f1fb7bcc56e37a08a7640110a6789ababbb52f8b058bde1a0666ce7e35483",
           "gateway": false,
           "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "network"
+            "network",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.web.browser_download",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "5d7ae053bb4bdbbae40c304324bef9bcd9ed3a94ca4cf80f599730aa24d4d3ee",
+          "definition_identity": "dfb1d7380c39e34929338982ef462570fede25ff81b822f278a530b49ce092d0",
           "gateway": false,
           "input_schema_sha256": "e2117910872a860d315083b105c2f083562105212e2d412b837d63f5bc70f48c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
-            "network"
+            "network",
+            "mutate",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.web.browser_list",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "a8de6a1d225262a309f67ffc318992fbcc760823a466b1db4c32bc3ab097d251",
+          "definition_identity": "635311616496c7bef7777fb313dfbc489273412434323cafbca488a7619fc06c",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "network"
+            "network",
+            "query",
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.web.browser_open",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "ac271ae28327e840a891146db9eb42d662bd5a9944a5a11eed1db5b066576419",
+          "definition_identity": "2daeee00de9af1eec534614475a4b40b2307ab3ffaae10a3b2ac613255e430b3",
           "gateway": false,
           "input_schema_sha256": "64aaf0fa25b1764c4cb942c952256cd0e6e3cd4a090576acb8759806c7fe03a1",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
             "network",
-            "internet"
+            "interactive",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.web.browser_screenshot",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "16938a88fe1bfdea5a58bd559698454dcc704c7849abafa2df352551b2a7815f",
+          "definition_identity": "c0aeba3102972c0c84fd20f0a415a710dbb1cb373b40c24a6defcb6fd0da61c4",
           "gateway": false,
           "input_schema_sha256": "cacabdb8755c596b517d757444f9703468a40910b6aab47b87a366c632c40067",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "filesystem_write",
-            "network"
+            "network",
+            "mutate",
+            "filesystem"
           ]
         },
         {
           "canonical_name": "agena.web.browser_snapshot",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "719570d0ed2e01b458bbcaade6cea105e711e8a99e67cb2ed27e2e32eae1432c",
+          "definition_identity": "80c560ec34ebb9a74d3237bb76691df3d3551bda3a0e40580623149923f5d62d",
           "gateway": false,
           "input_schema_sha256": "7ef5208cec320ec5e221d0a0d9504588157925f5f9fe1206453c8f14322fd981",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "network"
+            "network",
+            "query"
           ]
         },
         {
           "canonical_name": "agena.web.browser_type",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "65e18b998bc6f3239c96eb0157f80f4b73ce9ac7f627270ef03b152960c3d4a5",
+          "definition_identity": "3f5862766dd34502f963a32d3b363a922f0524e7750cab093f00520c7d79f64a",
           "gateway": false,
           "input_schema_sha256": "1c6d406a169970b88ffb2fe29b6ffa1407d394952af80ad758061535618b7b95",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "network"
+            "network",
+            "interactive",
+            "mutate"
           ]
         },
         {
           "canonical_name": "agena.web.browser_wait",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "0bf9c8b1509c4de840770e5bd5317ac34e75229e51cdc1dbcec32a2cc31f048b",
+          "definition_identity": "dcaf7a3833bb9ef8595a730a34d2f980e660f05c3c16a1c79825b495e3d6a0bd",
           "gateway": false,
           "input_schema_sha256": "c67b4acf17953cf1e724c19c89fd5e5ac9126d86e96a537e94746df44710c66e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "network"
+            "network",
+            "query"
           ]
         },
         {
           "canonical_name": "agena.web.crawl",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "1b23e09a5b60051880a5094f879d623073a37ded0bb603241ade2f2594a0347c",
+          "definition_identity": "da56066be604283c1f263b053e15ad0c62ba958b161bf8630fc4c31e3749215d",
           "gateway": false,
           "input_schema_sha256": "fc17dc394ff452db1897d80f4618c7b72b1b2740154ec0e7e08e383e69cdb962",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "mutating",
-            "network",
-            "internet",
-            "discovery",
-            "filesystem_write"
+            "discovery"
           ]
         },
         {
           "canonical_name": "agena.web.fetch",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "2c4ed7a505129c75019298d9445f341bc6594cdab7bc7018f7c908708d942e71",
+          "definition_identity": "954b2382ac238a18618899a7397f533e25130d5e2df111e834df0b16fb4659a4",
           "gateway": false,
           "input_schema_sha256": "e19bfb678a04be4168bc223831c2f9ef60bef1a7c4cef2726ab7849c7893dd05",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
-          "tags": [
-            "read_only",
-            "network",
-            "internet"
-          ]
+          "tags": []
         },
         {
           "canonical_name": "agena.web.search",
-          "capabilities": [],
           "conditional": null,
-          "definition_identity": "bffd9cfed8ad7db5ab383f1ed6e376611699b82108d17e9fbd0ff4c8b61d80ad",
+          "definition_identity": "03830056f42f54e13f6635a4725ecc22c1d1dfbeffd71b303070d051b54d7fda",
           "gateway": false,
           "input_schema_sha256": "0118e9d182159c4643824f31e5004880939ffbc24a792b7d5dfa4791f3edb577",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
-            "read_only",
-            "network",
-            "internet",
             "discovery"
           ]
         }

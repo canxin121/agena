@@ -66,7 +66,10 @@ impl ToolExecutor {
                 .registered_tools_with_definition_overrides()
                 .into_iter()
                 .filter(|entry| {
-                    entry.has_tag(agena_plugin_host::sdk::ToolTag::ReadOnly)
+                    let permissions = &entry.definition.permissions;
+                    permissions.read_only
+                        && !permissions.shell
+                        && !permissions.interactive
                         && !crate::tool::is_tool_api_handler(entry)
                 })
                 .map(|entry| entry.canonical_name())

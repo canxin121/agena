@@ -38,7 +38,6 @@ pub struct BundledPluginCapability {
     pub bundled: bool,
     pub conditional: Option<String>,
     pub hooks: Vec<String>,
-    pub capabilities: Vec<String>,
     pub tools: Vec<BundledToolCapability>,
 }
 
@@ -52,7 +51,6 @@ pub struct BundledToolCapability {
     pub summary: Option<String>,
     pub tags: Vec<String>,
     pub effects: Vec<String>,
-    pub capabilities: Vec<String>,
     pub input_schema_sha256: String,
     pub output_schema_sha256: String,
     pub definition_identity: String,
@@ -226,30 +224,68 @@ fn plugin_capability(
         .map(|definition| {
             let registered =
                 RegisteredTool::new(key.clone(), definition).expect("bundled tool definition");
+            // Effects are derived from the permission contract (authority) and
+            // declared metadata tags; tags alone never carry authority.
+            let permissions = &registered.definition.permissions;
+            let read_specs = permissions
+                .input_paths
+                .iter()
+                .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Read)
+                || permissions
+                    .path_access
+                    .iter()
+                    .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Read);
+            let write_specs = permissions
+                .input_paths
+                .iter()
+                .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Write)
+                || permissions
+                    .path_access
+                    .iter()
+                    .any(|spec| spec.kind == agena_plugin_host::sdk::PathKind::Write);
+            let network_specs =
+                !permissions.input_networks.is_empty() || !permissions.network_access.is_empty();
+            let declared = registered
+                .definition
+                .tags
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            let mut effects = Vec::new();
+            if permissions.read_only {
+                effects.push("read_only".to_string());
+            }
+            if declared.iter().any(|tag| tag == "mutating") {
+                effects.push("mutating".to_string());
+            }
+            if read_specs || declared.iter().any(|tag| tag == "filesystem_read") {
+                effects.push("filesystem_read".to_string());
+            }
+            if write_specs || declared.iter().any(|tag| tag == "filesystem_write") {
+                effects.push("filesystem_write".to_string());
+            }
+            if network_specs || declared.iter().any(|tag| tag == "network") {
+                effects.push("network".to_string());
+            }
+            if declared.iter().any(|tag| tag == "internet") {
+                effects.push("internet".to_string());
+            }
+            if permissions.shell {
+                effects.push("shell".to_string());
+            }
+            if permissions.interactive {
+                effects.push("interactive".to_string());
+            }
+            for metadata in ["snapshot", "scheduler", "subtask"] {
+                if declared.iter().any(|tag| tag == metadata) {
+                    effects.push(metadata.to_string());
+                }
+            }
             let tags = registered
                 .effective_tags()
                 .into_iter()
                 .map(|tag| tag.to_string())
                 .collect::<Vec<_>>();
-            let effects = tags
-                .iter()
-                .filter(|tag| {
-                    matches!(
-                        tag.as_str(),
-                        "mutating"
-                            | "filesystem_read"
-                            | "filesystem_write"
-                            | "network"
-                            | "internet"
-                            | "shell"
-                            | "interactive"
-                            | "snapshot"
-                            | "scheduler"
-                            | "subtask"
-                    )
-                })
-                .cloned()
-                .collect();
             let gateway = key.to_string() == "agena.tools"
                 && matches!(
                     registered.tool_name(),
@@ -261,12 +297,6 @@ fn plugin_capability(
                 summary: registered.summary_text().map(str::to_owned),
                 tags,
                 effects,
-                capabilities: registered
-                    .definition
-                    .capabilities
-                    .iter()
-                    .map(capability_name)
-                    .collect(),
                 input_schema_sha256: json_sha256(&registered.input_schema()),
                 output_schema_sha256: json_sha256(&registered.output_schema()),
                 definition_identity: registered.definition_identity(),
@@ -289,21 +319,10 @@ fn plugin_capability(
             .into_iter()
             .map(str::to_owned)
             .collect(),
-        capabilities: manifest
-            .plugin_capabilities
-            .iter()
-            .map(capability_name)
-            .collect(),
         tools,
     }
 }
 
-fn capability_name(capability: &agena_plugin_host::sdk::HostCapability) -> String {
-    serde_json::to_value(capability)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| format!("{capability:?}").to_ascii_lowercase())
-}
 
 fn json_sha256(value: &serde_json::Value) -> String {
     let digest = Sha256::digest(serde_json::to_vec(value).unwrap_or_default());

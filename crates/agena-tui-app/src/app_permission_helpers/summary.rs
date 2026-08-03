@@ -83,10 +83,10 @@ pub(crate) fn permission_resource_override_summary(
                 })),
             ));
         }
-        if !tools.tags.is_empty() {
+        if !tools.capabilities.is_empty() {
             labels.push(i18n.text_args(
                 "value-tag-count",
-                &agena_tui::fl_args!("count" => tools.tags.len() as i64),
+                &agena_tui::fl_args!("count" => tools.capabilities.len() as i64),
             ));
         }
         if !tools.names.is_empty() {
@@ -193,12 +193,6 @@ pub(crate) fn tool_permission_summary(i18n: &I18n, tools: Option<&ToolPermission
         parts.push(i18n.text_args(
             "permission-studio-tool-default-summary",
             &agena_tui::fl_args!("value" => permission_mode_label(i18n, mode)),
-        ));
-    }
-    if !tools.tags.is_empty() {
-        parts.push(i18n.text_args(
-            "value-tag-count",
-            &agena_tui::fl_args!("count" => tools.tags.len() as i64),
         ));
     }
     if !tools.names.is_empty() {

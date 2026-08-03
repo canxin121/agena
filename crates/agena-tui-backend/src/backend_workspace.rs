@@ -20,8 +20,7 @@ impl Backend {
         workspace_root: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
-            application: Application::from_composed_runtime_services(services)
-                .map_err(|error| anyhow!(error.to_string()))?,
+            application: Application::from_composed_runtime_services(services)?,
             workspace_root,
             file_index: Arc::new(OnceLock::new()),
         })
@@ -174,7 +173,6 @@ impl Backend {
     pub fn config_json_sources(&self) -> Result<ConfigJsonSources> {
         self.application
             .config_json_sources()
-            .map_err(|error| anyhow!(error.to_string()))
             .context("failed to read Application configuration-source projection")
     }
 
@@ -214,7 +212,6 @@ impl Backend {
                     reload: true,
                 },
             })
-            .map_err(|error| anyhow!(error.to_string()))
             .context("failed to set config setting")?;
 
         if response.reload_required {
@@ -233,7 +230,6 @@ impl Backend {
         self.application
             .refresh_provider_client_versions()
             .await
-            .map_err(|error| anyhow!(error.to_string()))
             .context("failed to refresh provider client versions")
     }
 
@@ -257,7 +253,6 @@ impl Backend {
                     reload: true,
                 },
             })
-            .map_err(|error| anyhow!(error.to_string()))
             .context("failed to delete config setting")?;
 
         if response.reload_required {
@@ -287,7 +282,6 @@ impl Backend {
                     reload: true,
                 },
             })
-            .map_err(|error| anyhow!(error.to_string()))
             .context("failed to set workspace config setting")?;
 
         if response.reload_required {
@@ -315,7 +309,6 @@ impl Backend {
                     reload: true,
                 },
             })
-            .map_err(|error| anyhow!(error.to_string()))
             .context("failed to delete workspace config setting")?;
 
         if response.reload_required {

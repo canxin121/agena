@@ -679,6 +679,48 @@ impl Backend {
             .await?;
         Ok(())
     }
+
+    /// Persist `providers.default` and `providers.default_selection` in one
+    /// atomic patch. Writing them as two separate edits would leave the file in
+    /// a partially updated state if the second edit failed validation (the
+    /// default provider would already be persisted without the selection).
+    pub async fn set_provider_default_selection(
+        &self,
+        provider_id: &str,
+        selection: JsonValue,
+    ) -> Result<agena_runtime::ConfigSettingsEditResponse> {
+        let provider_id = provider_id.trim();
+        if provider_id.is_empty() {
+            return Err(anyhow!("provider id is required"));
+        }
+        let mut changes = JsonMap::new();
+        changes.insert("default".to_owned(), JsonValue::String(provider_id.to_owned()));
+        changes.insert("default_selection".to_owned(), selection);
+        let response = self
+            .application
+            .runtime_config_settings()
+            .patch_file_settings(agena_runtime::ConfigSettingsPatchInput {
+                target: agena_runtime::ConfigSettingsPathInput {
+                    path: Some("providers".to_owned()),
+                },
+                changes: JsonValue::Object(changes),
+                options: agena_runtime::ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            })
+            .context("failed to set provider default selection")?;
+
+        if response.reload_required {
+            self.application
+                .runtime_control()
+                .reload()
+                .await
+                .context("failed to reload runtime after provider default selection change")?;
+        }
+        Ok(response)
+    }
 }
 
 fn apply_provider_adapter_selection(

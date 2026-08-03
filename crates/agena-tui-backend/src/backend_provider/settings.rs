@@ -388,11 +388,63 @@ impl Backend {
 
         self.set_provider_settings(provider_id, provider_value)
             .await?;
+        // The file-level `providers.default_selection` can still reference the
+        // adapter just deleted (its `adapter` field). Resolution does not
+        // reject that reference, so it would silently point at a missing
+        // adapter at runtime. Clear the selection when it points at this
+        // provider and the removed adapter so it falls back to the provider
+        // defaults written above.
+        self.clear_default_selection_for_removed_adapter(provider_id, adapter_id)
+            .await?;
         Ok(ProviderStudioSaveResult::AdapterDeleted {
             provider_id: provider_id.to_owned(),
             adapter_id: adapter_id.to_owned(),
             removed_model_count,
         })
+    }
+
+    /// Drop `providers.default_selection` when it references `provider_id` with
+    /// the removed `adapter_id`, so the effective selection falls back to the
+    /// provider defaults instead of pointing at a deleted adapter.
+    async fn clear_default_selection_for_removed_adapter(
+        &self,
+        provider_id: &str,
+        adapter_id: &str,
+    ) -> std::result::Result<(), ProviderStudioSaveError> {
+        let selection = self
+            .application
+            .runtime_config_settings()
+            .read_file_settings(agena_runtime::ConfigSettingsGetInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers.default_selection".to_owned()),
+                },
+                source: agena_runtime::ConfigSettingsSource::File,
+            })
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to read configured default provider selection")
+            .map_err(ProviderStudioSaveError::other)?
+            .value;
+        let Some(selection) = selection.as_object() else {
+            return Ok(());
+        };
+        let references_removed = selection
+            .get("provider")
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .is_some_and(|configured| configured == provider_id)
+            && selection
+                .get("adapter")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                .is_some_and(|configured| configured == adapter_id);
+        if !references_removed {
+            return Ok(());
+        }
+        let mut changes = JsonMap::new();
+        changes.insert("default_selection".to_owned(), JsonValue::Null);
+        self.patch_provider_settings_root(JsonValue::Object(changes))
+            .await?;
+        Ok(())
     }
 
     pub(super) fn provider_adapter_models_response(

@@ -913,4 +913,67 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn default_and_default_selection_persist_in_one_atomic_patch() {
+        use serde_json::json;
+        // Mirrors `set_provider_default_selection`: `providers.default` and
+        // `providers.default_selection` are written by a single patch so a
+        // validation failure cannot leave only the default provider persisted.
+        let root = test_root();
+        let global_path = root.join("agena/agena.json");
+        let workspace_path = root.join("workspace/.agena/agena.json");
+        std::fs::create_dir_all(global_path.parent().expect("global parent"))
+            .expect("create global config directory");
+        std::fs::create_dir_all(workspace_path.parent().expect("workspace parent"))
+            .expect("create workspace config directory");
+        std::fs::write(&global_path, "{}").expect("write global config");
+        std::fs::write(&workspace_path, "{}").expect("write workspace config");
+
+        let patched = patch_layered_file_settings_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Global,
+            ConfigSettingsPatchInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers".to_owned()),
+                },
+                changes: json!({
+                    "default": "opencode",
+                    "default_selection": {
+                        "provider": "opencode",
+                        "adapter": "anthropic",
+                        "model": "claude"
+                    },
+                    "opencode": {
+                        "defaults": { "adapter": "anthropic" },
+                        "auth": {
+                            "mode": "api",
+                            "subtype": "custom",
+                            "base_url": "https://api.example.com/v1",
+                            "api_key": { "kind": "inline", "value": "test-key" }
+                        },
+                        "adapters": {
+                            "anthropic": { "enabled": true }
+                        }
+                    }
+                }),
+                options: edit_options(false),
+            },
+            &TestEnvironment,
+        )
+        .expect("atomic default + default_selection patch must validate");
+
+        assert_eq!(patched.current["default"], "opencode");
+        assert_eq!(patched.current["default_selection"]["provider"], "opencode");
+        assert_eq!(patched.current["default_selection"]["adapter"], "anthropic");
+        validate_layered_file_settings_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Global,
+            &TestEnvironment,
+        )
+        .expect("resulting config must validate");
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

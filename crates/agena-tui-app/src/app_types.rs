@@ -562,6 +562,9 @@ impl UiFailure {
         if let Some(error) = error.downcast_ref::<agena_application::ApplicationError>() {
             return Self::from_failure((*error.failure).clone());
         }
+        if let Some(error) = error.downcast_ref::<agena_runtime::RuntimeConfigSettingsError>() {
+            return Self::from_failure(error.failure().clone());
+        }
         if let Some(error) = error.downcast_ref::<agena_runtime::SessionExecutionCommandError>() {
             return Self::from_failure(error.failure.clone());
         }
@@ -783,6 +786,29 @@ mod ui_failure_tests {
         assert_eq!(
             projected.failure.user.fallback,
             "Filesystem write failed because the target changed."
+        );
+    }
+
+    #[test]
+    fn settings_validation_message_survives_backend_context_rewrap() {
+        // A config settings edit that fails validation carries the real
+        // user-visible message on `RuntimeConfigSettingsError`. The backend
+        // wraps it with anyhow context; UiFailure::from_backend must recover
+        // the structured failure instead of falling back to the generic
+        // "terminal interface" message.
+        let error = agena_runtime::RuntimeConfigSettingsError::invalid_input(
+            "providers.default `ghost` references unknown provider",
+        );
+        let expected = error.failure().user.fallback.clone();
+        let wrapped = anyhow::Error::new(error).context("failed to set config setting");
+
+        let projected = UiFailure::from_backend(wrapped);
+
+        assert!(!projected.failure.is_unexpected());
+        assert_eq!(projected.failure.user.fallback, expected);
+        assert_ne!(
+            projected.failure.user.fallback,
+            "The terminal interface could not finish this action."
         );
     }
 }

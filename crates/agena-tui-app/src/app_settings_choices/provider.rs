@@ -109,12 +109,8 @@ impl App {
         verbosity: Option<String>,
     ) -> UiResult<()> {
         let provider_id = model.provider_id.to_string();
-        self.block_on_async(
-            self.backend
-                .set_config_setting("providers.default", JsonValue::String(provider_id)),
-        )?;
-        self.block_on_async(self.backend.set_config_setting(
-            "providers.default_selection",
+        self.block_on_async(self.backend.set_provider_default_selection(
+            provider_id.as_str(),
             model_selection_value(model, thinking_mode, speed_mode, verbosity),
         ))?;
         Ok(())

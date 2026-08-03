@@ -133,10 +133,27 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
             .transpose()
     }
     async fn ensure_id(&self, path: &str) -> Result<i64, WorkspaceRepositoryError> {
-        if let Some(id) = self.lookup_id(path).await? {
-            return Ok(id);
-        }
-        self.create(path.to_owned()).await.map(|row| row.id)
+        // Atomic insert-or-nothing: concurrent processes racing on the same
+        // path can only win one insert, and every loser falls through to the
+        // read-back below instead of surfacing a unique-constraint error.
+        let path = normalized_workspace_path(path)?;
+        let now = Utc::now().timestamp_millis();
+        self.db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "INSERT INTO {TABLE} (path, created_at_ms, updated_at_ms) VALUES (?, ?, ?) \
+                     ON CONFLICT(path) DO NOTHING"
+                ),
+                [path.clone().into(), now.into(), now.into()],
+            ))
+            .await
+            .map_err(map_error)?;
+        self.lookup_id(&path)
+            .await?
+            .ok_or_else(|| WorkspaceRepositoryError::Backend(format!(
+                "workspace row is missing after ensure_id for {path}"
+            )))
     }
 }
 

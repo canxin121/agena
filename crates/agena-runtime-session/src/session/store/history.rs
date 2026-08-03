@@ -236,14 +236,18 @@ impl SessionStore {
         &self,
         part_count: usize,
     ) -> Result<ReservedMessageIds, AppError> {
-        let mut allocator = self.ids.lock().await;
-        self.ensure_id_allocator(&mut allocator).await?;
-
-        let message_id = allocator.next_message_id;
-        allocator.next_message_id += 1;
-
-        let first_part_id = allocator.next_part_id;
-        allocator.next_part_id += part_count as i64;
+        self.seed_id_allocator().await?;
+        let message_id = self
+            .ids
+            .next_message_id()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        let first_part_id = self
+            .ids
+            .reserve_part_id_block(part_count as i64)
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?
+            + 1;
         let part_ids = (0..part_count)
             .map(|index| first_part_id + index as i64)
             .collect::<Vec<_>>();
@@ -255,23 +259,24 @@ impl SessionStore {
     }
 
     pub(crate) async fn reserve_part_id(&self) -> Result<i64, AppError> {
-        let mut allocator = self.ids.lock().await;
-        self.ensure_id_allocator(&mut allocator).await?;
-
-        let part_id = allocator.next_part_id;
-        allocator.next_part_id += 1;
-        Ok(part_id)
+        self.seed_id_allocator().await?;
+        self.ids
+            .next_part_id()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))
     }
 
     pub(crate) async fn reserve_processor_ids(&self) -> Result<ReservedProcessorIds, AppError> {
-        let mut allocator = self.ids.lock().await;
-        self.ensure_id_allocator(&mut allocator).await?;
-
+        self.seed_id_allocator().await?;
+        let message_id = self
+            .ids
+            .next_message_id()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
         let ids = ReservedProcessorIds {
-            message_id: allocator.next_message_id,
+            message_id,
             part_ids: ProcessorPartIdAllocator::new(Arc::clone(&self.ids)),
         };
-        allocator.next_message_id += 1;
         Ok(ids)
     }
 

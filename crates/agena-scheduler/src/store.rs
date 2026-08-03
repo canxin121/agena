@@ -19,7 +19,16 @@ pub trait JobStore: Send + Sync {
     async fn remove(&self, id: Uuid) -> bool;
     async fn list(&self) -> Vec<ScheduledJob>;
     async fn get(&self, id: Uuid) -> Option<ScheduledJob>;
-    async fn replace(&self, id: Uuid, job: ScheduledJob) -> bool;
+    /// Optimistically replace `id`'s row only if it still holds
+    /// `expected_next_fire_at_ms` (in milliseconds, as read by the caller).
+    /// Returns `false` when the row was changed concurrently, so a caller can
+    /// skip work another process already claimed.
+    async fn replace(
+        &self,
+        id: Uuid,
+        expected_next_fire_at_ms: Option<i64>,
+        job: ScheduledJob,
+    ) -> bool;
     async fn append_history(&self, entry: SchedulerHistoryEntry);
     async fn list_history(&self, job_id: Option<Uuid>, limit: usize) -> Vec<SchedulerHistoryEntry>;
 }
@@ -99,7 +108,12 @@ impl JobStore for InMemoryJobStore {
     async fn get(&self, id: Uuid) -> Option<ScheduledJob> {
         self.inner.read().get(&id).cloned()
     }
-    async fn replace(&self, id: Uuid, job: ScheduledJob) -> bool {
+    async fn replace(
+        &self,
+        id: Uuid,
+        _expected_next_fire_at_ms: Option<i64>,
+        job: ScheduledJob,
+    ) -> bool {
         let mut g = self.inner.write();
         if !g.contains_key(&id) {
             return false;
@@ -182,11 +196,43 @@ impl JobStore for SqliteJobStore {
         }
     }
 
-    async fn replace(&self, id: Uuid, job: ScheduledJob) -> bool {
-        if self.get(id).await.is_none() {
-            return false;
+    async fn replace(
+        &self,
+        id: Uuid,
+        expected_next_fire_at_ms: Option<i64>,
+        job: ScheduledJob,
+    ) -> bool {
+        let json = match serde_json::to_string(&job) {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to serialize scheduled job for replace");
+                return false;
+            }
+        };
+        let next_fire_at_ms = job.next_fire_at.map(|value| value.timestamp_millis());
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE agena_scheduler_jobs \
+                 SET job_json = ?, next_fire_at_ms = ?, updated_at_ms = ? \
+                 WHERE id = ? AND next_fire_at_ms IS ?",
+                [
+                    json.into(),
+                    next_fire_at_ms.into(),
+                    chrono::Utc::now().timestamp_millis().into(),
+                    id.to_string().into(),
+                    expected_next_fire_at_ms.into(),
+                ],
+            ))
+            .await;
+        match result {
+            Ok(result) => result.rows_affected() > 0,
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to replace scheduled job");
+                false
+            }
         }
-        self.upsert(&job).await.is_ok()
     }
 
     async fn append_history(&self, entry: SchedulerHistoryEntry) {
@@ -314,8 +360,9 @@ mod tests {
         assert_eq!(reconstructed.list().await.len(), 1);
 
         let mut updated = job;
+        let token = updated.next_fire_at.map(|value| value.timestamp_millis());
         updated.prompt = "verify again".to_string();
-        assert!(reconstructed.replace(id, updated).await);
+        assert!(reconstructed.replace(id, token, updated).await);
         assert_eq!(
             reconstructed.get(id).await.expect("updated job").prompt,
             "verify again"

@@ -1195,9 +1195,15 @@ impl SessionManager {
         );
         let bus: Arc<dyn crate::event::EventBus<crate::event::EventKind>> =
             Arc::new(crate::event::InProcessEventBus::<crate::event::EventKind>::new(4096));
-        let seq = Arc::new(agena_storage::SequenceAllocator::new());
+        // One database-backed allocator serves both the publisher (event
+        // sequences) and the session store (projected message/part ids), so
+        // every monotonic id is allocated atomically in the shared database
+        // across all processes.
+        let seq: Arc<dyn agena_storage::SequenceAllocator> = Arc::new(
+            agena_storage_sqlite::SqliteSequenceAllocator::new(Arc::clone(&db_arc)),
+        );
         let publisher = Arc::new(crate::event::publisher::EventPublisher::new(
-            seq,
+            Arc::clone(&seq),
             Arc::clone(&store_inner),
             Arc::clone(&bus),
         ));
@@ -1213,6 +1219,7 @@ impl SessionManager {
             db,
             tool_executor.workspace_root(),
             Arc::clone(&publisher),
+            seq,
             Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(
                 Arc::clone(&db_arc),
             )),

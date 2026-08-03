@@ -1,8 +1,6 @@
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use chrono::Utc;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::event::bus::EventBus;
@@ -39,10 +37,9 @@ pub struct EventPublisher<K>
 where
     K: KindPersistence + Send + Sync + Clone + 'static,
 {
-    seq: Arc<SequenceAllocator>,
+    seq: Arc<dyn SequenceAllocator>,
     store: Arc<dyn agena_storage::EventStore<K>>,
     bus: Arc<dyn EventBus<K>>,
-    session_sequences: Arc<Mutex<HashMap<i64, Arc<Mutex<Option<i64>>>>>>,
 }
 
 impl<K> EventPublisher<K>
@@ -50,16 +47,11 @@ where
     K: KindPersistence + Send + Sync + Clone + 'static,
 {
     pub fn new(
-        seq: Arc<SequenceAllocator>,
+        seq: Arc<dyn SequenceAllocator>,
         store: Arc<dyn agena_storage::EventStore<K>>,
         bus: Arc<dyn EventBus<K>>,
     ) -> Self {
-        Self {
-            seq,
-            store,
-            bus,
-            session_sequences: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { seq, store, bus }
     }
 
     pub fn store(&self) -> &Arc<dyn agena_storage::EventStore<K>> {
@@ -71,35 +63,22 @@ where
     }
 
     /// Build an envelope with both globally and per-session monotonic
-    /// sequences. Session sequence allocation is lazy and resumes from the
-    /// durable store high watermark on first use after process start.
+    /// sequences, allocated atomically by the backing store so concurrent
+    /// processes can never produce a duplicate.
     pub async fn build(
         &self,
         ctx: PublishContext,
         kind: K,
     ) -> Result<DomainEvent<K>, EventStoreError> {
-        let seq_session = if let Some(session_id) = ctx.session_id {
-            let allocator = self.session_allocator(session_id).await;
-            let mut next = allocator.lock().await;
-            let allocated = match *next {
-                Some(next) => next,
-                None => self
-                    .store
-                    .session_high_watermark(session_id)
-                    .await?
-                    .unwrap_or(0)
-                    .saturating_add(1)
-                    .max(1),
-            };
-            *next = Some(allocated.saturating_add(1));
-            Some(allocated)
+        let seq_session = if ctx.session_id.is_some() {
+            Some(self.seq.next_seq_session(ctx.session_id.unwrap()).await?)
         } else {
             None
         };
         Ok(DomainEvent {
             meta: EventMeta {
                 id: Uuid::new_v4(),
-                seq_global: self.seq.next(),
+                seq_global: self.seq.next_seq_global().await?,
                 seq_session,
                 session_id: ctx.session_id,
                 workspace_id: ctx.workspace_id,
@@ -112,66 +91,21 @@ where
         })
     }
 
-    /// Resolve (and lazily create) the per-session sequence allocator.
-    async fn session_allocator(&self, session_id: i64) -> Arc<Mutex<Option<i64>>> {
-        let mut sequences = self.session_sequences.lock().await;
-        Arc::clone(
-            sequences
-                .entry(session_id)
-                .or_insert_with(|| Arc::new(Mutex::new(None))),
-        )
-    }
-
     /// Reallocate both the global and the per-session sequence numbers of a
-    /// batch after a duplicate-sequence conflict.
-    ///
-    /// Global sequences simply continue from the allocator. Per-session
-    /// sequences resume from the durable store high watermark so a batch that
-    /// was built before another writer (for example the bootstrap reconcile
-    /// pass after a process restart) persisted its events can never collide
-    /// with those already-persisted rows. The allocator is never rolled back:
-    /// if a concurrent publisher already advanced it past the watermark, the
-    /// higher value wins.
+    /// batch after a duplicate-sequence conflict. With the database-backed
+    /// allocator this is normally a no-op path: each allocation is atomic and
+    /// unique, so a batch can only collide if it carried hand-built sequences
+    /// (fork copy, JSONL import). Re-allocating through the same store keeps
+    /// the retry loop a safe fallback.
     async fn resequence_events_from_store(
         &self,
         events: Vec<DomainEvent<K>>,
     ) -> Result<Vec<DomainEvent<K>>, EventStoreError> {
-        // Read fresh watermarks before taking any per-session allocator lock
-        // so a store round-trip never happens while holding a session lock.
-        let mut sessions: Vec<i64> = events
-            .iter()
-            .filter_map(|event| event.meta.session_id)
-            .collect();
-        sessions.sort_unstable();
-        sessions.dedup();
-        let mut bases: HashMap<i64, i64> = HashMap::with_capacity(sessions.len());
-        for session_id in sessions {
-            let hw = self
-                .store
-                .session_high_watermark(session_id)
-                .await?
-                .unwrap_or(0);
-            bases.insert(session_id, hw.saturating_add(1).max(1));
-        }
-
-        let mut initialized: HashSet<i64> = HashSet::new();
         let mut out = Vec::with_capacity(events.len());
         for mut event in events {
-            event.meta.seq_global = self.seq.next();
+            event.meta.seq_global = self.seq.next_seq_global().await?;
             if let Some(session_id) = event.meta.session_id {
-                let allocator = self.session_allocator(session_id).await;
-                let mut next = allocator.lock().await;
-                if initialized.insert(session_id) {
-                    let base = bases
-                        .get(&session_id)
-                        .copied()
-                        .unwrap_or(1)
-                        .max(next.unwrap_or(1));
-                    *next = Some(base);
-                }
-                let allocated = next.unwrap_or(1);
-                *next = Some(allocated.saturating_add(1));
-                event.meta.seq_session = Some(allocated);
+                event.meta.seq_session = Some(self.seq.next_seq_session(session_id).await?);
             }
             out.push(event);
         }
@@ -258,13 +192,12 @@ where
         self.persist_with_retry(events).await
     }
 
-    /// Re-initialise the sequence allocator from the store's high watermark.
-    /// Call this once at startup, before any events are produced.
+    /// Raise the sequence allocator floor to the store's high watermark.
+    /// Call this once at startup, before any events are produced. Idempotent:
+    /// the database-backed allocator seeds to `MAX(current, watermark + 1)`.
     pub async fn resume_from_store(&self) -> Result<(), EventStoreError> {
-        if let Some(hw) = self.store.high_watermark().await? {
-            self.seq.init_from(hw);
-        }
-        Ok(())
+        let hw = self.store.high_watermark().await?.unwrap_or(0);
+        self.seq.seed_global(hw).await
     }
 }
 
@@ -274,10 +207,9 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            seq: self.seq.clone(),
-            store: self.store.clone(),
-            bus: self.bus.clone(),
-            session_sequences: Arc::clone(&self.session_sequences),
+            seq: Arc::clone(&self.seq),
+            store: Arc::clone(&self.store),
+            bus: Arc::clone(&self.bus),
         }
     }
 }
@@ -290,11 +222,12 @@ mod tests {
     use agena_domain::ExecutionSource;
     use agena_domain::ExecutionStartedEvent;
     use agena_storage::WorkspaceRepository;
-    use sea_orm::Database;
+    use sea_orm::{Database, DatabaseConnection};
 
     async fn test_publisher() -> (
         Arc<EventPublisher<EventKind>>,
         Arc<dyn agena_storage::EventStore<EventKind>>,
+        Arc<DatabaseConnection>,
         i64,
     ) {
         let db = Database::connect("sqlite::memory:")
@@ -311,17 +244,18 @@ mod tests {
             crate::db::crud::session::create_session(&db, workspace_id, None, "publisher test")
                 .await
                 .expect("session");
+        let db_arc = Arc::new(db);
         let store: Arc<dyn agena_storage::EventStore<EventKind>> = Arc::new(
-            agena_storage_sqlite::SeaEventStore::<EventKind>::new(Arc::new(db)),
+            agena_storage_sqlite::SeaEventStore::<EventKind>::new(Arc::clone(&db_arc)),
         );
         let bus: Arc<dyn EventBus<EventKind>> = Arc::new(InProcessEventBus::new(8));
+        let seq: Arc<dyn SequenceAllocator> = Arc::new(
+            agena_storage_sqlite::SqliteSequenceAllocator::new(Arc::clone(&db_arc)),
+        );
         (
-            Arc::new(EventPublisher::new(
-                Arc::new(SequenceAllocator::new()),
-                Arc::clone(&store),
-                bus,
-            )),
+            Arc::new(EventPublisher::new(seq, Arc::clone(&store), bus)),
             store,
+            db_arc,
             session.id,
         )
     }
@@ -339,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_builds_allocate_unique_ordered_session_sequences() {
-        let (publisher, _, session_id) = test_publisher().await;
+        let (publisher, _, _, session_id) = test_publisher().await;
         let (first, second) = tokio::join!(
             publisher.build(
                 PublishContext::for_session(session_id),
@@ -359,55 +293,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_session_seq_conflict_is_retried_and_resequenced() {
-        let (_, store, session_id) = test_publisher().await;
+    async fn independent_publishers_never_allocate_duplicate_session_sequences() {
+        let (_, store, db_arc, session_id) = test_publisher().await;
         let bus: Arc<dyn EventBus<EventKind>> = Arc::new(InProcessEventBus::new(8));
 
-        // Two independent publishers share one store. The second publisher
-        // builds its batch before the first persists, so both allocate
-        // `seq_session = 1`. When the second batch is appended after the
-        // first, the store reports a duplicate session sequence and the
-        // publisher must resequence the whole batch instead of failing.
+        // Two independent publishers share one store but hold separate
+        // database-backed allocator instances. The database allocates each
+        // `seq_session` atomically, so neither publisher can collide with the
+        // other even though both start from a fresh allocator.
         let publisher_a = Arc::new(EventPublisher::new(
-            Arc::new(SequenceAllocator::new()),
+            Arc::new(agena_storage_sqlite::SqliteSequenceAllocator::new(
+                Arc::clone(&db_arc),
+            )),
             Arc::clone(&store),
             Arc::clone(&bus),
         ));
         let publisher_b = Arc::new(EventPublisher::new(
-            Arc::new(SequenceAllocator::new()),
+            Arc::new(agena_storage_sqlite::SqliteSequenceAllocator::new(
+                Arc::clone(&db_arc),
+            )),
             Arc::clone(&store),
             Arc::clone(&bus),
         ));
 
-        let built_b = publisher_b
-            .build(
+        // Allocate four session sequences across both publishers. All four
+        // must be distinct even though each allocator is independent.
+        let (a1, b1) = tokio::join!(
+            publisher_a.build(
                 PublishContext::for_session(session_id),
-                execution_started(session_id),
-            )
-            .await
-            .expect("publisher b build");
-        assert_eq!(built_b.meta.seq_session, Some(1));
-        let built_a = publisher_a
-            .build(
+                execution_started(session_id)
+            ),
+            publisher_b.build(
                 PublishContext::for_session(session_id),
-                execution_started(session_id),
-            )
-            .await
-            .expect("publisher a build");
-        assert_eq!(built_a.meta.seq_session, Some(1));
+                execution_started(session_id)
+            ),
+        );
+        let (a2, b2) = tokio::join!(
+            publisher_a.build(
+                PublishContext::for_session(session_id),
+                execution_started(session_id)
+            ),
+            publisher_b.build(
+                PublishContext::for_session(session_id),
+                execution_started(session_id)
+            ),
+        );
+        let built = [a1, b1, a2, b2]
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("all builds succeed");
+        let mut sequences = built
+            .iter()
+            .map(|event| event.meta.seq_session.expect("session seq"))
+            .collect::<Vec<_>>();
+        sequences.sort_unstable();
+        assert_eq!(sequences, [1, 2, 3, 4]);
 
+        // Every event persists without any duplicate-sequence conflict.
         publisher_a
-            .append_batch_silent(vec![built_a])
+            .append_batch_silent(built)
             .await
-            .expect("publisher a persists first");
-        let persisted_b = publisher_b
-            .append_batch_silent(vec![built_b])
-            .await
-            .expect("publisher b retries and resequences instead of failing");
-        let persisted_b = persisted_b.into_iter().next().expect("one event returned");
-        assert_eq!(persisted_b.meta.seq_session, Some(2));
+            .expect("persist all events");
 
-        // Both events are durable and the per-session sequence is unique.
         let rows = store
             .range(
                 &agena_domain::EventFilter {
@@ -427,6 +374,6 @@ mod tests {
             .map(|event| event.meta.seq_session.expect("session seq"))
             .collect::<Vec<_>>();
         sequences.sort_unstable();
-        assert_eq!(sequences, [1, 2]);
+        assert_eq!(sequences, [1, 2, 3, 4]);
     }
 }

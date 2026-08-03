@@ -1,13 +1,93 @@
 //! Concrete SQLite table and index definitions for the shared Agena store.
 
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement};
+use std::path::{Path, PathBuf};
 
-use crate::{
-    begin_schema_initialization, complete_schema_initialization, install_invariant_triggers,
-};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbErr, Statement, TransactionTrait};
+
+use crate::{CURRENT_SCHEMA_VERSION, install_invariant_triggers};
+
+/// How long `initialize_schema` waits for a concurrent process to finish
+/// building the schema before giving up.
+const SCHEMA_LOCK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Serializes schema creation across processes.
+///
+/// SQLite's `PRAGMA journal_mode = WAL` needs an exclusive lock that the busy
+/// timeout does not wait on, so two processes cold-starting the same database
+/// file would otherwise race and one would fail with `SQLITE_BUSY`. A
+/// filesystem lock on a sibling `.schema-lock` file serializes the whole
+/// create path. In-memory databases have no backing file and skip the lock.
+///
+/// The lock is held for the lifetime of this guard: dropping it releases the
+/// advisory file lock.
+struct SchemaLock {
+    // Held only so the file (and its lock) outlives the guard.
+    _file: std::fs::File,
+}
+
+impl SchemaLock {
+    async fn acquire(db: &DatabaseConnection) -> Result<Option<SchemaLock>, DbErr> {
+        let Some(lock_path) = schema_lock_path(db).await? else {
+            return Ok(None);
+        };
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|error| {
+                DbErr::Custom(format!("open schema lock file {}: {error}", lock_path.display()))
+            })?;
+        let started = std::time::Instant::now();
+        loop {
+            match file.try_lock() {
+                Ok(()) => return Ok(Some(SchemaLock { _file: file })),
+                Err(_) if started.elapsed() < SCHEMA_LOCK_TIMEOUT => {
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(error) => {
+                    return Err(DbErr::Custom(format!(
+                        "timed out acquiring schema lock {}: {error}",
+                        lock_path.display()
+                    )));
+                }
+            }
+        }
+    }
+}
+
+/// Resolve the `<db>.schema-lock` path for a SQLite connection, or `None` for
+/// in-memory databases. Uses `PRAGMA database_list` which reports the absolute
+/// backing-file path of the main database.
+async fn schema_lock_path(db: &DatabaseConnection) -> Result<Option<PathBuf>, DbErr> {
+    let row = db
+        .query_one(Statement::from_string(
+            db.get_database_backend(),
+            "PRAGMA database_list".to_owned(),
+        ))
+        .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let file: String = row.try_get("", "file")?;
+    if file.is_empty() || file == ":memory:" {
+        return Ok(None);
+    }
+    let path = Path::new(&file);
+    let mut lock_path = path.as_os_str().to_owned();
+    lock_path.push(".schema-lock");
+    Ok(Some(PathBuf::from(lock_path)))
+}
 
 /// Creates the complete SQLite schema and applies its version marker atomically.
+///
+/// Serialized across processes by a filesystem lock so concurrent cold starts
+/// of the same database file cannot race the WAL switch or the DDL transaction.
+/// A version-0 database is created from scratch; a database already at
+/// [`CURRENT_SCHEMA_VERSION`] is left untouched; anything else is rejected
+/// (Agena no longer migrates older development schemas).
 pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
+    let _lock = SchemaLock::acquire(db).await?;
     // Connection hardening: WAL journal (no-op for in-memory databases),
     // bounded busy timeout, and NORMAL durability so the WAL checkpoint
     // window is small while every commit stays crash-safe.
@@ -19,17 +99,47 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         db.execute(Statement::from_string(db.get_database_backend(), pragma.to_owned()))
             .await?;
     }
-    let (txn, current_version) = begin_schema_initialization(db).await?;
-    for statement in TABLES.iter().chain(INDEXES) {
-        txn.execute(Statement::from_string(
-            txn.get_database_backend(),
-            (*statement).to_owned(),
-        ))
-        .await?;
+    let current_version = read_schema_version(db).await?;
+    match current_version {
+        0 => {
+            let txn = db.begin().await?;
+            for statement in TABLES.iter().chain(INDEXES).chain(SEEDS) {
+                txn.execute(Statement::from_string(
+                    txn.get_database_backend(),
+                    (*statement).to_owned(),
+                ))
+                .await?;
+            }
+            install_invariant_triggers(&txn).await?;
+            txn.execute(Statement::from_string(
+                txn.get_database_backend(),
+                format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
+            ))
+            .await?;
+            txn.commit().await
+        }
+        v if v == CURRENT_SCHEMA_VERSION => Ok(()),
+        v => Err(DbErr::Custom(format!(
+            "database schema version {v} is incompatible with the supported version {CURRENT_SCHEMA_VERSION}; \
+             Agena does not migrate incompatible databases, so create a fresh database"
+        ))),
     }
-    install_invariant_triggers(&txn).await?;
-    complete_schema_initialization(txn, current_version).await
 }
+
+async fn read_schema_version(db: &DatabaseConnection) -> Result<i64, DbErr> {
+    let row = db
+        .query_one(Statement::from_string(
+            db.get_database_backend(),
+            "PRAGMA user_version".to_owned(),
+        ))
+        .await?
+        .ok_or_else(|| DbErr::Custom("SQLite did not return user_version".to_owned()))?;
+    row.try_get("", "user_version")
+}
+
+/// Seed rows for the database-backed sequence allocators. `next_val` is the
+/// next value to hand out, so every allocator starts at 1.
+const SEEDS: &[&str] = &["INSERT OR IGNORE INTO agena_sequences (seq_name, next_val) VALUES ('seq_global', 1), ('message_id', 1), ('part_id', 1)"];
 
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
@@ -48,6 +158,8 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_state (id INTEGER PRIMARY KEY, fetched_at_unix_ms INTEGER NULL, source TEXT NULL, last_error TEXT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_session_sequences (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, next_val INTEGER NOT NULL)",
 ];
 
 const INDEXES: &[&str] = &[
@@ -71,6 +183,7 @@ const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_content_nodes_owner ON agena_content_nodes(owner_kind, owner_id, position)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_messages_session_created ON agena_model_messages(session_id, created_at_ms, message_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_messages_session_turn ON agena_model_messages(session_id, model_turn_id, message_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_model_messages_session_execution ON agena_model_messages(session_id, execution_id) WHERE execution_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_message_parts_message_index ON agena_model_message_parts(message_id, part_index)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_model_catalog_kind_model ON agena_model_catalog_entries(kind, model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_model_id ON agena_model_catalog_entries(model_id)",

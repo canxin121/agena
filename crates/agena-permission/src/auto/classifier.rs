@@ -129,6 +129,7 @@ Return the strict JSON verdict object described in the system prompt. Never retu
 ///   `shouldBlock` / `should_block` decides;
 /// - otherwise an unambiguous single-word reply decides;
 /// - anything else is ambiguous (`None`) and the host falls back fail-closed.
+///
 /// A loose substring like `"shouldBlock": false` inside prose is deliberately
 /// never honored as an allow.
 pub fn parse_classifier_verdict(text: &str) -> Option<bool> {

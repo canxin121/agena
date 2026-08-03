@@ -338,7 +338,9 @@ fn project_runtime_presentation_event(
                     reply_id,
                     &update.part,
                 )
-                .map(agena_runtime::RuntimePresentationEventKind::TranscriptPatch)
+                .map(|patch| {
+                    agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(patch))
+                })
             } else {
                 // Tool-owned parts are checkpointed from the session store,
                 // which does not attach the owning turn/reply ids to the
@@ -359,7 +361,9 @@ fn project_runtime_presentation_event(
             update.reply_id,
             &update.part,
         )
-        .map(agena_runtime::RuntimePresentationEventKind::TranscriptPatch),
+        .map(|patch| {
+            agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(patch))
+        }),
         EventKind::UserMessageAppended(_) | EventKind::AssistantMessageFinished(_) => {
             Some(agena_runtime::RuntimePresentationEventKind::Refresh {
                 force_refresh: false,

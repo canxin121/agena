@@ -1321,7 +1321,7 @@ async fn project_part_content<C: ConnectionTrait>(
              WHERE excluded.revision_seq >= agena_content_nodes.revision_seq",
             [
                 segment_id.to_string().into(),
-                owner_kind.clone().into(),
+                owner_kind.into(),
                 owner_id.clone().into(),
                 text.into(),
                 node_state.into(),
@@ -1382,9 +1382,9 @@ async fn project_part_content<C: ConnectionTrait>(
            AND excluded.revision_seq >= agena_content_nodes.revision_seq",
         [
             activity_id.to_string().into(),
-            owner_kind.clone().into(),
+            owner_kind.into(),
             owner_id.clone().into(),
-            actor.clone().into(),
+            actor.into(),
             serde_json::to_value(&payload)
                 .map_err(|error| DbErr::Custom(format!("encode input activity: {error}")))?
                 .into(),
@@ -2626,6 +2626,7 @@ fn role_default_source(role: Role) -> MessageSource {
     }
 }
 
+#[cfg(test)]
 async fn clear_projection_for_session<C>(db: &C, session_id: i64) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
@@ -2642,6 +2643,7 @@ where
     Ok(())
 }
 
+#[cfg(test)]
 async fn upsert_projection_state<C>(
     db: &C,
     session_id: i64,

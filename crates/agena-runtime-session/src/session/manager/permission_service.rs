@@ -322,7 +322,7 @@ impl SessionManager {
                 responses_api_metadata: None,
                                 request_override,
             };
-            let outcome = match tokio::time::timeout(
+            match tokio::time::timeout(
                 agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT,
                 state
                     .processor
@@ -341,8 +341,7 @@ impl SessionManager {
                     }
                 }
                 Ok(Err(_)) | Err(_) => Err(()),
-            };
-                                    outcome
+            }
             });
         }
         futures_util::future::join_all(futures).await

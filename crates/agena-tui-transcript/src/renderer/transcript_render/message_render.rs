@@ -1733,10 +1733,10 @@ pub(crate) fn render_part_node(
                 summary,
                 width,
             );
-            if toggleable && expanded {
-                if let Some(problem) = problem.as_ref() {
-                    render_failure_detail(out, problem, i18n, width);
-                }
+            if toggleable && expanded
+                && let Some(problem) = problem.as_ref()
+            {
+                render_failure_detail(out, problem, i18n, width);
             }
             RenderedNodeDraft {
                 key,

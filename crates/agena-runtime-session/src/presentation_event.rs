@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 #[derive(Debug, Clone)]
 pub enum RuntimePresentationEventKind {
-    TranscriptPatch(agena_domain::TranscriptPatch),
+    TranscriptPatch(Box<agena_domain::TranscriptPatch>),
     /// A session transition that has no incremental transcript projection but
     /// requires the presentation to reload persisted state.
     Refresh {

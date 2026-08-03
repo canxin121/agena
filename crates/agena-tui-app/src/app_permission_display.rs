@@ -625,8 +625,10 @@ pub(crate) fn permission_prompt_content(
     // risk. Everything else lives behind the Details page.
     let mut overview = Vec::new();
 
-    // One-line action, strong. Full per-field expansion moves to Details.
-    overview.push(PermissionPromptLine::strong(permission_action_label(
+    // The action, rendered as Markdown: a shell command gets a fenced code
+    // block so what would execute is immediately legible, paths/network stay
+    // inline. Full per-field expansion moves to Details.
+    overview.push(PermissionPromptLine::markdown(permission_action_markdown(
         i18n,
         &request.action,
     )));
@@ -659,7 +661,7 @@ pub(crate) fn permission_prompt_content(
     let mut details = Vec::new();
 
     // Full primary action fields (tool / target / path / workspace / network).
-    details.push(PermissionPromptLine::strong(permission_action_label(
+    details.push(PermissionPromptLine::markdown(permission_action_markdown(
         i18n,
         &request.action,
     )));
@@ -673,7 +675,10 @@ pub(crate) fn permission_prompt_content(
             "overlay-permission-detail-requested-actions",
         )));
         details.extend(requested_actions.iter().map(|action| {
-            PermissionPromptLine::normal(format!("  {}", permission_action_label(i18n, action)))
+            PermissionPromptLine::markdown(format!(
+                "- {}",
+                permission_action_markdown_single_line(i18n, action)
+            ))
         }));
     }
     let related_actions = permission_related_actions_for_display(
@@ -686,7 +691,10 @@ pub(crate) fn permission_prompt_content(
             "overlay-permission-detail-related-actions",
         )));
         details.extend(related_actions.iter().map(|action| {
-            PermissionPromptLine::muted(format!("  {}", permission_action_label(i18n, action)))
+            PermissionPromptLine::markdown(format!(
+                "- {}",
+                permission_action_markdown_single_line(i18n, action)
+            ))
         }));
     }
 
@@ -746,6 +754,82 @@ fn permission_request_reason(request: &PermissionRequest) -> &str {
         return reason;
     }
     request.explanation.trim()
+}
+
+/// Markdown projection of the primary action: a tool shell command becomes a
+/// fenced code block, paths and network targets stay inline, so what would
+/// execute is immediately legible.
+fn permission_action_markdown(i18n: &I18n, action: &PermissionAction) -> String {
+    match action {
+        PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        } => {
+            let command = qualifier.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let title = i18n.text_args(
+                "overlay-permission-action-tool",
+                &agena_tui::fl_args!("tool" => tool_name.clone()),
+            );
+            match command {
+                Some(command) if command.lines().count() > 1 || command.len() > 60 => {
+                    format!("**{title}**\n\n```sh\n{command}\n```")
+                }
+                Some(command) => format!("**{title}**\n\n`{command}`"),
+                None => format!("**{title}**"),
+            }
+        }
+        PermissionAction::PathAccess {
+            access_kind,
+            target_path,
+            ..
+        } => {
+            let label = i18n.text_args(
+                "overlay-permission-action-path",
+                &agena_tui::fl_args!(
+                    "access" => access_kind.clone(),
+                    "path" => target_path.clone(),
+                ),
+            );
+            format!("**{label}**")
+        }
+        PermissionAction::NetworkAccess { target, host, port } => {
+            let endpoint = if target.trim().is_empty() {
+                match port {
+                    Some(port) => format!("{host}:{port}"),
+                    None => host.clone(),
+                }
+            } else {
+                target.clone()
+            };
+            let label = i18n.text_args(
+                "overlay-permission-action-network",
+                &agena_tui::fl_args!("target" => endpoint),
+            );
+            format!("**{label}**")
+        }
+    }
+}
+
+/// Single-line Markdown projection for a secondary (requested/related) action.
+/// Long shell commands are kept inline with inline-code styling so the list
+/// does not explode into a wall of code blocks.
+fn permission_action_markdown_single_line(i18n: &I18n, action: &PermissionAction) -> String {
+    match action {
+        PermissionAction::Tool {
+            tool_name,
+            qualifier,
+        } => {
+            let base = i18n.text_args(
+                "overlay-permission-action-tool",
+                &agena_tui::fl_args!("tool" => tool_name.clone()),
+            );
+            match qualifier.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                Some(command) => format!("{base} · `{command}`"),
+                None => base,
+            }
+        }
+        _ => permission_action_label(i18n, action),
+    }
 }
 
 #[derive(Clone, Copy)]

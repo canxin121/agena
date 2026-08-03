@@ -20,6 +20,7 @@ use ratatui::{
 
 use crate::i18n::I18n;
 use crate::keymap::{KeyAction, KeyContext, resolve};
+use tui_markdown::from_str as markdown_to_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionPromptDecision {
@@ -42,6 +43,9 @@ pub enum PermissionPromptLineTone {
 pub struct PermissionPromptLine {
     pub text: String,
     pub tone: PermissionPromptLineTone,
+    /// Optional Markdown source rendered in place of `text`. Code fences,
+    /// inline code, and headings get terminal styling (monospace / bold).
+    pub markdown: Option<String>,
 }
 
 impl PermissionPromptLine {
@@ -49,6 +53,7 @@ impl PermissionPromptLine {
         Self {
             text: text.into(),
             tone: PermissionPromptLineTone::Normal,
+            markdown: None,
         }
     }
 
@@ -56,6 +61,7 @@ impl PermissionPromptLine {
         Self {
             text: text.into(),
             tone: PermissionPromptLineTone::Muted,
+            markdown: None,
         }
     }
 
@@ -63,6 +69,17 @@ impl PermissionPromptLine {
         Self {
             text: text.into(),
             tone: PermissionPromptLineTone::Strong,
+            markdown: None,
+        }
+    }
+
+    /// A row rendered from Markdown source (e.g. a shell command in a code
+    /// fence). The tone only applies when `markdown` is absent.
+    pub fn markdown(markdown: impl Into<String>) -> Self {
+        Self {
+            text: String::new(),
+            tone: PermissionPromptLineTone::Normal,
+            markdown: Some(markdown.into()),
         }
     }
 }
@@ -276,7 +293,7 @@ pub fn render_overlay(
     let page = presentation.page();
     let footer = Text::from(footer(i18n, page));
     let mut sections = vec![StackedDialogSection::Paragraph(ParagraphSection {
-        height: StackedDialogSectionHeight::AutoText { min: 4, max: 18 },
+        height: StackedDialogSectionHeight::AutoText { min: 6, max: 40 },
         title: None,
         borders: Borders::NONE,
         body,
@@ -310,30 +327,47 @@ pub fn render_overlay(
         SurfaceMode::Overlay,
         &StackedDialogSpec {
             title: title(i18n, page).into(),
-            target_width: 84,
+            target_width: 108,
             sections,
         },
     );
 }
 
 fn content_lines(content: &[PermissionPromptLine]) -> Vec<Line<'static>> {
-    content
-        .iter()
-        .map(|line| {
-            Line::from(Span::styled(
-                sanitize_display_text(line.text.as_str()),
-                match line.tone {
-                    PermissionPromptLineTone::Normal => Style::default(),
-                    PermissionPromptLineTone::Muted => {
-                        Style::default().fg(agena_tui_components::theme::muted_color())
-                    }
-                    PermissionPromptLineTone::Strong => {
-                        Style::default().add_modifier(Modifier::BOLD)
-                    }
-                },
-            ))
-        })
-        .collect()
+    let mut lines = Vec::with_capacity(content.len());
+    for line in content {
+        if let Some(markdown) = line.markdown.as_deref() {
+            let markdown = markdown.trim();
+            if markdown.is_empty() {
+                lines.push(Line::from(""));
+                continue;
+            }
+            let rendered = markdown_to_text(markdown);
+            lines.extend(rendered.lines.into_iter().map(|md_line| {
+                Line::from(
+                    md_line
+                        .spans
+                        .into_iter()
+                        .map(|span| Span::styled(sanitize_display_text(&span.content), span.style))
+                        .collect::<Vec<_>>(),
+                )
+            }));
+            continue;
+        }
+        lines.push(Line::from(Span::styled(
+            sanitize_display_text(line.text.as_str()),
+            match line.tone {
+                PermissionPromptLineTone::Normal => Style::default(),
+                PermissionPromptLineTone::Muted => {
+                    Style::default().fg(agena_tui_components::theme::muted_color())
+                }
+                PermissionPromptLineTone::Strong => {
+                    Style::default().add_modifier(Modifier::BOLD)
+                }
+            },
+        )));
+    }
+    lines
 }
 
 fn choice_lines(

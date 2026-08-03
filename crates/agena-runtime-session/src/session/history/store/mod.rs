@@ -1226,17 +1226,9 @@ async fn next_content_position<C: ConnectionTrait>(
         .query_one(Statement::from_sql_and_values(
             db.get_database_backend(),
             "SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM (\
-                 SELECT position FROM agena_text_segments WHERE owner_kind = ? AND owner_id = ? \
-                 UNION ALL \
-                 SELECT position FROM agena_activities WHERE owner_kind = ? AND owner_id = ? \
-                 UNION ALL \
                  SELECT position FROM agena_content_nodes WHERE owner_kind = ? AND owner_id = ?
              )",
             [
-                owner_kind.into(),
-                owner_id.into(),
-                owner_kind.into(),
-                owner_id.into(),
                 owner_kind.into(),
                 owner_id.into(),
             ],
@@ -1281,7 +1273,7 @@ async fn project_part_content<C: ConnectionTrait>(
     let position = if let Some(activity_id) = part.activity_id {
         db.query_one(Statement::from_sql_and_values(
             db.get_database_backend(),
-            "SELECT position FROM agena_activities WHERE activity_id = ?",
+                        "SELECT position FROM agena_content_nodes WHERE node_id = ?",
             [activity_id.to_string().into()],
         ))
         .await?
@@ -1290,7 +1282,7 @@ async fn project_part_content<C: ConnectionTrait>(
     } else if let Some(segment_id) = part.segment_id {
         db.query_one(Statement::from_sql_and_values(
             db.get_database_backend(),
-            "SELECT position FROM agena_text_segments WHERE segment_id = ?",
+                        "SELECT position FROM agena_content_nodes WHERE node_id = ?",
             [segment_id.to_string().into()],
         ))
         .await?
@@ -1309,31 +1301,8 @@ async fn project_part_content<C: ConnectionTrait>(
             Some(PartContent::Text(text)) if part.activity_id.is_none() => text.text.as_str(),
             _ => return Ok(()),
         };
-        db.execute(Statement::from_sql_and_values(
-            db.get_database_backend(),
-            "INSERT INTO agena_text_segments \
-             (segment_id, owner_kind, owner_id, text, position, revision_seq, created_at_ms, updated_at_ms) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
-             ON CONFLICT(segment_id) DO UPDATE SET \
-             text = excluded.text, revision_seq = excluded.revision_seq, updated_at_ms = excluded.updated_at_ms \
-             WHERE agena_text_segments.owner_kind = excluded.owner_kind \
-               AND agena_text_segments.owner_id = excluded.owner_id \
-               AND agena_text_segments.position = excluded.position \
-               AND excluded.revision_seq >= agena_text_segments.revision_seq",
-            [
-                segment_id.to_string().into(),
-                owner_kind.clone().into(),
-                owner_id.clone().into(),
-                text.into(),
-                position.into(),
-                revision_seq.into(),
-                part.created_at.timestamp_millis().into(),
-                chrono::Utc::now().timestamp_millis().into(),
-            ],
-        ))
-        .await?;
-        // v10 unified content node mirror: the text node lives in
-        // `agena_content_nodes` with the same identity, position and revision
+        // v10 canonical text node: `agena_content_nodes` is the single
+        // content store for text segments.
         // so readers can switch to the single content table.
         let node_state = match part.status {
             ExecutionStatus::Pending => "pending",
@@ -1395,37 +1364,7 @@ async fn project_part_content<C: ConnectionTrait>(
             | ExecutionStatus::Cancelled
     )
     .then_some(part.created_at.timestamp_millis());
-    db.execute(Statement::from_sql_and_values(
-        db.get_database_backend(),
-        "INSERT INTO agena_activities \
-         (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-         ON CONFLICT(activity_id) DO UPDATE SET \
-         payload_json = excluded.payload_json, state = excluded.state, \
-         revision_seq = excluded.revision_seq, \
-         finished_at_ms = excluded.finished_at_ms \
-         WHERE agena_activities.owner_kind = excluded.owner_kind \
-           AND agena_activities.owner_id = excluded.owner_id \
-           AND agena_activities.actor = excluded.actor \
-           AND agena_activities.position = excluded.position \
-           AND excluded.revision_seq >= agena_activities.revision_seq",
-        [
-            activity_id.to_string().into(),
-            owner_kind.clone().into(),
-            owner_id.clone().into(),
-            actor.clone().into(),
-            serde_json::to_value(&payload)
-                .map_err(|error| DbErr::Custom(format!("encode input activity: {error}")))?
-                .into(),
-            state.into(),
-            position.into(),
-            revision_seq.into(),
-            part.created_at.timestamp_millis().into(),
-            finished_at_ms.into(),
-        ],
-    ))
-    .await?;
-    // v10 unified content node mirror: activities also live in
+        // v10 unified content node mirror: activities also live in
     // `agena_content_nodes` so readers can switch to the single content table.
     db.execute(Statement::from_sql_and_values(
         db.get_database_backend(),
@@ -1492,26 +1431,7 @@ where
             execution_id: payload.execution_id,
             activity: payload.activity.clone(),
         });
-    db.execute(Statement::from_sql_and_values(
-        db.get_database_backend(),
-        "INSERT INTO agena_activities \
-         (activity_id, owner_kind, owner_id, actor, payload_json, state, position, revision_seq, started_at_ms, finished_at_ms) \
-         VALUES (?, 'assistant_reply', ?, 'runtime', ?, 'completed', ?, ?, ?, ?) \
-         ON CONFLICT(activity_id) DO NOTHING",
-        [
-            payload.activity_id.to_string().into(),
-            reply_id.clone().into(),
-            serde_json::to_value(&activity_payload)
-                .map_err(|error| DbErr::Custom(format!("encode compaction activity: {error}")))?
-                .into(),
-            position.into(),
-            revision_seq.into(),
-            payload.ts_ms.into(),
-            payload.ts_ms.into(),
-        ],
-    ))
-    .await?;
-    // v10 unified content node mirror for maintenance activities.
+        // v10 unified content node mirror for maintenance activities.
     db.execute(Statement::from_sql_and_values(
         db.get_database_backend(),
         "INSERT INTO agena_content_nodes \
@@ -2706,7 +2626,6 @@ fn role_default_source(role: Role) -> MessageSource {
     }
 }
 
-#[cfg(test)]
 async fn clear_projection_for_session<C>(db: &C, session_id: i64) -> Result<(), DbErr>
 where
     C: ConnectionTrait,
@@ -2723,7 +2642,6 @@ where
     Ok(())
 }
 
-#[cfg(test)]
 async fn upsert_projection_state<C>(
     db: &C,
     session_id: i64,
@@ -2747,6 +2665,6 @@ where
             updated_at_ms.into(),
         ],
     );
-    db.execute(stmt).await?;
+        db.execute(stmt).await?;
     Ok(())
 }

@@ -492,7 +492,7 @@
             "session_registry"
           ],
           "conditional": null,
-          "definition_identity": "62b7340a44438304b1662ee52567c04616505e0bd7866fa02ead03e22fad51e4",
+          "definition_identity": "1494e47df0f1c1bab3460a0eb7a3df261bf84c34654b1edeb76c5abee0a123c7",
           "gateway": false,
           "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",

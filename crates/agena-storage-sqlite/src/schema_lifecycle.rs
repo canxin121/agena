@@ -10,11 +10,11 @@ use sea_orm::{
 };
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
-pub const CURRENT_SCHEMA_VERSION: i64 = 10;
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 /// Schema versions that `apply_migrations` knows how to upgrade in place.
 /// Older databases report an error instead of being migrated.
-const MIGRATABLE_VERSIONS: &[i64] = &[8, 9];
+const MIGRATABLE_VERSIONS: &[i64] = &[8, 9, 10];
 
 /// Validates SQLite invariants and opens the transaction that must contain
 /// table/index/trigger creation plus the schema-version update.
@@ -81,8 +81,8 @@ async fn ensure_sqlite_foreign_keys(db: &DatabaseConnection) -> Result<(), DbErr
 }
 
 /// Creates `agena_content_nodes` and backfills it from the legacy
-/// `agena_activities` and `agena_text_segments` tables. Shared by the 8 -> 10
-/// and 9 -> 10 migration paths; fresh databases already have the table from
+/// `agena_activities` and `agena_text_segments` tables. Shared by the 8 -> 11
+/// and 9 -> 11 migration paths; fresh databases already have the table from
 /// `schema.rs` and skip this.
 async fn create_content_nodes<C: ConnectionTrait>(db: &C) -> Result<(), DbErr> {
     db.execute(Statement::from_string(
@@ -100,9 +100,26 @@ async fn create_content_nodes<C: ConnectionTrait>(db: &C) -> Result<(), DbErr> {
         "INSERT OR IGNORE INTO agena_content_nodes          (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state,           position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms)          SELECT activity_id, owner_kind, owner_id, 'activity', actor, payload_json, NULL, state,                 position, revision_seq, started_at_ms, finished_at_ms, started_at_ms, started_at_ms          FROM agena_activities",
     ))
     .await?;
-    db.execute(Statement::from_string(
+        db.execute(Statement::from_string(
         DatabaseBackend::Sqlite,
         "INSERT OR IGNORE INTO agena_content_nodes          (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state,           position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms)          SELECT segment_id, owner_kind, owner_id, 'text', NULL, NULL, text, 'completed',                 position, revision_seq, created_at_ms, NULL, created_at_ms, updated_at_ms          FROM agena_text_segments",
+    ))
+    .await?;
+    Ok(())
+}
+
+/// Drops the legacy `agena_activities` and `agena_text_segments` tables now
+/// that `agena_content_nodes` is the single source of content. Called by the
+/// 8 -> 11, 9 -> 11, and 10 -> 11 migration paths after their backfill work.
+async fn drop_legacy_content_tables<C: ConnectionTrait>(db: &C) -> Result<(), DbErr> {
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "DROP TABLE IF EXISTS agena_activities".to_owned(),
+    ))
+    .await?;
+    db.execute(Statement::from_string(
+        DatabaseBackend::Sqlite,
+        "DROP TABLE IF EXISTS agena_text_segments".to_owned(),
     ))
     .await?;
     Ok(())
@@ -121,17 +138,16 @@ async fn apply_migrations<C: ConnectionTrait>(db: &C, from_version: i64) -> Resu
             ))
             .await?;
         }
-        // 8 -> 9: assistant replies carry an optional structured failure
+                // 8 -> 9: assistant replies carry an optional structured failure
         // projection (`failure_json`) so clients can render a readable
         // failure summary with expandable detail. Existing failed replies
         // are backfilled from their last `execution_finished` event.
-        // 9 -> 10: introduce `agena_content_nodes`, the unified single-source
-        // content table. Existing activities and text segments are copied so
-        // readers can switch to the new table without losing history; the
-        // legacy tables stay for compatibility until the read paths are fully
-        // migrated and the tables are dropped in a later version.
+        // 9 -> 11: introduce `agena_content_nodes`, the unified single-source
+        // content table, backfill it from the legacy tables, then drop the
+        // legacy tables so content_nodes is the only content store.
         9 => {
             create_content_nodes(db).await?;
+            drop_legacy_content_tables(db).await?;
             db.execute(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
@@ -144,12 +160,7 @@ async fn apply_migrations<C: ConnectionTrait>(db: &C, from_version: i64) -> Resu
                 "ALTER TABLE agena_assistant_replies ADD COLUMN failure_json JSON NULL",
             ))
             .await?;
-            create_content_nodes(db).await?;
-            db.execute(Statement::from_string(
-                DatabaseBackend::Sqlite,
-                "ALTER TABLE agena_assistant_replies ADD COLUMN failure_json JSON NULL",
-            ))
-            .await?;
+                        create_content_nodes(db).await?;
             db.execute(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 "UPDATE agena_assistant_replies AS r \
@@ -162,9 +173,20 @@ async fn apply_migrations<C: ConnectionTrait>(db: &C, from_version: i64) -> Resu
                    ORDER BY e.seq_session DESC \
                    LIMIT 1 \
                  ) \
-                 WHERE r.status = 'failed' AND r.failure_json IS NULL",
+                                   WHERE r.status = 'failed' AND r.failure_json IS NULL",
             ))
             .await?;
+            drop_legacy_content_tables(db).await?;
+            db.execute(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
+            ))
+            .await?;
+        }
+        // 10 -> 11: `agena_content_nodes` is already the single source of
+        // content for v10 databases, so the legacy tables are simply dropped.
+        10 => {
+            drop_legacy_content_tables(db).await?;
             db.execute(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"),
@@ -235,13 +257,13 @@ mod tests {
 
     #[tokio::test]
     async fn migratable_older_database_is_upgraded_in_place() {
-        let db = database_with_version(CURRENT_SCHEMA_VERSION - 1).await;
+                let db = database_with_version(CURRENT_SCHEMA_VERSION - 3).await;
         // Simulate the v8 assistant-replies table (without failure_json).
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
-                        "CREATE TABLE agena_assistant_replies (reply_id TEXT PRIMARY KEY, \
+                                    "CREATE TABLE agena_assistant_replies (reply_id TEXT PRIMARY KEY, \
              turn_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, revision_seq INTEGER NOT NULL, \
-             created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL, failure_json JSON NULL)"
+             created_at_ms INTEGER NOT NULL, finished_at_ms INTEGER NULL)"
                 .to_owned(),
         ))
         .await
@@ -313,12 +335,107 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(preserved.try_get::<String>("", "status").unwrap(), "failed");
+                assert_eq!(preserved.try_get::<String>("", "status").unwrap(), "failed");
+        // v11 drops the legacy content tables once content_nodes is populated.
+        let legacy_tables = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT name FROM sqlite_master WHERE type = 'table' \
+                 AND name IN ('agena_activities', 'agena_text_segments')"
+                    .to_owned(),
+            ))
+            .await
+            .unwrap();
+                assert!(legacy_tables.is_empty());
     }
 
     #[tokio::test]
-    async fn incompatible_older_database_is_rejected_without_mutation() {
-        let db = database_with_version(CURRENT_SCHEMA_VERSION - 3).await;
+    async fn migratable_v10_database_drops_legacy_tables_and_keeps_content_nodes() {
+        let db = database_with_version(CURRENT_SCHEMA_VERSION - 1).await;
+        // v10 databases carry the legacy content tables alongside the unified
+        // `agena_content_nodes` table that already replaced them as the read
+        // source; the 10 -> 11 migration drops only the legacy tables.
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE agena_activities (activity_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, \
+             owner_id TEXT NOT NULL, actor TEXT NOT NULL, payload_json JSON NOT NULL, state TEXT NOT NULL, \
+             position INTEGER NOT NULL, revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, \
+             finished_at_ms INTEGER NULL)"
+                .to_owned(),
+        ))
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE agena_text_segments (segment_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, \
+             owner_id TEXT NOT NULL, text TEXT NOT NULL, position INTEGER NOT NULL, \
+             revision_seq INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)"
+                .to_owned(),
+        ))
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE agena_content_nodes (node_id TEXT PRIMARY KEY, owner_kind TEXT NOT NULL, \
+             owner_id TEXT NOT NULL, node_type TEXT NOT NULL CHECK (node_type IN ('text','activity')), \
+             actor TEXT, payload_json JSON, text TEXT, state TEXT NOT NULL, position INTEGER NOT NULL, \
+             revision_seq INTEGER NOT NULL, started_at_ms INTEGER NOT NULL, finished_at_ms INTEGER, \
+             created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, \
+             UNIQUE (owner_kind, owner_id, position))"
+                .to_owned(),
+        ))
+        .await
+        .unwrap();
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO agena_content_nodes (node_id, owner_kind, owner_id, node_type, actor, payload_json, \
+             text, state, position, revision_seq, started_at_ms, created_at_ms, updated_at_ms) \
+             VALUES ('activity-1', 'turn_input', 'turn-1', 'activity', 'user', '{}', NULL, 'completed', \
+             0, 1, 0, 0, 0)"
+                .to_owned(),
+        ))
+        .await
+        .unwrap();
+
+        let (transaction, from_version) = begin_schema_initialization(&db)
+            .await
+            .expect("begin v10 schema initialization");
+        complete_schema_initialization(transaction, from_version)
+            .await
+            .expect("complete v10 schema migration");
+
+        assert_eq!(
+            read_schema_version(&db).await.unwrap(),
+            CURRENT_SCHEMA_VERSION
+        );
+        // The legacy tables are gone and the unified content table survives.
+        let legacy_tables = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT name FROM sqlite_master WHERE type = 'table' \
+                 AND name IN ('agena_activities', 'agena_text_segments')"
+                    .to_owned(),
+            ))
+            .await
+            .unwrap();
+        assert!(legacy_tables.is_empty());
+        let preserved = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT node_id FROM agena_content_nodes WHERE node_id = 'activity-1'".to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            preserved.try_get::<String>("", "node_id").unwrap(),
+            "activity-1"
+        );
+    }
+
+    #[tokio::test]
+        async fn incompatible_older_database_is_rejected_without_mutation() {
+        let db = database_with_version(CURRENT_SCHEMA_VERSION - 4).await;
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "CREATE TABLE legacy_marker (value TEXT NOT NULL)".to_owned(),
@@ -336,8 +453,8 @@ mod tests {
 
         assert!(error.to_string().contains("does not migrate"));
         assert_eq!(
-            read_schema_version(&db).await.unwrap(),
-                        CURRENT_SCHEMA_VERSION - 3
+                        read_schema_version(&db).await.unwrap(),
+            CURRENT_SCHEMA_VERSION - 4
         );
         let marker = db
             .query_one(Statement::from_string(

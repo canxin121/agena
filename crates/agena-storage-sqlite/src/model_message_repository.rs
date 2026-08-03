@@ -119,26 +119,7 @@ impl SeaModelMessageTransactionWriter {
         transaction: &DatabaseTransaction,
         session_id: i64,
     ) -> Result<(), ModelMessageRepositoryError> {
-        transaction
-            .execute(statement(
-                 "DELETE FROM agena_text_segments WHERE \
-                 (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
-                 OR (owner_kind = 'assistant_reply' AND owner_id IN (SELECT reply_id FROM agena_assistant_replies WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
-                    .to_owned(),
-                [session_id.into(), session_id.into()],
-            ))
-            .await
-            .map_err(map_error)?;
-        transaction
-            .execute(statement(
-                 "DELETE FROM agena_activities WHERE \
-                 (owner_kind = 'turn_input' AND owner_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)) \
-                 OR (owner_kind = 'assistant_reply' AND owner_id IN (SELECT reply_id FROM agena_assistant_replies WHERE turn_id IN (SELECT turn_id FROM agena_turns WHERE session_id = ?)))"
-                    .to_owned(),
-                [session_id.into(), session_id.into()],
-            ))
-            .await
-            .map_err(map_error)?;
+        
         transaction
             .execute(statement(
                 "DELETE FROM agena_content_nodes WHERE \

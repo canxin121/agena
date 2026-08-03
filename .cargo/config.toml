@@ -1,0 +1,8 @@
+# The async reply/continuation state machines nest deeply enough that Tokio
+# worker threads (macOS gives newly created threads a 512 KiB default stack)
+# can overflow in repository tests, e.g.
+# session::manager::tests::approved_provider_tool_executes_once_then_continues_the_same_turn.
+# Raise the default thread stack so the full test suite is deterministic on
+# every developer machine and in CI.
+[env]
+RUST_MIN_STACK = "16777216"

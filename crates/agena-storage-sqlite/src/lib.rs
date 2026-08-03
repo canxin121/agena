@@ -11,6 +11,7 @@ mod projection_lookup_repository;
 mod schema;
 mod schema_invariants;
 mod schema_lifecycle;
+mod sequence_allocator;
 mod session_stats_repository;
 mod session_summary_repository;
 mod stored_values;
@@ -29,12 +30,14 @@ pub use permission_rule_repository::{
 pub use projection_lookup_repository::SeaProjectionLookupRepository;
 pub use schema::initialize_schema;
 pub use schema_invariants::install_invariant_triggers;
-pub use schema_lifecycle::{
-    CURRENT_SCHEMA_VERSION, begin_schema_initialization, complete_schema_initialization,
-};
+pub use schema_lifecycle::CURRENT_SCHEMA_VERSION;
+pub use sequence_allocator::SqliteSequenceAllocator;
 pub use session_stats_repository::SeaSessionStatsRepository;
 pub use session_summary_repository::SeaSessionSummaryRepository;
 pub use stored_values::{StoredExecutionStatus, StoredPartKind, StoredRole};
 pub use transaction::{run_transaction_app_effects, run_transaction_effects};
 pub use usage_repository::SeaUsageRepository;
 pub use workspace_repository::SeaWorkspaceRepository;
+
+#[cfg(test)]
+mod concurrency_tests;

@@ -114,7 +114,7 @@ pub(crate) fn provider_studio_field_editable(
     field: ProviderStudioField,
 ) -> bool {
     match field {
-        ProviderStudioField::ProviderId => dialog.draft.source_provider_id.is_none(),
+        ProviderStudioField::ProviderId => true,
         ProviderStudioField::AuthMode => true,
         ProviderStudioField::AuthSubtype => matches!(
             dialog.draft.auth_kind,

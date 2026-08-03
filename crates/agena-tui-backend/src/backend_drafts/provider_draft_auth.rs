@@ -671,6 +671,18 @@ impl ProviderStudioSaveError {
     }
 }
 
+impl From<agena_runtime::RuntimeConfigSettingsError> for ProviderStudioSaveError {
+    fn from(error: agena_runtime::RuntimeConfigSettingsError) -> Self {
+        // Preserve the structured failure: config validation errors already
+        // project a safe user-visible message (and never a Reference), while
+        // unexpected failures keep their reference id. Wrapping the error in a
+        // generic internal problem would hide the actionable validation message
+        // behind "The provider settings could not be saved."
+        let problem = error.failure().into();
+        Self::Other(problem)
+    }
+}
+
 fn provider_backend_problem(
     code: &'static str,
     fallback: &'static str,

@@ -746,6 +746,94 @@ mod tests {
     }
 
     #[test]
+    fn deleting_a_referenced_provider_clears_its_references_in_one_atomic_patch() {
+        // Mirrors `delete_provider`: a single patch to the `providers` root
+        // removes the provider key and every reference to it (default +
+        // default_selection) as null-valued deletions. The patch must validate
+        // atomically and the written file must still resolve.
+        let root = test_root();
+        let global_path = root.join("agena/agena.json");
+        let workspace_path = root.join("workspace/.agena/agena.json");
+        std::fs::create_dir_all(global_path.parent().expect("global parent"))
+            .expect("create global config directory");
+        std::fs::create_dir_all(workspace_path.parent().expect("workspace parent"))
+            .expect("create workspace config directory");
+        std::fs::write(
+            &global_path,
+            r#"{
+                "providers": {
+                    "default": "opencode",
+                    "default_selection": {
+                        "provider": "opencode",
+                        "adapter": "openai_responses",
+                        "model": "deepseek-v4-flash",
+                        "thinking_mode": "max"
+                    },
+                    "opencode": {
+                        "defaults": { "adapter": "anthropic" },
+                        "auth": {
+                            "mode": "api",
+                            "subtype": "custom",
+                            "base_url": "https://api.example.com/v1",
+                            "api_key": { "kind": "inline", "value": "test-key" }
+                        },
+                        "adapters": {
+                            "anthropic": { "enabled": true },
+                            "gemini": { "enabled": false }
+                        }
+                    },
+                    "chatgpt": {
+                        "defaults": { "adapter": "openai_responses", "model": "gpt-5" },
+                        "auth": { "mode": "credential", "issuer": "openai_chatgpt" },
+                        "adapters": {
+                            "openai_responses": {
+                                "enabled": true,
+                                "backend": "chatgpt_codex",
+                                "models": { "gpt-5": {} }
+                            }
+                        }
+                    }
+                }
+            }"#,
+        )
+        .expect("write global config");
+        std::fs::write(&workspace_path, "{}").expect("write workspace config");
+
+        let patched = patch_layered_file_settings_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Global,
+            ConfigSettingsPatchInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers".to_owned()),
+                },
+                changes: JsonValue::Object(JsonMap::from_iter([
+                    ("opencode".to_owned(), JsonValue::Null),
+                    ("default".to_owned(), JsonValue::Null),
+                    ("default_selection".to_owned(), JsonValue::Null),
+                ])),
+                options: edit_options(false),
+            },
+            &TestEnvironment,
+        )
+        .expect("atomic delete patch must validate");
+        assert!(patched.changed);
+        assert!(!patched.current.as_object().unwrap().contains_key("opencode"));
+        assert!(patched.current.get("default").is_none());
+        assert!(patched.current.get("default_selection").is_none());
+        assert!(patched.current.get("chatgpt").is_some());
+
+        validate_layered_file_settings_with_env(
+            &global_path,
+            &workspace_path,
+            ConfigSettingsLayer::Global,
+            &TestEnvironment,
+        )
+        .expect("resulting config must validate");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn settings_edits_cover_client_compaction_and_presentation_paths() {
         let root = test_root();
         let config_path = root.join("agena/agena.json");

@@ -145,8 +145,7 @@ impl Backend {
         }
         provider_patch.insert("defaults".to_owned(), JsonValue::Object(defaults));
         self.patch_provider_settings(provider_id, JsonValue::Object(provider_patch))
-            .await
-            .map_err(ProviderStudioSaveError::other)?;
+            .await?;
         Ok(ProviderStudioSaveResult::ConfiguredModelSaved {
             provider_id: provider_id.to_owned(),
             adapter_id: adapter_id.to_owned(),
@@ -231,8 +230,7 @@ impl Backend {
         }
 
         self.set_provider_settings(provider_id, provider_value)
-            .await
-            .map_err(ProviderStudioSaveError::other)?;
+            .await?;
         Ok(ProviderStudioSaveResult::ModelDeleted {
             provider_id: provider_id.to_owned(),
             adapter_id: adapter_id.to_owned(),
@@ -255,6 +253,10 @@ impl Backend {
             return Err(ProviderStudioSaveError::ExistingProviderSettingsMustBeObject);
         }
 
+        // Removing a provider that `providers.default` or
+        // `providers.default_selection` still references would fail the
+        // post-edit config validation. Clear every reference to the deleted
+        // provider in the same atomic patch so the resulting file validates.
         let configured_default_provider = self
             .application
             .runtime_config_settings()
@@ -268,18 +270,40 @@ impl Backend {
             .context("failed to read configured default provider")
             .map_err(ProviderStudioSaveError::other)?
             .value;
+        let configured_default_selection = self
+            .application
+            .runtime_config_settings()
+            .read_file_settings(agena_runtime::ConfigSettingsGetInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers.default_selection".to_owned()),
+                },
+                source: agena_runtime::ConfigSettingsSource::File,
+            })
+            .map_err(|error| anyhow!(error.to_string()))
+            .context("failed to read configured default provider selection")
+            .map_err(ProviderStudioSaveError::other)?
+            .value;
         let clears_default_provider = configured_default_provider
             .as_str()
             .map(str::trim)
             .is_some_and(|configured| configured == provider_id);
+        let default_selection_points_at_provider = configured_default_selection
+            .as_object()
+            .and_then(|selection| selection.get("provider"))
+            .and_then(JsonValue::as_str)
+            .map(str::trim)
+            .is_some_and(|configured| configured == provider_id);
+
+        let mut changes = JsonMap::new();
+        changes.insert(provider_id.to_owned(), JsonValue::Null);
         if clears_default_provider {
-            self.delete_config_setting("providers.default")
-                .await
-                .map_err(ProviderStudioSaveError::other)?;
+            changes.insert("default".to_owned(), JsonValue::Null);
         }
-        self.delete_config_setting(provider_settings_path(provider_id).as_str())
-            .await
-            .map_err(ProviderStudioSaveError::other)?;
+        if default_selection_points_at_provider {
+            changes.insert("default_selection".to_owned(), JsonValue::Null);
+        }
+        self.patch_provider_settings_root(JsonValue::Object(changes))
+            .await?;
         Ok(ProviderStudioSaveResult::ProviderDeleted {
             provider_id: provider_id.to_owned(),
         })
@@ -363,8 +387,7 @@ impl Backend {
         provider_object.insert("defaults".to_owned(), JsonValue::Object(defaults));
 
         self.set_provider_settings(provider_id, provider_value)
-            .await
-            .map_err(ProviderStudioSaveError::other)?;
+            .await?;
         Ok(ProviderStudioSaveResult::AdapterDeleted {
             provider_id: provider_id.to_owned(),
             adapter_id: adapter_id.to_owned(),
@@ -402,7 +425,7 @@ impl Backend {
         &self,
         provider_id: &str,
         provider_patch: JsonValue,
-    ) -> Result<ConfigSettingsEditResponse> {
+    ) -> Result<ConfigSettingsEditResponse, ProviderStudioSaveError> {
         let response = self
             .application
             .runtime_config_settings()
@@ -418,15 +441,48 @@ impl Backend {
                     validate: true,
                     reload: true,
                 },
-            })
-            .map_err(|error| anyhow!("failed to patch provider settings: {error}"))?;
+            })?;
 
         if response.reload_required {
             self.application
                 .runtime_control()
                 .reload()
                 .await
-                .context("failed to reload runtime after provider settings change")?;
+                .context("failed to reload runtime after provider settings change")
+                .map_err(ProviderStudioSaveError::other)?;
+        }
+        Ok(response)
+    }
+
+    /// Patch the `providers` root map atomically. Null values delete keys, so a
+    /// single edit can remove a provider and every `default`/`default_selection`
+    /// reference to it before the resulting document is validated.
+    pub(super) async fn patch_provider_settings_root(
+        &self,
+        changes: JsonValue,
+    ) -> Result<ConfigSettingsEditResponse, ProviderStudioSaveError> {
+        let response = self
+            .application
+            .runtime_config_settings()
+            .patch_file_settings(agena_runtime::ConfigSettingsPatchInput {
+                target: ConfigSettingsPathInput {
+                    path: Some("providers".to_owned()),
+                },
+                changes,
+                options: agena_runtime::ConfigSettingsEditOptions {
+                    dry_run: false,
+                    validate: true,
+                    reload: true,
+                },
+            })?;
+
+        if response.reload_required {
+            self.application
+                .runtime_control()
+                .reload()
+                .await
+                .context("failed to reload runtime after provider settings change")
+                .map_err(ProviderStudioSaveError::other)?;
         }
         Ok(response)
     }
@@ -435,7 +491,7 @@ impl Backend {
         &self,
         provider_id: &str,
         provider_value: JsonValue,
-    ) -> Result<ConfigSettingsEditResponse> {
+    ) -> Result<ConfigSettingsEditResponse, ProviderStudioSaveError> {
         let response = self
             .application
             .runtime_config_settings()
@@ -447,15 +503,15 @@ impl Backend {
                     validate: true,
                     reload: true,
                 },
-            })
-            .map_err(|error| anyhow!("failed to save provider settings: {error}"))?;
+            })?;
 
         if response.reload_required {
             self.application
                 .runtime_control()
                 .reload()
                 .await
-                .context("failed to reload runtime after provider settings change")?;
+                .context("failed to reload runtime after provider settings change")
+                .map_err(ProviderStudioSaveError::other)?;
         }
         Ok(response)
     }

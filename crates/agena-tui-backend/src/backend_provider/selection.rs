@@ -316,6 +316,17 @@ impl Backend {
             ProviderStudioSaveField::ProviderId,
         )
         .map_err(ProviderStudioSaveError::Validation)?;
+        if let Some(source_provider_id) = draft.source_provider_id.as_deref()
+            && source_provider_id != provider_id
+            && self
+                .read_file_provider_settings(provider_id)
+                .map_err(ProviderStudioSaveError::other)?
+                .is_some()
+        {
+            return Err(ProviderStudioSaveError::other(anyhow!(
+                "provider `{provider_id}` already exists; rename it to a different id"
+            )));
+        }
         let requested_default_adapter = optional_non_empty(draft.default_adapter.as_str())
             .map(str::to_owned)
             .or_else(|| {
@@ -360,8 +371,14 @@ impl Backend {
             .filter(|value| !value.is_empty())
             .collect::<std::collections::BTreeSet<_>>();
 
+        // Editing an existing provider under a new id is a rename: start from
+        // the source provider's full file value so fields the draft does not
+        // manage (such as `network`) are carried to the new key instead of
+        // being dropped. For a plain save the source id equals the target id
+        // and this reads the provider being edited.
+        let existing_base_id = draft.source_provider_id.as_deref().unwrap_or(provider_id);
         let mut provider_value = self
-            .read_file_provider_settings(provider_id)
+            .read_file_provider_settings(existing_base_id)
             .map_err(ProviderStudioSaveError::other)?
             .unwrap_or_else(|| JsonValue::Object(JsonMap::new()));
         let provider_object = provider_value
@@ -478,8 +495,16 @@ impl Backend {
         );
         provider_object.insert("adapters".to_owned(), JsonValue::Object(adapters));
         self.set_provider_settings(provider_id, provider_value)
-            .await
-            .map_err(ProviderStudioSaveError::other)?;
+            .await?;
+        if let Some(source_provider_id) = draft.source_provider_id.as_deref()
+            && source_provider_id != provider_id
+        {
+            // The provider was renamed. Drop the old key and re-point every
+            // `providers.default` / `default_selection.provider` reference to
+            // the new id in one atomic patch so the file keeps validating.
+            self.rename_provider_references(source_provider_id, provider_id)
+                .await?;
+        }
         Ok(ProviderStudioSaveResult::ProviderDraftSaved {
             provider_id: provider_id.to_owned(),
             default_adapter,
@@ -557,8 +582,7 @@ impl Backend {
         let provider_patch =
             build_provider_adapter_matches_patch(&draft, adapter_id, configured_models)?;
         self.patch_provider_settings(provider_id, provider_patch)
-            .await
-            .map_err(ProviderStudioSaveError::other)?;
+            .await?;
         Ok(ProviderStudioSaveResult::AdapterMatchesSaved {
             provider_id: provider_id.to_owned(),
             adapter_id: adapter_id.to_owned(),
@@ -604,6 +628,56 @@ impl Backend {
             model_id,
             provider_model,
         ))
+    }
+
+    /// Re-point the file-level `providers.default` and
+    /// `providers.default_selection.provider` references from `source` to
+    /// `target`, and drop the old `providers.<source>` key, in a single atomic
+    /// patch. The new provider config is written under `target` by the caller
+    /// first, so the resulting document still validates.
+    async fn rename_provider_references(
+        &self,
+        source: &str,
+        target: &str,
+    ) -> std::result::Result<(), ProviderStudioSaveError> {
+        let read_path = |path: &str| {
+            self.application
+                .runtime_config_settings()
+                .read_file_settings(agena_runtime::ConfigSettingsGetInput {
+                    target: agena_runtime::ConfigSettingsPathInput {
+                        path: Some(path.to_owned()),
+                    },
+                    source: agena_runtime::ConfigSettingsSource::File,
+                })
+                .map(|response| response.value)
+                .map_err(ProviderStudioSaveError::from)
+        };
+        let default_provider = read_path("providers.default")?;
+        let default_selection = read_path("providers.default_selection")?;
+
+        let mut changes = JsonMap::new();
+        changes.insert(source.to_owned(), JsonValue::Null);
+        if default_provider.as_str().map(str::trim) == Some(source) {
+            changes.insert("default".to_owned(), JsonValue::String(target.to_owned()));
+        }
+        if let Some(selection) = default_selection.as_object() {
+            let mut selection = selection.clone();
+            if selection
+                .get("provider")
+                .and_then(JsonValue::as_str)
+                .map(str::trim)
+                == Some(source)
+            {
+                selection.insert("provider".to_owned(), JsonValue::String(target.to_owned()));
+                changes.insert("default_selection".to_owned(), JsonValue::Object(selection));
+            }
+        }
+        if changes.is_empty() {
+            return Ok(());
+        }
+        self.patch_provider_settings_root(JsonValue::Object(changes))
+            .await?;
+        Ok(())
     }
 }
 
@@ -693,6 +767,7 @@ mod tests {
     use super::{
         apply_provider_adapter_selection, build_provider_adapter_matches_patch,
         preferred_model_display_name, preserve_existing_model_execution_policy,
+        resolve_provider_defaults_from_value_for_save,
     };
     use crate::{
         JsonMap, ModelRef, ProviderConfigDraft, ProviderDraftAuthKind,
@@ -800,5 +875,51 @@ mod tests {
         let merged = preserve_existing_model_execution_policy(generated.clone(), None);
 
         assert_eq!(merged, generated);
+    }
+
+    #[test]
+    fn defaults_resolution_falls_back_when_requested_adapter_was_disabled() {
+        let mut adapters = JsonMap::new();
+        adapters.insert(
+            "openai_chat_completions".to_owned(),
+            json!({ "enabled": false }),
+        );
+        adapters.insert("anthropic".to_owned(), json!({ "enabled": true }));
+
+        let (default_adapter, default_model) =
+            resolve_provider_defaults_from_value_for_save(&adapters, Some("openai_chat_completions"), None)
+                .expect("defaults resolve");
+
+        assert_eq!(default_adapter, "anthropic");
+        assert_eq!(default_model, None);
+    }
+
+    #[test]
+    fn defaults_resolution_prefers_enabled_requested_adapter() {
+        let mut adapters = JsonMap::new();
+        adapters.insert("anthropic".to_owned(), json!({ "enabled": true }));
+        adapters.insert("gemini".to_owned(), json!({ "enabled": true }));
+
+        let (default_adapter, _) =
+            resolve_provider_defaults_from_value_for_save(&adapters, Some("gemini"), None)
+                .expect("defaults resolve");
+
+        assert_eq!(default_adapter, "gemini");
+    }
+
+    #[test]
+    fn defaults_resolution_errors_when_no_adapter_is_enabled() {
+        let mut adapters = JsonMap::new();
+        adapters.insert(
+            "openai_responses".to_owned(),
+            json!({ "enabled": false }),
+        );
+
+        let error = resolve_provider_defaults_from_value_for_save(&adapters, None, None)
+            .expect_err("no enabled adapter must be rejected");
+        assert!(matches!(
+            error,
+            crate::ProviderStudioSaveError::Validation(_)
+        ));
     }
 }

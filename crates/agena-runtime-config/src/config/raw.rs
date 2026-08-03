@@ -1676,4 +1676,112 @@ mod openai_protocol_adapter_tests {
 
         assert!(error.to_string().contains("needs an explicit strategy"));
     }
+
+    #[test]
+    fn deleted_provider_with_dangling_default_selection_is_rejected() {
+        // A provider was removed from the file but `default_selection` still
+        // references it: resolution must reject the dangling reference so the
+        // settings layer refuses to persist the invalid document.
+        let value = serde_json::json!({
+            "providers": {
+                "default": "opencode",
+                "default_selection": {
+                    "provider": "opencode",
+                    "adapter": "openai_responses",
+                    "model": "deepseek-v4-flash",
+                    "thinking_mode": "max"
+                },
+                "chatgpt": {
+                    "defaults": { "adapter": "openai_responses" },
+                    "auth": {
+                        "mode": "credential",
+                        "issuer": "openai_chatgpt"
+                    },
+                    "adapters": {
+                        "openai_responses": {
+                            "enabled": true,
+                            "backend": "chatgpt_codex",
+                            "models": { "gpt-5": {} }
+                        }
+                    }
+                }
+            }
+        });
+        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
+        let error = raw
+            .resolve_with_env(&crate::ProcessEnvironment)
+            .expect_err("dangling default_selection must be rejected");
+        assert!(
+            error.to_string().contains("references unknown provider"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn provider_default_adapter_may_not_point_at_a_disabled_adapter() {
+        // Provider Studio unchecking an adapter keeps the adapter entry with
+        // `enabled: false`; a stale `defaults.adapter` pointing at it must be
+        // rejected during validation, which is exactly the failure the studio
+        // hit when it tried to save such a selection.
+        let value = serde_json::json!({
+            "providers": {
+                "test": {
+                    "defaults": { "adapter": "openai_chat_completions" },
+                    "auth": {
+                        "mode": "api",
+                        "subtype": "custom",
+                        "base_url": "https://api.openai.com",
+                        "api_key": { "kind": "inline", "value": "test-key" }
+                    },
+                    "adapters": {
+                        "openai_chat_completions": { "enabled": false },
+                        "anthropic": { "enabled": true }
+                    }
+                }
+            }
+        });
+        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
+        let error = raw
+            .resolve_with_env(&crate::ProcessEnvironment)
+            .expect_err("defaults.adapter referencing a disabled adapter must be rejected");
+        assert!(
+            error.to_string().contains("references disabled adapter"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn deleting_a_provider_and_clearing_its_references_validates() {
+        // This is the document produced by `delete_provider` after its atomic
+        // patch removes `providers.<id>`, `providers.default`, and
+        // `providers.default_selection` (which referenced the deleted provider).
+        // The remaining providers must still resolve.
+        let value = serde_json::json!({
+            "providers": {
+                "chatgpt": {
+                    "defaults": { "adapter": "openai_responses", "model": "gpt-5" },
+                    "auth": {
+                        "mode": "credential",
+                        "issuer": "openai_chatgpt"
+                    },
+                    "adapters": {
+                        "openai_responses": {
+                            "enabled": true,
+                            "backend": "chatgpt_codex",
+                            "models": { "gpt-5": {} }
+                        }
+                    }
+                }
+            }
+        });
+        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
+        let resolved = raw
+            .resolve_with_env(&crate::ProcessEnvironment)
+            .expect("config with provider references cleared must resolve");
+        assert_eq!(
+            resolved.default_selection.provider.as_deref(),
+            Some("chatgpt"),
+            "default selection falls back to the remaining enabled provider"
+        );
+    }
 }

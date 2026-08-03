@@ -499,14 +499,45 @@ pub(super) fn provider_model_selection_contains(
     selected_model_keys.contains(format!("{adapter_id}\u{1f}{model_id}").as_str())
 }
 
+/// Whether an adapter value is enabled, defaulting to enabled when the key is
+/// absent (matching how the runtime treats a provider adapter without an
+/// explicit `enabled` flag).
+fn provider_adapter_enabled(adapter_value: &JsonValue) -> bool {
+    adapter_value
+        .as_object()
+        .and_then(|adapter| adapter.get("enabled"))
+        .and_then(JsonValue::as_bool)
+        .unwrap_or(true)
+}
+
+/// Resolve the effective default adapter for a provider being written.
+///
+/// The requested default must both exist and be enabled. When the requested
+/// default was just unchecked in Provider Studio (or otherwise disabled), the
+/// next enabled adapter becomes the default so the saved provider still
+/// validates. This mirrors the runtime's `RawProviderConfig` resolution, which
+/// rejects a `defaults.adapter` that points at a disabled adapter.
 pub(super) fn resolve_provider_defaults_from_value_for_save(
     adapters: &JsonMap<String, JsonValue>,
     requested_default_adapter: Option<&str>,
     requested_default_model: Option<&str>,
 ) -> std::result::Result<(String, Option<String>), ProviderStudioSaveError> {
-    let default_adapter = requested_default_adapter
+    let requested = requested_default_adapter
         .filter(|default_adapter| adapters.contains_key(*default_adapter))
+        .filter(|default_adapter| {
+            adapters
+                .get(*default_adapter)
+                .is_some_and(provider_adapter_enabled)
+        });
+    let default_adapter = requested
         .map(ToOwned::to_owned)
+        .or_else(|| {
+            adapters
+                .iter()
+                .filter(|(_, value)| provider_adapter_enabled(value))
+                .map(|(adapter_id, _)| adapter_id.clone())
+                .next()
+        })
         .ok_or(ProviderStudioSaveError::Validation(
             ProviderStudioSaveValidationError::FieldRequired(
                 ProviderStudioSaveField::DefaultAdapter,

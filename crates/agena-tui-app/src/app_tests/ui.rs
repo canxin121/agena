@@ -40,12 +40,6 @@ mod permission_studio_tests {
 
         apply_permission_studio_entries_mode(
             &mut permission,
-            PermissionStudioCatalogKind::ToolCapabilities,
-            vec!["shell".to_owned(), "task".to_owned()],
-            PermissionMode::Deny,
-        );
-        apply_permission_studio_entries_mode(
-            &mut permission,
             PermissionStudioCatalogKind::ToolNames,
             vec!["agena.shell.run".to_owned()],
             PermissionMode::Allow,
@@ -54,8 +48,6 @@ mod permission_studio_tests {
         let tools = permission
             .tools
             .expect("tool permissions should be created");
-        assert_eq!(tools.capabilities.get("shell"), Some(&PermissionMode::Deny));
-        assert_eq!(tools.capabilities.get("task"), Some(&PermissionMode::Deny));
         assert_eq!(
             tools.names.get("agena.shell.run"),
             Some(&PermissionMode::Allow)
@@ -186,7 +178,6 @@ mod permission_overlay_tests {
         PermissionPromptPage, PermissionReplyKind, PermissionRequest, PermissionRuleSubjectKind,
         PermissionScope, Utc, permission_overlay_choice, permission_rule_draft_from_request,
     };
-    use agena_domain::PermissionRiskLevel;
 
     fn request_for(action: PermissionAction, session_id: Option<i64>) -> PermissionRequest {
         PermissionRequest {
@@ -200,7 +191,6 @@ mod permission_overlay_tests {
             source: None,
             scope: None,
             operator: None,
-            risk: PermissionRiskLevel::Medium,
             trace: Vec::new(),
             created_at: Utc::now(),
         }
@@ -208,7 +198,7 @@ mod permission_overlay_tests {
 
     #[test]
     fn root_menu_groups_decisions_before_asking_for_scope() {
-        assert_eq!(PermissionPromptPage::Action.choice_count(), 4);
+        assert_eq!(PermissionPromptPage::Action.choice_count(), 5);
         assert_eq!(
             permission_overlay_choice(PermissionPromptPage::Action, 0),
             PermissionOverlayChoice::OpenScope(PermissionPromptDecision::Allow)
@@ -223,6 +213,10 @@ mod permission_overlay_tests {
         );
         assert_eq!(
             permission_overlay_choice(PermissionPromptPage::Action, 3),
+            PermissionOverlayChoice::AutoApprove
+        );
+        assert_eq!(
+            permission_overlay_choice(PermissionPromptPage::Action, 4),
             PermissionOverlayChoice::Details
         );
     }

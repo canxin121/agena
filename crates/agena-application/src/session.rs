@@ -112,6 +112,7 @@ fn permission_reply_from_wire(value: PermissionReply) -> agena_domain::Permissio
             PermissionReplyKind::AllowAlways => agena_domain::PermissionReplyKind::AllowAlways,
             PermissionReplyKind::DenyOnce => agena_domain::PermissionReplyKind::DenyOnce,
             PermissionReplyKind::DenyAlways => agena_domain::PermissionReplyKind::DenyAlways,
+            PermissionReplyKind::AutoApprove => agena_domain::PermissionReplyKind::AutoApprove,
         },
         reason: value.reason,
         scope: value.scope.map(|scope| match scope {

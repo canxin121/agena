@@ -502,6 +502,9 @@ impl Backend {
                         PermissionReplyKind::DenyAlways => {
                             agena_api::resource::PermissionReplyKind::DenyAlways
                         }
+                        PermissionReplyKind::AutoApprove => {
+                            agena_api::resource::PermissionReplyKind::AutoApprove
+                        }
                     },
                     reason: None,
                     scope: scope.map(|scope| match scope {

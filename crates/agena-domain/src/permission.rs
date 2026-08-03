@@ -31,6 +31,10 @@ pub enum PermissionReplyKind {
     AllowAlways,
     DenyOnce,
     DenyAlways,
+    /// Ask the automatic-approval classifier to decide this request. The
+    /// runtime never records this kind: it classifies first, then downgrades
+    /// to `AllowOnce`/`DenyOnce` before the reply is persisted.
+    AutoApprove,
 }
 
 #[cfg(test)]
@@ -54,6 +58,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&PermissionReplyKind::AllowAlways).unwrap(),
             "\"allow_always\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PermissionReplyKind::AutoApprove).unwrap(),
+            "\"auto_approve\""
         );
     }
 }

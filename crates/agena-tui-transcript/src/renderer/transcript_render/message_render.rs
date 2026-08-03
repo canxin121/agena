@@ -246,6 +246,11 @@ fn canonical_activity_details(
                             Some(agena_domain::PermissionReplyKind::DenyAlways) => {
                                 "Denied persistently"
                             }
+                            // AutoApprove is downgraded before being recorded, so
+                            // it cannot appear on a stored reply; keep a fallback.
+                            Some(agena_domain::PermissionReplyKind::AutoApprove) => {
+                                "Auto-approval requested"
+                            }
                         };
                         let action = match &permission.request.action {
                             agena_domain::PermissionAction::Tool {
@@ -286,10 +291,6 @@ fn canonical_activity_details(
                         let provenance = [
                             permission.request.source.clone(),
                             permission.request.scope.map(|scope| format!("{scope}")),
-                            Some(format!(
-                                "{} risk",
-                                format!("{:?}", permission.request.risk).to_ascii_lowercase()
-                            )),
                         ]
                         .into_iter()
                         .flatten()

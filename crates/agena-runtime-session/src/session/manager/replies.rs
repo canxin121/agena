@@ -22,7 +22,6 @@ pub(super) struct AggregatedPermissionRequest {
     pub(super) source: Option<String>,
     pub(super) scope: Option<PermissionScope>,
     pub(super) operator: Option<String>,
-    pub(super) risk: PermissionRiskLevel,
     pub(super) trace: Vec<DecisionTraceStep>,
 }
 
@@ -735,7 +734,7 @@ impl SessionManager {
 
     async fn reply_permission_dispatch(
         &self,
-        request: SessionPermissionReplyRequest,
+        mut request: SessionPermissionReplyRequest,
         mode: ReplyExecutionMode,
     ) -> Result<ReplyDispatch, AppError> {
         let request_id = request.request.reply.request_id.clone();
@@ -763,6 +762,45 @@ impl SessionManager {
             "permission",
             |session, pending| session.pending_permission_request(pending).cloned(),
         )?;
+
+        // An `AutoApprove` reply asks the automatic-approval classifier to
+        // decide this exact request. Classify before the reply is recorded:
+        // the classifier outcome is downgraded to a one-shot Allow/Deny, and
+        // a classification failure keeps the pending permission untouched so
+        // the interactive client can retry or pick a manual decision.
+        if request.request.reply.kind == PermissionReplyKind::AutoApprove {
+            let candidate = agena_permission::ClassifierCandidate {
+                action: agena_domain::ActionSpec::from_action(&permission_request.action),
+                policy_reason: permission_request.reason.clone(),
+            };
+            let outcomes = self
+                .classify_auto_candidates(
+                    Some(&session),
+                    &state,
+                    Some(request.request.session_id),
+                    vec![candidate],
+                )
+                .await;
+            let verdict = outcomes.into_iter().next().unwrap_or_else(|| {
+                Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(
+                    "no classification outcome was produced".to_owned(),
+                ))
+            });
+            match verdict {
+                Ok(true) => {
+                    request.request.reply.kind = PermissionReplyKind::AllowOnce;
+                    request.request.reply.scope = None;
+                }
+                Ok(false) => {
+                    request.request.reply.kind = PermissionReplyKind::DenyOnce;
+                    request.request.reply.scope = None;
+                }
+                Err(failure) => {
+                    return Err(AppError::AutoApproveClassifyFailed(failure));
+                }
+            }
+        }
+
         let replied_at_ms = Utc::now().timestamp_millis();
         let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
         let operation_id = resolved_tool.operation_id.clone();
@@ -793,6 +831,10 @@ impl SessionManager {
                 PermissionReplyKind::AllowAlways => "Permission allowed always",
                 PermissionReplyKind::DenyOnce => "Permission denied once",
                 PermissionReplyKind::DenyAlways => "Permission denied always",
+                // Unreachable: an AutoApprove reply is downgraded to a one-shot
+                // Allow/Deny before this point. Keep a clean fallback instead of
+                // panicking if a future regression skips the downgrade.
+                PermissionReplyKind::AutoApprove => "Permission auto-approved",
             };
             let summary = request
                 .request
@@ -951,6 +993,14 @@ impl SessionManager {
                     )
                     .await?;
                 session.refresh_derived();
+            }
+            // Unreachable: AutoApprove is downgraded before record_reply. A
+            // regression that skips the downgrade must fail cleanly instead of
+            // silently executing with an unhandled kind.
+            PermissionReplyKind::AutoApprove => {
+                return Err(AppError::Internal(
+                    "unresolved auto-approve reply reached dispatch".to_owned(),
+                ));
             }
         }
 
@@ -1357,15 +1407,15 @@ use super::{
     ExecutionStatus, HistoryMessageId, HistoryRunId, InteractiveRequestPart, Message,
     MessageCheckpoint, MessageMetadata, MessagePart, MessageSource, ModelRef,
     ModelSpeedModeRequestOverride, OperationPart, PartContent, PathBuf, PermissionAction,
-    PermissionMode, PermissionRepliedEvent, PermissionReplyKind, PermissionRiskLevel,
-    PermissionScope, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
+    PermissionMode, PermissionRepliedEvent, PermissionReplyKind, PermissionScope,
+    PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
     ProviderPromptAnchor, RequestPart, ResolvedPendingTool, Role, RunAborted, RunCompleted,
     RunStarted, SessionCommit, SessionExecutionReplyRequest, SessionManager, SessionManagerState,
     SessionPendingTool, SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest,
     SessionRunTermination, StreamingToolExecution, TimeRange, ToolCallCompleted, ToolError,
     ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title,
     build_message, build_request_part, completed_lifecycle, custom_payload_value,
-    execution_control_to_app_error, host_user_input_response, max_permission_risk,
+    execution_control_to_app_error, host_user_input_response,
     merge_system_prompts, mpsc, operation_blocks_from_tool_output,
     payload_tool_name_for_invocation, permission_action_key, permission_scope_label,
     persisted_rules_for_reply, resolve_pending_tool, run_abort_reason, text_result_blocks,

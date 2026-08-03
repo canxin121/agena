@@ -38,9 +38,10 @@ impl App {
             AppMessage::PermissionReplied {
                 session_id,
                 request_id,
+                kind,
                 label,
                 result,
-            } => self.handle_permission_replied(session_id, request_id, label, result),
+            } => self.handle_permission_replied(session_id, request_id, kind, label, result),
             AppMessage::UserInputReplied {
                 session_id,
                 request_id,

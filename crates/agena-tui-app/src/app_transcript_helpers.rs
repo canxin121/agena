@@ -165,6 +165,7 @@ pub(crate) fn permission_overlay_choice(
             0 => PermissionOverlayChoice::OpenScope(PermissionPromptDecision::Allow),
             1 => PermissionOverlayChoice::OpenScope(PermissionPromptDecision::Deny),
             2 => PermissionOverlayChoice::EditRule,
+            3 => PermissionOverlayChoice::AutoApprove,
             _ => PermissionOverlayChoice::Details,
         },
         PermissionPromptPage::Scope(PermissionPromptDecision::Allow) => match selected {

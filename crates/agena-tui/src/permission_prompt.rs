@@ -75,6 +75,16 @@ pub struct PermissionPromptContent {
     pub details: Vec<PermissionPromptLine>,
 }
 
+/// Live async state for the "auto-approve" choice. `PermissionPromptContent`
+/// stays immutable; this state is rendered as an overlay on the choices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionPromptAutoApproveStatus {
+    /// The classifier request is in flight; the choice is disabled.
+    Requesting,
+    /// The classifier request failed; `reason` is shown below the choices.
+    Failed(String),
+}
+
 pub fn decision_label(i18n: &I18n, decision: PermissionPromptDecision) -> String {
     i18n.text(match decision {
         PermissionPromptDecision::Allow => "value-allow",
@@ -105,7 +115,7 @@ pub enum PermissionPromptPage {
 impl PermissionPromptPage {
     pub fn choice_count(self) -> usize {
         match self {
-            Self::Action => 4,
+            Self::Action => 5,
             Self::Scope(_) => 5,
             Self::Details(_) => 0,
         }
@@ -253,11 +263,13 @@ pub fn handle_key(
 
 /// Renders the entire permission prompt from opaque display-only content.
 /// The App retains the Domain request, reply validation, rule-editor routing,
-/// and Runtime submission effect.
+/// and Runtime submission effect. `auto_approve` carries the live async status
+/// of the "auto-approve" choice (in-flight or failed).
 pub fn render_overlay(
     frame: &mut Frame<'_>,
     area: Rect,
     presentation: &PermissionPromptPresentation,
+    auto_approve: Option<&PermissionPromptAutoApproveStatus>,
     i18n: &I18n,
 ) {
     let body = Text::from(content_lines(presentation.active_content()));
@@ -277,7 +289,7 @@ pub fn render_overlay(
             height: StackedDialogSectionHeight::AutoText { min: 3, max: 6 },
             title: None,
             borders: Borders::NONE,
-            body: Text::from(choice_lines(presentation, i18n)),
+            body: Text::from(choice_lines(presentation, auto_approve, i18n)),
             wrap: true,
             scroll: None,
             alignment: None,
@@ -324,7 +336,11 @@ fn content_lines(content: &[PermissionPromptLine]) -> Vec<Line<'static>> {
         .collect()
 }
 
-fn choice_lines(presentation: &PermissionPromptPresentation, i18n: &I18n) -> Vec<Line<'static>> {
+fn choice_lines(
+    presentation: &PermissionPromptPresentation,
+    auto_approve: Option<&PermissionPromptAutoApproveStatus>,
+    i18n: &I18n,
+) -> Vec<Line<'static>> {
     let page = presentation.page();
     let heading = match page {
         PermissionPromptPage::Action => "overlay-permission-decision-heading",
@@ -335,7 +351,7 @@ fn choice_lines(presentation: &PermissionPromptPresentation, i18n: &I18n) -> Vec
         sanitize_display_text(i18n.text(heading).as_str()),
         Style::default().add_modifier(Modifier::BOLD),
     ))];
-    for (index, label) in choice_labels(i18n, page).into_iter().enumerate() {
+    for (index, label) in choice_labels(i18n, page, auto_approve).into_iter().enumerate() {
         let selected = index == presentation.selected();
         let style = if selected {
             agena_tui_components::theme::selection_style()
@@ -347,17 +363,38 @@ fn choice_lines(presentation: &PermissionPromptPresentation, i18n: &I18n) -> Vec
             style,
         )));
     }
+    if let Some(PermissionPromptAutoApproveStatus::Failed(reason)) = auto_approve {
+        let reason = sanitize_display_text(reason.as_str());
+        lines.push(Line::from(Span::styled(
+            reason,
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )));
+    }
     lines
 }
 
-fn choice_labels(i18n: &I18n, page: PermissionPromptPage) -> Vec<String> {
+fn choice_labels(
+    i18n: &I18n,
+    page: PermissionPromptPage,
+    auto_approve: Option<&PermissionPromptAutoApproveStatus>,
+) -> Vec<String> {
     match page {
-        PermissionPromptPage::Action => vec![
-            choice_decision_label(i18n, PermissionPromptDecision::Allow),
-            choice_decision_label(i18n, PermissionPromptDecision::Deny),
-            i18n.text("overlay-permission-choice-edit-rule"),
-            i18n.text("overlay-permission-details-title"),
-        ],
+        PermissionPromptPage::Action => {
+            let mut labels = vec![
+                choice_decision_label(i18n, PermissionPromptDecision::Allow),
+                choice_decision_label(i18n, PermissionPromptDecision::Deny),
+                i18n.text("overlay-permission-choice-edit-rule"),
+            ];
+            let auto_approve_label = match auto_approve {
+                Some(PermissionPromptAutoApproveStatus::Requesting) => {
+                    i18n.text("overlay-permission-choice-auto-approve-busy")
+                }
+                _ => i18n.text("overlay-permission-choice-auto-approve"),
+            };
+            labels.push(auto_approve_label);
+            labels.push(i18n.text("overlay-permission-details-title"));
+            labels
+        }
         PermissionPromptPage::Scope(_) => vec![
             i18n.text("overlay-permission-choice-once"),
             i18n.text("overlay-permission-choice-session"),

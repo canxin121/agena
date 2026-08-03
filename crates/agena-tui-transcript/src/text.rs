@@ -135,6 +135,7 @@ pub fn permission_reply_label(i18n: &I18n, kind: PermissionReplyKind) -> String 
         PermissionReplyKind::AllowAlways => t(i18n, "permission-label-allow-always"),
         PermissionReplyKind::DenyOnce => t(i18n, "permission-label-deny-once"),
         PermissionReplyKind::DenyAlways => t(i18n, "permission-label-deny-always"),
+        PermissionReplyKind::AutoApprove => t(i18n, "permission-label-auto-approve"),
     }
 }
 

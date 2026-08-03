@@ -1564,10 +1564,6 @@ impl NetworkPermissionConfigResource {
 pub struct ToolPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<PermissionMode>,
-    /// Modes keyed by tool capability (`read_only`, `shell`, `interactive`,
-    /// `task`). Tool tags are metadata and never carry authority.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub capabilities: BTreeMap<String, PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub names: BTreeMap<String, PermissionMode>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1577,7 +1573,6 @@ pub struct ToolPermissionConfigResource {
 impl ToolPermissionConfigResource {
     pub fn is_empty(&self) -> bool {
         self.default.is_none()
-            && self.capabilities.is_empty()
             && self.names.is_empty()
             && self.rules.is_empty()
     }
@@ -1648,6 +1643,7 @@ pub enum PermissionReplyKind {
     AllowAlways,
     DenyOnce,
     DenyAlways,
+    AutoApprove,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1703,16 +1699,6 @@ pub enum PermissionActionResource {
     },
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionRiskLevel {
-    Low,
-    #[default]
-    Medium,
-    High,
-    Critical,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicySourceKind {
@@ -1752,8 +1738,6 @@ pub struct PermissionRequest {
     pub scope: Option<PermissionScope>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator: Option<String>,
-    #[serde(default)]
-    pub risk: PermissionRiskLevel,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trace: Vec<DecisionTraceStep>,
     pub created_at: DateTime<Utc>,

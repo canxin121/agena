@@ -3,6 +3,7 @@ impl App {
         &mut self,
         session_id: i64,
         request_id: String,
+        kind: PermissionReplyKind,
         label: String,
         result: UiResult<SessionExecutionResource>,
     ) {
@@ -12,6 +13,19 @@ impl App {
         );
         match result {
             Ok(execution) => {
+                // An auto-approve success resolves the request like a manual
+                // allow/deny: close the open permission popup for this request
+                // before the execution refresh (which would re-derive pending
+                // state from a request that is no longer pending).
+                if kind == PermissionReplyKind::AutoApprove
+                    && matches!(
+                        &self.overlay,
+                        Some(Overlay::Permission(dialog))
+                            if dialog.request.request_id == request_id
+                    )
+                {
+                    self.overlay = None;
+                }
                 let transcript_is_target = self.transcript.session_id == Some(session_id);
                 let transcript_contains_target =
                     self.transcript.execution.as_ref().is_some_and(|execution| {
@@ -38,6 +52,22 @@ impl App {
                 ));
             }
             Err(error) => {
+                if kind == PermissionReplyKind::AutoApprove {
+                    // The classifier failed before the reply was recorded, so
+                    // the pending request still exists. Keep the open popup and
+                    // surface the failure on the auto-approve choice instead of
+                    // closing and re-opening it.
+                    if let Some(Overlay::Permission(dialog)) = self.overlay.as_mut()
+                        && dialog.request.request_id == request_id
+                    {
+                        dialog.auto_approve = Some(PermissionPromptAutoApproveStatus::Failed(
+                            error.to_string(),
+                        ));
+                    } else {
+                        self.flash_error(error);
+                    }
+                    return;
+                }
                 // The modal closes when a decision is submitted, but the
                 // request is consumed only after backend acknowledgement. On
                 // rejection make the same durable request unseen again and
@@ -781,11 +811,12 @@ impl App {
 use crate::view::model_catalog_presentation_item;
 use crate::{
     App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, ModelCatalogListResponse,
-    PaginatedResponse, ProviderAdapterModelsResponse, ProviderPickerPurpose, ProviderStudioFocus,
-    ProviderSummaryResource, Route, RunActivityTarget, RunOperation, SelectableListState,
-    SelectionPickerCommand, SelectionPickerQuery, SessionExecutionResource,
-    SessionNavigationCommand, SessionNavigationQuery, SessionResource, UiResult,
-    build_timeline_item, i18n_provider_list_detail, provider_draft_auth_action_message,
+    Overlay, PaginatedResponse, PermissionReplyKind, ProviderAdapterModelsResponse,
+    ProviderPickerPurpose, ProviderStudioFocus, ProviderSummaryResource, Route,
+    RunActivityTarget, RunOperation, SelectableListState, SelectionPickerCommand,
+    SelectionPickerQuery, SessionExecutionResource, SessionNavigationCommand,
+    SessionNavigationQuery, SessionResource, UiResult, build_timeline_item,
+    i18n_provider_list_detail, provider_draft_auth_action_message,
     provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
     provider_list_create_item, provider_studio_available_model_keys,
     provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,
@@ -796,4 +827,5 @@ use crate::{
     settings_choice_adapter_fallback, settings_choice_default_provider_detail, ui_text,
 };
 use agena_tui::main_focus::Focus;
+use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;
 use agena_tui_session::session_view::SessionViewMode;

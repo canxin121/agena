@@ -49,6 +49,7 @@ impl App {
                     frame,
                     area,
                     &dialog.presentation,
+                    dialog.auto_approve.as_ref(),
                     &self.i18n,
                 );
             }

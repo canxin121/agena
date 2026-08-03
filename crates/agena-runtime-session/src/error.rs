@@ -57,6 +57,8 @@ pub enum AppError {
     ToolUnavailable(Box<agena_domain::ToolUnavailableResult>),
     #[error("tool execution error: {0}")]
     Tool(Box<crate::tool::ToolError>),
+    #[error("automatic approval classification failed: {0}")]
+    AutoApproveClassifyFailed(agena_permission::ClassifyFailure),
     #[error("subtask usage budget exceeded: {0}")]
     SubtaskBudgetExceeded(String),
     #[error("session {0} already has an active execution")]
@@ -130,6 +132,9 @@ impl AppError {
                 "The session changed while the request was running. Refresh and try again."
             }
             Self::Cancelled => "Response cancelled.",
+            Self::AutoApproveClassifyFailed(_) => {
+                "Automatic approval could not classify this request. Choose an option below."
+            }
             Self::SubtaskBudgetExceeded(_) => {
                 "The subtask reached its usage limit before it could finish."
             }
@@ -288,6 +293,13 @@ impl AppError {
                 Retry::Unknown,
                 Recovery::Retry,
             ),
+            Self::AutoApproveClassifyFailed(_) => (
+                "permission.auto_approve_classify_failed",
+                Category::DependencyUnavailable,
+                Responsibility::Dependency,
+                Retry::Backoff,
+                Recovery::Retry,
+            ),
             Self::SubtaskBudgetExceeded(_) => (
                 "subtask.budget_exceeded",
                 Category::QuotaExceeded,
@@ -377,6 +389,9 @@ impl AppError {
             }
             Self::Internal(diagnostic) => {
                 UserPresentation::validated_with_context(code, diagnostic)
+            }
+            Self::AutoApproveClassifyFailed(failure) => {
+                UserPresentation::validated_with_context(code, failure.to_string())
             }
             _ => UserPresentation::new(code, self.public_message()),
         }

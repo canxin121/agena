@@ -19,6 +19,14 @@ impl App {
         page: PermissionPromptPage,
         selected: usize,
     ) -> bool {
+        // While the auto-approve classifier is in flight every other choice is
+        // disabled so a concurrent reply cannot race the classification.
+        if matches!(
+            dialog.auto_approve,
+            Some(PermissionPromptAutoApproveStatus::Requesting)
+        ) {
+            return false;
+        }
         let choice = permission_overlay_choice(page, selected);
         match choice {
             PermissionOverlayChoice::OpenScope(decision) => {
@@ -34,6 +42,17 @@ impl App {
                     permission_overlay_reply_label(&self.i18n, kind, scope),
                 );
                 true
+            }
+            PermissionOverlayChoice::AutoApprove => {
+                dialog.auto_approve = Some(PermissionPromptAutoApproveStatus::Requesting);
+                self.request_permission_reply(
+                    dialog.session_id,
+                    dialog.request.request_id.clone(),
+                    PermissionReplyKind::AutoApprove,
+                    None,
+                    ui_text::t(&self.i18n, "overlay-permission-choice-auto-approve"),
+                );
+                false
             }
             PermissionOverlayChoice::EditRule => {
                 self.open_permission_rule_studio_from_overlay(dialog);
@@ -260,13 +279,15 @@ impl App {
 use crate::{
     App, EditorDialogKeyResult, InputDialogKeyResult, KeyEvent, LineInputOverlay,
     PermissionOverlay, PermissionOverlayChoice, PermissionPromptEffect, PermissionPromptPage,
-    PermissionRuleStudioAction, PermissionRuleStudioOverlay, PermissionRuleStudioPathField,
-    PermissionStudioOverlay, PermissionStudioPaneFocus, Route, SettingsStudioOverlay,
-    drive_editor_dialog_key, drive_input_dialog_key, permission_overlay_choice,
-    permission_overlay_reply_label, permission_rule_draft_from_request,
-    permission_studio_nav_move_step, set_permission_studio_pane_focus, ui_text,
+    PermissionReplyKind, PermissionRuleStudioAction, PermissionRuleStudioOverlay,
+    PermissionRuleStudioPathField, PermissionStudioOverlay, PermissionStudioPaneFocus, Route,
+    SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
+    permission_overlay_choice, permission_overlay_reply_label,
+    permission_rule_draft_from_request, permission_studio_nav_move_step,
+    set_permission_studio_pane_focus, ui_text,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
+use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;
 
 #[cfg(test)]
 mod tests {

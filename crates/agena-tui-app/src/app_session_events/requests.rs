@@ -452,6 +452,7 @@ impl App {
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         let replied_request_id = request_id.clone();
+        let replied_kind = kind;
         tokio::spawn(async move {
             let result = backend
                 .reply_permission_with_options(session_id, request_id, kind, scope, options)
@@ -460,6 +461,7 @@ impl App {
             let _ = tx.send(AppMessage::PermissionReplied {
                 session_id,
                 request_id: replied_request_id,
+                kind: replied_kind,
                 label,
                 result,
             });

@@ -1,7 +1,7 @@
 use super::{
     AppError, AttachmentItem, ExecutionControlError, ExecutionStatus, HashSet, HistoryToolCallId,
     Message, MessageMetadata, MessagePart, OperationBlock, PartContent, PermissionAction,
-    PermissionMode, PermissionReplyKind, PermissionRiskLevel, PermissionScope,
+    PermissionMode, PermissionReplyKind, PermissionScope,
     PersistedPermissionRule, RequestPart, ReservedMessageIds, ResolvedPendingTool, Role,
     RunAbortReason, SessionPendingTool, SessionStore, TimeRange, ToolError, ToolInvocation,
     ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
@@ -345,6 +345,9 @@ pub(super) fn persisted_mode_for_reply(kind: PermissionReplyKind) -> Option<Perm
         PermissionReplyKind::AllowAlways => Some(PermissionMode::Allow),
         PermissionReplyKind::DenyAlways => Some(PermissionMode::Deny),
         PermissionReplyKind::AllowOnce | PermissionReplyKind::DenyOnce => None,
+        // AutoApprove is downgraded before the reply is recorded; it never
+        // persists a rule. Kept explicit for exhaustiveness.
+        PermissionReplyKind::AutoApprove => None,
     }
 }
 
@@ -421,26 +424,6 @@ pub(super) fn tool_error_to_app_error(err: ToolError) -> AppError {
             AppError::Internal("unexpected unresolved user input request".to_string())
         }
         other => AppError::Tool(Box::new(other)),
-    }
-}
-
-pub(super) fn max_permission_risk(
-    left: PermissionRiskLevel,
-    right: PermissionRiskLevel,
-) -> PermissionRiskLevel {
-    if permission_risk_rank(left) >= permission_risk_rank(right) {
-        left
-    } else {
-        right
-    }
-}
-
-pub(super) fn permission_risk_rank(risk: PermissionRiskLevel) -> u8 {
-    match risk {
-        PermissionRiskLevel::Low => 0,
-        PermissionRiskLevel::Medium => 1,
-        PermissionRiskLevel::High => 2,
-        PermissionRiskLevel::Critical => 3,
     }
 }
 

@@ -175,23 +175,42 @@ impl SessionManager {
 
     /// Classify a batch of auto-approval candidates with one shared context:
     /// one model resolution, one variant resolution, one transcript. Returns
-    /// per-candidate `Ok(allowed)`; `Err` means the candidate falls back to
-    /// interactive `ask` (fail closed).
+    /// per-candidate `Ok(allowed)`; `Err(failure)` means the candidate fell
+    /// back to interactive `ask` (fail closed) because automatic approval
+    /// could not resolve. The failure reason is surfaced to the user.
     pub(in crate::session::manager) async fn classify_auto_candidates(
         &self,
         session: Option<&Session>,
         state: &SessionManagerState,
         session_id: Option<i64>,
         candidates: Vec<agena_permission::ClassifierCandidate>,
-    ) -> Vec<Result<bool, ()>> {
+    ) -> Vec<Result<bool, agena_permission::ClassifyFailure>> {
         if candidates.is_empty() {
             return Vec::new();
         }
         let Some((model, selection)) = (match self.resolve_approval_model(session, state) {
             Ok(Some(resolved)) => Some(resolved),
-            Ok(None) | Err(_) => None,
+            Ok(None) => {
+                let reason =
+                    "no approval model is configured and no session/default model could be resolved"
+                        .to_owned();
+                return candidates
+                    .into_iter()
+                    .map(|_| Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(reason.clone())))
+                    .collect();
+            }
+            Err(error) => {
+                return candidates
+                    .into_iter()
+                    .map(|_| {
+                        Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(
+                            error.to_string(),
+                        ))
+                    })
+                    .collect();
+            }
         }) else {
-            return candidates.into_iter().map(|_| Err(())).collect();
+            return Vec::new();
         };
 
         let mut options = SessionRunOptions {
@@ -219,8 +238,11 @@ impl SessionManager {
                 .request_override
                 .set_parallel_tool_calls(Some(parallel_tool_calls));
         }
-        if self.apply_model_mode_requests(&mut options).is_err() {
-            return candidates.into_iter().map(|_| Err(())).collect();
+        if let Err(error) = self.apply_model_mode_requests(&mut options) {
+            return candidates
+                .into_iter()
+                .map(|_| Err(agena_permission::ClassifyFailure::ModeUnavailable(error.to_string())))
+                .collect();
         }
 
                 let transcript_budget_chars = state
@@ -337,13 +359,30 @@ impl SessionManager {
                             self.record_auto_decision(session_id, allowed);
                             Ok(allowed)
                         }
-                        None => Err(()),
+                        None => Err(agena_permission::ClassifyFailure::UnparseableVerdict(
+                            truncate_classifier_text(response.text.as_str()),
+                        )),
                     }
                 }
-                Ok(Err(_)) | Err(_) => Err(()),
+                Ok(Err(error)) => Err(agena_permission::ClassifyFailure::Provider(
+                    error.to_string(),
+                )),
+                Err(_elapsed) => Err(agena_permission::ClassifyFailure::Timeout),
             }
             });
         }
         futures_util::future::join_all(futures).await
     }
+}
+
+/// Bound the classifier text echoed into a fallback `Ask` reason so a
+/// pathological provider response cannot balloon the interactive prompt.
+fn truncate_classifier_text(text: &str) -> String {
+    const MAX: usize = 400;
+    if text.chars().count() <= MAX {
+        return text.to_owned();
+    }
+    let mut out = text.chars().take(MAX).collect::<String>();
+    out.push_str("…");
+    out
 }

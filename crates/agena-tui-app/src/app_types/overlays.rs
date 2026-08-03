@@ -12,6 +12,7 @@ use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
 use agena_provider::AgenaToolMode;
 use agena_tui::model_catalog::ModelCatalogPresentation;
 use agena_tui::permission_prompt::PermissionPromptPresentation;
+use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;
 use agena_tui_backend::ProviderConfigDraft;
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, EditorDialogState, InputDialogState,
@@ -90,7 +91,6 @@ pub(crate) enum PermissionStudioEditorAction {
     Text(PermissionStudioTextTarget),
     AddPathRule,
     AddNetworkRule,
-    AddToolCapability,
     AddToolName,
     AddToolRule,
     AddToolCommandPattern { tool_name: String },
@@ -102,7 +102,6 @@ pub(crate) use agena_tui_permission_studio::PermissionStudioModeTarget;
 pub(crate) enum PermissionStudioTextTarget {
     PathRulePattern { pattern: String },
     NetworkRuleTarget { target: String },
-    ToolCapabilityKey { key: String },
     ToolNameKey { key: String },
     ToolRuleName { tool_name: String },
 }
@@ -144,7 +143,6 @@ pub(crate) enum ChoiceOverlayAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PermissionStudioCatalogKind {
-    ToolCapabilities,
     ToolNames,
 }
 
@@ -273,6 +271,8 @@ pub(crate) struct PermissionOverlay {
     pub(crate) session_id: i64,
     pub(crate) request: PermissionRequest,
     pub(crate) presentation: PermissionPromptPresentation,
+    /// Live async status of the "auto-approve" choice; `None` when idle.
+    pub(crate) auto_approve: Option<PermissionPromptAutoApproveStatus>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +300,7 @@ pub(crate) enum PermissionOverlayChoice {
         kind: PermissionReplyKind,
         scope: Option<PermissionScope>,
     },
+    AutoApprove,
     EditRule,
     Details,
 }
@@ -319,9 +320,6 @@ pub(crate) enum ConfirmAction {
     },
     PermissionStudioDeleteNetworkRule {
         target: String,
-    },
-    PermissionStudioDeleteToolCapability {
-        key: String,
     },
     PermissionStudioDeleteToolName {
         key: String,

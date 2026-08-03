@@ -934,8 +934,6 @@ export type MessageResource = {
 
 export type PartLoadMode = 'none' | 'summary' | 'full'
 
-export type PermissionRiskLevel = 'low' | 'medium' | 'high' | 'critical'
-
 export type PermissionDecisionTraceStep = {
   source_kind: 'static_policy' | 'persisted_rule' | 'plugin_advice' | 'managed_policy'
   summary: string
@@ -955,7 +953,6 @@ export type PermissionRequest = {
   source?: string | null
   scope?: 'session' | 'workspace' | 'global' | null
   operator?: string | null
-  risk?: PermissionRiskLevel | null
   trace?: PermissionDecisionTraceStep[]
   created_at: string
 }
@@ -2602,7 +2599,7 @@ export async function submitTurn(input: {
 export async function replyPermission(input: {
   sessionId: number
   requestId: string
-  kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always'
+  kind: 'allow_once' | 'allow_always' | 'deny_once' | 'deny_always' | 'auto_approve'
   reason?: string
   scope?: 'session' | 'workspace' | 'global'
 }): Promise<SessionExecutionResource> {

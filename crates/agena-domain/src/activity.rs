@@ -1423,7 +1423,7 @@ mod tests {
                     agena_failure::RetryDirective::Unknown,
                     agena_failure::RecoveryDirective::None,
                     agena_failure::FailureImpact::OperationFailed,
-                    agena_failure::UserPresentation::new("test-failure", "Something went wrong."),
+                    agena_failure::UserPresentation::new("test-failure", "Test failure occurred."),
                 )
                 .into(),
             }),

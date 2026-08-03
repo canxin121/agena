@@ -2729,11 +2729,7 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
     if !output.failures.is_empty() {
         lines.push("Failures:".to_string());
         lines.extend(output.failures.iter().take(5).map(|failure| {
-            if failure.is_unexpected() {
-                format!("- {} Reference: {}", failure.user.fallback, failure.id)
-            } else {
-                format!("- {}", failure.user.fallback)
-            }
+            format!("- {}", failure.user.fallback)
         }));
     }
     lines.join("\n")

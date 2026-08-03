@@ -1854,7 +1854,6 @@ failure-detail-responsibility = 责任方
 failure-detail-impact = 影响
 failure-detail-recovery = 恢复建议
 failure-detail-retry = 重试策略
-failure-detail-reference = 参考编号
 failure-category-invalid-input = 输入无效
 failure-category-not-found = 未找到
 failure-category-conflict = 冲突

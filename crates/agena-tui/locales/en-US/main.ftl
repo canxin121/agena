@@ -1854,7 +1854,6 @@ failure-detail-responsibility = Responsibility
 failure-detail-impact = Impact
 failure-detail-recovery = Recovery
 failure-detail-retry = Retry
-failure-detail-reference = Reference
 failure-category-invalid-input = Invalid input
 failure-category-not-found = Not found
 failure-category-conflict = Conflict

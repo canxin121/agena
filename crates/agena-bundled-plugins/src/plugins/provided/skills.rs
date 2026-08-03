@@ -1553,10 +1553,7 @@ impl SkillsPlugin {
         if input.verbose && !catalog.diagnostics.is_empty() {
             lines.push("Discovery diagnostics:".to_string());
             lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
-                format!(
-                    "- {} Reference: {}",
-                    diagnostic.failure.user.fallback, diagnostic.failure.id
-                )
+                format!("- {}", diagnostic.failure.user.fallback)
             }));
         }
         let payload = serde_json::json!({
@@ -1781,10 +1778,7 @@ impl SkillsPlugin {
         if input.verbose && !refresh.catalog.diagnostics.is_empty() {
             lines.push("Discovery diagnostics:".to_string());
             lines.extend(refresh.catalog.diagnostics.iter().map(|diagnostic| {
-                format!(
-                    "- {} Reference: {}",
-                    diagnostic.failure.user.fallback, diagnostic.failure.id
-                )
+                format!("- {}", diagnostic.failure.user.fallback)
             }));
         }
         Ok(ToolInvokeOutput::from_parts(

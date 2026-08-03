@@ -207,7 +207,6 @@ failure-detail-responsibility = Verantwortung
 failure-detail-impact = Auswirkung
 failure-detail-recovery = Wiederherstellung
 failure-detail-retry = Wiederholung
-failure-detail-reference = Referenz
 failure-category-invalid-input = Ungültige Eingabe
 failure-category-not-found = Nicht gefunden
 failure-category-conflict = Konflikt

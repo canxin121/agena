@@ -646,11 +646,7 @@ impl UiFailure {
 
 impl std::fmt::Display for UiFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.failure.user.fallback.as_str())?;
-        if self.failure.is_unexpected() {
-            write!(formatter, " Reference: {}", self.failure.id)?;
-        }
-        Ok(())
+        formatter.write_str(self.failure.user.fallback.as_str())
     }
 }
 

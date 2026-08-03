@@ -207,7 +207,6 @@ failure-detail-responsibility = 責任
 failure-detail-impact = 影響
 failure-detail-recovery = 復旧
 failure-detail-retry = 再試行
-failure-detail-reference = 参照
 failure-category-invalid-input = 入力が無効
 failure-category-not-found = 見つかりません
 failure-category-conflict = 競合

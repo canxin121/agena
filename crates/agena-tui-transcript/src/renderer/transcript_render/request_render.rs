@@ -180,15 +180,7 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
             Some(tool_execution_preview(part, tool, i18n))
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
-            let text = if error.problem.is_unexpected() {
-                format!(
-                    "{} Reference: {}",
-                    error.problem.user.fallback, error.problem.id
-                )
-            } else {
-                error.problem.user.fallback.clone()
-            };
-            Some(text)
+            Some(error.problem.user.fallback.clone())
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,

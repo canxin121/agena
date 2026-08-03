@@ -41,7 +41,6 @@ pub struct UiNotice {
     pub severity: NoticeSeverity,
     pub scope: NoticeScope,
     pub action: Option<NoticeAction>,
-    pub failure_id: Option<agena_failure::FailureId>,
     pub expires_at: Instant,
 }
 
@@ -61,7 +60,6 @@ impl UiNotice {
             severity,
             scope: NoticeScope::Global,
             action: None,
-            failure_id: None,
             expires_at: Instant::now() + lifetime,
         }
     }
@@ -72,16 +70,14 @@ impl UiNotice {
 
     pub fn from_problem(problem: &agena_failure::UserProblem) -> Self {
         let mut notice = Self::message(NoticeSeverity::Error, problem.user.fallback.clone());
-        notice.failure_id = problem.is_unexpected().then_some(problem.id);
         notice.action = recovery_action(problem.recovery);
         notice
     }
 
     pub fn display_summary(&self) -> String {
-        match self.failure_id {
-            Some(id) => format!("{}  Reference: {id}", self.summary),
-            None => self.summary.clone(),
-        }
+        // The summary already carries the scrubbed root cause; the correlation
+        // id stays out of user-visible text.
+        self.summary.clone()
     }
 
     pub fn is_expired_at(&self, now: Instant) -> bool {
@@ -121,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn unexpected_failure_shows_reference_but_not_machine_code() {
+    fn unexpected_failure_shows_root_cause_but_not_machine_code() {
         let failure = agena_failure::Failure::new(
             agena_failure::FailureCode::new("internal.database"),
             agena_failure::FailureCategory::Internal,
@@ -129,11 +125,13 @@ mod tests {
             agena_failure::RetryDirective::Unknown,
             agena_failure::RecoveryDirective::Retry,
             agena_failure::FailureImpact::OperationFailed,
-            agena_failure::UserPresentation::new("internal", "Something went wrong."),
+            agena_failure::UserPresentation::new("internal", "Database is unavailable."),
         );
         let notice = UiNotice::from_failure(&failure);
         let display = notice.display_summary();
-        assert!(display.contains("Reference:"));
+        // The user sees the real message and no correlation-id noise.
+        assert_eq!(display, "Database is unavailable.");
+        assert!(!display.contains("Reference:"));
         assert!(!display.contains("internal.database"));
     }
 }

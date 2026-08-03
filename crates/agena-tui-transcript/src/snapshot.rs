@@ -2084,6 +2084,6 @@ mod tests {
             expanded_text.contains("Retry: Retry once immediately"),
             "{expanded_text}"
         );
-        assert!(expanded_text.contains("Reference:"), "{expanded_text}");
+        assert!(!expanded_text.contains("Reference:"), "{expanded_text}");
     }
 }

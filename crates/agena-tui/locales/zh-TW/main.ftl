@@ -207,7 +207,6 @@ failure-detail-responsibility = 責任方
 failure-detail-impact = 影響
 failure-detail-recovery = 復原建議
 failure-detail-retry = 重試策略
-failure-detail-reference = 參考編號
 failure-category-invalid-input = 輸入無效
 failure-category-not-found = 找不到
 failure-category-conflict = 衝突

@@ -207,7 +207,6 @@ failure-detail-responsibility = 책임
 failure-detail-impact = 영향
 failure-detail-recovery = 복구
 failure-detail-retry = 재시도
-failure-detail-reference = 참조
 failure-category-invalid-input = 잘못된 입력
 failure-category-not-found = 찾을 수 없음
 failure-category-conflict = 충돌

@@ -684,7 +684,6 @@ fn render_failure_detail(
     i18n: &I18n,
     width: u16,
 ) {
-    let muted = Style::default().fg(agena_tui_components::theme::muted_color());
     let danger = Style::default().fg(agena_tui_components::theme::danger_color());
     let mut push = |label: &str, value: &str, style: Style| {
         push_label_value(out, "    ", &format!("{label}: {value}"), style, width);
@@ -723,11 +722,6 @@ fn render_failure_detail(
         &ui_text::t(i18n, "failure-detail-retry"),
         &retry_directive_label(problem.retry, i18n),
         Style::default(),
-    );
-    push(
-        &ui_text::t(i18n, "failure-detail-reference"),
-        &problem.id.to_string(),
-        muted,
     );
 }
 
@@ -1042,13 +1036,7 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
     match transcript_part_content(part) {
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
             let (_, title, summary, error) = activity_presentation(payload);
-            let error_text = error.as_ref().map(|e| {
-                if e.is_unexpected() {
-                    format!("{} Reference: {}", e.user.fallback, e.id)
-                } else {
-                    e.user.fallback.clone()
-                }
-            });
+            let error_text = error.as_ref().map(|e| e.user.fallback.clone());
             let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
             let details =
                 canonical_activity_details(payload, summary.as_str(), error_equivalence_text);
@@ -1094,15 +1082,7 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
             )
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
-            let text = if error.problem.is_unexpected() {
-                format!(
-                    "{} Reference: {}",
-                    error.problem.user.fallback, error.problem.id
-                )
-            } else {
-                error.problem.user.fallback.clone()
-            };
-            Some(text)
+            Some(error.problem.user.fallback.clone())
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
@@ -1435,13 +1415,7 @@ pub(crate) fn render_part_node(
                 .copied()
                 .unwrap_or(defaults.activity_expanded);
             let (_, title, summary, error) = activity_presentation(payload);
-            let error_text = error.as_ref().map(|e| {
-                if e.is_unexpected() {
-                    format!("{} Reference: {}", e.user.fallback, e.id)
-                } else {
-                    e.user.fallback.clone()
-                }
-            });
+            let error_text = error.as_ref().map(|e| e.user.fallback.clone());
             let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
             let details =
                 canonical_activity_details(payload, summary.as_str(), error_equivalence_text);
@@ -1649,18 +1623,13 @@ pub(crate) fn render_part_node(
             };
             let expanded = expansions.get(&key).copied().unwrap_or(true);
             let title = error.problem.user.fallback.clone();
-            let reference = if error.problem.is_unexpected() {
-                Some(format!("Reference: {}", error.problem.id))
-            } else {
-                None
-            };
             push_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
                 title.as_str(),
-                reference.as_deref().unwrap_or(""),
+                "",
                 width,
             );
             if expanded {
@@ -1669,11 +1638,7 @@ pub(crate) fn render_part_node(
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: if let Some(reference) = reference {
-                    format!("{title} {reference}")
-                } else {
-                    title
-                },
+                copy_text: title,
                 toggleable: true,
                 expanded,
                 end_line: None,

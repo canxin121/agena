@@ -106,11 +106,7 @@ pub(crate) fn provider_draft_auth_error_message(
             &agena_tui::fl_args!("field" => provider_draft_auth_field_label(i18n, field)),
         ),
         agena_tui_backend::ProviderDraftAuthError::Other(problem) => {
-            if problem.is_unexpected() {
-                format!("{} Reference: {}", problem.user.fallback, problem.id)
-            } else {
-                problem.user.fallback.clone()
-            }
+            problem.user.fallback.clone()
         }
     }
 }
@@ -229,11 +225,7 @@ pub(crate) fn provider_studio_save_error_message(
             ui_text::t(i18n, "flash-provider-save-error-configured-models-object")
         }
         agena_tui_backend::ProviderStudioSaveError::Other(problem) => {
-            if problem.is_unexpected() {
-                format!("{} Reference: {}", problem.user.fallback, problem.id)
-            } else {
-                problem.user.fallback.clone()
-            }
+            problem.user.fallback.clone()
         }
     }
 }
@@ -462,13 +454,7 @@ pub(crate) fn provider_studio_adapter_list_detail(
         }
         return adapter.failure.as_ref().map_or_else(
             || ui_text::t(i18n, "overlay-provider-studio-error"),
-            |problem| {
-                if problem.is_unexpected() {
-                    format!("{} Reference: {}", problem.user.fallback, problem.id)
-                } else {
-                    problem.user.fallback.clone()
-                }
-            },
+            |problem| problem.user.fallback.clone(),
         );
     }
     if let Some(rule) = provider_studio_adapter_rule(dialog, adapter_id) {

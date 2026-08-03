@@ -22,7 +22,7 @@ mod tests {
                 agena_failure::RetryDirective::Unknown,
                 agena_failure::RecoveryDirective::None,
                 agena_failure::FailureImpact::OperationFailed,
-                agena_failure::UserPresentation::new("stream-test", "Something went wrong."),
+                agena_failure::UserPresentation::new("stream-test", "Stream test failure."),
             )
             .into(),
             ts_ms: 42,

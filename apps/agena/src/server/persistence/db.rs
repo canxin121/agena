@@ -23,11 +23,6 @@ pub(crate) struct ServerStateDb {
 
 impl ServerStateDb {
     pub(crate) async fn open() -> Result<Self, String> {
-        let canonical_root = crate::server::persistence::paths::server_data_dir_candidates()
-            .into_iter()
-            .next()
-            .unwrap_or_default();
-        crate::server::persistence::legacy_studio::migrate_once(&canonical_root).await?;
         Self::open_at_path(crate::server::persistence::paths::server_state_db_path()).await
     }
 

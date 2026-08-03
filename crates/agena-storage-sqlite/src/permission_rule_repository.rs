@@ -28,44 +28,7 @@ impl SeaPermissionRuleTransactionWriter {
         txn: &DatabaseTransaction,
         rule: &PersistedPermissionRule,
     ) -> Result<(PermissionRuleRecord, bool), PermissionRuleRepositoryError> {
-        let scope = scope_to_string(rule.scope);
-        let existing = txn.query_one(statement(
-            format!("SELECT id FROM {TABLE} WHERE action_key = ? AND scope = ? AND session_id IS ? AND workspace_id IS ?"),
-            [rule.action_key.clone().into(), scope.clone().into(), rule.session_id.into(), rule.workspace_id.into()],
-        )).await.map_err(map_error)?;
-        let now = Utc::now().timestamp_millis();
-        let (id, created) = if let Some(row) = existing {
-            let id: i64 = row.try_get("", "id").map_err(map_error)?;
-            txn.execute(statement(
-                format!("UPDATE {TABLE} SET mode = ?, source = ?, reason = ?, operator = ?, revoked_at_ms = ?, revoked_reason = ?, revoked_by = ?, updated_at_ms = ? WHERE id = ?"),
-                [mode_to_string(rule.mode).into(), rule.source.clone().into(), rule.reason.clone().into(), rule.operator.clone().into(), rule.revoked_at_ms.into(), rule.revoked_reason.clone().into(), rule.revoked_by.clone().into(), now.into(), id.into()],
-            )).await.map_err(map_error)?;
-            (id, false)
-        } else {
-            let result = txn.execute(statement(
-                format!("INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
-                [rule.action_key.clone().into(), mode_to_string(rule.mode).into(), scope.into(), rule.session_id.into(), rule.workspace_id.into(), rule.source.clone().into(), rule.reason.clone().into(), rule.operator.clone().into(), rule.revoked_at_ms.into(), rule.revoked_reason.clone().into(), rule.revoked_by.clone().into(), now.into(), now.into()],
-            )).await.map_err(map_error)?;
-            (
-                i64::try_from(result.last_insert_id()).map_err(|_| {
-                    PermissionRuleRepositoryError::Backend(
-                        "permission rule identifier exceeds i64 range".to_owned(),
-                    )
-                })?,
-                true,
-            )
-        };
-        let row = txn
-            .query_one(statement(
-                format!("SELECT {COLUMNS} FROM {TABLE} WHERE id = ?"),
-                [id.into()],
-            ))
-            .await
-            .map_err(map_error)?;
-        row.map(record_from_row)
-            .transpose()?
-            .map(|record| (record, created))
-            .ok_or_else(missing_row)
+        upsert_rule(txn, rule).await
     }
 }
 
@@ -138,37 +101,7 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         &self,
         rule: &PersistedPermissionRule,
     ) -> Result<(PermissionRuleRecord, bool), PermissionRuleRepositoryError> {
-        let scope = scope_to_string(rule.scope);
-        let existing = self.db.query_one(statement(
-            format!("SELECT id FROM {TABLE} WHERE action_key = ? AND scope = ? AND session_id IS ? AND workspace_id IS ?"),
-            [rule.action_key.clone().into(), scope.clone().into(), rule.session_id.into(), rule.workspace_id.into()],
-        )).await.map_err(map_error)?;
-        let now = Utc::now().timestamp_millis();
-        if let Some(existing) = existing {
-            let id: i64 = existing.try_get("", "id").map_err(map_error)?;
-            self.db.execute(statement(
-                format!("UPDATE {TABLE} SET mode = ?, source = ?, reason = ?, operator = ?, revoked_at_ms = ?, revoked_reason = ?, revoked_by = ?, updated_at_ms = ? WHERE id = ?"),
-                [mode_to_string(rule.mode).into(), rule.source.clone().into(), rule.reason.clone().into(), rule.operator.clone().into(), rule.revoked_at_ms.into(), rule.revoked_reason.clone().into(), rule.revoked_by.clone().into(), now.into(), id.into()],
-            )).await.map_err(map_error)?;
-            return self
-                .record(id)
-                .await?
-                .map(|row| (row, false))
-                .ok_or_else(missing_row);
-        }
-        let result = self.db.execute(statement(
-            format!("INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
-            [rule.action_key.clone().into(), mode_to_string(rule.mode).into(), scope.into(), rule.session_id.into(), rule.workspace_id.into(), rule.source.clone().into(), rule.reason.clone().into(), rule.operator.clone().into(), rule.revoked_at_ms.into(), rule.revoked_reason.clone().into(), rule.revoked_by.clone().into(), now.into(), now.into()],
-        )).await.map_err(map_error)?;
-        let id = i64::try_from(result.last_insert_id()).map_err(|_| {
-            PermissionRuleRepositoryError::Backend(
-                "permission rule identifier exceeds i64 range".to_owned(),
-            )
-        })?;
-        self.record(id)
-            .await?
-            .map(|row| (row, true))
-            .ok_or_else(missing_row)
+        upsert_rule(self.db.as_ref(), rule).await
     }
 
     async fn replace(
@@ -270,6 +203,188 @@ fn statement(sql: String, values: impl IntoIterator<Item = Value>) -> Statement 
 }
 fn missing_row() -> PermissionRuleRepositoryError {
     PermissionRuleRepositoryError::Backend("permission rule row is missing after write".to_owned())
+}
+
+/// Atomic upsert of a permission rule against its partial unique index.
+///
+/// The schema enforces subject uniqueness with three partial unique indexes
+/// (`schema.rs`), so both the conflict target and the follow-up update's
+/// `WHERE` must match the index's partial clause verbatim.
+///
+/// `created` is deterministic, not timestamp-derived: `INSERT ... ON CONFLICT
+/// ... DO NOTHING RETURNING id` returns a row only when the insert actually
+/// happened, and no row when the subject already existed (in which case the
+/// existing row is updated). Under SQLite's single-writer model concurrent
+/// processes serialize at the write lock, so this never races into a
+/// unique-constraint error.
+async fn upsert_rule<C: ConnectionTrait>(
+    db: &C,
+    rule: &PersistedPermissionRule,
+) -> Result<(PermissionRuleRecord, bool), PermissionRuleRepositoryError> {
+    let scope = scope_to_string(rule.scope);
+    let now = Utc::now().timestamp_millis();
+    let (insert_sql, update_sql, values) = match (rule.session_id, rule.workspace_id) {
+        (None, None) => (
+            format!(
+                "INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) \
+                 VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(action_key, scope) WHERE session_id IS NULL AND workspace_id IS NULL \
+                 DO NOTHING RETURNING id"
+            ),
+            format!(
+                "UPDATE {TABLE} SET mode = ?, source = ?, reason = ?, operator = ?, revoked_at_ms = ?, \
+                 revoked_reason = ?, revoked_by = ?, updated_at_ms = ? \
+                 WHERE action_key = ? AND scope = ? AND session_id IS NULL AND workspace_id IS NULL RETURNING id"
+            ),
+            rule_values(rule, &scope, now),
+        ),
+        (None, Some(workspace_id)) => (
+            format!(
+                "INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) \
+                 VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(action_key, scope, workspace_id) WHERE session_id IS NULL AND workspace_id IS NOT NULL \
+                 DO NOTHING RETURNING id"
+            ),
+            format!(
+                "UPDATE {TABLE} SET mode = ?, source = ?, reason = ?, operator = ?, revoked_at_ms = ?, \
+                 revoked_reason = ?, revoked_by = ?, updated_at_ms = ? \
+                 WHERE action_key = ? AND scope = ? AND session_id IS NULL AND workspace_id = ? RETURNING id"
+            ),
+            rule_values_with_workspace(rule, &scope, workspace_id, now),
+        ),
+        (Some(session_id), None) => (
+            format!(
+                "INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) \
+                 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?) \
+                 ON CONFLICT(action_key, scope, session_id) WHERE session_id IS NOT NULL AND workspace_id IS NULL \
+                 DO NOTHING RETURNING id"
+            ),
+            format!(
+                "UPDATE {TABLE} SET mode = ?, source = ?, reason = ?, operator = ?, revoked_at_ms = ?, \
+                 revoked_reason = ?, revoked_by = ?, updated_at_ms = ? \
+                 WHERE action_key = ? AND scope = ? AND session_id = ? AND workspace_id IS NULL RETURNING id"
+            ),
+            rule_values_with_session(rule, &scope, session_id, now),
+        ),
+        (Some(_), Some(_)) => {
+            return Err(PermissionRuleRepositoryError::Backend(
+                "permission rule cannot target both a session and a workspace".to_owned(),
+            ));
+        }
+    };
+
+    // 1) Try the insert. Returns a row only when this call created the row.
+    let inserted = db
+        .query_one(statement(insert_sql, values))
+        .await
+        .map_err(map_error)?;
+    let (id, created) = if let Some(row) = inserted {
+        (row.try_get::<i64>("", "id").map_err(map_error)?, true)
+    } else {
+        // 2) Subject already exists: update it in place (created = false).
+        //    `UPDATE ... RETURNING id` yields the row's id in one statement.
+        let update_values = update_rule_values(rule, &scope, now)?;
+        let id = db
+            .query_one(statement(update_sql, update_values))
+            .await
+            .map_err(map_error)?
+            .and_then(|row| row.try_get("", "id").ok())
+            .ok_or_else(missing_row)?;
+        (id, false)
+    };
+
+    let record = db
+        .query_one(statement(
+            format!("SELECT {COLUMNS} FROM {TABLE} WHERE id = ?"),
+            [id.into()],
+        ))
+        .await
+        .map_err(map_error)?
+        .map(record_from_row)
+        .transpose()?
+        .ok_or_else(missing_row)?;
+    Ok((record, created))
+}
+
+/// UPDATE bindings in the statement's placeholder order: `mode, source,
+/// reason, operator, revoked_at_ms, revoked_reason, revoked_by, updated_at_ms,
+/// action_key, scope, [subject]`. The two subject arms each append one value;
+/// the global arm has none.
+fn update_rule_values(
+    rule: &PersistedPermissionRule,
+    scope: &str,
+    now: i64,
+) -> Result<Vec<Value>, PermissionRuleRepositoryError> {
+    let mut values = vec![
+        mode_to_string(rule.mode).into(),
+        rule.source.clone().into(),
+        rule.reason.clone().into(),
+        rule.operator.clone().into(),
+        rule.revoked_at_ms.into(),
+        rule.revoked_reason.clone().into(),
+        rule.revoked_by.clone().into(),
+        now.into(),
+        rule.action_key.clone().into(),
+        scope.to_owned().into(),
+    ];
+    match (rule.session_id, rule.workspace_id) {
+        (None, None) => {}
+        (None, Some(workspace_id)) => values.push(workspace_id.into()),
+        (Some(session_id), None) => values.push(session_id.into()),
+        (Some(_), Some(_)) => {
+            return Err(PermissionRuleRepositoryError::Backend(
+                "permission rule cannot target both a session and a workspace".to_owned(),
+            ));
+        }
+    }
+    Ok(values)
+}
+
+/// Bind values for a global-scope rule (`session_id` and `workspace_id` are
+/// both `NULL` in the SQL).
+fn rule_values(rule: &PersistedPermissionRule, scope: &str, now: i64) -> Vec<Value> {
+    common_rule_values(rule, scope, now)
+}
+
+fn rule_values_with_workspace(
+    rule: &PersistedPermissionRule,
+    scope: &str,
+    workspace_id: i64,
+    now: i64,
+) -> Vec<Value> {
+    let mut values = common_rule_values(rule, scope, now);
+    values.insert(3, workspace_id.into());
+    values
+}
+
+fn rule_values_with_session(
+    rule: &PersistedPermissionRule,
+    scope: &str,
+    session_id: i64,
+    now: i64,
+) -> Vec<Value> {
+    let mut values = common_rule_values(rule, scope, now);
+    values.insert(3, session_id.into());
+    values
+}
+
+/// `action_key, mode, scope, source, reason, operator, revoked_at_ms,
+/// revoked_reason, revoked_by, created_at_ms, updated_at_ms` — the columns
+/// that precede the optional subject placeholders.
+fn common_rule_values(rule: &PersistedPermissionRule, scope: &str, now: i64) -> Vec<Value> {
+    vec![
+        rule.action_key.clone().into(),
+        mode_to_string(rule.mode).into(),
+        scope.to_owned().into(),
+        rule.source.clone().into(),
+        rule.reason.clone().into(),
+        rule.operator.clone().into(),
+        rule.revoked_at_ms.into(),
+        rule.revoked_reason.clone().into(),
+        rule.revoked_by.clone().into(),
+        now.into(),
+        now.into(),
+    ]
 }
 fn record_from_row(
     row: sea_orm::QueryResult,
@@ -377,6 +492,17 @@ mod tests {
         ))
         .await
         .expect("create permission rule fixture");
+        // Mirror the three partial unique indexes from the real schema so the
+        // ON CONFLICT upsert clauses resolve to a matching constraint.
+        for sql in [
+            format!("CREATE UNIQUE INDEX uq_rule_global ON {TABLE}(action_key, scope) WHERE session_id IS NULL AND workspace_id IS NULL"),
+            format!("CREATE UNIQUE INDEX uq_rule_workspace ON {TABLE}(action_key, scope, workspace_id) WHERE session_id IS NULL AND workspace_id IS NOT NULL"),
+            format!("CREATE UNIQUE INDEX uq_rule_session ON {TABLE}(action_key, scope, session_id) WHERE session_id IS NOT NULL AND workspace_id IS NULL"),
+        ] {
+            db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+                .await
+                .expect("create permission rule fixture index");
+        }
         SeaPermissionRuleRepository::new(Arc::new(db))
     }
 

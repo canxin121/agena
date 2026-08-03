@@ -103,8 +103,9 @@ impl Scheduler {
         let Some(mut job) = self.store.get(id).await else {
             return Ok(None);
         };
+        let token = job.next_fire_at.map(|value| value.timestamp_millis());
         if job.pause() {
-            self.store.replace(id, job.clone()).await;
+            self.store.replace(id, token, job.clone()).await;
         }
         Ok(Some(job))
     }
@@ -113,8 +114,9 @@ impl Scheduler {
         let Some(mut job) = self.store.get(id).await else {
             return Ok(None);
         };
+        let token = job.next_fire_at.map(|value| value.timestamp_millis());
         if job.resume(Utc::now())? {
-            self.store.replace(id, job.clone()).await;
+            self.store.replace(id, token, job.clone()).await;
         }
         Ok(Some(job))
     }
@@ -131,6 +133,7 @@ impl Scheduler {
         let Some(mut job) = self.store.get(id).await else {
             return Ok(None);
         };
+        let token = job.next_fire_at.map(|value| value.timestamp_millis());
         if job.update(
             prompt,
             expression,
@@ -139,7 +142,7 @@ impl Scheduler {
             retry_policy,
             Utc::now(),
         )? {
-            self.store.replace(id, job.clone()).await;
+            self.store.replace(id, token, job.clone()).await;
         }
         Ok(Some(job))
     }
@@ -150,22 +153,22 @@ impl Scheduler {
                 break;
             };
             let due = current.claim_due().await;
-            for (mut job, delivery) in due {
+            for (mut job, delivery, token) in due {
                 let now = Utc::now();
                 let result = current.sink.deliver(&job, &delivery).await;
                 match job.finish_delivery(now, &delivery, result) {
                     Ok(JobOutcome::Continued) => {
-                        current.persist_completed_delivery(job).await;
+                        current.persist_completed_delivery(job, token).await;
                     }
                     Ok(JobOutcome::Expired) => {
                         // Keep terminal jobs, including their bounded run
                         // history, until a user explicitly deletes them.
-                        current.persist_completed_delivery(job).await;
+                        current.persist_completed_delivery(job, token).await;
                     }
                     Ok(JobOutcome::RetryScheduled) => {
                         // The failed attempt and retry deadline are durable;
                         // a later poll will reclaim the same delivery key.
-                        current.persist_completed_delivery(job).await;
+                        current.persist_completed_delivery(job, token).await;
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -190,10 +193,16 @@ impl Scheduler {
     /// Persist every due-state transition before invoking the delivery sink.
     /// A returned `Deliver` item is therefore already claimed durably; a
     /// process loss before the sink finishes can be recovered as a retry.
-    async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt)> {
+    ///
+    /// The returned `Option<i64>` is the job's `next_fire_at` (in millis) as
+    /// observed before claiming — the optimistic-lock token for the follow-up
+    /// `store.replace` so a concurrent process cannot double-claim.
+    async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt, Option<i64>)> {
         let now = Utc::now();
         let mut deliveries = Vec::new();
         for mut job in self.store.list().await {
+            // Capture the pre-claim next_fire_at as the optimistic token.
+            let token = job.next_fire_at.map(|value| value.timestamp_millis());
             if !job.due(now) {
                 continue;
             }
@@ -201,7 +210,7 @@ impl Scheduler {
                 Ok(crate::job::ClaimDueDelivery::NotDue) => {}
                 Ok(crate::job::ClaimDueDelivery::StateUpdated) => {
                     let record = job.last_run.clone();
-                    if self.store.replace(job.id, job.clone()).await {
+                    if self.store.replace(job.id, token, job.clone()).await {
                         if let Some(record) = record {
                             self.store
                                 .append_history(SchedulerHistoryEntry {
@@ -218,8 +227,8 @@ impl Scheduler {
                     }
                 }
                 Ok(crate::job::ClaimDueDelivery::Deliver(delivery)) => {
-                    if self.store.replace(job.id, job.clone()).await {
-                        deliveries.push((job, delivery));
+                    if self.store.replace(job.id, token, job.clone()).await {
+                        deliveries.push((job, delivery, token));
                     } else {
                         tracing::warn!(
                             target: "agena_scheduler",
@@ -244,10 +253,10 @@ impl Scheduler {
     /// itself has been durably replaced.  That ordering prevents an audit
     /// entry from claiming a completed delivery whose claim/finalization did
     /// not reach the same store.
-    async fn persist_completed_delivery(&self, job: ScheduledJob) {
+    async fn persist_completed_delivery(&self, job: ScheduledJob, token: Option<i64>) {
         let record = job.last_run.clone();
         let id = job.id;
-        if !self.store.replace(id, job).await {
+        if !self.store.replace(id, token, job).await {
             tracing::warn!(
                 target: "agena_scheduler",
                 job_id = %id,

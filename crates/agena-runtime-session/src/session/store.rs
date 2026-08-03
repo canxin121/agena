@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr};
-use tokio::sync::{Mutex as AsyncMutex, OnceCell};
+use tokio::sync::OnceCell;
 
 use crate::{
     AppError,
@@ -12,8 +12,8 @@ use crate::{
 };
 use agena_domain::{PermissionMode, PermissionRuleEvent, PermissionScope};
 use agena_storage::{
-    GlobalIdAllocator, PermissionRuleRepository, PermissionRuleTransactionWriter,
-    PersistedPermissionRule, SessionSummaryRepository, WorkspaceRepository,
+    PermissionRuleRepository, PermissionRuleTransactionWriter, PersistedPermissionRule,
+    SequenceAllocator, SessionSummaryRepository, WorkspaceRepository,
 };
 
 use super::{
@@ -73,25 +73,19 @@ struct PersistedRuleEventMeta {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ProcessorPartIdAllocator {
-    pub(crate) ids: Arc<AsyncMutex<GlobalIdAllocator>>,
+    pub(crate) ids: Arc<dyn SequenceAllocator>,
 }
 
 impl ProcessorPartIdAllocator {
-    pub(crate) fn new(ids: Arc<AsyncMutex<GlobalIdAllocator>>) -> Self {
+    pub(crate) fn new(ids: Arc<dyn SequenceAllocator>) -> Self {
         Self { ids }
     }
 
     pub(crate) async fn reserve(&self) -> Result<i64, AppError> {
-        let mut allocator = self.ids.lock().await;
-        if !allocator.initialized {
-            return Err(AppError::Internal(
-                "processor part allocator used before initialization".to_string(),
-            ));
-        }
-
-        let part_id = allocator.next_part_id;
-        allocator.next_part_id += 1;
-        Ok(part_id)
+        self.ids
+            .next_part_id()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))
     }
 }
 
@@ -99,8 +93,9 @@ pub(crate) struct SessionStore {
     pub(crate) db: DatabaseConnection,
     pub(crate) workspace_path: String,
     pub(crate) workspace_id: OnceCell<i64>,
+    pub(crate) id_seed: OnceCell<()>,
     pub(crate) cache: Arc<Mutex<SessionCache>>,
-    pub(crate) ids: Arc<AsyncMutex<GlobalIdAllocator>>,
+    pub(crate) ids: Arc<dyn SequenceAllocator>,
     pub(crate) history: SessionHistoryStore,
     pub(crate) publisher: Arc<EventPublisher>,
     pub(crate) workspace_repository: Arc<dyn WorkspaceRepository>,

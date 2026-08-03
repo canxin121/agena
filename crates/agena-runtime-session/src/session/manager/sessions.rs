@@ -9,7 +9,6 @@ use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
 
 impl SessionManager {
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
-        self.store.backfill_reply_failure_projections().await?;
         let state = self.execution_state();
         for session_id in self.workspace_session_ids().await? {
             self.store

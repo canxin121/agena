@@ -6,7 +6,7 @@ use std::{
 
 use chrono::Utc;
 use sea_orm::{DatabaseConnection, DbErr};
-use tokio::sync::{Mutex as AsyncMutex, OnceCell};
+use tokio::sync::OnceCell;
 
 use crate::{
     AppError,
@@ -25,38 +25,10 @@ use super::{
     timestamp_millis_to_utc, visit_event_message_ids, visit_event_part_ids,
 };
 use agena_domain::{SessionListRequest, SessionSummary};
-use agena_storage::GlobalIdAllocator;
+use agena_storage::SequenceAllocator;
 use agena_storage_sqlite::run_transaction_effects;
 
 impl SessionStore {
-    /// Backfill `failure_json` for replies that failed before the column
-    /// existed (schema v8 databases) using their last `execution_finished`
-    /// event. Idempotent: only rows with `NULL` are touched, so repeated
-    /// startups are harmless.
-    pub(crate) async fn backfill_reply_failure_projections(&self) -> Result<usize, AppError> {
-        use sea_orm::{ConnectionTrait, Statement};
-        let result = self
-            .db
-            .execute(Statement::from_sql_and_values(
-                self.db.get_database_backend(),
-                "UPDATE agena_assistant_replies AS r \
-                 SET failure_json = ( \
-                   SELECT json_extract(e.payload_json, '$.payload.outcome.failure') \
-                   FROM agena_events e \
-                   WHERE e.kind_tag = 'execution_finished' \
-                     AND json_extract(e.payload_json, '$.payload.reply_id') = r.reply_id \
-                     AND json_extract(e.payload_json, '$.payload.outcome.failure') IS NOT NULL \
-                   ORDER BY e.seq_session DESC \
-                   LIMIT 1 \
-                 ) \
-                 WHERE r.status = 'failed' AND r.failure_json IS NULL",
-                [],
-            ))
-            .await
-            .map_err(AppError::from)?;
-        Ok(result.rows_affected() as usize)
-    }
-
     pub(crate) async fn reconcile_interrupted_lifecycles(
         &self,
         session_id: i64,
@@ -88,6 +60,7 @@ impl SessionStore {
         db: DatabaseConnection,
         workspace_root: &Path,
         publisher: Arc<EventPublisher>,
+        ids: Arc<dyn SequenceAllocator>,
         workspace_repository: Arc<dyn agena_storage::WorkspaceRepository>,
         permission_rule_repository: Arc<dyn agena_storage::PermissionRuleRepository>,
         permission_rule_transaction_writer: Arc<
@@ -107,8 +80,9 @@ impl SessionStore {
             db: db.clone(),
             workspace_path: workspace_root.to_string_lossy().replace('\\', "/"),
             workspace_id: OnceCell::new(),
+            id_seed: OnceCell::new(),
             cache: Arc::new(Mutex::new(SessionCache::default())),
-            ids: Arc::new(AsyncMutex::new(GlobalIdAllocator::default())),
+            ids,
             history: SessionHistoryStore::new(
                 Arc::clone(&publisher),
                 db,

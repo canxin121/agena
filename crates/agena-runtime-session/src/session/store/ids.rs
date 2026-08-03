@@ -9,20 +9,20 @@ use super::{
 impl SessionStore {
     pub(crate) async fn reserve_message_id_block(&self, count: i64) -> Result<i64, AppError> {
         debug_assert!(count > 0);
-        let mut allocator = self.ids.lock().await;
-        self.ensure_id_allocator(&mut allocator).await?;
-        let first = allocator.next_message_id;
-        allocator.next_message_id = first.saturating_add(count);
-        Ok(first - 1)
+        self.seed_id_allocator().await?;
+        self.ids
+            .reserve_message_id_block(count)
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))
     }
 
     pub(crate) async fn reserve_part_id_block(&self, count: i64) -> Result<i64, AppError> {
         debug_assert!(count > 0);
-        let mut allocator = self.ids.lock().await;
-        self.ensure_id_allocator(&mut allocator).await?;
-        let first = allocator.next_part_id;
-        allocator.next_part_id = first.saturating_add(count);
-        Ok(first - 1)
+        self.seed_id_allocator().await?;
+        self.ids
+            .reserve_part_id_block(count)
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))
     }
 
     /// Give replayed history its own globally unique storage identities.

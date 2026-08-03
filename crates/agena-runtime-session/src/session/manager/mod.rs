@@ -23,7 +23,7 @@ use agena_domain::UserInputReply;
 use agena_domain::{
     DecisionTraceStep, ExecutionFinishedEvent, ExecutionOutcome, ExecutionSource,
     ExecutionStartedEvent, FinishReason, PermissionAction, PermissionMode, PermissionRepliedEvent,
-    PermissionReplyKind, PermissionRiskLevel, PermissionScope, Role, RunAbortReason, TimeRange,
+    PermissionReplyKind, PermissionScope, Role, RunAbortReason, TimeRange,
     UserInputReplyKind,
 };
 use agena_domain::{ExecutionStatus, MessageSource};

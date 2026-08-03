@@ -620,42 +620,76 @@ pub(crate) fn permission_prompt_content(
 ) -> agena_tui::permission_prompt::PermissionPromptContent {
     use agena_tui::permission_prompt::{PermissionPromptContent, PermissionPromptLine};
 
+    // Overview shows only what is needed to decide: the action, the reason
+    // auto-approval did not resolve (or why approval is requested), and the
+    // risk. Everything else lives behind the Details page.
     let mut overview = Vec::new();
-    append_prompt_primary_action(i18n, &mut overview, &request.action);
-    let requested_actions = permission_requested_actions_for_display(
-        Some(&request.action),
-        request.requested_actions.as_slice(),
-    );
-    append_prompt_secondary_actions(
+
+    // One-line action, strong. Full per-field expansion moves to Details.
+    overview.push(PermissionPromptLine::strong(permission_action_label(
+        i18n,
+        &request.action,
+    )));
+
+    // Secondary actions that also need approval this call. Keep it to a
+    // single summary line in Overview; the exact list is in Details.
+    let requested_actions =
+        permission_requested_actions_for_display(Some(&request.action), &request.requested_actions);
+    let requested_extra = requested_actions.len();
+    if requested_extra > 0 {
+        overview.push(PermissionPromptLine::muted(i18n.text_args(
+            "overlay-permission-summary-more-approvals",
+            &agena_tui::fl_args!("count" => requested_extra as i64),
+        )));
+    }
+
+    // The primary reason to ask. Prefer `reason` (which carries the concrete
+    // auto-approval failure); fall back to the policy explanation only when
+    // no reason is present.
+    let reason = permission_request_reason(request);
+    append_prompt_field(
         i18n,
         &mut overview,
-        "overlay-permission-requested-actions",
-        requested_actions.as_slice(),
+        "overlay-permission-field-reason",
+        reason,
+        PromptFieldTone::Normal,
     );
+
+    // Details carries everything that is not needed to decide.
+    let mut details = Vec::new();
+
+    // Full primary action fields (tool / target / path / workspace / network).
+    details.push(PermissionPromptLine::strong(permission_action_label(
+        i18n,
+        &request.action,
+    )));
+    append_prompt_primary_action(i18n, &mut details, &request.action);
+
+    // Requested actions (still need approval) vs related (already allowed).
+    let requested_actions =
+        permission_requested_actions_for_display(Some(&request.action), &request.requested_actions);
+    if !requested_actions.is_empty() {
+        details.push(PermissionPromptLine::muted(i18n.text(
+            "overlay-permission-detail-requested-actions",
+        )));
+        details.extend(requested_actions.iter().map(|action| {
+            PermissionPromptLine::normal(format!("  {}", permission_action_label(i18n, action)))
+        }));
+    }
     let related_actions = permission_related_actions_for_display(
         Some(&request.action),
         request.related_actions.as_slice(),
         request.requested_actions.as_slice(),
     );
-    append_prompt_secondary_actions(
-        i18n,
-        &mut overview,
-        "overlay-permission-related-actions",
-        related_actions.as_slice(),
-    );
-    append_prompt_field(
-        i18n,
-        &mut overview,
-        "overlay-permission-field-reason",
-        permission_request_explanation(request),
-        PromptFieldTone::Normal,
-    );
-    overview.push(PermissionPromptLine::muted(i18n.text_args(
-        "overlay-permission-fact-risk",
-        &agena_tui::fl_args!("value" => permission_risk_label(i18n, request.risk)),
-    )));
+    if !related_actions.is_empty() {
+        details.push(PermissionPromptLine::muted(i18n.text(
+            "overlay-permission-detail-related-actions",
+        )));
+        details.extend(related_actions.iter().map(|action| {
+            PermissionPromptLine::muted(format!("  {}", permission_action_label(i18n, action)))
+        }));
+    }
 
-    let mut details = Vec::new();
     append_prompt_field(
         i18n,
         &mut details,
@@ -700,6 +734,18 @@ pub(crate) fn permission_prompt_content(
     }
 
     PermissionPromptContent { overview, details }
+}
+
+/// The primary reason shown to the user. `reason` is authoritative: it carries
+/// the concrete auto-approval failure or policy reason. `explanation` (the
+/// policy decision trace summary) is only a fallback so a bare policy Ask does
+/// not render an empty field.
+fn permission_request_reason(request: &PermissionRequest) -> &str {
+    let reason = request.reason.trim();
+    if !reason.is_empty() {
+        return reason;
+    }
+    request.explanation.trim()
 }
 
 #[derive(Clone, Copy)]
@@ -836,15 +882,6 @@ fn append_prompt_field(
     });
 }
 
-fn permission_request_explanation(request: &PermissionRequest) -> &str {
-    let explanation = request.explanation.trim();
-    if explanation.is_empty() {
-        request.reason.trim()
-    } else {
-        explanation
-    }
-}
-
 fn permission_request_scope_label(i18n: &I18n, scope: PermissionScope) -> String {
     ui_text::t(
         i18n,
@@ -852,18 +889,6 @@ fn permission_request_scope_label(i18n: &I18n, scope: PermissionScope) -> String
             PermissionScope::Session => "value-session",
             PermissionScope::Workspace => "value-workspace",
             PermissionScope::Global => "value-global",
-        },
-    )
-}
-
-fn permission_risk_label(i18n: &I18n, risk: agena_domain::PermissionRiskLevel) -> String {
-    ui_text::t(
-        i18n,
-        match risk {
-            agena_domain::PermissionRiskLevel::Low => "value-risk-low",
-            agena_domain::PermissionRiskLevel::Medium => "value-risk-medium",
-            agena_domain::PermissionRiskLevel::High => "value-risk-high",
-            agena_domain::PermissionRiskLevel::Critical => "value-risk-critical",
         },
     )
 }

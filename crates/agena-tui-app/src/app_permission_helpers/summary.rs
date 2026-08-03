@@ -83,12 +83,6 @@ pub(crate) fn permission_resource_override_summary(
                 })),
             ));
         }
-        if !tools.capabilities.is_empty() {
-            labels.push(i18n.text_args(
-                "value-tag-count",
-                &agena_tui::fl_args!("count" => tools.capabilities.len() as i64),
-            ));
-        }
         if !tools.names.is_empty() {
             labels.push(i18n.text_args(
                 "value-name-count",

@@ -1,4 +1,4 @@
-use crate::{DecisionTraceStep, PermissionMode, PermissionRiskLevel, PermissionScope};
+use crate::{DecisionTraceStep, PermissionMode, PermissionScope};
 
 /// The outcome of evaluating a permission policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +45,6 @@ pub struct PermissionResolution {
     pub decision: PermissionDecision,
     pub source: PermissionResolutionSource,
     pub explanation: String,
-    pub risk: PermissionRiskLevel,
     pub trace: Vec<DecisionTraceStep>,
 }
 

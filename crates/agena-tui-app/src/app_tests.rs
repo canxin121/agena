@@ -19,7 +19,7 @@ mod interactive_request_visibility_tests {
 
     use agena_api::resource::{
         PendingInteractiveRequest, PendingInteractiveRequestResource, PermissionActionResource,
-        PermissionRequest, PermissionRiskLevel, UserInputRequest,
+        PermissionRequest, UserInputRequest,
     };
     use chrono::Utc;
 
@@ -45,7 +45,6 @@ mod interactive_request_visibility_tests {
                     source: Some("static_policy".to_owned()),
                     scope: None,
                     operator: None,
-                    risk: PermissionRiskLevel::Medium,
                     trace: Vec::new(),
                     created_at: Utc::now(),
                 },

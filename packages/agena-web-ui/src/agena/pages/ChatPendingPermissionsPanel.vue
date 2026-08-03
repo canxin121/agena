@@ -5,7 +5,6 @@ import type { PermissionActionView } from '@/agena/lib/permissionFormatting'
 const props = defineProps<{
   requests: PermissionRequest[]
   permissionActionView: (action: Record<string, unknown>) => PermissionActionView
-  permissionRiskLabel: (risk?: string | null, action?: Record<string, unknown>) => string
   permissionExplainability: (value: {
     source?: string | null
     scope?: 'session' | 'workspace' | 'global' | null
@@ -34,7 +33,6 @@ const props = defineProps<{
         </div>
         <div class="muted mono">request_id={{ request.request_id }}</div>
         <div class="muted">{{ request.reason }}</div>
-        <div class="muted">risk={{ props.permissionRiskLabel(request.risk, request.action) }}</div>
         <div v-if="request.explanation" class="muted">{{ request.explanation }}</div>
         <div v-if="request.trace?.length" class="muted mono">
           {{ request.trace.map((step) => step.summary).join(' · ') }}

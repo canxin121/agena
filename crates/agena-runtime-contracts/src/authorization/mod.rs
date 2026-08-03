@@ -53,6 +53,16 @@ pub fn validate_permission_config(config: &PermissionConfig) -> Result<(), Permi
     let _ = apply_to_permission_policy(config, PermissionPolicy::allow_all())?;
     let _ = apply_to_network_permission_policy(config, NetworkPermissionPolicy::allow_all())?;
     let _ = apply_to_tool_permission_policy(config, ToolPermissionPolicy::allow_all())?;
+    if config
+        .tools
+        .as_ref()
+        .is_some_and(|tools| tools.declared_tags_present)
+    {
+        tracing::warn!(
+            target: "agena::permission",
+            "permission.tools.tags is no longer honored: tool permission modes are configured by `tools.names`, `tools.rules`, or `tools.default`; the declared tags were ignored"
+        );
+    }
     Ok(())
 }
 
@@ -156,13 +166,6 @@ pub fn apply_tool_permission_config(
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
     if let Some(mode) = value.default {
         base.default_mode = mode;
-    }
-    for (capability, mode) in &value.capabilities {
-        let capability = capability.trim();
-        if capability.is_empty() {
-            continue;
-        }
-        base.capability_modes.insert(capability.to_string(), *mode);
     }
     for (tool_name, mode) in value.names.iter().chain(value.plugin.iter()) {
         let name = tool_name.trim();
@@ -528,16 +531,18 @@ mod permission_ceiling_tests {
             PermissionDecision::Allow,
             "the built-in workspace read default must not open an approval request"
         );
-        assert_eq!(
-            principal.authorize_tool_contract(
-                "agena.fs.read",
-                &ToolPermissionContract {
-                    read_only: true,
-                    ..ToolPermissionContract::default()
-                },
+        assert!(
+            matches!(
+                principal.authorize_tool_contract(
+                    "agena.fs.read",
+                    &ToolPermissionContract {
+                        read_only: true,
+                        ..ToolPermissionContract::default()
+                    },
+                ),
+                PermissionDecision::Allow
             ),
-            PermissionDecision::Allow,
-            "filesystem read tools must remain allowed without any tag coupling"
+            "ordinary execution tools default to allow; their effects are already governed by path/network/shell policies"
         );
     }
 

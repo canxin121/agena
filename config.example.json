@@ -76,18 +76,6 @@
       "rules": {
         "github.com": "allow"
       }
-    },
-    "tools": {
-      "tags": {
-        "filesystem_read": "allow",
-        "filesystem_write": "auto",
-        "settings_read": "allow",
-        "settings_write": "auto",
-        "network": "auto",
-        "internet": "auto",
-        "task": "auto",
-        "shell": "auto"
-      }
     }
   }
 }

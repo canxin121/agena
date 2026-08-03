@@ -91,16 +91,6 @@ pub enum PermissionAction {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionRiskLevel {
-    Low,
-    #[default]
-    Medium,
-    High,
-    Critical,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PolicySourceKind {
@@ -130,11 +120,10 @@ pub struct DecisionTrace {
 
 #[cfg(test)]
 mod tests {
-    use super::{PermissionAction, PermissionRiskLevel};
+    use super::PermissionAction;
 
     #[test]
     fn permission_request_values_have_stable_wire_shapes() {
-        assert_eq!(PermissionRiskLevel::default(), PermissionRiskLevel::Medium);
         assert_eq!(
             serde_json::to_string(&PermissionAction::NetworkAccess {
                 target: "https://example.com".to_owned(),

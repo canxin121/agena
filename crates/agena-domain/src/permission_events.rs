@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DecisionTraceStep, PermissionAction, PermissionReplyKind, PermissionRiskLevel};
+use crate::{DecisionTraceStep, PermissionAction, PermissionReplyKind};
 use crate::{PolicyDeniedResult, UserDeclinedResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -23,8 +23,6 @@ pub struct PermissionRequestedEvent {
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator: Option<String>,
-    #[serde(default)]
-    pub risk: PermissionRiskLevel,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trace: Vec<DecisionTraceStep>,
     pub ts_ms: i64,

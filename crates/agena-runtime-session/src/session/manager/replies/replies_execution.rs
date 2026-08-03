@@ -8,7 +8,7 @@ use super::{
     ToolInvocationExecution, ToolPermissionCheck, Utc, append_resolved_message_part,
     ask_user_title, assistant_message_for_part, build_message, build_request_part,
     completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
-    max_permission_risk, operation_authorization, operation_blocks_from_tool_output,
+    operation_authorization, operation_blocks_from_tool_output,
     pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
     permission_scope_label, push_unique_permission_action, resolve_pending_tool,
     responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
@@ -19,8 +19,8 @@ use crate::session::prompt_window;
 use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
-    PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionRiskLevel,
-    PermissionScope, PolicySourceKind, Role, RunAbortReason,
+    PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionScope,
+    PolicySourceKind, Role, RunAbortReason,
 };
 use tracing::Instrument;
 
@@ -987,7 +987,6 @@ impl SessionManager {
                 request.source,
                 request.scope,
                 request.operator,
-                request.risk,
                 request.trace,
                 state.clone(),
             ))
@@ -1453,7 +1452,6 @@ impl SessionManager {
                     request.source,
                     request.scope,
                     request.operator,
-                    request.risk,
                     request.trace,
                     state,
                 ))
@@ -1766,11 +1764,8 @@ impl SessionManager {
                             candidate.policy_reason
                         )),
                     },
-                    Err(()) => PermissionDecision::Ask {
-                        reason: format!(
-                            "automatic approval classifier unavailable; falling back to confirmation: {}",
-                            candidate.policy_reason
-                        ),
+                    Err(failure) => PermissionDecision::Ask {
+                        reason: format!("automatic approval unavailable: {failure}"),
                     },
                 };
                 decisions.push((action, resolution, true));
@@ -1831,7 +1826,6 @@ impl SessionManager {
                         };
                     if let Some(existing) = denial.as_mut() {
                         push_unique_permission_action(&mut existing.denied_actions, action.clone());
-                        existing.risk = max_permission_risk(existing.risk, resolution.risk);
                         existing.trace.extend(resolution.trace);
                     } else {
                         denial = Some(agena_domain::PolicyDeniedResult {
@@ -1846,7 +1840,6 @@ impl SessionManager {
                             authority,
                             rule_id,
                             rule_revision_ms,
-                            risk: resolution.risk,
                             trace: resolution.trace,
                         });
                     }
@@ -1866,7 +1859,6 @@ impl SessionManager {
                     };
 
                     if let Some(existing) = primary_request.as_mut() {
-                        existing.risk = max_permission_risk(existing.risk, resolution.risk);
                         existing.trace.extend(resolution.trace);
                     } else {
                         primary_request = Some(AggregatedPermissionRequest {
@@ -1878,7 +1870,6 @@ impl SessionManager {
                             source,
                             scope,
                             operator,
-                            risk: resolution.risk,
                             trace: resolution.trace,
                         });
                     }
@@ -1920,7 +1911,6 @@ impl SessionManager {
         source: Option<String>,
         scope: Option<PermissionScope>,
         operator: Option<String>,
-        risk: PermissionRiskLevel,
         trace: Vec<DecisionTraceStep>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
@@ -1937,7 +1927,6 @@ impl SessionManager {
             source,
             scope,
             operator,
-            risk,
             trace,
             state,
         )
@@ -1958,7 +1947,6 @@ impl SessionManager {
         source: Option<String>,
         scope: Option<PermissionScope>,
         operator: Option<String>,
-        risk: PermissionRiskLevel,
         trace: Vec<DecisionTraceStep>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
@@ -1998,7 +1986,6 @@ impl SessionManager {
             source,
             scope,
             operator,
-            risk,
             trace: trace.clone(),
             created_at: Utc::now(),
         };
@@ -2033,7 +2020,6 @@ impl SessionManager {
                 source: request.source.clone(),
                 scope: request.scope.map(permission_scope_label),
                 operator: request.operator.clone(),
-                risk: request.risk,
                 trace,
                 ts_ms: Utc::now().timestamp_millis(),
             })]

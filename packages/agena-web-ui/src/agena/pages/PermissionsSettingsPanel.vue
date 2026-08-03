@@ -29,11 +29,10 @@ type SectionId =
   | 'filesystem-path-rules'
   | 'network-zones'
   | 'network-domain-rules'
-  | 'entry-tag-rules'
   | 'entry-name-rules'
   | 'entry-command-rules'
 
-type SimpleRuleKind = 'path' | 'domain' | 'tag' | 'name'
+type SimpleRuleKind = 'path' | 'domain' | 'name'
 type DialogMode = 'add' | 'edit' | 'duplicate' | 'delete'
 
 type SimpleRuleRow = {
@@ -82,7 +81,6 @@ const saving = ref(false)
 
 const selectedPathRuleKey = ref('')
 const selectedDomainRuleKey = ref('')
-const selectedTagRuleKey = ref('')
 const selectedNameRuleKey = ref('')
 const selectedCommandEntry = ref('')
 const selectedCommandPattern = ref('')
@@ -143,13 +141,6 @@ const domainRuleRows = computed<SimpleRuleRow[]>(() =>
   })),
 )
 
-const tagRuleRows = computed<SimpleRuleRow[]>(() =>
-  Object.entries(draft.entries.tags).map(([key, access]) => ({
-    key,
-    access,
-  })),
-)
-
 const nameRuleRows = computed<SimpleRuleRow[]>(() =>
   Object.entries(draft.entries.names).map(([key, access]) => ({
     key,
@@ -166,7 +157,6 @@ const selectedPathRule = computed(() => pathRuleRows.value.find((row) => row.key
 const selectedDomainRule = computed(
   () => domainRuleRows.value.find((row) => row.key === selectedDomainRuleKey.value) ?? null,
 )
-const selectedTagRule = computed(() => tagRuleRows.value.find((row) => row.key === selectedTagRuleKey.value) ?? null)
 const selectedNameRule = computed(() => nameRuleRows.value.find((row) => row.key === selectedNameRuleKey.value) ?? null)
 const selectedCommandRule = computed(
   () => commandRuleRowsForSelectedEntry.value.find((row) => row.pattern === selectedCommandPattern.value) ?? null,
@@ -215,10 +205,6 @@ const overviewSections = computed(() => [
     title: 'Entry Access',
     rows: [
       {
-        label: 'tag rules',
-        value: String(overviewCounts.value.tagRules),
-      },
-      {
         label: 'name rules',
         value: String(overviewCounts.value.nameRules),
       },
@@ -255,15 +241,6 @@ watch(
   (rows) =>
     syncSelection(
       selectedDomainRuleKey,
-      rows.map((row) => row.key),
-    ),
-  { immediate: true },
-)
-watch(
-  tagRuleRows,
-  (rows) =>
-    syncSelection(
-      selectedTagRuleKey,
       rows.map((row) => row.key),
     ),
   { immediate: true },
@@ -314,8 +291,6 @@ function sectionTitle(section: SectionId) {
       return 'Network / Network Zones'
     case 'network-domain-rules':
       return 'Network / Domain Rules'
-    case 'entry-tag-rules':
-      return 'Entry Access / Tag Rules'
     case 'entry-name-rules':
       return 'Entry Access / Name Rules'
     case 'entry-command-rules':
@@ -329,8 +304,6 @@ function simpleRuleTitle(kind: SimpleRuleKind) {
       return 'Path Rule'
     case 'domain':
       return 'Domain Rule'
-    case 'tag':
-      return 'Tag Rule'
     case 'name':
       return 'Name Rule'
   }
@@ -342,8 +315,6 @@ function simpleRuleKeyLabel(kind: SimpleRuleKind) {
       return 'Path'
     case 'domain':
       return 'Domain'
-    case 'tag':
-      return 'Tag'
     case 'name':
       return 'Entry'
   }
@@ -355,8 +326,6 @@ function simpleRulePlaceholder(kind: SimpleRuleKind) {
       return 'docs/**'
     case 'domain':
       return 'api.openai.com'
-    case 'tag':
-      return 'read_only'
     case 'name':
       return 'web.search'
   }
@@ -373,8 +342,6 @@ function simpleRuleMap(model: PermissionEditorModel, kind: SimpleRuleKind) {
       return model.path.rules
     case 'domain':
       return model.network.rules
-    case 'tag':
-      return model.entries.tags
     case 'name':
       return model.entries.names
   }
@@ -386,8 +353,6 @@ function simpleRuleRows(kind: SimpleRuleKind) {
       return pathRuleRows.value
     case 'domain':
       return domainRuleRows.value
-    case 'tag':
-      return tagRuleRows.value
     case 'name':
       return nameRuleRows.value
   }
@@ -399,8 +364,6 @@ function simpleRuleSelection(kind: SimpleRuleKind) {
       return selectedPathRuleKey.value
     case 'domain':
       return selectedDomainRuleKey.value
-    case 'tag':
-      return selectedTagRuleKey.value
     case 'name':
       return selectedNameRuleKey.value
   }
@@ -414,9 +377,6 @@ function setSimpleRuleSelection(kind: SimpleRuleKind, key: string) {
     case 'domain':
       selectedDomainRuleKey.value = key
       return
-    case 'tag':
-      selectedTagRuleKey.value = key
-      return
     case 'name':
       selectedNameRuleKey.value = key
   }
@@ -428,8 +388,6 @@ function selectedSimpleRule(kind: SimpleRuleKind) {
       return selectedPathRule.value
     case 'domain':
       return selectedDomainRule.value
-    case 'tag':
-      return selectedTagRule.value
     case 'name':
       return selectedNameRule.value
   }
@@ -804,15 +762,6 @@ function changeSection(section: SectionId) {
             <div class="permission-nav-group-title">Entry Access</div>
             <button
               class="permission-nav-item nested"
-              :class="{ active: activeSection === 'entry-tag-rules' }"
-              :disabled="isBusy"
-              type="button"
-              @click="changeSection('entry-tag-rules')"
-            >
-              Tag Rules
-            </button>
-            <button
-              class="permission-nav-item nested"
               :class="{ active: activeSection === 'entry-name-rules' }"
               :disabled="isBusy"
               type="button"
@@ -1149,79 +1098,6 @@ function changeSection(section: SectionId) {
                 :disabled="simpleActionButtonsDisabled('domain')"
                 type="button"
                 @click="openSimpleDeleteDialog('domain')"
-              >
-                Delete
-              </button>
-            </div>
-          </section>
-
-          <section v-else-if="activeSection === 'entry-tag-rules'" class="permission-section-card">
-            <div class="permission-section-title-row">
-              <h3 class="permission-section-title">{{ sectionTitle('entry-tag-rules') }}</h3>
-            </div>
-
-            <div class="table-shell">
-              <table class="permission-table">
-                <thead>
-                  <tr>
-                    <th class="permission-table-select">&nbsp;</th>
-                    <th class="permission-table-key">Tag</th>
-                    <th>Access</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="row in tagRuleRows"
-                    :key="row.key"
-                    :class="{ selected: selectedTagRuleKey === row.key }"
-                    @click="selectedTagRuleKey = row.key"
-                  >
-                    <td class="permission-table-select">{{ selectedTagRuleKey === row.key ? '>' : '' }}</td>
-                    <td class="permission-table-key mono">{{ row.key }}</td>
-                    <td>
-                      <select
-                        v-model="draft.entries.tags[row.key]"
-                        :disabled="isBusy"
-                        class="select permission-select"
-                        @click.stop
-                        @change="saveCurrentDraft"
-                      >
-                        <option value="allow">Allow</option>
-                        <option value="auto">Auto</option>
-                        <option value="ask">Ask</option>
-                        <option value="deny">Deny</option>
-                      </select>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="permission-actions">
-              <button class="button" :disabled="isBusy" type="button" @click="openSimpleRuleDialog('tag', 'add')">
-                Add
-              </button>
-              <button
-                class="button"
-                :disabled="simpleActionButtonsDisabled('tag')"
-                type="button"
-                @click="openSimpleRuleDialog('tag', 'edit')"
-              >
-                Edit
-              </button>
-              <button
-                class="button"
-                :disabled="simpleActionButtonsDisabled('tag')"
-                type="button"
-                @click="openSimpleRuleDialog('tag', 'duplicate')"
-              >
-                Duplicate
-              </button>
-              <button
-                class="button"
-                :disabled="simpleActionButtonsDisabled('tag')"
-                type="button"
-                @click="openSimpleDeleteDialog('tag')"
               >
                 Delete
               </button>

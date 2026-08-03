@@ -14,7 +14,7 @@ mod tests {
 
     use agena_domain::{
         ExecutionStatus, FinishReason, PermissionAction, PermissionDecision, PermissionReplyKind,
-        PermissionRiskLevel, StructuredObject, TimeRange, UserInputQuestion, UserInputReplyKind,
+        StructuredObject, TimeRange, UserInputQuestion, UserInputReplyKind,
     };
     use chrono::Utc;
     use sea_orm::{ConnectionTrait, Database, Statement};
@@ -1004,7 +1004,6 @@ mod tests {
                     Some("static_policy".to_owned()),
                     None,
                     None,
-                    PermissionRiskLevel::Medium,
                     Vec::new(),
                     manager.execution_state(),
                 )
@@ -1180,7 +1179,6 @@ mod tests {
                 Some("static_policy".to_owned()),
                 None,
                 None,
-                PermissionRiskLevel::Medium,
                 Vec::new(),
                 manager.execution_state(),
             )
@@ -1486,7 +1484,6 @@ mod tests {
                 Some("static_policy".to_owned()),
                 None,
                 None,
-                PermissionRiskLevel::Medium,
                 Vec::new(),
                 manager.execution_state(),
             )
@@ -2945,7 +2942,6 @@ mod tests {
                 Some("static_policy".to_string()),
                 None,
                 None,
-                PermissionRiskLevel::Medium,
                 Vec::new(),
                 manager.execution_state(),
             )

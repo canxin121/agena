@@ -61,9 +61,7 @@ pub fn decide_sync(
             // Denial budget: stop burning model calls after repeated denials.
             if budget.exceeded() {
                 return SyncOutcome::Final(PermissionDecision::Ask {
-                    reason: format!(
-                        "automatic approval denial budget exceeded; falling back to confirmation: {reason}"
-                    ),
+                    reason: "automatic approval disabled after repeated denials".to_owned(),
                 });
             }
             SyncOutcome::Classifier(ClassifierCandidate {

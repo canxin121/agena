@@ -6,8 +6,7 @@
 
 use agena_domain::{
     DecisionTraceStep, PermissionDecision, PermissionMode, PermissionResolution,
-    PermissionResolutionSource, PermissionRiskLevel, PermissionScope, PolicySourceKind,
-    decide_from_mode,
+    PermissionResolutionSource, PermissionScope, PolicySourceKind, decide_from_mode,
 };
 
 /// Host-agnostic view of one stored permission rule.
@@ -29,7 +28,6 @@ pub fn apply_rules(base: &PermissionDecision, rules: &[RuleEntry]) -> Permission
         return PermissionResolution {
             explanation: explanation.clone(),
             source: PermissionResolutionSource::StaticPolicy,
-            risk: risk_for_decision(base),
             decision: base.clone(),
             trace: vec![DecisionTraceStep {
                 source_kind: PolicySourceKind::StaticPolicy,
@@ -78,7 +76,6 @@ pub fn apply_rules(base: &PermissionDecision, rules: &[RuleEntry]) -> Permission
         return PermissionResolution {
             explanation: static_policy_explanation(base),
             source: PermissionResolutionSource::StaticPolicy,
-            risk: risk_for_decision(&decision),
             decision,
             trace,
         };
@@ -94,7 +91,6 @@ pub fn apply_rules(base: &PermissionDecision, rules: &[RuleEntry]) -> Permission
             reason: effective_rule.reason.clone(),
             operator: effective_rule.operator.clone(),
         },
-        risk: risk_for_decision(&decision),
         decision,
         trace,
     }
@@ -106,16 +102,6 @@ fn static_policy_explanation(decision: &PermissionDecision) -> String {
         PermissionDecision::Auto { reason } => reason.clone(),
         PermissionDecision::Ask { reason } => reason.clone(),
         PermissionDecision::Deny { reason } => reason.clone(),
-    }
-}
-
-fn risk_for_decision(decision: &PermissionDecision) -> PermissionRiskLevel {
-    match decision {
-        PermissionDecision::Allow => PermissionRiskLevel::Low,
-        PermissionDecision::Auto { .. } | PermissionDecision::Ask { .. } => {
-            PermissionRiskLevel::Medium
-        }
-        PermissionDecision::Deny { .. } => PermissionRiskLevel::High,
     }
 }
 

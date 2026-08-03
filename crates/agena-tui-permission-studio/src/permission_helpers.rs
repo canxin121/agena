@@ -63,10 +63,6 @@ pub fn permission_studio_mode_target_value(
             .network
             .as_ref()
             .and_then(|network| network.rules.get(target.as_str()).copied()),
-        PermissionStudioModeTarget::ToolCapability { key } => permission
-            .tools
-            .as_ref()
-            .and_then(|tools| tools.capabilities.get(key.as_str()).copied()),
         PermissionStudioModeTarget::ToolName { key } => permission
             .tools
             .as_ref()
@@ -125,37 +121,6 @@ pub fn path_rule_summary(i18n: &I18n, rule: Option<&PathAccessRuleConfig>) -> St
     path_rule_modes(rule)
         .map(|modes| path_access_modes_summary(i18n, Some(&modes)))
         .unwrap_or_else(|| i18n.text("value-custom"))
-}
-
-pub fn tool_permission_rules_summary(i18n: &I18n, rules: Option<&ToolPermissionRules>) -> String {
-    let Some(rules) = rules else {
-        return i18n.text("value-unset");
-    };
-    match rules {
-        ToolPermissionRules::Mode(mode) => permission_mode_label(i18n, *mode),
-        ToolPermissionRules::Ordered(entries) => {
-            let fallback = entries.get("*").copied();
-            let qualifier_count = entries
-                .keys()
-                .filter(|pattern| pattern.as_str() != "*")
-                .count();
-            let mut parts = Vec::new();
-            if let Some(mode) = fallback {
-                parts.push(permission_mode_label(i18n, mode));
-            }
-            if qualifier_count > 0 {
-                parts.push(i18n.text_args(
-                    "value-rule-count",
-                    &agena_tui::fl_args!("count" => qualifier_count as i64),
-                ));
-            }
-            if parts.is_empty() {
-                i18n.text("value-custom")
-            } else {
-                join_inline_segments(parts)
-            }
-        }
-    }
 }
 
 pub fn parse_permission_studio_optional_mode_input(
@@ -240,18 +205,6 @@ pub fn rename_network_rule(permission: &mut PermissionConfig, from: &str, to: &s
     };
     if let Some(mode) = network.rules.shift_remove(from) {
         network.rules.insert(to.to_string(), mode);
-    }
-}
-
-pub fn rename_tool_capability(permission: &mut PermissionConfig, from: &str, to: &str) {
-    if from == to {
-        return;
-    }
-    let Some(tools) = permission.tools.as_mut() else {
-        return;
-    };
-    if let Some(mode) = tools.capabilities.remove(from) {
-        tools.capabilities.insert(to.to_string(), mode);
     }
 }
 

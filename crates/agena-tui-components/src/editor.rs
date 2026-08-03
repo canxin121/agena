@@ -161,7 +161,15 @@ impl Editor {
         let lines = split_editor_lines_with_offsets(self.text.as_str());
         let current_line_index = self.current_line_index();
         let current_col = self.current_display_column();
-        let hscroll = current_col.saturating_sub(width.saturating_sub(1));
+        // Scroll only once the cursor moves past the last visible column.
+        // Keeping the window at column 0 while the text (or the cursor at the
+        // end of an exactly-fitting line) still fits avoids hiding the leading
+        // characters: e.g. "abcd" in a 4-column input must not show "bcd".
+        let hscroll = if current_col > width {
+            current_col.saturating_sub(width.saturating_sub(1))
+        } else {
+            0
+        };
         let vscroll = current_line_index.saturating_sub(height.saturating_sub(1));
         let visible_lines = lines
             .iter()
@@ -172,7 +180,7 @@ impl Editor {
                     self.text.as_str(),
                     range.clone(),
                     hscroll,
-                    width,
+                    hscroll.saturating_add(width),
                     self.elements.as_slice(),
                 )
             })
@@ -180,7 +188,10 @@ impl Editor {
 
         EditorView {
             lines: visible_lines,
-            cursor_x: min(current_col.saturating_sub(hscroll), u16::MAX as usize) as u16,
+            cursor_x: min(
+                min(current_col.saturating_sub(hscroll), width.saturating_sub(1)),
+                u16::MAX as usize,
+            ) as u16,
             cursor_y: min(
                 current_line_index.saturating_sub(vscroll),
                 u16::MAX as usize,
@@ -225,7 +236,7 @@ impl Editor {
                     self.text.as_str(),
                     line.range.clone(),
                     line.start_column,
-                    width,
+                    line.end_column,
                     self.elements.as_slice(),
                 )
             })
@@ -251,6 +262,81 @@ impl Editor {
 
     pub fn insert_explicit_newline(&mut self) {
         self.insert_newline();
+    }
+
+    /// Move the cursor up one soft-wrapped visual row. Unlike `move_up`
+    /// (which jumps between explicit `\n` logical lines), this walks the same
+    /// wrap boundaries used by `render_wrapped_view` so long prompts can be
+    /// edited row by row. `width` must match the editor viewport width.
+    pub fn move_visual_up(&mut self, width: u16) {
+        let cursor_column = self.current_display_column();
+        let target_col = self.preferred_column.unwrap_or(cursor_column);
+        let lines = wrapped_editor_lines(self.text.as_str(), width);
+        let Some(visual_index) =
+            visual_row_index_for_cursor(&lines, self.current_line_index(), cursor_column)
+        else {
+            return;
+        };
+        if visual_index == 0 {
+            // Already on the first visual row: land on the head of the
+            // current logical line (matching the existing first-line
+            // behavior of the non-wrapped `move_up`).
+            let bol = self.current_line_start();
+            self.cursor = self.clamp_pos_to_nearest_boundary(bol);
+            self.preferred_column = None;
+            return;
+        }
+        let previous = &lines[visual_index - 1];
+        if previous.logical_line_index != self.current_line_index() {
+            // Crossing into the previous logical line: prefer its head so the
+            // transition is deterministic instead of jumping to an arbitrary
+            // wrapped column.
+            let prev_bol = self.beginning_of_line(previous.range.start);
+            self.cursor = self.clamp_pos_to_nearest_boundary(prev_bol);
+            self.preferred_column = None;
+            return;
+        }
+        let line_text = &self.text[previous.range.clone()];
+        self.cursor = byte_index_at_display_column(
+            line_text,
+            previous.range.start,
+            target_col.saturating_sub(previous.start_column),
+        );
+        self.cursor = self.clamp_pos_to_nearest_boundary(self.cursor);
+        self.preferred_column = Some(target_col);
+    }
+
+    /// Move the cursor down one soft-wrapped visual row. See `move_visual_up`.
+    pub fn move_visual_down(&mut self, width: u16) {
+        let cursor_column = self.current_display_column();
+        let target_col = self.preferred_column.unwrap_or(cursor_column);
+        let lines = wrapped_editor_lines(self.text.as_str(), width);
+        let Some(visual_index) =
+            visual_row_index_for_cursor(&lines, self.current_line_index(), cursor_column)
+        else {
+            return;
+        };
+        let Some(next) = lines.get(visual_index + 1) else {
+            // Last visual row: land on the tail of the current logical line.
+            let eol = self.current_line_end();
+            self.cursor = self.clamp_pos_to_nearest_boundary(eol);
+            self.preferred_column = None;
+            return;
+        };
+        if next.logical_line_index != self.current_line_index() {
+            let next_bol = self.beginning_of_line(next.range.start);
+            self.cursor = self.clamp_pos_to_nearest_boundary(next_bol);
+            self.preferred_column = None;
+            return;
+        }
+        let line_text = &self.text[next.range.clone()];
+        self.cursor = byte_index_at_display_column(
+            line_text,
+            next.range.start,
+            target_col.saturating_sub(next.start_column),
+        );
+        self.cursor = self.clamp_pos_to_nearest_boundary(self.cursor);
+        self.preferred_column = Some(target_col);
     }
 
     pub fn cursor_on_first_line(&self) -> bool {
@@ -897,17 +983,35 @@ fn wrapped_editor_lines(text: &str, width: u16) -> Vec<WrappedEditorLine> {
         .into_iter()
         .enumerate()
     {
-        let display_width = UnicodeWidthStr::width(&text[range.clone()]);
-        let row_count = display_width.max(1).div_ceil(width);
-        for row_index in 0..row_count {
-            let start_column = row_index.saturating_mul(width);
-            lines.push(WrappedEditorLine {
-                range: range.clone(),
-                logical_line_index,
-                start_column,
-                end_column: start_column.saturating_add(width),
-            });
+        let line_text = &text[range.clone()];
+        // Rows are placed by grapheme display width, not by an arithmetic
+        // `row_index * width`. A wide (CJK / emoji) grapheme that would
+        // straddle a wrap boundary is pushed onto the next row so it never
+        // overflows the requested width or offsets the cursor. Each row keeps
+        // the absolute start/end display column of its content.
+        let mut start_column = 0_usize;
+        let mut column = 0_usize;
+        for (_, grapheme) in line_text.grapheme_indices(true) {
+            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            let row_width = column.saturating_sub(start_column);
+            if row_width > 0 && row_width.saturating_add(grapheme_width) > width {
+                lines.push(WrappedEditorLine {
+                    range: range.clone(),
+                    logical_line_index,
+                    start_column,
+                    end_column: column,
+                });
+                start_column = column;
+            }
+            column = column.saturating_add(grapheme_width);
         }
+        // The final (possibly empty) row of the logical line.
+        lines.push(WrappedEditorLine {
+            range: range.clone(),
+            logical_line_index,
+            start_column,
+            end_column: column,
+        });
     }
     lines
 }
@@ -940,18 +1044,54 @@ fn byte_index_at_display_column(line: &str, offset: usize, target_column: usize)
     offset + line.len()
 }
 
+/// Map a cursor position to the index of the visual (soft-wrapped) row that
+/// holds the cursor within the wrapped line set for a logical line. The
+/// cursor is expressed as an absolute byte offset into the buffer; the cursor
+/// column is the display column of the cursor within its logical line.
+///
+/// Returns `None` when the logical line has no rows (empty buffer), which
+/// callers treat as "no row to move within".
+fn visual_row_index_for_cursor(
+    lines: &[WrappedEditorLine],
+    logical_line_index: usize,
+    cursor_column: usize,
+) -> Option<usize> {
+    // Only rows belonging to the requested logical line are candidates; a
+    // wrapped line's `start_column`/`end_column` are absolute within that
+    // logical line, so we can compare directly against the cursor column.
+    let mut index = 0_usize;
+    for (row_index, row) in lines.iter().enumerate() {
+        if row.logical_line_index != logical_line_index {
+            continue;
+        }
+        if row.end_column == 0 {
+            // Empty row (empty logical line): the cursor sits on it.
+            return Some(row_index);
+        }
+        if cursor_column >= row.start_column && cursor_column < row.end_column {
+            return Some(row_index);
+        }
+        index = row_index;
+    }
+    // The cursor is at or past the last row's end column.
+    if lines.iter().any(|row| row.logical_line_index == logical_line_index) {
+        Some(index)
+    } else {
+        None
+    }
+}
+
 fn slice_display_window_styled(
     text: &str,
     range: Range<usize>,
     start_column: usize,
-    width: usize,
+    end_column: usize,
     elements: &[EditorElement],
 ) -> Line<'static> {
-    if width == 0 {
+    if end_column <= start_column {
         return Line::default();
     }
 
-    let end_column = start_column.saturating_add(width);
     let line_text = &text[range.clone()];
     let mut current_column = 0_usize;
     let mut current_style: Option<Style> = None;
@@ -1055,6 +1195,78 @@ mod tests {
         assert_eq!(editor.wrapped_line_count(4), 2);
         let view = editor.render_wrapped_view(4, 2);
         assert_eq!(view.lines.len(), 2);
+    }
+
+    #[test]
+    fn wrapped_view_breaks_before_a_wide_char_that_crosses_the_boundary() {
+        // "abc你" is 5 display columns wide; at width 4 the CJK char wraps
+        // onto its own row because it cannot straddle the 4-column boundary.
+        let editor = Editor::from_text("abc你".to_string());
+
+        assert_eq!(editor.wrapped_line_count(4), 2);
+        let view = editor.render_wrapped_view(4, 8);
+        let lines = view
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(lines, ["abc", "你"]);
+    }
+
+    #[test]
+    fn wrapped_view_places_the_cursor_after_a_wrapped_wide_char() {
+        // Cursor at the end of "abc你" (display column 5). The terminal wraps
+        // 你 onto row 1 at columns 0-1, so the cursor must sit at column 2 of
+        // row 1, not at column 1 of an overflowing row 0.
+        let mut editor = Editor::from_text("abc你".to_string());
+        editor.set_cursor(editor.text().len());
+        let view = editor.render_wrapped_view(4, 8);
+        assert_eq!((view.cursor_x, view.cursor_y), (2, 1));
+    }
+
+    #[test]
+    fn single_line_view_does_not_scroll_when_the_text_fits_exactly() {
+        // "abcd" is exactly as wide as the viewport; the cursor at the end
+        // must not push the window right and hide the leading character.
+        let mut editor = Editor::from_text("abcd".to_string());
+        editor.set_cursor(editor.text().len());
+        let view = editor.render_view(4, 1);
+        let text = view
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(text, ["abcd"]);
+        assert_eq!((view.cursor_x, view.cursor_y), (3, 0));
+    }
+
+    #[test]
+    fn single_line_view_scrolls_only_when_the_cursor_passes_the_width() {
+        let mut editor = Editor::from_text("abcdef".to_string());
+        editor.set_cursor(editor.text().len());
+        let view = editor.render_view(4, 1);
+        let text = view
+            .lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(text, ["def"]);
+        assert_eq!((view.cursor_x, view.cursor_y), (3, 0));
     }
 
     #[test]

@@ -496,7 +496,7 @@ mod tests {
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
         CustomActivity, OperationActivity, OperationActivityError, OperationAuthorization,
         OperationPermission, PermissionAction, PermissionReply, PermissionReplyKind,
-        PermissionRequest, PermissionRiskLevel, ResourceActivity, SkillReferenceActivity,
+        PermissionRequest, ResourceActivity, SkillReferenceActivity,
         StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
     };
     use agena_failure::{
@@ -633,7 +633,6 @@ mod tests {
                                             source: Some("static_policy".to_owned()),
                                             scope: None,
                                             operator: None,
-                                            risk: PermissionRiskLevel::Medium,
                                             trace: Vec::new(),
                                             created_at: Utc::now(),
                                         },

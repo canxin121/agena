@@ -12,10 +12,6 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub struct ToolPermissionPolicy {
     pub(crate) default_mode: PermissionMode,
-    /// Modes keyed by tool capability (`read_only`, `shell`, `interactive`,
-    /// `task`). Capabilities are authority-bearing; tool tags are metadata
-    /// and never consulted by the policy engine.
-    pub(crate) capability_modes: HashMap<String, PermissionMode>,
     pub(crate) tool_modes: HashMap<String, PermissionMode>,
     pub(crate) bash_pattern_rules: Vec<BashPatternRule>,
     pub(crate) bash_deny_rules: Vec<BashPatternRule>,
@@ -190,7 +186,6 @@ impl ToolPermissionPolicy {
     pub fn new(default_mode: PermissionMode) -> Self {
         Self {
             default_mode,
-            capability_modes: HashMap::new(),
             tool_modes: HashMap::new(),
             bash_pattern_rules: Vec::new(),
             bash_deny_rules: Vec::new(),
@@ -257,8 +252,16 @@ impl ToolPermissionPolicy {
     fn check_tool_mode_with_names(
         &self,
         names: &[&str],
-        contract: &ToolPermissionContract,
+        _contract: &ToolPermissionContract,
     ) -> PermissionDecision {
+        // A precise tool-name rule wins; otherwise the default applies. The
+        // default for ordinary execution tools is Allow: most tools are safe
+        // because their effects are already constrained by the path, network,
+        // and shell-command policies. Ask/Deny remain for the cases that need
+        // them (interactive tools, destructive shell commands, users who opt
+        // into stricter tool gating). The `shell` and `interactive` contract
+        // flags are never used as a proxy for the default — only configured
+        // rules and `tools.default` decide.
         if let Some((matched_name, mode)) = names.iter().find_map(|name| {
             self.tool_modes
                 .get(*name)
@@ -267,20 +270,8 @@ impl ToolPermissionPolicy {
         }) {
             return self.decision_for_mode(matched_name, mode);
         }
-        let mode = self
-            .capability_modes
-            .iter()
-            .filter_map(|(key, mode)| {
-                if capability_matches(key, contract) {
-                    Some(*mode)
-                } else {
-                    None
-                }
-            })
-            .reduce(combine_permission_modes)
-            .unwrap_or(self.default_mode);
         let name = names.first().copied().unwrap_or("tool");
-        self.decision_for_mode(name, mode)
+        self.decision_for_mode(name, self.default_mode)
     }
 
     fn decision_for_mode(&self, name: &str, mode: PermissionMode) -> PermissionDecision {
@@ -387,22 +378,6 @@ impl ToolPermissionPolicy {
 
 fn is_shell_tool(names: &[&str], contract: &ToolPermissionContract) -> bool {
     names.contains(&"bash") || contract.shell
-}
-
-/// Whether a capability key from configuration matches a tool's permission
-/// contract. A tool matches a key when it carries the capability flag (e.g.
-/// `read_only`) or, for `path_scoped`, when it is scoped to declared paths.
-fn capability_matches(key: &str, contract: &ToolPermissionContract) -> bool {
-    match key {
-        "read_only" => contract.read_only && !contract.shell && !contract.interactive,
-        "shell" => contract.shell,
-        "interactive" => contract.interactive,
-        "task" => contract.task,
-        "path_scoped" => {
-            !contract.input_paths.is_empty() || !contract.path_access.is_empty()
-        }
-        _ => false,
-    }
 }
 
 pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> PermissionMode {

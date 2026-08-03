@@ -4,7 +4,6 @@ import {
   permissionActionView,
   permissionExplainability,
   permissionReplyPreview,
-  permissionRiskLabel,
 } from '@/agena/lib/permissionFormatting'
 import type {
   PermissionRequest,
@@ -106,7 +105,6 @@ const pendingPermissions = computed(() => pendingPermissionRequests(props.sessio
           </div>
           <div class="muted mono">request_id={{ request.request_id }}</div>
           <div class="muted">{{ request.reason }}</div>
-          <div class="muted">risk={{ permissionRiskLabel(request.risk, request.action) }}</div>
           <div v-if="request.explanation" class="muted">{{ request.explanation }}</div>
           <div v-if="request.trace?.length" class="muted mono">
             {{ request.trace.map((step) => step.summary).join(' · ') }}

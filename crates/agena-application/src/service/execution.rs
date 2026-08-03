@@ -569,16 +569,6 @@ pub(crate) fn pending_interactive_request_from_domain(
                     source: request.source,
                     scope: request.scope.map(permission_scope_from_domain),
                     operator: request.operator,
-                    risk: match request.risk {
-                        agena_domain::PermissionRiskLevel::Low => wire::PermissionRiskLevel::Low,
-                        agena_domain::PermissionRiskLevel::Medium => {
-                            wire::PermissionRiskLevel::Medium
-                        }
-                        agena_domain::PermissionRiskLevel::High => wire::PermissionRiskLevel::High,
-                        agena_domain::PermissionRiskLevel::Critical => {
-                            wire::PermissionRiskLevel::Critical
-                        }
-                    },
                     trace: request
                         .trace
                         .into_iter()
@@ -740,11 +730,6 @@ pub fn permission_config_resource_from_domain(
             .as_ref()
             .map(|tools| ToolPermissionConfigResource {
                 default: tools.default.map(permission_mode_resource_from_domain),
-                capabilities: tools
-                    .capabilities
-                    .iter()
-                    .map(|(name, mode)| (name.clone(), permission_mode_resource_from_domain(*mode)))
-                    .collect(),
                 names: tools
                     .names
                     .iter()

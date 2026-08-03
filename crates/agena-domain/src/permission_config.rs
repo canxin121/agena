@@ -60,8 +60,12 @@ impl PermissionConfig {
                 ..Default::default()
             }),
             tools: Some(ToolPermissionConfig {
-                default: Some(auto),
-                capabilities: BTreeMap::from([("read_only".to_string(), PermissionMode::Allow)]),
+                // Ordinary execution tools default to Allow: their effects are
+                // already constrained by the path, network, and shell-command
+                // policies. Ask/Deny are opt-in per tool name or via the shell
+                // command pattern table. Web fetch/search are allowlisted
+                // because network policy already governs their targets.
+                default: Some(PermissionMode::Allow),
                 names: BTreeMap::from([
                     ("agena.web.search".to_string(), PermissionMode::Allow),
                     ("agena.web.fetch".to_string(), PermissionMode::Allow),

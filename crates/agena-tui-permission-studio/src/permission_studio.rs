@@ -40,7 +40,6 @@ pub enum PermissionStudioSectionId {
     PathRules,
     NetworkZones,
     NetworkRules,
-    ToolCapabilities,
     ToolNames,
     ToolCommandRules,
 }
@@ -52,7 +51,6 @@ pub enum PermissionStudioPage {
     PathRules,
     NetworkZones,
     NetworkRules,
-    ToolCapabilities,
     ToolNames,
     ToolCommandRules,
 }
@@ -119,11 +117,11 @@ pub fn nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem> {
         ),
         nav_item(
             i18n,
-            "permission-studio-nav-capability-rules",
-            1,
-            PermissionStudioPage::ToolCapabilities,
-            Some(PermissionStudioSectionId::ToolCapabilities),
-            true,
+            "permission-studio-nav-tool-access",
+            0,
+            PermissionStudioPage::ToolNames,
+            Some(PermissionStudioSectionId::ToolNames),
+            false,
         ),
         nav_item(
             i18n,
@@ -168,8 +166,7 @@ pub fn nav_index_for_page(page: &PermissionStudioPage) -> usize {
         PermissionStudioPage::PathRules => 3,
         PermissionStudioPage::NetworkZones => 5,
         PermissionStudioPage::NetworkRules => 6,
-        PermissionStudioPage::ToolCapabilities => 8,
-        PermissionStudioPage::ToolNames => 9,
+        PermissionStudioPage::ToolNames => 8,
         PermissionStudioPage::ToolCommandRules => 10,
     }
 }

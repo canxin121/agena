@@ -10,11 +10,6 @@ pub(crate) fn apply_permission_studio_entries_mode(
 ) {
     let tools = permission.tools.get_or_insert_with(Default::default);
     match kind {
-        PermissionStudioCatalogKind::ToolCapabilities => {
-            for entry in entries {
-                tools.capabilities.insert(entry, mode);
-            }
-        }
         PermissionStudioCatalogKind::ToolNames => {
             for entry in entries {
                 tools.names.insert(entry, mode);
@@ -44,7 +39,6 @@ impl App {
             }
             PermissionStudioPage::PathRules => PermissionStudioEditorAction::AddPathRule,
             PermissionStudioPage::NetworkRules => PermissionStudioEditorAction::AddNetworkRule,
-            PermissionStudioPage::ToolCapabilities => PermissionStudioEditorAction::AddToolCapability,
             PermissionStudioPage::ToolNames => {
                 self.open_permission_studio_catalog_selector(
                     dialog,
@@ -64,12 +58,6 @@ impl App {
     ) {
         let catalog = self.backend.permission_tool_catalog();
         let existing = match kind {
-            PermissionStudioCatalogKind::ToolCapabilities => dialog
-                .permission
-                .tools
-                .as_ref()
-                .map(|tools| tools.capabilities.keys().cloned().collect::<BTreeSet<_>>())
-                .unwrap_or_default(),
             PermissionStudioCatalogKind::ToolNames => dialog
                 .permission
                 .tools
@@ -78,21 +66,6 @@ impl App {
                 .unwrap_or_default(),
         };
         let mut items = match kind {
-            // Capabilities are a fixed set of authority-bearing contract
-            // keys; there is no tool-derived catalog for them.
-            PermissionStudioCatalogKind::ToolCapabilities => [
-                "read_only", "shell", "interactive", "task", "path_scoped",
-            ]
-            .into_iter()
-            .filter(|key| !existing.contains(*key))
-            .map(|key| ChoiceItem {
-                label: key.to_string(),
-                detail: String::new(),
-                value: key.to_string(),
-                search_text: key.to_string(),
-                current: false,
-            })
-            .collect::<Vec<_>>(),
             PermissionStudioCatalogKind::ToolNames => catalog
                 .into_iter()
                 .filter(|tool| !existing.contains(tool.name.as_str()))
@@ -219,31 +192,6 @@ impl App {
                     ConfirmAction::PermissionStudioDeleteNetworkRule { target },
                 )
             }
-            PermissionStudioPage::ToolCapabilities => {
-                let Some(key) = selected_action.and_then(|action| match action {
-                    PermissionStudioAction::EditMode(
-                        PermissionStudioModeTarget::ToolCapability { key },
-                    ) => Some(key),
-                    _ => None,
-                }) else {
-                    self.flash_warning(ui_text::t(
-                        &self.i18n,
-                        "flash-permission-studio-no-selection",
-                    ));
-                    return;
-                };
-                (
-                    ui_text::t(&self.i18n, "overlay-permission-studio-delete-title"),
-                    vec![self.i18n.text_args(
-                        "overlay-permission-studio-delete-body",
-                        &agena_tui::fl_args!(
-                            "kind" => ui_text::t(&self.i18n, "permission-studio-page-tags"),
-                            "value" => key.clone(),
-                        ),
-                    )],
-                    ConfirmAction::PermissionStudioDeleteToolCapability { key },
-                )
-            }
             PermissionStudioPage::ToolNames => {
                 let Some(key) = selected_action.and_then(|action| match action {
                     PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName {
@@ -347,15 +295,6 @@ impl App {
         self.delete_permission_studio_config(move |permission| {
             if let Some(network) = permission.network.as_mut() {
                 network.rules.shift_remove(target.as_str());
-            }
-        });
-    }
-
-    pub(crate) fn delete_permission_studio_tool_capability(&mut self, key: &str) {
-        let key = key.to_string();
-        self.delete_permission_studio_config(move |permission| {
-            if let Some(tools) = permission.tools.as_mut() {
-                tools.capabilities.remove(key.as_str());
             }
         });
     }

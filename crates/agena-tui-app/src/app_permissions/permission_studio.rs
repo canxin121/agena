@@ -131,9 +131,6 @@ impl App {
             PermissionStudioAction::EditMode(PermissionStudioModeTarget::NetworkRule {
                 target,
             }) => PermissionStudioTextTarget::NetworkRuleTarget { target },
-            PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolCapability { key }) => {
-                PermissionStudioTextTarget::ToolCapabilityKey { key }
-            }
             PermissionStudioAction::EditMode(PermissionStudioModeTarget::ToolName { key }) => {
                 PermissionStudioTextTarget::ToolNameKey { key }
             }
@@ -185,9 +182,6 @@ impl App {
                     PermissionStudioPage::PathRules => Some(PermissionStudioSectionId::PathRules),
                     PermissionStudioPage::NetworkRules => {
                         Some(PermissionStudioSectionId::NetworkRules)
-                    }
-                    PermissionStudioPage::ToolCapabilities => {
-                        Some(PermissionStudioSectionId::ToolCapabilities)
                     }
                     PermissionStudioPage::ToolNames => Some(PermissionStudioSectionId::ToolNames),
                     PermissionStudioPage::ToolCommandRules => {
@@ -250,25 +244,6 @@ impl App {
                     PermissionStudioFocus::Items,
                 );
             }
-            PermissionStudioEditorAction::AddToolCapability => {
-                let key = parse_permission_studio_key_input(
-                    &self.i18n,
-                    ui_text::t(&self.i18n, "permission-studio-field-tool-tags").as_str(),
-                    input.as_str(),
-                )
-                .map_err(crate::UiFailure::message)?;
-                self.set_permission_studio_page_with_section(
-                    dialog,
-                    PermissionStudioPage::ToolCapabilities,
-                    Some(PermissionStudioSectionId::ToolCapabilities),
-                    PermissionStudioFocus::Items,
-                );
-                self.open_permission_studio_add_entries_mode(
-                    PermissionStudioCatalogKind::ToolCapabilities,
-                    vec![key],
-                    false,
-                );
-            }
             PermissionStudioEditorAction::AddToolName => {
                 let key = parse_permission_studio_key_input(
                     &self.i18n,
@@ -295,6 +270,16 @@ impl App {
                     input.as_str(),
                 )
                 .map_err(crate::UiFailure::message)?;
+                if !matches!(
+                    tool_name.as_str(),
+                    "shell" | "bash" | "agena.shell.run" | "agena.process.run"
+                ) {
+                    self.flash_warning(ui_text::t(
+                        &self.i18n,
+                        "permission-studio-command-rules-shell-only",
+                    ));
+                    return Ok(());
+                }
                 let mut permission = dialog.permission.clone();
                 let rule = ToolPermissionRules::Mode(PermissionMode::Auto);
                 permission

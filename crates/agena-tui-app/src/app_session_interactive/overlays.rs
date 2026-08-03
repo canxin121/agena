@@ -106,6 +106,7 @@ impl App {
                 &self.i18n, &request,
             )),
             request,
+            auto_approve: None,
         }
     }
 
@@ -590,18 +591,6 @@ fn permission_request_from_wire(
         source: value.source,
         scope: value.scope.map(permission_scope_from_wire),
         operator: value.operator,
-        risk: match value.risk {
-            agena_api::resource::PermissionRiskLevel::Low => agena_domain::PermissionRiskLevel::Low,
-            agena_api::resource::PermissionRiskLevel::Medium => {
-                agena_domain::PermissionRiskLevel::Medium
-            }
-            agena_api::resource::PermissionRiskLevel::High => {
-                agena_domain::PermissionRiskLevel::High
-            }
-            agena_api::resource::PermissionRiskLevel::Critical => {
-                agena_domain::PermissionRiskLevel::Critical
-            }
-        },
         trace: value
             .trace
             .into_iter()

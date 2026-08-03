@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DecisionTraceStep, PermissionAction, PermissionRiskLevel, PermissionScope};
+use crate::{DecisionTraceStep, PermissionAction, PermissionScope};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -34,8 +34,6 @@ pub struct PolicyDeniedResult {
     pub rule_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_revision_ms: Option<i64>,
-    #[serde(default)]
-    pub risk: PermissionRiskLevel,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trace: Vec<DecisionTraceStep>,
 }

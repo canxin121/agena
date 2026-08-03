@@ -19,9 +19,9 @@ pub mod rules;
 pub use auto::{
     AUTO_APPROVAL_CLASSIFY_TIMEOUT, AUTO_APPROVAL_SYSTEM_PROMPT,
     AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS, AUTO_DENY_GUIDANCE, AutoApprovalClient,
-    AutoApprovalError, ClassifierRequest, DenialBudget, build_classifier_action_message,
-    build_classifier_context_message, build_classifier_user_prompt, classifier_json_schema,
-    deny_reason, parse_classifier_verdict,
+    AutoApprovalError, ClassifierRequest, ClassifyFailure, DenialBudget,
+    build_classifier_action_message, build_classifier_context_message,
+    build_classifier_user_prompt, classifier_json_schema, deny_reason, parse_classifier_verdict,
 };
 pub use pipeline::{ClassifierCandidate, DecisionContext, SyncOutcome, decide_sync};
 pub use rules::{RuleEntry, apply_rules};

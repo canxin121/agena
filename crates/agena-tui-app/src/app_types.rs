@@ -13,6 +13,7 @@ use agena_api::{
 };
 use agena_domain::ModelRef;
 use agena_domain::PermissionMode;
+use agena_domain::PermissionReplyKind;
 use agena_domain::UsagePeriod;
 use agena_domain::UsageStats;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -442,6 +443,7 @@ pub(super) enum AppMessage {
     PermissionReplied {
         session_id: i64,
         request_id: String,
+        kind: PermissionReplyKind,
         label: String,
         result: UiResult<SessionExecutionResource>,
     },

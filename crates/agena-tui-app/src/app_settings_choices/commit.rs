@@ -270,14 +270,7 @@ impl App {
                 if wants_custom {
                     self.open_permission_studio_creator(
                         &mut parent,
-                        match kind {
-                            PermissionStudioCatalogKind::ToolCapabilities => {
-                                PermissionStudioEditorAction::AddToolCapability
-                            }
-                            PermissionStudioCatalogKind::ToolNames => {
-                                PermissionStudioEditorAction::AddToolName
-                            }
-                        },
+                        PermissionStudioEditorAction::AddToolName,
                     );
                 }
                 self.restore_permission_studio_dialog(host, parent);
@@ -312,14 +305,7 @@ impl App {
                 if add_custom_after {
                     self.open_permission_studio_creator(
                         &mut parent,
-                        match kind {
-                            PermissionStudioCatalogKind::ToolCapabilities => {
-                                PermissionStudioEditorAction::AddToolCapability
-                            }
-                            PermissionStudioCatalogKind::ToolNames => {
-                                PermissionStudioEditorAction::AddToolName
-                            }
-                        },
+                        PermissionStudioEditorAction::AddToolName,
                     );
                 }
                 self.restore_permission_studio_dialog(host, parent);
@@ -386,7 +372,7 @@ fn choice_selection_value(selection: &agena_tui::choice::ChoiceSelection) -> Str
 use crate::{
     App, ChoiceOverlay, ChoiceOverlayAction, Editor, JsonValue, Overlay,
     PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionMode, PermissionRuleStudioChoiceField,
-    PermissionRuleSubjectKind, PermissionStudioCatalogKind, PermissionStudioEditorAction, Route,
+    PermissionRuleSubjectKind, PermissionStudioEditorAction, Route,
     SessionModelModeStep, SettingsFieldSpec, SettingsValueEditOverlay,
     apply_permission_studio_entries_mode, apply_permission_studio_mode_input, get_json_path,
     parse_settings_field_input, refresh_permission_rule_studio_dialog, setting_value_input_text,

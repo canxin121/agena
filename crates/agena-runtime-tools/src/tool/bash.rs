@@ -76,7 +76,6 @@ pub(super) fn prepare_command(
                     authority: agena_domain::PermissionAuthorityKind::PluginPolicy,
                     rule_id: None,
                     rule_revision_ms: None,
-                    risk: agena_domain::PermissionRiskLevel::High,
                     trace: vec![agena_domain::DecisionTraceStep {
                         source_kind: agena_domain::PolicySourceKind::PluginAdvice,
                         summary: format!("command-before hook denied execution: {reason}"),

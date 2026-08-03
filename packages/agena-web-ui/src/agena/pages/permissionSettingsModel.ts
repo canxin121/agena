@@ -18,7 +18,6 @@ export type PermissionEditorModel = {
     rules: Record<string, PermissionMode>
   }
   entries: {
-    tags: Record<string, PermissionMode>
     names: Record<string, PermissionMode>
     rules: Record<string, Record<string, PermissionMode>>
   }
@@ -35,7 +34,6 @@ export type PermissionEditorModel = {
 export type PermissionOverviewCounts = {
   pathRules: number
   networkRules: number
-  tagRules: number
   nameRules: number
   commandRules: number
 }
@@ -64,7 +62,6 @@ export function createPermissionEditorModel(): PermissionEditorModel {
       rules: {},
     },
     entries: {
-      tags: {},
       names: {},
       rules: {},
     },
@@ -104,7 +101,6 @@ export function normalizePermissionEditorModel(value: unknown): PermissionEditor
       rules: normalizeModeRecord(isRecord(root.network) ? root.network.rules : undefined),
     },
     entries: {
-      tags: normalizeModeRecord(isRecord(entriesRoot) ? entriesRoot.tags : undefined),
       names: normalizeModeRecord(isRecord(entriesRoot) ? entriesRoot.names : undefined),
       rules: normalizeCommandRules(isRecord(entriesRoot) ? entriesRoot.rules : undefined),
     },
@@ -123,7 +119,6 @@ export function summarizePermissionEditorModel(model: PermissionEditorModel): Pe
   return {
     pathRules: Object.keys(model.path.rules).length,
     networkRules: Object.keys(model.network.rules).length,
-    tagRules: Object.keys(model.entries.tags).length,
     nameRules: Object.keys(model.entries.names).length,
     commandRules: countCommandPatternRows(model.entries.rules),
   }
@@ -178,7 +173,6 @@ export function replacePermissionEditorModel(target: PermissionEditorModel, sour
   target.network.private = source.network.private
   target.network.loopback = source.network.loopback
   replaceRecord(target.network.rules, source.network.rules)
-  replaceRecord(target.entries.tags, source.entries.tags)
   replaceRecord(target.entries.names, source.entries.names)
   replaceRecord(target.entries.rules, source.entries.rules)
   target.approvalModel.providerId = source.approvalModel.providerId

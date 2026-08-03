@@ -20,3 +20,6 @@ packages/agena-vscode/dist/
 docs/tex/build/
 __pycache__/
 *.py[cod]
+
+# Local worktrees
+.claude/worktrees/

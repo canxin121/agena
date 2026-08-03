@@ -116,7 +116,7 @@ mod permission_path_display_tests {
 mod permission_overlay_presentation_tests {
     use super::{I18n, permission_prompt_content};
     use crate::{PermissionAction, PermissionRequest, PermissionScope};
-    use agena_domain::{DecisionTraceStep, PermissionRiskLevel, PolicySourceKind};
+    use agena_domain::{DecisionTraceStep, PolicySourceKind};
     use agena_tui::permission_prompt::{PermissionPromptLine, PermissionPromptPresentation};
     use chrono::Utc;
 
@@ -132,7 +132,6 @@ mod permission_overlay_presentation_tests {
             source: Some("static_policy".to_string()),
             scope: Some(PermissionScope::Workspace),
             operator: None,
-            risk: PermissionRiskLevel::Medium,
             trace: vec![DecisionTraceStep {
                 source_kind: PolicySourceKind::StaticPolicy,
                 source: Some("static_policy".to_string()),
@@ -153,7 +152,7 @@ mod permission_overlay_presentation_tests {
     }
 
     #[test]
-    fn overview_focuses_on_the_approved_target_and_hides_audit_noise() {
+    fn overview_focuses_on_the_action_and_reason_and_hides_audit_noise() {
         let i18n = I18n::default();
         let request = request(PermissionAction::Tool {
             tool_name: "tools_tags".to_string(),
@@ -162,16 +161,19 @@ mod permission_overlay_presentation_tests {
         let content = permission_prompt_content(&i18n, &request);
         let text = rendered(content.overview.as_slice());
 
+        // One-line action, primary reason, and risk only.
         assert!(text.contains("tools_tags"));
         assert!(text.contains("workspace=/repo"));
-        assert!(text.contains("The tool will update the current workspace."));
+        // `reason` is authoritative; the `explanation` moved behind Details.
+        assert!(text.contains("policy requires confirmation"));
+        assert!(!text.contains("The tool will update the current workspace."));
         assert!(!text.contains("call_sensitive_request"));
         assert!(!text.contains("static_policy"));
         assert!(!text.contains("99"));
     }
 
     #[test]
-    fn network_overview_shows_the_full_requested_url() {
+    fn overview_shows_concise_action_summary_while_details_carries_the_full_url() {
         let i18n = I18n::default();
         let request = request(PermissionAction::NetworkAccess {
             target: "https://api.example.test/v1/private?scope=write".to_string(),
@@ -179,10 +181,20 @@ mod permission_overlay_presentation_tests {
             port: Some(443),
         });
         let content = permission_prompt_content(&i18n, &request);
-        let text = rendered(content.overview.as_slice());
+        let overview = rendered(content.overview.as_slice());
+        let details = rendered(content.details.as_slice());
 
-        assert!(text.contains("https://api.example.test/v1/private?scope=write"));
-        assert!(text.contains("api.example.test:443"));
+        // Overview keeps the endpoint via the action summary.
+        assert!(overview.contains("https://api.example.test/v1/private?scope=write"));
+        // The host:port expansion lives in Details (locale-independent value).
+        assert!(details.contains("api.example.test:443"));
+        // The primary action is rendered twice only in Details (one-line summary
+        // + per-field expansion); overview carries just the one-line summary.
+        assert_eq!(
+            overview.matches("https://api.example.test/v1/private?scope=write").count(),
+            1,
+            "overview must not duplicate the endpoint across multiple fields"
+        );
     }
 
     #[test]

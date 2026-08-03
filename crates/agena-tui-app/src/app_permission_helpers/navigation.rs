@@ -92,7 +92,6 @@ pub(crate) fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage)
         | PermissionStudioPage::PathRules
         | PermissionStudioPage::NetworkZones
         | PermissionStudioPage::NetworkRules
-        | PermissionStudioPage::ToolCapabilities
         | PermissionStudioPage::ToolNames
         | PermissionStudioPage::ToolCommandRules => {
             ui_text::t(i18n, "overlay-permission-studio-footer-nested")
@@ -121,9 +120,6 @@ pub(crate) fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioP
         }
         PermissionStudioPage::NetworkRules => {
             ui_text::t(i18n, "permission-studio-page-network-rules")
-        }
-        PermissionStudioPage::ToolCapabilities => {
-            ui_text::t(i18n, "permission-studio-page-tags")
         }
         PermissionStudioPage::ToolNames => ui_text::t(i18n, "permission-studio-page-tool-names"),
         PermissionStudioPage::ToolCommandRules => {

@@ -63,16 +63,6 @@
       }
     },
     "tools": {
-      "tags": {
-        "filesystem_read": "allow",
-        "filesystem_write": "auto",
-        "settings_read": "allow",
-        "settings_write": "auto",
-        "network": "auto",
-        "internet": "auto",
-        "task": "auto",
-        "shell": "auto"
-      },
       "names": {
         "agena.shell.run": "auto",
         "agena.fs.apply_patch": "auto"
@@ -286,7 +276,9 @@
           "enabled": true,
           "models": {
             "gpt-5.5": {
-              "agena_tools": { "mode": "provider_protocol" }
+              "agena_tools": {
+                "mode": "provider_protocol"
+              }
             }
           }
         },
@@ -324,7 +316,9 @@
           "enabled": true,
           "models": {
             "claude-sonnet-4-6": {
-              "agena_tools": { "mode": "provider_protocol" }
+              "agena_tools": {
+                "mode": "provider_protocol"
+              }
             }
           }
         }
@@ -527,7 +521,9 @@
           "enabled": true,
           "models": {
             "gemini-2.5-pro": {
-              "agena_tools": { "mode": "provider_protocol" }
+              "agena_tools": {
+                "mode": "provider_protocol"
+              }
             }
           }
         }

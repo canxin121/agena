@@ -2,7 +2,7 @@
 //! in-workspace reads, managed project-state writes, and exact no-op shell
 //! commands are allowed without a model call.
 //!
-//! Read-only detection is capability-driven ([`ToolCapabilities::read_only`]),
+//! Read-only detection is contract-driven ([`ToolCapabilities::read_only`]),
 //! never tool-name allowlists and never tool tags, so MCP and future plugins
 //! are covered automatically.
 

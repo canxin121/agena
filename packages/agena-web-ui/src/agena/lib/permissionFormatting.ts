@@ -12,25 +12,6 @@ function readString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null
 }
 
-export function permissionRiskLabel(risk?: string | null, action?: Record<string, unknown>): string {
-  const normalizedRisk = readString(risk)
-  if (normalizedRisk) return normalizedRisk
-  const kind = action ? readString(action.kind) : null
-  if (!kind) return 'permission request'
-  const toolName = kind === 'tool' && action ? readString(action.tool_name) || '' : ''
-  if (kind === 'tool') {
-    return toolName === 'bash' || toolName === 'shell' ? 'medium' : 'medium'
-  }
-  if (kind === 'path_access') {
-    const accessKind = action ? readString(action.access_kind) || '' : ''
-    return accessKind === 'write' ? 'high' : 'medium'
-  }
-  if (kind === 'network_access') {
-    return 'high'
-  }
-  return 'permission request'
-}
-
 export function permissionRiskHint(action: Record<string, unknown>): string {
   const kind = readString(action.kind)
   if (kind === 'tool') {

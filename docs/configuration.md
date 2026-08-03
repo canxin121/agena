@@ -114,10 +114,10 @@ Permissions 分区只列出当前会话（存在时）、全局和工作区权�
 
 settings 工具不绕过权限系统：
 
-- 每次调用先按工具名和 `settings`、`settings_read` / `settings_write`、`filesystem_read` / `filesystem_write` 等 tag 计算 tool policy。
+- 每次调用先按工具名计算 tool policy（`permission.tools.names` / `permission.tools.rules`，无精确规则时使用 `permission.tools.default`）。
 - 随后按真实全局或工作区配置路径计算 path policy。读取 effective 快照会同时声明全局和工作区两个来源；分层验证同样读取两层。
 - 非 dry-run 的 `set/delete/patch` 对实际目标申请 write path，并对另一层申请 read path 以验证合并结果；dry-run 对两层都只申请 read path。默认全局配置位于 workspace 外，因此仍会按 external path policy 询问或拒绝。
-- 可以通过 `permission.tools.names."agena.settings.set"` 这类精确 tool-name 规则覆盖某个工具，也可以用 `permission.tools.tags.settings_read` / `settings_write` 做分组策略；path policy 仍然独立生效。
+- 可以通过 `permission.tools.names."agena.settings.set"` 这类精确 tool-name 规则覆盖某个工具；`permission.tools.tags` 已移除（tag 只是发现/UI 元数据，不再携带权限）；path policy 仍然独立生效。
 
 ## CLI 覆盖
 
@@ -1360,11 +1360,9 @@ deny
     },
     "tools": {
       "default": "auto",
-      "tags": {
-        "filesystem_read": "allow",
-        "filesystem_write": "auto",
-        "network": "auto",
-        "shell": "auto"
+      "names": {
+        "agena.web.search": "allow",
+        "agena.web.fetch": "allow"
       }
     },
     "approval_model": {
@@ -1512,11 +1510,6 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
   "permission": {
     "tools": {
       "default": "ask",
-      "tags": {
-        "filesystem_read": "allow",
-        "filesystem_write": "ask",
-        "network": "ask"
-      },
       "names": {
         "agena.shell.run": "ask",
         "agena.fs.read": "ask",
@@ -1537,7 +1530,7 @@ Network target 会先分到三类默认策略：`loopback` 匹配 `localhost`、
 }
 ```
 
-`tags` 用于 tool 没有精确规则时的默认策略。Tool 由 plugin manifest 声明自己的 tags，常见 tags 如 `filesystem_read`、`filesystem_write`、`network`、`internet`、`task`、`shell`。`names` 按 tool 名匹配；runtime-provided and user-configured plugin tools 使用同一个名字表。
+`default` 是工具没有精确规则时的默认策略。`names` 按 tool 名匹配；runtime-provided and user-configured plugin tools 使用同一个名字表。Tool 的 `tags`（plugin manifest 声明）只是发现/UI 元数据，不再携带任何权限，`permission.tools.tags` 已移除。
 
 `rules.<tool>` 可以直接写 mode，也可以写 pattern table。`shell` 的 pattern table 按实际 shell command 覆盖，`"*"` 是 fallback。其他 tool 使用直接 mode；需要 fallback 时也可以写 `rules.<tool>."*" = "ask"`。
 

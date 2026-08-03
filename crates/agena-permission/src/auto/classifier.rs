@@ -38,6 +38,41 @@ pub enum AutoApprovalError {
     Unavailable(String),
 }
 
+/// Why a classifier candidate could not be auto-approved and therefore
+/// fell back to an interactive `ask`. Surfaced verbatim in the fallback
+/// reason so a user can see exactly why automatic approval did not resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassifyFailure {
+    /// The configured approval model could not be resolved (missing provider,
+    /// adapter, or model in the registry, or an invalid model reference).
+    ApprovalModelUnavailable(String),
+    /// A model-mode override (thinking/speed) could not be applied.
+    ModeUnavailable(String),
+    /// The classifier request timed out.
+    Timeout,
+    /// The provider completion call itself failed.
+    Provider(String),
+    /// The classifier returned a verdict that could not be parsed.
+    UnparseableVerdict(String),
+}
+
+impl std::fmt::Display for ClassifyFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApprovalModelUnavailable(message) => {
+                write!(f, "automatic approval model is unavailable: {message}")
+            }
+            Self::ModeUnavailable(message) => write!(f, "auto-approval model mode is unavailable: {message}"),
+            Self::Timeout => write!(f, "automatic approval classifier timed out"),
+            Self::Provider(message) => write!(f, "automatic approval provider error: {message}"),
+            Self::UnparseableVerdict(text) => write!(
+                f,
+                "automatic approval classifier returned an unparseable verdict: {text}"
+            ),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait AutoApprovalClient: Send + Sync {
     /// Run the classifier and return the raw model text. The host owns model

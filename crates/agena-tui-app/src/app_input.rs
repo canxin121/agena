@@ -55,10 +55,9 @@ impl App {
             return;
         }
 
-        // In Transcript normal mode Ctrl+H is the previous-message motion.
-        // Keep Ctrl+H as contextual Help everywhere else (and while Help is
-        // already open, so the same chord still closes it).
-        if global_action == Some(KeyAction::Help) && !self.transcript_owns_ctrl_h(key) {
+        // Ctrl+H is the global contextual-help toggle: it opens help for the
+        // current interface, and closes it again while help is open.
+        if global_action == Some(KeyAction::Help) {
             self.toggle_context_help();
             return;
         }
@@ -189,14 +188,6 @@ impl App {
         self.transcript_viewport_pending = false;
         self.transcript_find_pending = None;
         self.transcript_text_object_pending = None;
-    }
-
-    fn transcript_owns_ctrl_h(&self, key: KeyEvent) -> bool {
-        self.focus == Focus::Transcript
-            && self.current_route_is_main()
-            && self.overlay.is_none()
-            && self.context_help.is_none()
-            && resolve_tui_key(KeyContext::Transcript, key) == Some(KeyAction::PreviousMessage)
     }
 
     /// In INSERT mode, Ctrl+C clears an actual Composer draft. A blank

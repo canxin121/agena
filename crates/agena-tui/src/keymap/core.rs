@@ -38,14 +38,8 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             _ => None,
         },
         KeyContext::Transcript => match key.code {
-            K::Char('h') if only_ctrl(key) => Some(A::PreviousMessage),
-            // Legacy terminals often encode Ctrl+H as an unmodified BS
-            // control character instead of a modifier-bearing `h` event.
-            K::Char('\u{0008}') if unmodified(key) => Some(A::PreviousMessage),
-            K::Backspace if only_ctrl(key) => Some(A::PreviousMessage),
-            K::Char('l') if only_ctrl(key) => Some(A::NextMessage),
-            // Likewise Ctrl+L may arrive as a raw form-feed control byte.
-            K::Char('\u{000c}') if unmodified(key) => Some(A::NextMessage),
+            K::Char('k') if only_ctrl(key) => Some(A::PreviousMessage),
+            K::Char('j') if only_ctrl(key) => Some(A::NextMessage),
             K::Char(digit @ '1'..='9') if unmodified(key) => {
                 Some(A::CountDigit(digit as u8 - b'0'))
             }
@@ -91,10 +85,15 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::PageUp if unmodified(key) => Some(A::PageUp),
             K::Char('b') if only_ctrl(key) => Some(A::PageUp),
             K::PageDown if unmodified(key) => Some(A::PageDown),
+            K::Char('f') if only_ctrl(key) => Some(A::PageDown),
             K::Char(' ') if only_shift(key) => Some(A::PageUp),
             K::Char(' ') if unmodified(key) => Some(A::PageDown),
             K::Char('u') if only_ctrl(key) => Some(A::HalfPageUp),
             K::Char('d') if only_ctrl(key) => Some(A::HalfPageDown),
+            K::Char('e') if only_ctrl(key) => Some(A::ScrollLineDown),
+            K::Char('y') if only_ctrl(key) => Some(A::ScrollLineUp),
+            K::Char('o') if only_ctrl(key) => Some(A::JumpBackward),
+            K::Char('i') if only_ctrl(key) => Some(A::JumpForward),
             _ => None,
         },
         KeyContext::Composer => match key.code {

@@ -5,7 +5,7 @@ use crate::commands::CommandSpec;
 use super::{
     ComposerDraft, I18n, MathRenderContext, ModelRef, RenderedTranscript, SessionExecutionResource,
     SessionLoadScope, TranscriptDetailDefaults, TranscriptInteraction, TranscriptNodeKey,
-    TranscriptViewport,
+    TranscriptTextPosition, TranscriptViewport,
 };
 #[cfg(test)]
 use agena_api::resource::MessageResource;
@@ -183,6 +183,11 @@ pub(crate) struct TranscriptState {
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,
     pub(crate) search_match_index: Option<usize>,
+    /// Vim-style jump list for `Ctrl+O`/`Ctrl+I`. Each entry records where a
+    /// large navigation jump started so the user can return to it.
+    pub(crate) jump_history: Vec<TranscriptTextPosition>,
+    /// Index of the current position inside [`Self::jump_history`].
+    pub(crate) jump_history_index: usize,
     pub(crate) execution: Option<SessionExecutionResource>,
     pub(crate) last_event_seq: Option<i64>,
     pub(crate) detail_expanded_by_default: TranscriptDetailDefaults,

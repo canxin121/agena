@@ -156,6 +156,10 @@ pub enum KeyAction {
     PageDown,
     HalfPageUp,
     HalfPageDown,
+    ScrollLineUp,
+    ScrollLineDown,
+    JumpBackward,
+    JumpForward,
     Home,
     End,
     GotoPrefix,
@@ -402,35 +406,92 @@ mod tests {
     }
 
     #[test]
-    fn transcript_reserves_ctrl_h_and_ctrl_l_for_message_jumps() {
+    fn transcript_reserves_ctrl_k_and_ctrl_j_for_message_jumps() {
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('k'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::PreviousMessage)
+        );
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('j'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::NextMessage)
+        );
+        // Ctrl+H/L are no longer bound to message jumps in the transcript.
         assert_eq!(
             resolve(
                 KeyContext::Transcript,
                 key(KeyCode::Char('h'), KeyModifiers::CONTROL)
             ),
-            Some(KeyAction::PreviousMessage)
+            None
         );
         assert_eq!(
             resolve(
                 KeyContext::Transcript,
                 key(KeyCode::Char('l'), KeyModifiers::CONTROL)
             ),
-            Some(KeyAction::NextMessage)
+            None
+        );
+    }
+
+    #[test]
+    fn transcript_registers_vim_paging_scroll_and_jump_history_keys() {
+        // Ctrl+F joins PageDown as the Vim forward-page chord.
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('f'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::PageDown)
+        );
+        // Ctrl+E/Y scroll the viewport one line without moving the cursor.
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('e'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::ScrollLineDown)
         );
         assert_eq!(
             resolve(
                 KeyContext::Transcript,
-                key(KeyCode::Char('\u{0008}'), KeyModifiers::NONE)
+                key(KeyCode::Char('y'), KeyModifiers::CONTROL)
             ),
-            Some(KeyAction::PreviousMessage)
+            Some(KeyAction::ScrollLineUp)
+        );
+        // Ctrl+O/I step through the transcript position history.
+        assert_eq!(
+            resolve(
+                KeyContext::Transcript,
+                key(KeyCode::Char('o'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::JumpBackward)
         );
         assert_eq!(
             resolve(
                 KeyContext::Transcript,
-                key(KeyCode::Char('\u{000c}'), KeyModifiers::NONE)
+                key(KeyCode::Char('i'), KeyModifiers::CONTROL)
             ),
-            Some(KeyAction::NextMessage)
+            Some(KeyAction::JumpForward)
         );
+        // The same letters keep their plain Vim meanings without Ctrl.
+        for (code, action) in [
+            (KeyCode::Char('f'), KeyAction::FindForward),
+            (KeyCode::Char('e'), KeyAction::WordEnd),
+            (KeyCode::Char('y'), KeyAction::Copy),
+            (KeyCode::Char('o'), KeyAction::SwapVisualEndpoint),
+            (KeyCode::Char('i'), KeyAction::EnterInsert),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::Transcript, key(code, KeyModifiers::NONE)),
+                Some(action),
+                "{code:?} should keep its plain Transcript Vim mapping",
+            );
+        }
     }
 
     #[test]

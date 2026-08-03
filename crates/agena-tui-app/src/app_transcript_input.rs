@@ -232,6 +232,26 @@ impl App {
                 self.transcript
                     .move_cursor_by_half_page(width, height, true);
             }
+            Some(KeyAction::ScrollLineUp) => {
+                self.clear_transcript_pending_command();
+                let count = self.transcript_motion_count();
+                self.transcript
+                    .scroll_viewport_by_lines(width, height, false, count);
+            }
+            Some(KeyAction::ScrollLineDown) => {
+                self.clear_transcript_pending_command();
+                let count = self.transcript_motion_count();
+                self.transcript
+                    .scroll_viewport_by_lines(width, height, true, count);
+            }
+            Some(KeyAction::JumpBackward) => {
+                self.clear_transcript_pending_command();
+                self.transcript.jump_backward(width, height);
+            }
+            Some(KeyAction::JumpForward) => {
+                self.clear_transcript_pending_command();
+                self.transcript.jump_forward(width, height);
+            }
             _ => self.clear_transcript_pending_command(),
         }
     }

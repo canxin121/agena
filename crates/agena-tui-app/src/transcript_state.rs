@@ -46,6 +46,8 @@ impl TranscriptState {
             interaction: TranscriptInteraction::default(),
             search_query: String::new(),
             search_match_index: None,
+            jump_history: Vec::new(),
+            jump_history_index: 0,
             execution: None,
             last_event_seq: None,
             detail_expanded_by_default,
@@ -77,6 +79,8 @@ impl TranscriptState {
         self.last_event_seq = None;
         self.search_query.clear();
         self.search_match_index = None;
+        self.jump_history.clear();
+        self.jump_history_index = 0;
         self.node_expansions.clear();
         self.invalidate_render();
     }
@@ -213,6 +217,7 @@ impl TranscriptState {
             return;
         }
 
+        self.push_jump_mark(width);
         let anchor_line = self.interaction_line().unwrap_or(self.viewport.top);
         let next_index = match (self.search_match_index, forward) {
             (None, direction) => {
@@ -698,7 +703,7 @@ impl TranscriptState {
     }
 
     /// Jump directly to the adjacent message. This is intentionally separate
-    /// from block navigation so `Ctrl+H`/`Ctrl+L` always skip exactly one
+    /// from block navigation so `Ctrl+K`/`Ctrl+J` always skip exactly one
     /// message, independent of the number of Markdown or activity blocks it
     /// contains.
     pub(crate) fn move_cursor_by_messages(
@@ -708,6 +713,7 @@ impl TranscriptState {
         direction: TranscriptMoveDirection,
         count: usize,
     ) {
+        self.push_jump_mark(width);
         self.ensure_visual_focus(width, height);
         let Some(cursor) = self.interaction.cursor.clone() else {
             return;
@@ -1655,6 +1661,7 @@ impl TranscriptState {
     }
 
     pub(crate) fn scroll_to_bottom(&mut self, width: u16, height: u16) {
+        self.push_jump_mark(width);
         let total_lines = self.rendered(width).lines.len();
         if total_lines == 0 {
             self.interaction = TranscriptInteraction::default();
@@ -1673,6 +1680,7 @@ impl TranscriptState {
     }
 
     pub(crate) fn scroll_to_top(&mut self, width: u16, height: u16) {
+        self.push_jump_mark(width);
         if self.rendered(width).lines.is_empty() {
             self.interaction = TranscriptInteraction::default();
             return;
@@ -1769,6 +1777,144 @@ impl TranscriptState {
         self.move_cursor_by_distance(width, height, distance, forward);
     }
 
+    /// Record the current cursor location as the newest entry in the Vim-style
+    /// jump list. Called immediately before large navigation jumps (pages,
+    /// halves, message jumps, search hits, `gg`/`G`) so `Ctrl+O` can step back
+    /// to the origin. A new jump discards any redo tail, matching Vim.
+    pub(crate) fn push_jump_mark(&mut self, width: u16) {
+        const MAX_JUMP_HISTORY: usize = 100;
+        let Some(position) = self.cursor_text_position(width) else {
+            return;
+        };
+        if self.jump_history_index.saturating_add(1) < self.jump_history.len() {
+            self.jump_history.truncate(self.jump_history_index + 1);
+        }
+        if self
+            .jump_history
+            .last()
+            .is_some_and(|last| *last == position)
+        {
+            return;
+        }
+        self.jump_history.push(position);
+        if self.jump_history.len() > MAX_JUMP_HISTORY {
+            self.jump_history.remove(0);
+        }
+        self.jump_history_index = self.jump_history.len().saturating_sub(1);
+    }
+
+    /// Vim's `Ctrl+O`: step backward through the transcript jump list. If the
+    /// user moved manually since the last jump, the current position is folded
+    /// into the list first so the first press still goes somewhere useful.
+    pub(crate) fn jump_backward(&mut self, width: u16, height: u16) {
+        if self.jump_history.is_empty() {
+            return;
+        }
+        let Some(position) = self.cursor_text_position(width) else {
+            return;
+        };
+        if self.jump_history[self.jump_history_index] != position {
+            self.push_jump_mark(width);
+        }
+        if self.jump_history_index == 0 {
+            return;
+        }
+        self.jump_history_index -= 1;
+        self.jump_to_position(width, height, self.jump_history[self.jump_history_index]);
+    }
+
+    /// Vim's `Ctrl+I`: step forward through the transcript jump list.
+    pub(crate) fn jump_forward(&mut self, width: u16, height: u16) {
+        if self.jump_history.is_empty() {
+            return;
+        }
+        let Some(position) = self.cursor_text_position(width) else {
+            return;
+        };
+        if self.jump_history[self.jump_history_index] != position {
+            self.push_jump_mark(width);
+            return;
+        }
+        if self.jump_history_index.saturating_add(1) >= self.jump_history.len() {
+            return;
+        }
+        self.jump_history_index += 1;
+        self.jump_to_position(width, height, self.jump_history[self.jump_history_index]);
+    }
+
+    fn jump_to_position(&mut self, width: u16, height: u16, target: TranscriptTextPosition) {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            return;
+        }
+        self.set_cursor_position_with_reveal(
+            width,
+            height,
+            target.line.min(total_lines.saturating_sub(1)),
+            target.column,
+            target.column,
+            TranscriptRevealPolicy::Center,
+        );
+    }
+
+    /// Vim's `Ctrl+E` / `Ctrl+Y`: scroll the viewport one rendered row while
+    /// keeping the cursor as still as possible. When the scroll pushes the
+    /// cursor outside the new visible window, the cursor is relocated to the
+    /// nearest visible focusable row (Vim's top/bottom edge behavior).
+    pub(crate) fn scroll_viewport_by_lines(
+        &mut self,
+        width: u16,
+        height: u16,
+        forward: bool,
+        count: usize,
+    ) {
+        self.ensure_visual_focus(width, height);
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
+            return;
+        }
+        let count = count.max(1);
+        let max_scroll = self.max_scroll(width, height);
+        let new_top = if forward {
+            self.viewport.top.saturating_add(count).min(max_scroll)
+        } else {
+            self.viewport.top.saturating_sub(count)
+        };
+        if new_top == self.viewport.top {
+            return;
+        }
+        self.viewport.top = new_top;
+        self.viewport.follow_tail = false;
+        let visible = usize::from(height.max(1));
+        let last_visible = new_top
+            .saturating_add(visible)
+            .saturating_sub(1)
+            .min(total_lines.saturating_sub(1));
+        if let Some(cursor) = self.interaction.cursor.clone() {
+            let target = if cursor.line < new_top {
+                Some(self.focusable_line_near(width, new_top, true))
+            } else if cursor.line > last_visible {
+                Some(self.focusable_line_near(width, last_visible, false))
+            } else {
+                None
+            };
+            if let Some(target) = target {
+                self.install_cursor_at_column(
+                    width,
+                    height,
+                    target,
+                    cursor.column,
+                    cursor.preferred_column,
+                    None,
+                    false,
+                );
+            } else {
+                self.refresh_cursor_screen_row(height);
+            }
+        }
+        self.sync_follow_tail(width, height);
+    }
+
     /// Vim's `gg`/`[count]G` destination. Transcript rows without selectable
     /// content are skipped, just as the rest of navigation skips borders and
     /// layout-only rows.
@@ -1778,6 +1924,7 @@ impl TranscriptState {
         height: u16,
         line_number: Option<usize>,
     ) {
+        self.push_jump_mark(width);
         self.ensure_visual_focus(width, height);
         let total_lines = self.rendered(width).lines.len();
         if total_lines == 0 {
@@ -1872,6 +2019,7 @@ impl TranscriptState {
     }
 
     fn move_cursor_by_distance(&mut self, width: u16, height: u16, distance: usize, forward: bool) {
+        self.push_jump_mark(width);
         self.ensure_visual_focus(width, height);
         let Some(cursor) = self.interaction.cursor.clone() else {
             return;

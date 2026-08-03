@@ -144,18 +144,20 @@ impl AppError {
             | Self::SerdeJson(_)
             | Self::Io(_)
             | Self::StorageConfig(_)
-            | Self::Internal(_) => "Something went wrong.",
+            | Self::Internal(_) => "The operation failed. Review the logs for details.",
         }
     }
 
     /// Project an internal execution error into the safe command boundary.
     /// The caller must log `self` together with the returned id; diagnostic
-    /// source data intentionally does not become part of this value.
+    /// source data intentionally does not become part of this value. Root
+    /// causes are extracted and scrubbed for the user channel so a real,
+    /// human-readable message survives instead of a generic fallback.
     pub fn failure(&self) -> agena_failure::Failure {
         use agena_failure::{
             Failure, FailureCategory as Category, FailureCode, FailureImpact,
             FailureResponsibility as Responsibility, RecoveryDirective as Recovery,
-            RetryDirective as Retry, UserPresentation,
+            RetryDirective as Retry,
         };
 
         let (code, category, responsibility, retry, recovery) = match self {
@@ -317,15 +319,124 @@ impl AppError {
                 Recovery::Retry,
             ),
         };
-        Failure::new(
+        let failure = Failure::new(
             FailureCode::new(code),
             category,
             responsibility,
             retry,
             recovery,
             FailureImpact::RequestRejected,
-            UserPresentation::new(code, self.public_message()),
-        )
+            self.user_presentation(code),
+        );
+        self.attach_model_feedback(failure)
+    }
+
+    /// Presentation for the user channel. Classified/expected failures keep
+    /// their reviewed static prose; diagnostics-bearing failures surface a
+    /// scrubbed root cause so the user sees a real message.
+    fn user_presentation(&self, code: &str) -> agena_failure::UserPresentation {
+        use agena_failure::UserPresentation;
+        match self {
+            Self::Provider(_)
+            | Self::Http(_)
+            | Self::HttpStatus { .. }
+            | Self::ProviderClassified { .. } => {
+                let diagnostic = self.diagnostic_text();
+                match diagnostic {
+                    Some(diagnostic) => {
+                        // Expected provider classification is already covered
+                        // by `public_message`; only surface raw provider text
+                        // when it is the best available signal (unclassified).
+                        if matches!(
+                            self,
+                            Self::Provider(_) | Self::Http(_) | Self::HttpStatus { .. }
+                        ) {
+                            UserPresentation::validated_with_context(code, diagnostic)
+                        } else {
+                            UserPresentation::new(code, self.public_message())
+                        }
+                    }
+                    None => UserPresentation::new(code, self.public_message()),
+                }
+            }
+            Self::Tool(error) => match error.actionable_message() {
+                Some(actionable) => {
+                    UserPresentation::validated_with_context(code, actionable)
+                }
+                None => UserPresentation::new(code, self.public_message()),
+            },
+            Self::Database(error) => {
+                UserPresentation::validated_with_context(code, error.to_string())
+            }
+            Self::SerdeJson(error) => {
+                UserPresentation::validated_with_context(code, error.to_string())
+            }
+            Self::Io(error) => UserPresentation::validated_with_context(code, error.to_string()),
+            Self::StorageConfig(error) => {
+                UserPresentation::validated_with_context(code, error.to_string())
+            }
+            Self::Internal(diagnostic) => {
+                UserPresentation::validated_with_context(code, diagnostic)
+            }
+            _ => UserPresentation::new(code, self.public_message()),
+        }
+    }
+
+    /// Best diagnostic text available for a raw-diagnostic variant.
+    fn diagnostic_text(&self) -> Option<String> {
+        match self {
+            Self::Provider(message) => Some(message.clone()),
+            Self::Http(error) => Some(error.to_string()),
+            Self::HttpStatus { body, .. } if !body.is_empty() => Some(body.clone()),
+            Self::HttpStatus { .. } => None,
+            Self::ProviderClassified { message, .. } if !message.is_empty() => Some(message.clone()),
+            Self::ProviderClassified { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// Attach scrubbed model feedback for tool failures so the model can act
+    /// on the real root cause rather than only a closed kind.
+    fn attach_model_feedback(&self, failure: agena_failure::Failure) -> agena_failure::Failure {
+        use agena_failure::{ModelFeedback, ModelFeedbackKind};
+        let feedback = match self {
+            Self::Tool(error) => match error.as_ref() {
+                crate::tool::ToolError::InvalidPatch(d) => Some(
+                    ModelFeedback::internal_tool_failure()
+                        .with_text(d.to_string())
+                        .with_kind(ModelFeedbackKind::InvalidInput),
+                ),
+                crate::tool::ToolError::InvalidInput { diagnostic, .. } => Some(
+                    ModelFeedback::invalid_input_with_fields(error.field_issues().to_vec())
+                        .with_text(diagnostic.to_string()),
+                ),
+                crate::tool::ToolError::InvalidGlobPattern(e) => Some(
+                    ModelFeedback::invalid_pattern().with_text(e.to_string()),
+                ),
+                crate::tool::ToolError::InvalidRegexPattern(e) => Some(
+                    ModelFeedback::invalid_pattern().with_text(e.to_string()),
+                ),
+                crate::tool::ToolError::Shell(e) => Some(
+                    ModelFeedback::internal_tool_failure().with_text(e.to_string()),
+                ),
+                crate::tool::ToolError::Io(e) => Some(
+                    ModelFeedback::internal_tool_failure().with_text(e.to_string()),
+                ),
+                crate::tool::ToolError::Plugin(p) => Some(
+                    ModelFeedback::plugin_failure().with_text(p.public.user.fallback.clone()),
+                ),
+                crate::tool::ToolError::StaleToolCall { tool } => Some(
+                    ModelFeedback::stale_tool_call()
+                        .with_text(format!("Tool `{tool}` is stale; refresh the catalog.")),
+                ),
+                _ => None,
+            },
+            _ => None,
+        };
+        match feedback {
+            Some(feedback) => failure.with_model_feedback(feedback),
+            None => failure,
+        }
     }
 
     pub fn retryable(&self) -> bool {
@@ -440,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn execution_command_failure_excludes_internal_source_chain() {
+    fn execution_command_failure_scrubs_but_preserves_root_cause() {
         let error = AppError::Internal(
             "database error: token=secret Custom Error: /private/agena.sqlite".to_owned(),
         );
@@ -449,11 +560,17 @@ mod tests {
         let wire = serde_json::to_string(&failure).expect("serialize safe command failure");
         let display = command_error.to_string();
 
+        // Secrets and absolute paths never cross the boundary.
         assert!(!wire.contains("token=secret"));
         assert!(!wire.contains("/private/agena.sqlite"));
-        assert!(!display.contains("database error"));
+        assert!(!display.contains("token=secret"));
+        assert!(!display.contains("/private/agena.sqlite"));
+        // Machine code is not shown to the user.
         assert!(!display.contains(failure.code.as_str()));
-        assert!(display.contains("Something went wrong."));
-        assert!(display.contains("Reference:"));
+        // A real, human-readable message replaces the old generic fallback,
+        // with no correlation-id noise appended.
+        assert!(!display.contains("Something went wrong."));
+        assert!(display.contains("database error") || display.contains("<redacted>"));
+        assert!(!display.contains("Reference:"));
     }
 }

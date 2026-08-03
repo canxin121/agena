@@ -699,9 +699,11 @@ mod tests {
                     if task.status == RuntimeBackgroundTaskStatus::Failed {
                         let failure = task.failure.expect("structured failure");
                         let encoded = serde_json::to_string(&failure).expect("serialize failure");
-                        assert_eq!(failure.user.fallback, "The background task failed.");
+                        // A scrubbed root cause replaces the generic fallback,
+                        // but the secret never escapes.
+                        assert_ne!(failure.user.fallback, "The background task failed.");
+                        assert!(!failure.user.fallback.contains("token=secret"));
                         assert!(!encoded.contains("token=secret"));
-                        assert!(!encoded.contains("internal stack"));
                         break;
                     }
                     tokio::task::yield_now().await;

@@ -196,15 +196,12 @@ mod tests {
         let diagnostic = "database error: token=secret response 123 is missing or already terminal";
         let failure = tool_error_failure(&ToolError::plugin(diagnostic));
         let encoded = serde_json::to_string(&failure).expect("serialize safe failure");
-
         assert_eq!(failure.category, FailureCategory::Internal);
         assert_eq!(failure.retry, RetryDirective::UseAlternative);
         assert!(failure.model.is_some());
-        assert_eq!(
-            failure.user.fallback,
-            "The request is invalid. Review the input and try again."
-        );
-        assert!(!failure.user.fallback.contains("failed unexpectedly"));
+        // Secrets never cross the boundary, but the real root cause survives.
+        assert!(!failure.user.fallback.contains("token=secret"));
+        assert!(failure.user.fallback.contains("response 123 is missing or already terminal"));
         assert!(!encoded.contains(diagnostic));
         assert!(!encoded.contains("token=secret"));
     }
@@ -222,15 +219,17 @@ mod tests {
     }
 
     #[test]
-    fn legacy_invalid_input_text_is_diagnostic_only() {
+    fn legacy_invalid_input_text_is_scrubbed_root_cause() {
         let diagnostic = "invalid path /private/tmp/secret-project: parser backtrace";
         let failure = tool_error_failure(&ToolError::invalid_input(diagnostic));
         let encoded = serde_json::to_string(&failure).expect("serialize safe failure");
-
         assert_eq!(failure.category, FailureCategory::InvalidInput);
         assert_eq!(failure.retry, RetryDirective::CorrectInput);
         assert!(!encoded.contains(diagnostic));
         assert!(!encoded.contains("/private/tmp"));
+        // The user sees a bounded root cause rather than a wall of paths.
+        assert!(failure.user.fallback.contains("invalid path"));
+        assert!(!failure.user.fallback.contains("/private"));
     }
 
     #[test]

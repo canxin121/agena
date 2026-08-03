@@ -55,17 +55,20 @@ impl ApiError {
         )
     }
 
-    /// Creates an unexpected public failure. `diagnostic` is intentionally
-    /// ignored here: callers must record it in the diagnostic channel before
-    /// constructing the wire value.
-    pub fn internal(_diagnostic: impl Into<String>) -> Self {
+    /// Creates an unexpected public failure. The diagnostic is reduced to a
+    /// scrubbed root cause so the client receives a real, human-readable
+    /// message instead of a generic fallback. Callers should also log the full
+    /// diagnostic in the diagnostic channel for correlation via [`FailureId`].
+    pub fn internal(diagnostic: impl Into<String>) -> Self {
+        let diagnostic = diagnostic.into();
+        let user = UserPresentation::validated_with_context("internal-unexpected", &diagnostic);
         Self::new(
             "internal.unexpected",
             FailureCategory::Internal,
             FailureResponsibility::System,
             RetryDirective::Unknown,
             RecoveryDirective::Retry,
-            UserPresentation::new("internal-unexpected", "Something went wrong."),
+            user,
         )
     }
 
@@ -122,11 +125,10 @@ impl ApiError {
 
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.problem.user.fallback.as_str())?;
-        if self.problem.is_unexpected() {
-            write!(f, " Reference: {}", self.problem.id)?;
-        }
-        Ok(())
+        // The fallback already carries a scrubbed, human-readable root cause.
+        // The machine code and correlation id stay out of the user-visible text
+        // (they are still available on the structured `problem`).
+        f.write_str(self.problem.user.fallback.as_str())
     }
 }
 
@@ -138,18 +140,22 @@ mod tests {
     use agena_failure::{FailureCategory, ModelFeedback};
 
     #[test]
-    fn internal_diagnostic_is_not_serialized_or_displayed() {
+    fn internal_diagnostic_is_scrubbed_but_surfaced() {
         let diagnostic = "database error: token=secret Custom Error";
         let error = ApiError::internal(diagnostic);
         let json = serde_json::to_string(&error).expect("serialize api failure");
         let display = error.to_string();
 
         assert_eq!(error.problem.category, FailureCategory::Internal);
-        assert!(!json.contains(diagnostic));
+        // The raw chain and secret never cross the wire verbatim.
         assert!(!json.contains("token=secret"));
+        assert!(!json.contains(diagnostic));
+        assert!(!display.contains("token=secret"));
         assert!(!display.contains(diagnostic));
-        assert!(display.contains("Something went wrong."));
-        assert!(display.contains("Reference:"));
+        // A scrubbed root cause replaces the generic fallback, with no
+        // "Reference:" noise appended.
+        assert!(!display.contains("Something went wrong."));
+        assert!(!display.contains("Reference:"));
     }
 
     #[test]

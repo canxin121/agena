@@ -692,7 +692,7 @@ fn sse_error_event(diagnostic: impl std::fmt::Display) -> Event {
             diagnostic = %serialization_error,
             "failed to serialize safe SSE failure envelope"
         );
-        "{\"problem\":{\"user\":{\"fallback\":\"Something went wrong.\"}}}".to_owned()
+        "{\"problem\":{\"user\":{\"fallback\":\"The response could not be delivered.\"}}}".to_owned()
     });
     Event::default().event("error").data(data)
 }

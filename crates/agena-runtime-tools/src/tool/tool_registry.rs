@@ -416,6 +416,14 @@ pub enum ToolError {
 }
 
 impl ToolError {
+    /// Structured field issues for invalid-input failures, if any.
+    pub fn field_issues(&self) -> &[agena_failure::FieldIssue] {
+        match self {
+            Self::InvalidInput { fields, .. } => fields.as_slice(),
+            _ => &[],
+        }
+    }
+
     pub fn actionable_message(&self) -> Option<String> {
         match self {
             Self::InvalidPatch(diagnostic) => Some(diagnostic.to_string()),
@@ -489,7 +497,7 @@ impl ToolError {
             if !proposed_public_detail.trim().is_empty() {
                 failure.user = agena_failure::UserPresentation::validated(
                     format!("{}-detail", failure.user.key),
-                    proposed_public_detail,
+                    proposed_public_detail.clone(),
                 );
             }
             failure
@@ -510,6 +518,11 @@ impl ToolError {
             }
             _ => agena_failure::ModelFeedback::plugin_failure(),
         });
+        // Give the model the scrubbed root cause so it can correct its
+        // approach rather than retrying a blank "plugin failed".
+        if public.model.is_some() {
+            public.model = public.model.map(|model| model.with_text(proposed_public_detail.clone()));
+        }
         Self::Plugin(Box::new(PluginToolFailure {
             public,
             diagnostic: ToolDiagnostic(diagnostic),

@@ -173,9 +173,12 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
                                 agena_failure::RetryDirective::Unknown,
                                 agena_failure::RecoveryDirective::Retry,
                                 agena_failure::FailureImpact::BackgroundTaskFailed,
-                                agena_failure::UserPresentation::new(
+                                // Surface the scrubbed root cause so a
+                                // background-task failure tells the user what
+                                // actually went wrong.
+                                agena_failure::UserPresentation::validated_with_context(
                                     "background-task-failed",
-                                    "The background task failed.",
+                                    &diagnostic,
                                 ),
                             );
                             tracing::error!(

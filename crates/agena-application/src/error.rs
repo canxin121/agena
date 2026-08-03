@@ -114,15 +114,21 @@ impl ApplicationError {
     }
 
     pub fn internal(diagnostic: impl std::fmt::Display) -> Self {
-        Self::diagnostic(
-            "internal.unexpected",
-            FailureCategory::Internal,
-            FailureResponsibility::System,
-            RetryDirective::Unknown,
-            RecoveryDirective::Retry,
-            "Something went wrong.",
-            diagnostic,
-        )
+        let diagnostic = diagnostic.to_string();
+        Self {
+            failure: Box::new(Failure::new(
+                FailureCode::new("internal.unexpected"),
+                FailureCategory::Internal,
+                FailureResponsibility::System,
+                RetryDirective::Unknown,
+                RecoveryDirective::Retry,
+                FailureImpact::RequestRejected,
+                // Surface the scrubbed root cause instead of a generic
+                // "Something went wrong." so the user sees a real message.
+                UserPresentation::validated_with_context("internal-unexpected", &diagnostic),
+            )),
+            diagnostic: Some(diagnostic),
+        }
     }
 
     pub fn diagnostic_message(&self) -> Option<&str> {
@@ -193,11 +199,8 @@ impl ApplicationError {
 
 impl std::fmt::Display for ApplicationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.failure.user.fallback.as_str())?;
-        if self.failure.is_unexpected() {
-            write!(formatter, " Reference: {}", self.failure.id)?;
-        }
-        Ok(())
+        // The fallback already carries a scrubbed, human-readable root cause.
+        formatter.write_str(self.failure.user.fallback.as_str())
     }
 }
 
@@ -208,13 +211,19 @@ mod tests {
     use super::ApplicationError;
 
     #[test]
-    fn internal_diagnostics_are_not_part_of_display_text() {
+    fn internal_diagnostics_surface_scrubbed_root_cause() {
         let diagnostic = "session execution command failed: database error: Custom Error: response 123 is missing or already terminal";
         let error = ApplicationError::internal(diagnostic);
 
-        assert!(error.to_string().starts_with("Something went wrong."));
-        assert!(!error.to_string().contains("database"));
-        assert!(!error.to_string().contains("response 123"));
+        // The user sees the operation context and the actionable root cause,
+        // not a generic fallback.
+        let display = error.to_string();
+        assert!(display.contains("response 123 is missing or already terminal"));
+        assert!(display.contains("session execution command failed"));
+        assert!(!display.contains("Something went wrong."));
+        // Nested wrapper noise is stripped from the user channel.
+        assert!(!display.contains("Custom Error"));
+        assert!(!display.contains("database error"));
         assert_eq!(error.diagnostic_message(), Some(diagnostic));
     }
 

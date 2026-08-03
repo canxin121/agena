@@ -254,11 +254,7 @@ impl RuntimeConfigSettingsError {
 
 impl std::fmt::Display for RuntimeConfigSettingsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.failure.user.fallback.as_str())?;
-        if self.failure.is_unexpected() {
-            write!(f, " Reference: {}", self.failure.id)?;
-        }
-        Ok(())
+        f.write_str(self.failure.user.fallback.as_str())
     }
 }
 

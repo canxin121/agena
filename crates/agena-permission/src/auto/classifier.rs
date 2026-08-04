@@ -52,6 +52,11 @@ pub enum ClassifyFailure {
     Timeout,
     /// The provider completion call itself failed.
     Provider(String),
+    /// The classifier returned no text at all (empty or whitespace-only
+    /// response). This is distinct from an unparseable verdict: nothing to
+    /// salvage exists, so it is almost always a provider/model failure rather
+    /// than a formatting problem.
+    EmptyResponse,
     /// The classifier returned a verdict that could not be parsed.
     UnparseableVerdict(String),
 }
@@ -65,6 +70,10 @@ impl std::fmt::Display for ClassifyFailure {
             Self::ModeUnavailable(message) => write!(f, "auto-approval model mode is unavailable: {message}"),
             Self::Timeout => write!(f, "automatic approval classifier timed out"),
             Self::Provider(message) => write!(f, "automatic approval provider error: {message}"),
+            Self::EmptyResponse => write!(
+                f,
+                "automatic approval classifier returned an empty response: the approval model produced no output. The model may be unavailable or misconfigured; choose an option below or retry."
+            ),
             Self::UnparseableVerdict(text) => write!(
                 f,
                 "automatic approval classifier returned an unparseable verdict: {text}"
@@ -415,6 +424,14 @@ DENY
         let schema = classifier_json_schema();
         assert_eq!(schema["required"].as_array().map(Vec::len), Some(3));
         assert_eq!(schema["additionalProperties"], Value::Bool(false));
+    }
+
+    #[test]
+    fn empty_response_failure_displays_actionable_message() {
+        let failure = ClassifyFailure::EmptyResponse;
+        let text = failure.to_string();
+        assert!(text.contains("empty response"));
+        assert!(text.contains("choose an option below or retry"));
     }
 }
 

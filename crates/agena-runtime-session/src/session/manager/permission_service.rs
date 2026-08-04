@@ -354,6 +354,9 @@ impl SessionManager {
             .await
             {
                 Ok(Ok(response)) => {
+                    if response.text.trim().is_empty() {
+                        return Err(agena_permission::ClassifyFailure::EmptyResponse);
+                    }
                     match agena_permission::parse_classifier_verdict(response.text.as_str()) {
                         Some(allowed) => {
                             self.record_auto_decision(session_id, allowed);

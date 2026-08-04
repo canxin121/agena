@@ -35,8 +35,11 @@ pub struct ShellCommandInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(path.read, fallback = "")]
     pub workdir: Option<String>,
-    /// Filesystem paths the command may read or write. Pass an empty list only
-    /// when the command has no filesystem effect beyond entering `workdir`.
+    /// Files and directories the command reads or modifies. Declare only the
+    /// actual files/directories affected - never the executables, interpreters,
+    /// or tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or
+    /// their installation directories. Pass an explicit empty list `[]` when the
+    /// command has no file reads/writes beyond the executables it invokes.
     pub filesystem_effects: Vec<FilesystemEffect>,
     /// Outbound network targets the command may connect to. Pass an empty list
     /// when the command has no network effect.

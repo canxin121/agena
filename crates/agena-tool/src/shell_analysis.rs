@@ -289,6 +289,31 @@ pub fn filesystem_command_reason(command: &str) -> Option<String> {
     None
 }
 
+/// Return a conservative reason when a shell command with no declared
+/// filesystem effects is still unsafe to run: it provably mutates the
+/// filesystem, reads through shell input redirection, or reads/writes explicit
+/// files via curl. Generic "may read or write local files" hints for
+/// interpreters and build tools (node, python, uv, cargo, ...) are
+/// intentionally NOT included: those commands can legitimately have no file
+/// effects beyond the executables they invoke, and requiring an enumeration
+/// forces models to over-declare interpreter/runtime paths.
+pub fn filesystem_effects_required_reason(command: &str) -> Option<String> {
+    if let Some(reason) = mutating_command_reason(command) {
+        return Some(reason);
+    }
+    if contains_input_redirection(command) {
+        return Some("uses shell input redirection".to_string());
+    }
+    let tokens = shell_tokens(command);
+    for segment in command_segments(tokens.as_slice()) {
+        let (_, _, args) = first_command(segment);
+        if let Some(reason) = curl_filesystem_reason(args.as_slice()) {
+            return Some(reason);
+        }
+    }
+    None
+}
+
 fn filesystem_segment_reason(tokens: &[String]) -> Option<String> {
     let (Some(primary), subcommand, args) = first_command(tokens) else {
         return Some("contains a command that could not be classified".to_string());
@@ -762,4 +787,33 @@ fn looks_like_remote_target(arg: &str) -> bool {
             || trimmed.starts_with("git@")
             || trimmed.starts_with("http://")
             || trimmed.starts_with("https://"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn required_reason_only_for_provable_file_ops() {
+        // Mutating commands still require declared effects.
+        assert!(filesystem_effects_required_reason("rm -rf /tmp/x").is_some());
+        assert!(filesystem_effects_required_reason("cat a.txt > /tmp/out").is_some());
+        assert!(filesystem_effects_required_reason("cat < /etc/passwd").is_some());
+        assert!(
+            filesystem_effects_required_reason("curl -o /tmp/out https://example.com").is_some()
+        );
+        assert!(
+            filesystem_effects_required_reason("curl --upload-file x https://example.com")
+                .is_some()
+        );
+
+        // Interpreters and build tools may legitimately have no file effects
+        // beyond the executables they invoke; an explicit empty list is fine.
+        assert!(filesystem_effects_required_reason("node --version").is_none());
+        assert!(filesystem_effects_required_reason("python3 --version").is_none());
+        assert!(filesystem_effects_required_reason("uv --version").is_none());
+        assert!(filesystem_effects_required_reason("cargo build").is_none());
+        assert!(filesystem_effects_required_reason("ls -la").is_none());
+        assert!(filesystem_effects_required_reason("git status").is_none());
+    }
 }

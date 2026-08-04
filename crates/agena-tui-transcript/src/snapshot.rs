@@ -1225,7 +1225,7 @@ mod tests {
     fn failed_canonical_operation_renders_the_real_error_once_without_a_fake_result() {
         let response_id = agena_domain::AssistantReplyId::new();
         let activity_id = agena_domain::ActivityId::new();
-        let full_error = "shell.run filesystem_effects must declare every accessed path because the command appears to touch the filesystem: invokes 'python3' which may read or write local files";
+        let full_error = "shell.run filesystem_effects must declare every accessed path because the command provably mutates or reads the filesystem: invokes mutating command 'rm'";
         let truncated_summary = agena_tool::normalize_tool_summary(full_error);
         assert!(truncated_summary.ends_with('…'));
         assert_ne!(truncated_summary, full_error);
@@ -1245,7 +1245,7 @@ mod tests {
                 invocation: ToolInvocation::new(
                     "shell.run",
                     StructuredObject::try_from(serde_json::json!({
-                        "command": "python3 - <<'EOF'\nprint('pi')\nEOF",
+                        "command": "rm -rf /tmp/agena-snapshot-test",
                         "description": "Compute pi with Python",
                         "filesystem_effects": [],
                         "network_effects": [],
@@ -1313,7 +1313,7 @@ mod tests {
         );
         assert_eq!(
             expanded_text
-                .matches("which may read or write local files")
+                .matches("provably mutates or reads the filesystem")
                 .count(),
             1,
             "{expanded_text}"

@@ -24,11 +24,16 @@ pub(crate) fn validate_declared_filesystem_effects(
     command: &str,
     effects: &[FilesystemEffect],
 ) -> Result<(), ToolError> {
+    // Only require declarations when the command provably mutates or reads
+    // explicit files (write/redirect, input redirect, curl file ops).
+    // Interpreters and build tools (node, python, uv, cargo, ...) may run with
+    // an explicit empty list: their executable paths are not file effects.
     if effects.is_empty()
-        && let Some(reason) = agena_tool::shell_analysis::filesystem_command_reason(command)
+        && let Some(reason) =
+            agena_tool::shell_analysis::filesystem_effects_required_reason(command)
     {
         return Err(ToolError::invalid_input(format!(
-            "{tool_name} filesystem_effects must declare every accessed path because the command appears to touch the filesystem: {reason}"
+            "{tool_name} filesystem_effects must declare every accessed path because the command provably mutates or reads the filesystem: {reason}"
         )));
     }
     Ok(())

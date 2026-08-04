@@ -252,10 +252,10 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
                     }
                 }
             });
-            self.lease_handles.lock().await.insert(
-                session_id,
-                LeaseHandle { stop },
-            );
+            self.lease_handles
+                .lock()
+                .await
+                .insert(session_id, LeaseHandle { stop });
         }
 
         Ok((control, rx))

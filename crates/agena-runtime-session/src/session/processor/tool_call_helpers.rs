@@ -214,7 +214,7 @@ mod tests {
                     runtime: Default::default(),
                     permissions: Default::default(),
                     display: Default::default(),
-                            tags: Vec::new(),
+                    tags: Vec::new(),
                 },
             )
             .expect("registered tool"),

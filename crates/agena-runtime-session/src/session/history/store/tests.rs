@@ -630,7 +630,7 @@ mod tests {
         let content = db
             .query_all(Statement::from_string(
                 db.get_database_backend(),
-                                                                "SELECT owner_kind, owner_id, node_id, position, text \
+                "SELECT owner_kind, owner_id, node_id, position, text \
                  FROM agena_content_nodes WHERE node_type = 'text' ORDER BY position"
                     .to_owned(),
             ))
@@ -753,9 +753,7 @@ mod tests {
         assert_eq!(reply.try_get::<String>("", "status").unwrap(), "completed");
         assert_eq!(reply.try_get::<i64>("", "revision_seq").unwrap(), 3);
         assert_eq!(
-            reply
-                .try_get::<Option<String>>("", "failure_json")
-                .unwrap(),
+            reply.try_get::<Option<String>>("", "failure_json").unwrap(),
             None,
             "a recovered reply must not keep its synthetic failure"
         );
@@ -771,10 +769,7 @@ mod tests {
             .await
             .expect("query reply execution")
             .expect("reply execution");
-        assert_eq!(
-            persisted.try_get::<String>("", "status").unwrap(),
-            "failed"
-        );
+        assert_eq!(persisted.try_get::<String>("", "status").unwrap(), "failed");
     }
 
     #[tokio::test]
@@ -890,7 +885,7 @@ mod tests {
         let rows = db
             .query_all(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                                "SELECT node_type AS kind, node_id AS id, position, payload_json \
+                "SELECT node_type AS kind, node_id AS id, position, payload_json \
                  FROM agena_content_nodes WHERE owner_kind = 'turn_input' AND owner_id = ? \
                  ORDER BY position",
                 [turn_id.to_string().into()],
@@ -1042,7 +1037,7 @@ mod tests {
         let row = db
             .query_one(Statement::from_sql_and_values(
                 db.get_database_backend(),
-                                "SELECT node_id, owner_kind, owner_id, actor, payload_json, state, \
+                "SELECT node_id, owner_kind, owner_id, actor, payload_json, state, \
                         position, revision_seq, started_at_ms, finished_at_ms \
                  FROM agena_content_nodes WHERE node_id = ?",
                 [activity_id.to_string().into()],
@@ -1051,7 +1046,7 @@ mod tests {
             .expect("query compaction activity")
             .expect("compaction activity");
         assert_eq!(
-                        row.try_get::<String>("", "node_id").unwrap(),
+            row.try_get::<String>("", "node_id").unwrap(),
             activity_id.to_string()
         );
         assert_eq!(

@@ -13,13 +13,12 @@ pub(crate) fn unexpected_service_failure(
     // user sees what actually went wrong. `validated_with_context` degrades to
     // a generic invalid-request text only when nothing safe remains.
     let presentation = UserPresentation::validated_with_context(code, &diagnostic);
-    let fallback = if presentation.fallback
-        == "The request is invalid. Review the input and try again."
-    {
-        fallback.to_owned()
-    } else {
-        presentation.fallback
-    };
+    let fallback =
+        if presentation.fallback == "The request is invalid. Review the input and try again." {
+            fallback.to_owned()
+        } else {
+            presentation.fallback
+        };
     let failure = Failure::new(
         FailureCode::new(code),
         FailureCategory::Internal,

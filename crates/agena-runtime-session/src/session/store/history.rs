@@ -189,15 +189,11 @@ impl SessionStore {
                                 }
                             }
                         }
-                        None => session::touch_session_updated_at(
-                            txn,
-                            session_id,
-                            session_runtime,
-                        )
-                        .await?
-                        .ok_or_else(|| {
-                            DbErr::Custom(format!("session not found: {session_id}"))
-                        })?,
+                        None => session::touch_session_updated_at(txn, session_id, session_runtime)
+                            .await?
+                            .ok_or_else(|| {
+                                DbErr::Custom(format!("session not found: {session_id}"))
+                            })?,
                     };
                     let updated_session = session_from_model_db(updated_session)?;
 

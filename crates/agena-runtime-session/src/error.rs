@@ -392,9 +392,7 @@ impl AppError {
                 }
             }
             Self::Tool(error) => match error.actionable_message() {
-                Some(actionable) => {
-                    UserPresentation::validated_with_context(code, actionable)
-                }
+                Some(actionable) => UserPresentation::validated_with_context(code, actionable),
                 None => UserPresentation::new(code, self.public_message()),
             },
             Self::Database(error) if is_database_busy(error) => {
@@ -430,7 +428,9 @@ impl AppError {
             Self::Http(error) => Some(error.to_string()),
             Self::HttpStatus { body, .. } if !body.is_empty() => Some(body.clone()),
             Self::HttpStatus { .. } => None,
-            Self::ProviderClassified { message, .. } if !message.is_empty() => Some(message.clone()),
+            Self::ProviderClassified { message, .. } if !message.is_empty() => {
+                Some(message.clone())
+            }
             Self::ProviderClassified { .. } => None,
             _ => None,
         }
@@ -451,21 +451,21 @@ impl AppError {
                     ModelFeedback::invalid_input_with_fields(error.field_issues().to_vec())
                         .with_text(diagnostic.to_string()),
                 ),
-                crate::tool::ToolError::InvalidGlobPattern(e) => Some(
-                    ModelFeedback::invalid_pattern().with_text(e.to_string()),
-                ),
-                crate::tool::ToolError::InvalidRegexPattern(e) => Some(
-                    ModelFeedback::invalid_pattern().with_text(e.to_string()),
-                ),
-                crate::tool::ToolError::Shell(e) => Some(
-                    ModelFeedback::internal_tool_failure().with_text(e.to_string()),
-                ),
-                crate::tool::ToolError::Io(e) => Some(
-                    ModelFeedback::internal_tool_failure().with_text(e.to_string()),
-                ),
-                crate::tool::ToolError::Plugin(p) => Some(
-                    ModelFeedback::plugin_failure().with_text(p.public.user.fallback.clone()),
-                ),
+                crate::tool::ToolError::InvalidGlobPattern(e) => {
+                    Some(ModelFeedback::invalid_pattern().with_text(e.to_string()))
+                }
+                crate::tool::ToolError::InvalidRegexPattern(e) => {
+                    Some(ModelFeedback::invalid_pattern().with_text(e.to_string()))
+                }
+                crate::tool::ToolError::Shell(e) => {
+                    Some(ModelFeedback::internal_tool_failure().with_text(e.to_string()))
+                }
+                crate::tool::ToolError::Io(e) => {
+                    Some(ModelFeedback::internal_tool_failure().with_text(e.to_string()))
+                }
+                crate::tool::ToolError::Plugin(p) => {
+                    Some(ModelFeedback::plugin_failure().with_text(p.public.user.fallback.clone()))
+                }
                 crate::tool::ToolError::StaleToolCall { tool } => Some(
                     ModelFeedback::stale_tool_call()
                         .with_text(format!("Tool `{tool}` is stale; refresh the catalog.")),

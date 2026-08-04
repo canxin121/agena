@@ -144,7 +144,7 @@ mod tests {
             ),
             SyncOutcome::Final(PermissionDecision::Allow)
         );
-                let outcome = decide_sync(
+        let outcome = decide_sync(
             &auto("auto"),
             &tool("shell.run", &["shell"], Some("rm -rf /")),
             &context,

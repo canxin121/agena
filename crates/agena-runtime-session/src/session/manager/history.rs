@@ -32,7 +32,11 @@ async fn transcript_documents_batch(
         .collect::<std::collections::HashMap<_, _>>();
 
     for chunk in owners.chunks(MAX_OWNERS_PER_QUERY) {
-        let tuples = chunk.iter().map(|_| "(?, ?)").collect::<Vec<_>>().join(", ");
+        let tuples = chunk
+            .iter()
+            .map(|_| "(?, ?)")
+            .collect::<Vec<_>>()
+            .join(", ");
         let values = chunk
             .iter()
             .flat_map(|(kind, id)| [kind.clone().into(), id.clone().into()])
@@ -42,7 +46,7 @@ async fn transcript_documents_batch(
             .query_all(Statement::from_sql_and_values(
                 db.get_database_backend(),
                 format!(
-                                        "SELECT owner_kind, owner_id, node_id, node_type, actor, payload_json, text, \
+                    "SELECT owner_kind, owner_id, node_id, node_type, actor, payload_json, text, \
                             state, position, revision_seq, started_at_ms, finished_at_ms \
                      FROM agena_content_nodes \
                      WHERE (owner_kind, owner_id) IN (VALUES {tuples}) \
@@ -79,7 +83,7 @@ async fn transcript_documents_batch(
                 other => {
                     return Err(AppError::Internal(format!(
                         "invalid transcript node type {other}"
-                    )))
+                    )));
                 }
             };
             positioned_nodes.entry(owner_key).or_default().push((
@@ -118,7 +122,9 @@ fn activity_owner_from_parts(
         }),
         "session" => Ok(agena_domain::ActivityOwner::Session {
             session_id: owner_id.parse().map_err(|error| {
-                AppError::Internal(format!("invalid transcript session owner id {owner_id}: {error}"))
+                AppError::Internal(format!(
+                    "invalid transcript session owner id {owner_id}: {error}"
+                ))
             })?,
         }),
         other => Err(AppError::Internal(format!(
@@ -131,7 +137,7 @@ fn parse_activity_row(
     row: &sea_orm::QueryResult,
     owner: agena_domain::ActivityOwner,
 ) -> Result<agena_domain::ActivityNode, AppError> {
-        let activity_id: String = row.try_get("", "node_id")?;
+    let activity_id: String = row.try_get("", "node_id")?;
     let actor: String = row.try_get("", "actor")?;
     let state: String = row.try_get("", "state")?;
     let position: i64 = row.try_get("", "position")?;
@@ -329,7 +335,7 @@ fn project_runtime_presentation_event(
 
     let seq_session = event.meta.seq_session.unwrap_or(event.meta.seq_global);
     let kind = match &event.kind {
-                EventKind::MessagePartCheckpointed(update) => {
+        EventKind::MessagePartCheckpointed(update) => {
             if let (Some(turn_id), Some(reply_id)) = (update.turn_id, update.reply_id) {
                 transcript_part_patch(
                     seq_session,
@@ -361,9 +367,7 @@ fn project_runtime_presentation_event(
             update.reply_id,
             &update.part,
         )
-        .map(|patch| {
-            agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(patch))
-        }),
+        .map(|patch| agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(patch))),
         EventKind::UserMessageAppended(_) | EventKind::AssistantMessageFinished(_) => {
             Some(agena_runtime::RuntimePresentationEventKind::Refresh {
                 force_refresh: false,
@@ -810,7 +814,10 @@ impl SessionManager {
             .flat_map(|row| {
                 let turn_id = row.try_get::<String>("", "turn_id").unwrap_or_default();
                 let reply_id = row.try_get::<String>("", "reply_id").unwrap_or_default();
-                [("turn_input".to_owned(), turn_id), ("assistant_reply".to_owned(), reply_id)]
+                [
+                    ("turn_input".to_owned(), turn_id),
+                    ("assistant_reply".to_owned(), reply_id),
+                ]
             })
             .collect::<Vec<_>>();
         let documents = transcript_documents_batch(&self.store.db, &owners).await?;
@@ -1620,6 +1627,5 @@ mod tests {
 
         assert_eq!(descendant_cancellation_order(2, &tree), vec![3, 2]);
         assert_eq!(descendant_cancellation_order(1, &tree), vec![3, 4, 2, 1]);
-        }
+    }
 }
-

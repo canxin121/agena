@@ -1228,10 +1228,7 @@ async fn next_content_position<C: ConnectionTrait>(
             "SELECT COALESCE(MAX(position), -1) + 1 AS next_position FROM (\
                  SELECT position FROM agena_content_nodes WHERE owner_kind = ? AND owner_id = ?
              )",
-            [
-                owner_kind.into(),
-                owner_id.into(),
-            ],
+            [owner_kind.into(), owner_id.into()],
         ))
         .await?;
     row.map(|row| row.try_get("", "next_position"))
@@ -1273,7 +1270,7 @@ async fn project_part_content<C: ConnectionTrait>(
     let position = if let Some(activity_id) = part.activity_id {
         db.query_one(Statement::from_sql_and_values(
             db.get_database_backend(),
-                        "SELECT position FROM agena_content_nodes WHERE node_id = ?",
+            "SELECT position FROM agena_content_nodes WHERE node_id = ?",
             [activity_id.to_string().into()],
         ))
         .await?
@@ -1282,7 +1279,7 @@ async fn project_part_content<C: ConnectionTrait>(
     } else if let Some(segment_id) = part.segment_id {
         db.query_one(Statement::from_sql_and_values(
             db.get_database_backend(),
-                        "SELECT position FROM agena_content_nodes WHERE node_id = ?",
+            "SELECT position FROM agena_content_nodes WHERE node_id = ?",
             [segment_id.to_string().into()],
         ))
         .await?
@@ -1364,7 +1361,7 @@ async fn project_part_content<C: ConnectionTrait>(
             | ExecutionStatus::Cancelled
     )
     .then_some(part.created_at.timestamp_millis());
-        // v10 unified content node mirror: activities also live in
+    // v10 unified content node mirror: activities also live in
     // `agena_content_nodes` so readers can switch to the single content table.
     db.execute(Statement::from_sql_and_values(
         db.get_database_backend(),
@@ -1431,7 +1428,7 @@ where
             execution_id: payload.execution_id,
             activity: payload.activity.clone(),
         });
-        // v10 unified content node mirror for maintenance activities.
+    // v10 unified content node mirror for maintenance activities.
     db.execute(Statement::from_sql_and_values(
         db.get_database_backend(),
         "INSERT INTO agena_content_nodes \
@@ -2528,7 +2525,10 @@ where
     // a part whose `created_at` predates the fork. The projection must still
     // be able to attach it. Only the session owner matters for part
     // identity, so treat any timestamp as acceptable.
-    if let Err(err) = part_writer.upsert_part(db, update.session_id, &update.part).await {
+    if let Err(err) = part_writer
+        .upsert_part(db, update.session_id, &update.part)
+        .await
+    {
         let reconcile_fork_copy = err.to_string().contains("cannot attach part")
             && model_message_part::Entity::find_by_id(update.part.id)
                 .one(db)
@@ -2667,6 +2667,6 @@ where
             updated_at_ms.into(),
         ],
     );
-        db.execute(stmt).await?;
+    db.execute(stmt).await?;
     Ok(())
 }

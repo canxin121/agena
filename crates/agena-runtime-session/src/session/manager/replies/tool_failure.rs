@@ -201,7 +201,12 @@ mod tests {
         assert!(failure.model.is_some());
         // Secrets never cross the boundary, but the real root cause survives.
         assert!(!failure.user.fallback.contains("token=secret"));
-        assert!(failure.user.fallback.contains("response 123 is missing or already terminal"));
+        assert!(
+            failure
+                .user
+                .fallback
+                .contains("response 123 is missing or already terminal")
+        );
         assert!(!encoded.contains(diagnostic));
         assert!(!encoded.contains("token=secret"));
     }

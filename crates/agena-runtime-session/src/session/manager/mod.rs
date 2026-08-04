@@ -23,8 +23,7 @@ use agena_domain::UserInputReply;
 use agena_domain::{
     DecisionTraceStep, ExecutionFinishedEvent, ExecutionOutcome, ExecutionSource,
     ExecutionStartedEvent, FinishReason, PermissionAction, PermissionMode, PermissionRepliedEvent,
-    PermissionReplyKind, PermissionScope, Role, RunAbortReason, TimeRange,
-    UserInputReplyKind,
+    PermissionReplyKind, PermissionScope, Role, RunAbortReason, TimeRange, UserInputReplyKind,
 };
 use agena_domain::{ExecutionStatus, MessageSource};
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
@@ -883,7 +882,7 @@ impl SessionManager {
     /// Interaction Activities are a downstream presentation projection and
     /// can legitimately trail their model-message checkpoint while sibling
     /// tools are still completing. Reply commands must therefore never use
-        /// `agena_content_nodes.owner_id` or the request part projection as their
+    /// `agena_content_nodes.owner_id` or the request part projection as their
     /// synchronization boundary. A request is appended to an already-owned
     /// assistant message, so message ownership is sufficient and stable.
     async fn conversation_identity_for_message(
@@ -1434,7 +1433,7 @@ impl SessionManager {
             .await
             .map_err(tool_error_to_app_error)?
         {
-                        let stream_id = stream.stream_id.clone();
+            let stream_id = stream.stream_id.clone();
             const DELTA_BATCH_MS: u64 = 100;
             let mut batch_started = std::time::Instant::now();
             let mut pending_delta = String::new();

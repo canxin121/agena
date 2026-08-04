@@ -8,11 +8,11 @@ use super::{
     ToolInvocationExecution, ToolPermissionCheck, Utc, append_resolved_message_part,
     ask_user_title, assistant_message_for_part, build_message, build_request_part,
     completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
-    operation_authorization, operation_blocks_from_tool_output,
-    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    permission_scope_label, push_unique_permission_action, resolve_pending_tool,
-    responses_api_request_metadata, run_abort_reason, should_execute_pending_tools_concurrently,
-    terminal_operation_title, tool_name, update_resolved_tool_message,
+    operation_authorization, operation_blocks_from_tool_output, pending_operation_for_resolved,
+    pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
+    push_unique_permission_action, resolve_pending_tool, responses_api_request_metadata,
+    run_abort_reason, should_execute_pending_tools_concurrently, terminal_operation_title,
+    tool_name, update_resolved_tool_message,
 };
 use crate::session::Session;
 use crate::session::prompt_window;
@@ -1656,7 +1656,7 @@ impl SessionManager {
         let context = agena_permission::DecisionContext {
             managed_project_root: Some(managed_project_root.as_str()),
         };
-                let budget = self.auto_budget(session_id);
+        let budget = self.auto_budget(session_id);
 
         // Phase 0: path-granted tool-ask override. A path-scoped tool whose
         // *every* concrete path check is allowed by the path policy performs
@@ -1668,7 +1668,7 @@ impl SessionManager {
         // Tool-level `Deny` stays authoritative, and a single non-allowed
         // path check disables the override so external or unlisted paths
         // still go through their own policy.
-                let mut tool_ask_overridden_by_paths = false;
+        let mut tool_ask_overridden_by_paths = false;
         if let Some(tool_check) = checks
             .iter()
             .find(|check| matches!(check.action, PermissionAction::Tool { .. }))
@@ -1708,7 +1708,7 @@ impl SessionManager {
                 &check.decision,
                 snapshot.rules_for(key.as_str()),
             );
-                        if tool_ask_overridden_by_paths
+            if tool_ask_overridden_by_paths
                 && matches!(check.action, PermissionAction::Tool { .. })
                 && matches!(resolution.decision, PermissionDecision::Ask { .. })
             {
@@ -1758,7 +1758,7 @@ impl SessionManager {
             {
                 resolution.decision = match outcome {
                     Ok(true) => PermissionDecision::Allow,
-                                        Ok(false) => PermissionDecision::Deny {
+                    Ok(false) => PermissionDecision::Deny {
                         reason: agena_permission::deny_reason(format!(
                             "automatic approval classifier denied the action: {}",
                             candidate.policy_reason
@@ -2133,7 +2133,7 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Session, AppError> {
-                        let stream_id = stream.stream_id.clone();
+        let stream_id = stream.stream_id.clone();
         // Durable checkpoint cadence: deltas accumulate in memory and are
         // persisted at most every 2s (plus the terminal flush), so a long
         // streaming tool output no longer writes a full-content checkpoint
@@ -2151,8 +2151,8 @@ impl SessionManager {
             if !pending_delta.is_empty()
                 && batch_started.elapsed() >= std::time::Duration::from_millis(DELTA_BATCH_MS)
             {
-                let refresh_title =
-                    last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS);
+                let refresh_title = last_title_refresh.elapsed()
+                    >= std::time::Duration::from_millis(TITLE_REFRESH_MS);
                 if refresh_title {
                     last_title_refresh = std::time::Instant::now();
                 }
@@ -2323,9 +2323,6 @@ impl SessionManager {
         .await
     }
 
-        
-
-            
     /// Persist one text chunk for a pending tool operation. This is shared by
     /// ordinary direct streaming invocations and streaming targets executed
     /// through Tool API function `tools_call`. The caller batches deltas into

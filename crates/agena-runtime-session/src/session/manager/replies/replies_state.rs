@@ -34,7 +34,7 @@ impl SessionManager {
         client_events: Vec<EventKind>,
         persisted_rules: Vec<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
-        ) -> Result<Session, AppError> {
+    ) -> Result<Session, AppError> {
         // Rules may target any scope (session, workspace, or global), and a
         // persisted batch may also delete rules. Invalidate every cached
         // snapshot so no session keeps applying stale rules.

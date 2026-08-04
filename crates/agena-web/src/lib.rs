@@ -12,7 +12,9 @@ mod search;
 mod spider;
 mod store;
 
-pub use browser::local_browser_endpoint;
+pub use browser::{
+    local_browser_endpoint, local_browser_running, local_browser_touch, shutdown_local_browser,
+};
 pub use error::CrawlError;
 pub use fetch::{
     DEFAULT_FETCH_TIMEOUT_SECS, DEFAULT_MAX_BODY_BYTES, FetchOptions, build_client,

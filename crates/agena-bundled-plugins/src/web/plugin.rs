@@ -10,8 +10,8 @@ use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
     CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebFetchCoordinator,
     WebFetchCoordinatorConfig, WebSearchEngine, WebSearchOptions, WebSearchResult, crawl_site,
-    fetch_page_with_spider, local_browser_endpoint, prepare_fetch_url, preview_text,
-    results_to_text, search_web,
+    fetch_page_with_spider, local_browser_endpoint, local_browser_running, local_browser_touch,
+    prepare_fetch_url, preview_text, results_to_text, search_web, shutdown_local_browser,
 };
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
@@ -208,13 +208,28 @@ impl Default for WebStoreRetentionConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct WebBrowserConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executable_path: Option<String>,
     pub wait: WebBrowserWaitConfig,
+    /// Seconds of inactivity after which the managed browser process is shut
+    /// down automatically. `0` disables idle auto-close.
+    #[serde(default = "default_web_browser_idle_timeout_secs")]
+    pub idle_timeout_secs: u64,
+}
+
+impl Default for WebBrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            executable_path: None,
+            wait: WebBrowserWaitConfig::default(),
+            idle_timeout_secs: default_web_browser_idle_timeout_secs(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -240,6 +255,10 @@ impl Default for WebBrowserWaitConfig {
 
 fn default_web_fetch_enabled() -> bool {
     true
+}
+
+fn default_web_browser_idle_timeout_secs() -> u64 {
+    300
 }
 
 fn default_true() -> bool {
@@ -418,6 +437,11 @@ fn web_config_schema() -> serde_json::Value {
                 "/properties/browser/properties/executable_path",
                 "Executable Path",
                 "Optional browser executable path. Leave unset to use the default browser resolution logic.",
+            ),
+            (
+                "/properties/browser/properties/idle_timeout_secs",
+                "Idle Timeout (sec)",
+                "Seconds of inactivity before the managed browser process is closed automatically. 0 disables auto-close.",
             ),
             (
                 "/properties/browser/properties/wait",
@@ -716,6 +740,19 @@ impl WebPlugin {
         ))
     }
 
+    #[hook(shutdown)]
+    async fn shutdown(&self) -> SdkResult<()> {
+        // Drop CDP sockets before killing the underlying browser process.
+        self.browser_clients.lock().await.clear();
+        tokio::task::spawn_blocking(shutdown_local_browser)
+            .await
+            .map_err(|error| {
+                PluginError::internal(format!("browser shutdown task failed: {error}"))
+            })?
+            .map_err(crawl_error_to_plugin)?;
+        Ok(())
+    }
+
     fn state(&self) -> SdkResult<&WebPluginState> {
         self.state
             .get()
@@ -758,6 +795,8 @@ impl WebPlugin {
                         .filter(|value| !value.is_empty())
                         .map(PathBuf::from),
                     startup_timeout: Duration::from_secs(config.browser.wait.timeout_secs),
+                    idle_timeout: (config.browser.idle_timeout_secs > 0)
+                        .then(|| Duration::from_secs(config.browser.idle_timeout_secs)),
                 },
                 wait_for_network_idle: config.browser.wait.for_network_idle,
                 wait_for_selector: config.browser.wait.for_selector.clone(),
@@ -831,6 +870,8 @@ impl WebPlugin {
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from),
             startup_timeout: Duration::from_secs(config.browser.wait.timeout_secs),
+            idle_timeout: (config.browser.idle_timeout_secs > 0)
+                .then(|| Duration::from_secs(config.browser.idle_timeout_secs)),
         })
     }
 
@@ -1199,6 +1240,26 @@ impl WebPlugin {
         concurrency_safe
     )]
     async fn browser_list(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
+        // Listing must never start the managed browser. Report the current
+        // process state first and only connect when it is already running.
+        let running = tokio::task::spawn_blocking(local_browser_running)
+            .await
+            .map_err(|error| {
+                PluginError::internal(format!("browser status task failed: {error}"))
+            })?;
+        if !running {
+            return Ok(ToolInvokeOutput::from_parts(
+                "browser list",
+                "0 open pages",
+                "The managed browser is not running. Use browser_open to start it.",
+                Some(serde_json::json!({
+                    "browser_running": false,
+                    "sessions": [],
+                })),
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ));
+        }
         let browser = self.browser_client(None).await?;
         let result = browser
             .command("Target.getTargets", serde_json::json!({}))
@@ -1227,7 +1288,10 @@ impl WebPlugin {
             "browser list",
             format!("{} open pages", sessions.len()),
             format!("{} managed browser page target(s).", sessions.len()),
-            Some(serde_json::json!({ "sessions": sessions })),
+            Some(serde_json::json!({
+                "browser_running": true,
+                "sessions": sessions,
+            })),
             std::collections::BTreeMap::new(),
             Vec::new(),
         ))
@@ -1265,6 +1329,36 @@ impl WebPlugin {
             Vec::new(),
         ))
     }
+    #[tool(
+        tags(network, mutate),
+        name = "browser_shutdown",
+        summary = "Shut down the managed browser process and all its sessions.",
+        help = "Closes the underlying Chrome/Chromium process used for rendered fetches and interactive browsing, and removes its temporary profile. All browser sessions are discarded; the next browser_open starts a fresh browser. Use this to release memory without exiting Agena.",
+        mutating,
+        display = detailed
+    )]
+    async fn browser_shutdown(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
+        self.browser_clients.lock().await.clear();
+        let closed = tokio::task::spawn_blocking(shutdown_local_browser)
+            .await
+            .map_err(|error| {
+                PluginError::internal(format!("browser shutdown task failed: {error}"))
+            })?
+            .map_err(crawl_error_to_plugin)?;
+        Ok(ToolInvokeOutput::from_parts(
+            "browser shutdown",
+            if closed { "Closed" } else { "Not running" },
+            if closed {
+                "Closed the managed browser process and removed its profile."
+            } else {
+                "No managed browser process was running."
+            },
+            Some(serde_json::json!({ "closed": closed })),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
+    }
+
     #[tool(
         tags(network, query),
         name = "browser_snapshot",
@@ -1798,6 +1892,9 @@ impl CdpClient {
         method: &str,
         params: serde_json::Value,
     ) -> SdkResult<serde_json::Value> {
+        // Every CDP exchange is browser activity: restart the idle auto-close
+        // timer so a session mid-flight is never torn down underneath us.
+        local_browser_touch();
         if let Some(error) = self.take_navigation_error() {
             return Err(PluginError::internal(error));
         }
@@ -2728,9 +2825,13 @@ fn format_crawl_run(output: &CrawlRunReport) -> String {
     }
     if !output.failures.is_empty() {
         lines.push("Failures:".to_string());
-        lines.extend(output.failures.iter().take(5).map(|failure| {
-            format!("- {}", failure.user.fallback)
-        }));
+        lines.extend(
+            output
+                .failures
+                .iter()
+                .take(5)
+                .map(|failure| format!("- {}", failure.user.fallback)),
+        );
     }
     lines.join("\n")
 }
@@ -2791,6 +2892,7 @@ mod tests {
             "browser_open",
             "browser_list",
             "browser_close",
+            "browser_shutdown",
             "browser_snapshot",
             "browser_click",
             "browser_type",
@@ -2916,6 +3018,11 @@ mod tests {
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
         );
+        // Never leak the managed browser from tests: shut it down explicitly
+        // (Rust statics are not dropped at process exit).
+        let _ = tokio::task::spawn_blocking(agena_web::shutdown_local_browser)
+            .await
+            .expect("browser shutdown task");
     }
 
     #[test]

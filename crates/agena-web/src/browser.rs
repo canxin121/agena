@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -11,6 +11,9 @@ use crate::CrawlError;
 pub struct LocalBrowserOptions {
     pub executable_path: Option<PathBuf>,
     pub startup_timeout: Duration,
+    /// How long the managed browser may stay idle before it is shut down
+    /// automatically. `None` disables idle auto-close.
+    pub idle_timeout: Option<Duration>,
 }
 
 impl Default for LocalBrowserOptions {
@@ -18,6 +21,7 @@ impl Default for LocalBrowserOptions {
         Self {
             executable_path: None,
             startup_timeout: Duration::from_secs(10),
+            idle_timeout: None,
         }
     }
 }
@@ -33,7 +37,8 @@ impl ManagedBrowser {
         let executable = find_browser_executable(options.executable_path.as_deref())?;
         let profile_dir = browser_profile_dir();
         fs::create_dir_all(&profile_dir)?;
-        let mut child = Command::new(&executable)
+        let mut command = Command::new(&executable);
+        command
             .arg("--headless=new")
             .arg("--disable-gpu")
             .arg("--disable-dev-shm-usage")
@@ -46,14 +51,20 @@ impl ManagedBrowser {
             .arg("about:blank")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|err| {
-                CrawlError::InvalidInput(format!(
-                    "failed to launch local browser '{}': {err}",
-                    executable.display()
-                ))
-            })?;
+            .stderr(Stdio::null());
+        // Put the browser in its own process group so shutdown can kill the
+        // whole tree (helpers included), not just the main process.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command.spawn().map_err(|err| {
+            CrawlError::InvalidInput(format!(
+                "failed to launch local browser '{}': {err}",
+                executable.display()
+            ))
+        })?;
 
         let endpoint =
             match wait_for_devtools_endpoint(&mut child, &profile_dir, options.startup_timeout) {
@@ -83,34 +94,146 @@ impl ManagedBrowser {
     fn is_running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }
-}
 
-impl Drop for ManagedBrowser {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
+    /// Kill the browser process tree and remove its temporary profile.
+    fn shutdown(&mut self) {
+        kill_browser_tree(&mut self.child);
         let _ = self.child.wait();
         let _ = fs::remove_dir_all(&self.profile_dir);
     }
 }
 
-static LOCAL_BROWSER: LazyLock<Mutex<Option<ManagedBrowser>>> = LazyLock::new(|| Mutex::new(None));
+impl Drop for ManagedBrowser {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
 
+/// Process-lifetime registry for the single managed browser. Rust statics are
+/// never dropped at process exit, so the child MUST be shut down explicitly
+/// through [`shutdown_local_browser`] (plugin shutdown, idle auto-close, or an
+/// explicit management tool); relying on `Drop` alone would leak the browser
+/// process after the host exits.
+struct LocalBrowserState {
+    browser: Option<ManagedBrowser>,
+    last_used: Option<Instant>,
+    idle_timeout: Option<Duration>,
+}
+
+static LOCAL_BROWSER: LazyLock<Mutex<LocalBrowserState>> = LazyLock::new(|| {
+    Mutex::new(LocalBrowserState {
+        browser: None,
+        last_used: None,
+        idle_timeout: None,
+    })
+});
+
+/// Return the DevTools WebSocket endpoint of the managed browser, spawning it
+/// lazily on first use. The browser is reused for the process lifetime and is
+/// shut down by [`shutdown_local_browser`] or after `options.idle_timeout` of
+/// inactivity.
 pub fn local_browser_endpoint(options: &LocalBrowserOptions) -> Result<String, CrawlError> {
-    let mut browser = LOCAL_BROWSER
+    let mut state = LOCAL_BROWSER
         .lock()
         .map_err(|_| CrawlError::InvalidInput("local browser mutex poisoned".to_string()))?;
-    if let Some(existing) = browser.as_mut()
+    if let Some(existing) = state.browser.as_mut()
         && existing.is_running()
     {
-        return Ok(existing.endpoint.clone());
+        let endpoint = existing.endpoint.clone();
+        state.last_used = Some(Instant::now());
+        state.idle_timeout = options.idle_timeout;
+        return Ok(endpoint);
     }
 
-    *browser = Some(ManagedBrowser::spawn(options)?);
-    Ok(browser
-        .as_ref()
-        .expect("managed browser inserted")
-        .endpoint
-        .clone())
+    // Drop a dead entry (kills and cleans its profile dir) before respawning.
+    state.browser = None;
+    let browser = ManagedBrowser::spawn(options)?;
+    let endpoint = browser.endpoint.clone();
+    state.idle_timeout = options.idle_timeout;
+    state.last_used = Some(Instant::now());
+    state.browser = Some(browser);
+    if options.idle_timeout.is_some() {
+        ensure_idle_janitor();
+    }
+    Ok(endpoint)
+}
+
+/// Report whether the managed browser process is currently running. This never
+/// starts a browser; management tools use it to inspect state cheaply.
+pub fn local_browser_running() -> bool {
+    LOCAL_BROWSER
+        .lock()
+        .ok()
+        .map(|mut state| {
+            state
+                .browser
+                .as_mut()
+                .is_some_and(ManagedBrowser::is_running)
+        })
+        .unwrap_or(false)
+}
+
+/// Mark the managed browser as recently used so the idle auto-close timer
+/// restarts. No-op when no browser is running.
+pub fn local_browser_touch() {
+    if let Ok(mut state) = LOCAL_BROWSER.lock() {
+        if state
+            .browser
+            .as_mut()
+            .is_some_and(ManagedBrowser::is_running)
+        {
+            state.last_used = Some(Instant::now());
+        }
+    }
+}
+
+/// Shut down the managed browser (if any) and remove its profile directory.
+/// Returns `true` when a running browser was closed.
+pub fn shutdown_local_browser() -> Result<bool, CrawlError> {
+    let mut state = LOCAL_BROWSER
+        .lock()
+        .map_err(|_| CrawlError::InvalidInput("local browser mutex poisoned".to_string()))?;
+    let running = state
+        .browser
+        .as_mut()
+        .is_some_and(ManagedBrowser::is_running);
+    if running {
+        tracing::debug!(target: "agena::web", "shutting down managed local browser");
+    }
+    // Taking the value out of the option drops it while the lock is held;
+    // `ManagedBrowser::drop` kills the child and removes the profile dir.
+    state.browser = None;
+    state.last_used = None;
+    state.idle_timeout = None;
+    Ok(running)
+}
+
+fn kill_browser_tree(child: &mut Child) {
+    // Best effort: signal the main process first, then the process group on
+    // Unix / the process tree on Windows so helper processes do not survive.
+    let _ = child.kill();
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .arg("-9")
+            .arg(format!("-{}", child.id()))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .arg("/PID")
+            .arg(child.id().to_string())
+            .arg("/T")
+            .arg("/F")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 fn wait_for_devtools_endpoint(
@@ -144,6 +267,38 @@ fn wait_for_devtools_endpoint(
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+static IDLE_JANITOR_STARTED: Once = Once::new();
+
+/// Start a lightweight daemon thread that closes the managed browser after the
+/// configured idle timeout. The janitor is started once, on the first browser
+/// launch that requests an idle timeout, and runs for the process lifetime.
+fn ensure_idle_janitor() {
+    IDLE_JANITOR_STARTED.call_once(|| {
+        thread::spawn(|| {
+            const CHECK_INTERVAL: Duration = Duration::from_secs(15);
+            loop {
+                thread::sleep(CHECK_INTERVAL);
+                let should_shutdown = LOCAL_BROWSER
+                    .lock()
+                    .ok()
+                    .and_then(|state| {
+                        let timeout = state.idle_timeout?;
+                        let last_used = state.last_used?;
+                        Some(last_used.elapsed() >= timeout)
+                    })
+                    .unwrap_or(false);
+                if should_shutdown {
+                    tracing::debug!(
+                        target: "agena::web",
+                        "closing idle managed local browser"
+                    );
+                    let _ = shutdown_local_browser();
+                }
+            }
+        });
+    });
 }
 
 fn find_browser_executable(configured: Option<&Path>) -> Result<PathBuf, CrawlError> {
@@ -223,4 +378,24 @@ fn browser_profile_dir() -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     std::env::temp_dir().join(format!("agena-web-browser-{}-{nanos}", std::process::id()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_spawn_running_shutdown_round_trip() {
+        // Chrome is an optional runtime dependency; skip when unavailable.
+        let options = LocalBrowserOptions::default();
+        let Ok(endpoint) = local_browser_endpoint(&options) else {
+            return;
+        };
+        assert!(!endpoint.is_empty());
+        assert!(local_browser_running());
+        assert!(shutdown_local_browser().unwrap_or_default());
+        assert!(!local_browser_running());
+        // Shutting down again is a no-op and reports nothing was closed.
+        assert!(!shutdown_local_browser().unwrap_or_default());
+    }
 }

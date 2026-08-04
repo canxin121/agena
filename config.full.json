@@ -189,6 +189,7 @@
           "browser": {
             "enabled": false,
             "executable_path": null,
+            "idle_timeout_secs": 300,
             "wait": {
               "for_network_idle": true,
               "timeout_secs": 10,

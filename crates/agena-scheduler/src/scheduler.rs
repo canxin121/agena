@@ -153,22 +153,28 @@ impl Scheduler {
                 break;
             };
             let due = current.claim_due().await;
-            for (mut job, delivery, token) in due {
+            for (mut job, delivery, token, delivery_key) in due {
                 let now = Utc::now();
                 let result = current.sink.deliver(&job, &delivery).await;
                 match job.finish_delivery(now, &delivery, result) {
                     Ok(JobOutcome::Continued) => {
-                        current.persist_completed_delivery(job, token).await;
+                        current
+                            .persist_completed_delivery(job, token, &delivery_key)
+                            .await;
                     }
                     Ok(JobOutcome::Expired) => {
                         // Keep terminal jobs, including their bounded run
                         // history, until a user explicitly deletes them.
-                        current.persist_completed_delivery(job, token).await;
+                        current
+                            .persist_completed_delivery(job, token, &delivery_key)
+                            .await;
                     }
                     Ok(JobOutcome::RetryScheduled) => {
                         // The failed attempt and retry deadline are durable;
                         // a later poll will reclaim the same delivery key.
-                        current.persist_completed_delivery(job, token).await;
+                        current
+                            .persist_completed_delivery(job, token, &delivery_key)
+                            .await;
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -196,8 +202,9 @@ impl Scheduler {
     ///
     /// The returned `Option<i64>` is the job's `next_fire_at` (in millis) as
     /// observed before claiming — the optimistic-lock token for the follow-up
-    /// `store.replace` so a concurrent process cannot double-claim.
-    async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt, Option<i64>)> {
+    /// `store.claim` so a concurrent process cannot double-claim. The trailing
+    /// `String` is the delivery key used to finalize (or requeue) the claim.
+    async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt, Option<i64>, String)> {
         let now = Utc::now();
         let mut deliveries = Vec::new();
         for mut job in self.store.list().await {
@@ -227,12 +234,23 @@ impl Scheduler {
                     }
                 }
                 Ok(crate::job::ClaimDueDelivery::Deliver(delivery)) => {
-                    if self.store.replace(job.id, token, job.clone()).await {
-                        deliveries.push((job, delivery, token));
+                    let delivery_key = format!("{}:{}", job.id, delivery.attempt);
+                    if self
+                        .store
+                        .claim(
+                            job.id,
+                            token,
+                            job.clone(),
+                            delivery_key.clone(),
+                            delivery.claimed_at.timestamp_millis(),
+                        )
+                        .await
+                    {
+                        deliveries.push((job, delivery, token, delivery_key));
                     } else {
                         tracing::warn!(
                             target: "agena_scheduler",
-                            "job disappeared while persisting scheduler delivery claim"
+                            "job was already claimed by another process"
                         );
                     }
                 }
@@ -253,10 +271,20 @@ impl Scheduler {
     /// itself has been durably replaced.  That ordering prevents an audit
     /// entry from claiming a completed delivery whose claim/finalization did
     /// not reach the same store.
-    async fn persist_completed_delivery(&self, job: ScheduledJob, token: Option<i64>) {
+    async fn persist_completed_delivery(
+        &self,
+        job: ScheduledJob,
+        _token: Option<i64>,
+        delivery_key: &str,
+    ) {
         let record = job.last_run.clone();
         let id = job.id;
-        if !self.store.replace(id, token, job).await {
+        let next_fire_at_ms = job.next_fire_at.map(|value| value.timestamp_millis());
+        if !self
+            .store
+            .finish(id, delivery_key.to_owned(), job, next_fire_at_ms)
+            .await
+        {
             tracing::warn!(
                 target: "agena_scheduler",
                 job_id = %id,

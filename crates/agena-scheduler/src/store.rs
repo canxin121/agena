@@ -29,6 +29,29 @@ pub trait JobStore: Send + Sync {
         expected_next_fire_at_ms: Option<i64>,
         job: ScheduledJob,
     ) -> bool;
+    /// Atomically claim a due job: mark it as claimed (via `delivery_key`) so
+    /// no other process can also claim it. The claim only succeeds when the
+    /// row is unclaimed (`delivery_key IS NULL`) and still due
+    /// (`next_fire_at_ms` matches). Returns `false` when another process
+    /// already claimed it or its schedule changed.
+    async fn claim(
+        &self,
+        id: Uuid,
+        expected_next_fire_at_ms: Option<i64>,
+        job: ScheduledJob,
+        delivery_key: String,
+        claimed_at_ms: i64,
+    ) -> bool;
+    /// Atomically finish (or requeue) a claimed job: clear its `delivery_key`
+    /// and set the next fire time. Returns `false` when the row is no longer
+    /// held by `delivery_key` (a stale finalize from a crashed attempt).
+    async fn finish(
+        &self,
+        id: Uuid,
+        delivery_key: String,
+        job: ScheduledJob,
+        next_fire_at_ms: Option<i64>,
+    ) -> bool;
     async fn append_history(&self, entry: SchedulerHistoryEntry);
     async fn list_history(&self, job_id: Option<Uuid>, limit: usize) -> Vec<SchedulerHistoryEntry>;
 }
@@ -113,6 +136,40 @@ impl JobStore for InMemoryJobStore {
         id: Uuid,
         _expected_next_fire_at_ms: Option<i64>,
         job: ScheduledJob,
+    ) -> bool {
+        let mut g = self.inner.write();
+        if !g.contains_key(&id) {
+            return false;
+        }
+        g.insert(id, job);
+        true
+    }
+
+    async fn claim(
+        &self,
+        id: Uuid,
+        _expected_next_fire_at_ms: Option<i64>,
+        job: ScheduledJob,
+        _delivery_key: String,
+        _claimed_at_ms: i64,
+    ) -> bool {
+        let mut g = self.inner.write();
+        let Some(existing) = g.get(&id) else {
+            return false;
+        };
+        if existing.pending_delivery.is_some() {
+            return false;
+        }
+        g.insert(id, job);
+        true
+    }
+
+    async fn finish(
+        &self,
+        id: Uuid,
+        _delivery_key: String,
+        job: ScheduledJob,
+        _next_fire_at_ms: Option<i64>,
     ) -> bool {
         let mut g = self.inner.write();
         if !g.contains_key(&id) {
@@ -230,6 +287,86 @@ impl JobStore for SqliteJobStore {
             Ok(result) => result.rows_affected() > 0,
             Err(error) => {
                 tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to replace scheduled job");
+                false
+            }
+        }
+    }
+
+    async fn claim(
+        &self,
+        id: Uuid,
+        expected_next_fire_at_ms: Option<i64>,
+        job: ScheduledJob,
+        delivery_key: String,
+        claimed_at_ms: i64,
+    ) -> bool {
+        let json = match serde_json::to_string(&job) {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to serialize scheduled job for claim");
+                return false;
+            }
+        };
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE agena_scheduler_jobs \
+                 SET job_json = ?, next_fire_at_ms = NULL, delivery_key = ?, claimed_at_ms = ?, updated_at_ms = ? \
+                 WHERE id = ? AND delivery_key IS NULL AND next_fire_at_ms IS ?",
+                [
+                    json.into(),
+                    delivery_key.into(),
+                    claimed_at_ms.into(),
+                    chrono::Utc::now().timestamp_millis().into(),
+                    id.to_string().into(),
+                    expected_next_fire_at_ms.into(),
+                ],
+            ))
+            .await;
+        match result {
+            Ok(result) => result.rows_affected() > 0,
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to claim scheduled job");
+                false
+            }
+        }
+    }
+
+    async fn finish(
+        &self,
+        id: Uuid,
+        delivery_key: String,
+        job: ScheduledJob,
+        next_fire_at_ms: Option<i64>,
+    ) -> bool {
+        let json = match serde_json::to_string(&job) {
+            Ok(json) => json,
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to serialize scheduled job for finish");
+                return false;
+            }
+        };
+        let result = self
+            .db
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE agena_scheduler_jobs \
+                 SET job_json = ?, next_fire_at_ms = ?, delivery_key = NULL, claimed_at_ms = NULL, updated_at_ms = ? \
+                 WHERE id = ? AND delivery_key = ?",
+                [
+                    json.into(),
+                    next_fire_at_ms.into(),
+                    chrono::Utc::now().timestamp_millis().into(),
+                    id.to_string().into(),
+                    delivery_key.into(),
+                ],
+            ))
+            .await;
+        match result {
+            Ok(result) => result.rows_affected() > 0,
+            Err(error) => {
+                tracing::error!(target: "agena_scheduler::store", job_id = %id, %error, "failed to finalize scheduled job");
                 false
             }
         }
@@ -453,5 +590,75 @@ mod tests {
                 .and_then(|entry| entry.record.delivery_key.as_deref()),
             Some("1")
         );
+    }
+
+    #[tokio::test]
+    async fn sqlite_claim_is_exclusive_across_connections() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)".to_string(),
+        ))
+        .await
+        .expect("create scheduler table with delivery key");
+
+        let store_a = SqliteJobStore::new(db.clone());
+        let store_b = SqliteJobStore::new(db);
+        let mut job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "claim");
+        job.next_fire_at = Some(Utc::now() - Duration::seconds(1)); // make it due
+        let id = job.id;
+        store_a.put(job.clone()).await;
+        let token = job.next_fire_at.map(|value| value.timestamp_millis());
+
+        // Two processes claim the same due job concurrently. The first wins;
+        // the second sees the row already claimed (delivery_key IS NOT NULL).
+        let (claim_a, claim_b) = tokio::join!(
+            store_a.claim(id, token, job.clone(), "delivery-a".to_owned(), 1),
+            store_b.claim(id, token, job.clone(), "delivery-b".to_owned(), 1),
+        );
+        assert!(claim_a ^ claim_b, "exactly one claim must succeed");
+    }
+
+    #[tokio::test]
+    async fn sqlite_finish_clears_delivery_and_requeues() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)".to_string(),
+        ))
+        .await
+        .expect("create scheduler table with delivery key");
+
+        let store = SqliteJobStore::new(db);
+        let mut job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "finish");
+        job.next_fire_at = Some(Utc::now() - Duration::seconds(1));
+        let id = job.id;
+        store.put(job.clone()).await;
+        let token = job.next_fire_at.map(|value| value.timestamp_millis());
+
+        assert!(
+            store
+                .claim(id, token, job.clone(), "delivery-1".to_owned(), 1)
+                .await
+        );
+        // A second claim on the claimed job must fail.
+        assert!(
+            !store
+                .claim(id, None, job.clone(), "delivery-2".to_owned(), 2)
+                .await
+        );
+        // Finish requeues it; the delivery key is cleared.
+        let next = job.next_fire_at.map(|value| value.timestamp_millis());
+        assert!(
+            store
+                .finish(id, "delivery-1".to_owned(), job, next)
+                .await
+        );
+        let reloaded = store.get(id).await.expect("reload");
+        assert!(reloaded.pending_delivery.is_none());
     }
 }

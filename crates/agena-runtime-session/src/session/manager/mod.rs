@@ -1246,16 +1246,26 @@ impl SessionManager {
             )),
         ));
         let state = SessionManagerState::new(processor, tool_executor, config);
+        let owner_id = uuid::Uuid::new_v4().to_string();
         Self {
             store,
             publisher,
             bus,
             execution: ArcSwap::from_pointee(state),
-            execution_registry: Arc::new(ExecutionRegistry::new()),
+            execution_registry: Arc::new(ExecutionRegistry::with_lease(
+                Arc::clone(&db_arc),
+                owner_id.clone(),
+            )),
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),
         }
+    }
+
+    /// The per-process execution-lease owner id, shared by the registry and
+    /// startup reconciliation so this process recognizes its own leases.
+    pub(crate) fn owner_id(&self) -> String {
+        self.execution_registry.owner_id()
     }
 
     /// Returns the unified event publisher used by Runtime composition and
@@ -1567,7 +1577,35 @@ impl SessionManager {
             })
         };
         let Some(timeout_ms) = auto_resolution_ms else {
-            return receive(response_rx.await);
+            // No auto-resolution deadline: keep waiting on the local oneshot,
+            // but also poll the database so a reply from another process
+            // (which cannot reach this process's oneshot) still wakes us.
+            let mut poll = tokio::time::interval(Duration::from_millis(250));
+            poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    biased;
+                    result = &mut response_rx => return receive(result),
+                    _ = poll.tick() => {
+                        let state = self.execution_state();
+                        let session = self.store
+                            .load_session(session_id, state.cache_policy())
+                            .await?;
+                        if session.has_replied_user_input_request(request_id) {
+                            // A concurrent process persisted the reply. The
+                            // answer content is durable in the event stream;
+                            // returning a default response lets the caller
+                            // resume without blocking forever.
+                            return Ok(agena_plugin_host::sdk::host_api::AskUserResponse {
+                                reply: String::new(),
+                                cancelled: false,
+                                timed_out: false,
+                                answers: Default::default(),
+                            });
+                        }
+                    }
+                }
+            }
         };
         let elapsed_ms = Utc::now()
             .signed_duration_since(created_at)

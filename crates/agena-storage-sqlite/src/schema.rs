@@ -156,10 +156,12 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_model_projection_states (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, last_seq_global INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_state (id INTEGER PRIMARY KEY, fetched_at_unix_ms INTEGER NULL, source TEXT NULL, last_error TEXT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_session_sequences (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, next_val INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_execution_leases (session_id INTEGER PRIMARY KEY REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, owner_id TEXT NOT NULL, run_id TEXT NULL, lease_started_at_ms INTEGER NOT NULL, heartbeat_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_user_message_idempotency (session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, idempotency_key TEXT NOT NULL, message_id INTEGER NOT NULL, PRIMARY KEY (session_id, idempotency_key))",
 ];
 
 const INDEXES: &[&str] = &[
@@ -191,6 +193,9 @@ const INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_next_fire ON agena_scheduler_jobs(next_fire_at_ms, id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_history_finished ON agena_scheduler_history(finished_at_ms DESC, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_history_job_finished ON agena_scheduler_history(job_id, finished_at_ms DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_execution_leases_heartbeat ON agena_execution_leases(heartbeat_at_ms)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_execution_leases_owner ON agena_execution_leases(owner_id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_jobs_delivery ON agena_scheduler_jobs(delivery_key) WHERE delivery_key IS NOT NULL",
 ];
 
 #[cfg(test)]

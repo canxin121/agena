@@ -28,6 +28,11 @@ pub(crate) struct SessionCommit {
     pub(crate) checkpoints: Vec<MessageCheckpoint>,
     pub(crate) client_events: Vec<EventKind>,
     pub(crate) persisted_rules: Vec<PersistedPermissionRule>,
+    /// Expected `agena_sessions.version` for the optimistic-lock write. When
+    /// present, the session row is updated only if its version still matches;
+    /// a mismatch yields `AppError::Conflict` instead of silently
+    /// overwriting a concurrent writer's change.
+    pub(crate) expected_version: Option<i64>,
 }
 
 /// Explicit delta for durable model-message projection.
@@ -117,6 +122,7 @@ mod ids;
 mod types;
 mod workspace;
 
+pub(crate) use self::core::LEASE_STALENESS_MS;
 pub(crate) use self::event_rewrite::*;
 pub(crate) use self::helpers::*;
 pub(crate) use self::types::*;

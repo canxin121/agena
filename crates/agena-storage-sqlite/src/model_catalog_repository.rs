@@ -218,6 +218,23 @@ impl SeaModelCatalogRepository {
     ) -> Result<(), ModelCatalogRepositoryError> {
         let txn = self.db.begin().await.map_err(backend_error)?;
         let result = async {
+            // Freshness gate: if another process already wrote a catalog
+            // fetched at or after ours, skip the whole rewrite. SQLite's
+            // single-writer transaction serializes concurrent writers, so the
+            // check-and-write is atomic: the later process sees the earlier
+            // commit and bails.
+            let existing: Option<i64> = txn
+                .query_one(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    format!("SELECT fetched_at_unix_ms FROM {STATE_TABLE} WHERE id = ?"),
+                    [CATALOG_STATE_ID.into()],
+                ))
+                .await
+                .map_err(backend_error)?
+                .and_then(|row| row.try_get("", "fetched_at_unix_ms").ok());
+            if existing.is_some_and(|value| value >= cached.fetched_at_unix_ms) {
+                return Ok(());
+            }
             Self::write_document_to_db(&txn, &cached.document).await?;
             txn.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,

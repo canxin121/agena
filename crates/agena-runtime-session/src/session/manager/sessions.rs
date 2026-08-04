@@ -5,12 +5,19 @@ use super::{
 };
 use crate::session::Session;
 use crate::session::prompt_window;
+use crate::session::store::LEASE_STALENESS_MS;
 use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
 
 impl SessionManager {
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
         let state = self.execution_state();
         for session_id in self.workspace_session_ids().await? {
+            // Skip sessions with a live execution lease: another process is
+            // actively running them, so their RunStarted entries are not
+            // interrupted and must not be aborted.
+            if self.store.active_lease_owner(session_id).await.is_some() {
+                continue;
+            }
             self.store
                 .reconcile_interrupted_lifecycles(session_id)
                 .await?;
@@ -63,6 +70,35 @@ impl SessionManager {
         }
         Ok(())
     }
+    /// Reclaim stale execution leases (from crashed processes) and reconcile
+    /// the interrupted runs of the reclaimed sessions. Called periodically by
+    /// a maintenance loop so a running process can recover another process's
+    /// crashed run without waiting for a restart.
+    pub async fn reap_stale_leases(&self) -> Result<(), AppError> {
+        let stale_before_ms =
+            agena_runtime_session_core::db::leases::lease_now_ms() - LEASE_STALENESS_MS;
+        let reclaimed =
+            agena_runtime_session_core::db::leases::reap_stale_leases(&self.store.db, stale_before_ms)
+                .await
+                .map_err(|error| AppError::Internal(error.to_string()))?;
+        let state = self.execution_state();
+        for session_id in reclaimed {
+            // Reconcile the reclaimed session's interrupted lifecycle.
+            self.store
+                .reconcile_interrupted_lifecycles(session_id)
+                .await?;
+            self.store
+                .reconcile_unmatched_runs(
+                    session_id,
+                    agena_domain::RunAbortReason::ProcessRestart,
+                )
+                .await
+                .map_err(AppError::from)?;
+            let _ = state;
+        }
+        Ok(())
+    }
+
     pub async fn active_execution(
         &self,
         session_id: i64,

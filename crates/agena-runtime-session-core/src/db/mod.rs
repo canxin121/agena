@@ -1,5 +1,6 @@
 pub mod crud;
 pub mod entities;
+pub mod leases;
 #[cfg(test)]
 pub mod event_entity;
 
@@ -170,5 +171,84 @@ mod event_store_adapter_tests {
             returned[0].meta.created_at.timestamp_millis(),
             event.meta.created_at.timestamp_millis()
         );
+    }
+}
+
+#[cfg(test)]
+mod lease_tests {
+    use std::sync::Arc;
+
+    use sea_orm::{ConnectionTrait, Database};
+    use agena_storage::WorkspaceRepository;
+
+    use agena_storage_sqlite::initialize_schema;
+    use crate::db::leases::{LeaseAcquireOutcome, lease_now_ms, release_lease, reap_stale_leases, try_acquire_lease};
+
+    async fn session_db() -> (sea_orm::DatabaseConnection, i64) {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        initialize_schema(&db).await.expect("schema");
+        // Workspace + session for the lease FK.
+        let ws = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/lease-test")
+            .await
+            .expect("workspace");
+        let row = db
+            .query_one(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "INSERT INTO agena_sessions (parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, created_at_ms, updated_at_ms) \
+                 VALUES (NULL, 0, 0, ?, 'lease', 1, 'ready', 1, 1) RETURNING id",
+                [ws.into()],
+            ))
+            .await
+            .expect("insert session")
+            .expect("session row");
+        let session_id: i64 = row.try_get("", "id").expect("session id");
+        (db, session_id)
+    }
+
+    #[tokio::test]
+    async fn lease_is_exclusive_across_owners_and_releasable() {
+        let (db, session_id) = session_db().await;
+        let now = lease_now_ms();
+
+        let first = try_acquire_lease(&db, session_id, "owner-a", None, now)
+            .await
+            .expect("acquire a");
+        assert!(matches!(first, LeaseAcquireOutcome::Acquired));
+
+        let second = try_acquire_lease(&db, session_id, "owner-b", None, now + 1)
+            .await
+            .expect("acquire b");
+        assert!(matches!(second, LeaseAcquireOutcome::HeldBy { .. }));
+
+        assert!(release_lease(&db, session_id, "owner-a")
+            .await
+            .expect("release a"));
+        let third = try_acquire_lease(&db, session_id, "owner-b", None, now + 2)
+            .await
+            .expect("acquire b again");
+        assert!(matches!(third, LeaseAcquireOutcome::Acquired));
+    }
+
+    #[tokio::test]
+    async fn stale_leases_are_reclaimed() {
+        let (db, session_id) = session_db().await;
+        let now = lease_now_ms();
+        try_acquire_lease(&db, session_id, "owner-crashed", None, now - 60_000)
+            .await
+            .expect("acquire stale");
+
+        let reclaimed = reap_stale_leases(&db, now - 30_000)
+            .await
+            .expect("reap");
+        assert!(reclaimed.contains(&session_id));
+
+        // After reclaim the lease is gone and a new owner can acquire.
+        let fresh = try_acquire_lease(&db, session_id, "owner-new", None, now)
+            .await
+            .expect("acquire after reap");
+        assert!(matches!(fresh, LeaseAcquireOutcome::Acquired));
     }
 }

@@ -28,7 +28,25 @@ use agena_domain::{SessionListRequest, SessionSummary};
 use agena_storage::SequenceAllocator;
 use agena_storage_sqlite::run_transaction_effects;
 
+/// A lease whose heartbeat is older than this is considered stale and may be
+/// reclaimed by reconciliation (the owning process is presumed crashed).
+pub(crate) const LEASE_STALENESS_MS: i64 = 15_000;
+
 impl SessionStore {
+    /// The owner of the session's active execution lease, if any.
+    ///
+    /// A lease is "active" while its heartbeat is fresh; a stale lease (e.g.
+    /// from a process that crashed) is not reported here so startup
+    /// reconciliation can reclaim the session.
+    pub(crate) async fn active_lease_owner(&self, session_id: i64) -> Option<String> {
+        let now = agena_runtime_session_core::db::leases::lease_now_ms();
+        let row = agena_runtime_session_core::db::leases::lease(&self.db, session_id)
+            .await
+            .ok()?;
+        let row = row?;
+        (now - row.heartbeat_at_ms < LEASE_STALENESS_MS).then_some(row.owner_id)
+    }
+
     pub(crate) async fn reconcile_interrupted_lifecycles(
         &self,
         session_id: i64,
@@ -1028,12 +1046,14 @@ impl SessionStore {
         child.runtime.prompt_window = source_prompt_window;
         child.runtime.clear_prompt_tokens();
         child.runtime.clear_provider_anchors();
+        let expected_version = Some(child.version);
         self.persist(
             super::SessionCommit {
                 session: child,
                 checkpoints: Vec::new(),
                 client_events: Vec::new(),
                 persisted_rules: Vec::new(),
+                expected_version,
             },
             cache_policy,
         )

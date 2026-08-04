@@ -336,6 +336,10 @@ pub async fn create_session_with_options(
     lifecycle_state: SessionLifecycleState,
 ) -> Result<SessionRecord, DbErr> {
     let txn = db.begin().await?;
+    // Acquire the SQLite write lock before the parent-lineage SELECT so a
+    // concurrent writer in another process cannot make the read→write upgrade
+    // fail with SQLITE_BUSY (the busy timeout only applies at transaction start).
+    agena_storage_sqlite::acquire_write_lock(&txn).await?;
     let result = create_session_in_transaction(
         &txn,
         workspace_id,

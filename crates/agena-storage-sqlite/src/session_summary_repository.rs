@@ -129,6 +129,12 @@ impl SessionMutationRepository for SeaSessionSummaryRepository {
         title: String,
     ) -> Result<SessionSummaryRecord, SessionMutationRepositoryError> {
         let txn = self.db.begin().await.map_err(map_mutation_error)?;
+        // Acquire the write lock before the parent SELECT so a concurrent
+        // writer in another process cannot make the read→write upgrade fail
+        // with SQLITE_BUSY (the busy timeout only applies at transaction start).
+        crate::acquire_write_lock(&txn)
+            .await
+            .map_err(map_mutation_error)?;
         let now = Utc::now().timestamp_millis();
         let (depth, root_id) = if let Some(parent_id) = parent_id {
             let parent = txn.query_one(statement(format!("SELECT depth, root_id, workspace_id, lifecycle_state FROM {SESSIONS} WHERE id = ?"), [parent_id.into()])).await.map_err(map_mutation_error)?.ok_or_else(|| SessionMutationRepositoryError::Backend(format!("parent session not found: {parent_id}")))?;

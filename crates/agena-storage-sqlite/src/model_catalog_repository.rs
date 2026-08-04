@@ -217,6 +217,13 @@ impl SeaModelCatalogRepository {
         cached: &CachedOfficialCatalog,
     ) -> Result<(), ModelCatalogRepositoryError> {
         let txn = self.db.begin().await.map_err(backend_error)?;
+        // Acquire the write lock before the freshness SELECT so the busy
+        // timeout applies at transaction start instead of surfacing SQLITE_BUSY
+        // on the read→write lock upgrade. Without this, a concurrent writer in
+        // another process makes the gate SELECT→write path fail immediately.
+        crate::acquire_write_lock(&txn)
+            .await
+            .map_err(backend_error)?;
         let result = async {
             // Freshness gate: if another process already wrote a catalog
             // fetched at or after ours, skip the whole rewrite. SQLite's
@@ -311,6 +318,9 @@ mod tests {
             .await
             .expect("in-memory database");
         for sql in [
+            // The write-lock fence (transaction.rs) inserts into agena_sequences,
+            // so the fixture must provide that table alongside the catalog tables.
+            "CREATE TABLE agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)".to_owned(),
             format!(
                 "CREATE TABLE {ENTRY_TABLE} (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)"
             ),

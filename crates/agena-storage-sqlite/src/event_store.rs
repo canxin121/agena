@@ -38,6 +38,12 @@ where
             return Ok(());
         }
         let txn = self.db.begin().await.map_err(backend_error)?;
+        // Acquire the write lock up front so the busy timeout applies at
+        // transaction start; concurrent writers wait instead of surfacing
+        // SQLITE_BUSY on a mid-transaction lock upgrade.
+        crate::acquire_write_lock(&txn)
+            .await
+            .map_err(backend_error)?;
         for event in events {
             let payload = serde_json::to_value(&event.kind).map_err(EventStoreError::Serde)?;
             let result = txn.execute(statement(format!("INSERT INTO {TABLE} (event_uuid, seq_global, seq_session, session_id, workspace_id, kind_tag, envelope_schema, payload_json, causation_uuid, correlation_uuid, created_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"), [event.meta.id.to_string().into(), event.meta.seq_global.into(), event.meta.seq_session.into(), event.meta.session_id.into(), event.meta.workspace_id.into(), event.kind.tag().to_string().into(), (event.meta.envelope_schema as i32).into(), payload.into(), event.meta.causation_id.map(|id| id.to_string()).into(), event.meta.correlation_id.map(|id| id.to_string()).into(), event.meta.created_at.timestamp_millis().into()])).await;

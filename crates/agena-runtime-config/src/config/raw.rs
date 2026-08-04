@@ -585,6 +585,33 @@ fn resolve_default_selection(
         ))
     })?;
 
+    // A `default_selection` can pin the adapter independently of the
+    // provider's `defaults.adapter`. When that adapter is not enabled the
+    // selection would point at a route the runtime never builds, so the
+    // effective model reference resolves to a "provider has no enabled
+    // adapter" failure at run time instead of a load-time error. Reject the
+    // reference here so config validation surfaces it (the provider-level
+    // `defaults.adapter` check in `raw_provider.rs` cannot see it).
+    if let Some(selection_adapter) = explicit_selection
+        .and_then(|selection| selection.adapter.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let resolved_adapter = provider
+            .adapters
+            .get(selection_adapter)
+            .ok_or_else(|| {
+                ConfigError::Validation(format!(
+                    "providers.default_selection adapter `{selection_adapter}` references unknown adapter for provider `{provider_id}`"
+                ))
+            })?;
+        if !resolved_adapter.enabled {
+            return Err(ConfigError::Validation(format!(
+                "providers.default_selection adapter `{selection_adapter}` references disabled adapter for provider `{provider_id}`"
+            )));
+        }
+    }
+
     Ok(agena_domain::ExecutionSelection {
         provider: Some(provider_id),
         adapter: explicit_selection
@@ -1675,6 +1702,85 @@ mod openai_protocol_adapter_tests {
         .expect_err("mode names must not imply strategy or effort");
 
         assert!(error.to_string().contains("needs an explicit strategy"));
+    }
+
+    #[test]
+    fn default_selection_adapter_referencing_a_disabled_adapter_is_rejected() {
+        // `providers.default_selection` pins an adapter that is disabled in
+        // the provider. Unlike the provider-level `defaults.adapter` check,
+        // resolution must reject this too, otherwise the runtime resolves a
+        // model through an adapter that is never built and fails per request
+        // with a generic "no enabled adapter" configuration error.
+        let value = serde_json::json!({
+            "providers": {
+                "default": "test",
+                "default_selection": {
+                    "provider": "test",
+                    "adapter": "openai_chat_completions",
+                    "model": "deepseek-v4-flash",
+                    "thinking_mode": "max"
+                },
+                "test": {
+                    "defaults": { "adapter": "openai_responses" },
+                    "auth": {
+                        "mode": "api",
+                        "subtype": "custom",
+                        "base_url": "https://api.openai.com",
+                        "api_key": { "kind": "inline", "value": "test-key" }
+                    },
+                    "adapters": {
+                        "openai_chat_completions": { "enabled": false },
+                        "openai_responses": { "enabled": true }
+                    }
+                }
+            }
+        });
+        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
+        let error = raw
+            .resolve_with_env(&crate::ProcessEnvironment)
+            .expect_err("default_selection adapter referencing a disabled adapter must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("references disabled adapter"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn default_selection_adapter_referencing_an_unknown_adapter_is_rejected() {
+        let value = serde_json::json!({
+            "providers": {
+                "default": "test",
+                "default_selection": {
+                    "provider": "test",
+                    "adapter": "does_not_exist",
+                    "model": "deepseek-v4-flash"
+                },
+                "test": {
+                    "defaults": { "adapter": "openai_responses" },
+                    "auth": {
+                        "mode": "api",
+                        "subtype": "custom",
+                        "base_url": "https://api.openai.com",
+                        "api_key": { "kind": "inline", "value": "test-key" }
+                    },
+                    "adapters": {
+                        "openai_responses": { "enabled": true }
+                    }
+                }
+            }
+        });
+        let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
+        let error = raw
+            .resolve_with_env(&crate::ProcessEnvironment)
+            .expect_err("default_selection adapter referencing an unknown adapter must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("references unknown adapter"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

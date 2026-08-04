@@ -106,6 +106,15 @@ pub struct MonitorStart {
     pub summary: ProcessSummary,
 }
 
+/// Observer hook called when a background process starts or reaches a
+/// terminal state. Lets the runtime surface shell processes through the
+/// unified background-activity registry without coupling the monitor to it.
+#[allow(unused_variables)]
+pub trait MonitorListener: Send + Sync + std::fmt::Debug {
+    fn on_started(&self, summary: &ProcessSummary) {}
+    fn on_finished(&self, summary: &ProcessSummary) {}
+}
+
 #[derive(Debug, Clone)]
 pub struct MonitorStopOutcome {
     pub summary: ProcessSummary,
@@ -131,9 +140,11 @@ struct MonitorState {
     /// Latest assigned seq (0 means no events yet).
     last_seq: AtomicU64,
     /// Cumulative count of evicted lines.
-    dropped_lines: AtomicU64,
+        dropped_lines: AtomicU64,
     inner: Mutex<MonitorInner>,
     notify: Notify,
+    /// Optional observer notified on start/finish transitions.
+    listener: Option<Arc<dyn MonitorListener>>,
 }
 
 #[derive(Debug)]
@@ -171,6 +182,7 @@ impl MonitorState {
 pub struct MonitorRegistry {
     handle: Option<Handle>,
     monitors: Mutex<HashMap<String, Arc<MonitorState>>>,
+    listener: Option<Arc<dyn MonitorListener>>,
 }
 
 impl Default for MonitorRegistry {
@@ -178,6 +190,7 @@ impl Default for MonitorRegistry {
         Self {
             handle: Handle::try_current().ok(),
             monitors: Mutex::new(HashMap::new()),
+            listener: None,
         }
     }
 }
@@ -187,8 +200,18 @@ impl MonitorRegistry {
         Self {
             handle: Some(handle),
             monitors: Mutex::new(HashMap::new()),
+            listener: None,
         }
     }
+
+    /// Attach an observer notified when processes start or finish. Only one
+    /// listener is supported per registry; later calls replace the previous
+    /// one.
+    pub fn with_monitor_listener(mut self, listener: Arc<dyn MonitorListener>) -> Self {
+        self.listener = Some(listener);
+        self
+    }
+
 
     fn require_handle(&self) -> Result<Handle, MonitorError> {
         self.handle.clone().ok_or(MonitorError::RuntimeMissing)
@@ -262,7 +285,8 @@ impl MonitorService for MonitorRegistry {
                 completion_reason: None,
                 abort: Some(abort_tx),
             }),
-            notify: Notify::new(),
+                        notify: Notify::new(),
+            listener: self.listener.clone(),
         });
 
         let runner_state = Arc::clone(&state);
@@ -290,11 +314,14 @@ impl MonitorService for MonitorRegistry {
             .await;
         });
 
-        let summary = state.snapshot();
+                let summary = state.snapshot();
         self.monitors
             .lock()
             .unwrap()
             .insert(state.monitor_id.clone(), state);
+        if let Some(listener) = &self.listener {
+            listener.on_started(&summary);
+        }
         Ok(MonitorStart { summary })
     }
 
@@ -360,7 +387,10 @@ impl MonitorService for MonitorRegistry {
                 }
             }
         }
-        state.notify.notify_waiters();
+                state.notify.notify_waiters();
+        if let Some(listener) = state.listener.as_ref() {
+            listener.on_finished(&state.snapshot());
+        }
         Ok(MonitorStopOutcome {
             summary: state.snapshot(),
         })
@@ -587,10 +617,13 @@ async fn run_monitor(
         if inner.completion_reason.is_none() {
             inner.completion_reason = Some(completion_reason);
         }
-        inner.ended_at_ms = Some(Utc::now().timestamp_millis());
+                inner.ended_at_ms = Some(Utc::now().timestamp_millis());
         inner.abort = None;
     }
     state.notify.notify_waiters();
+    if let Some(listener) = state.listener.as_ref() {
+        listener.on_finished(&state.snapshot());
+    }
 }
 
 async fn kill_child(child: &mut tokio::process::Child) {
@@ -621,6 +654,9 @@ fn mark_failed(state: &MonitorState, reason: String) {
     inner.abort = None;
     drop(inner);
     state.notify.notify_waiters();
+    if let Some(listener) = state.listener.as_ref() {
+        listener.on_finished(&state.snapshot());
+    }
 }
 
 async fn stream_lines<R>(

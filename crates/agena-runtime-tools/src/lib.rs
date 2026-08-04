@@ -12,8 +12,8 @@ mod snapshot_registry;
 pub mod tool;
 
 pub use monitor::{
-    MonitorError, MonitorRead, MonitorService, MonitorStart, MonitorStopOutcome,
-    default_monitor_registry,
+    MonitorError, MonitorListener, MonitorRead, MonitorRegistry, MonitorService, MonitorStart,
+    MonitorStopOutcome, default_monitor_registry,
 };
 pub use monitor::{ReadParams as MonitorReadParams, StartParams as MonitorStartParams};
 pub use project_paths::{

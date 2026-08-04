@@ -4,9 +4,9 @@
 //! API clients, and UIs (see [`ALL_KINDS`]).
 
 use agena_domain::{
-    CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, EventEnvelope, EventKindTag,
-    ExecutionFinishedEvent, ExecutionStartedEvent, KindMatcher, KindPersistence,
-    PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
+    BackgroundActivityChangedEvent, CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent,
+    EventEnvelope, EventKindTag, ExecutionFinishedEvent, ExecutionStartedEvent, KindMatcher,
+    KindPersistence, PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
     PromptCompactionCompletedEvent, ProviderRetryEvent, ProviderRetryResolvedEvent,
     StreamErrorEvent, SubtaskStatusChangedEvent, ToolPolicyDeniedEvent, ToolUserDeclinedEvent,
 };
@@ -46,7 +46,7 @@ pub enum EventKind {
     ToolPolicyDenied(ToolPolicyDeniedEvent),
     ToolUserDeclined(ToolUserDeclinedEvent),
 
-    // --- append-only history ---
+        // --- append-only history ---
     RunStarted(RunStarted),
     RunCompleted(RunCompleted),
     RunAborted(RunAborted),
@@ -54,6 +54,10 @@ pub enum EventKind {
     AssistantMessageFinished(AssistantMessageFinished),
     ToolCallIssued(ToolCallIssued),
     ToolCallCompleted(ToolCallCompleted),
+
+    // --- unified background-activity lifecycle ---
+    BackgroundActivityChanged(BackgroundActivityChangedEvent),
+
 
     // --- plugin-injected synthetic events ---
     /// Free-form payload published by a plugin via `host/event.publish`.
@@ -93,13 +97,14 @@ impl EventKind {
             Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
             Self::ToolPolicyDenied(_) => "tool_policy_denied",
             Self::ToolUserDeclined(_) => "tool_user_declined",
-            Self::RunStarted(_) => "run_started",
+                        Self::RunStarted(_) => "run_started",
             Self::RunCompleted(_) => "run_completed",
             Self::RunAborted(_) => "run_aborted",
             Self::UserMessageAppended(_) => "user_message_appended",
             Self::AssistantMessageFinished(_) => "assistant_message_finished",
             Self::ToolCallIssued(_) => "tool_call_issued",
             Self::ToolCallCompleted(_) => "tool_call_completed",
+            Self::BackgroundActivityChanged(_) => "background_activity_changed",
             Self::PluginEvent(_) => "plugin_event",
             Self::PluginToolRegistryChanged(_) => "plugin_tool_registry_changed",
         }
@@ -129,12 +134,13 @@ impl EventKind {
     /// ancestor projection. They must not reduce the child event into the
     /// ancestor transcript.
     pub fn invalidates_ancestor_projection(&self) -> bool {
-        matches!(
+                matches!(
             self,
             Self::PermissionRequested(_)
                 | Self::PermissionReplied(_)
                 | Self::SubtaskStatusChanged(_)
                 | Self::ExecutionFinished(_)
+                | Self::BackgroundActivityChanged(_)
         ) || matches!(
             self,
             Self::MessagePartCheckpointed(event)
@@ -180,8 +186,9 @@ pub const HISTORY_KINDS: &[&str] = &[
     "run_aborted",
     "user_message_appended",
     "assistant_message_finished",
-    "tool_call_issued",
+        "tool_call_issued",
     "tool_call_completed",
+    "background_activity_changed",
     "plugin_event",
     "plugin_tool_registry_changed",
 ];
@@ -212,8 +219,9 @@ pub const ALL_KINDS: &[&str] = &[
     "run_aborted",
     "user_message_appended",
     "assistant_message_finished",
-    "tool_call_issued",
+        "tool_call_issued",
     "tool_call_completed",
+    "background_activity_changed",
     "plugin_event",
     "plugin_tool_registry_changed",
 ];

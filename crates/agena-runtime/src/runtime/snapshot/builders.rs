@@ -20,7 +20,7 @@ type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
 pub(super) fn build_or_reconfigure_session_manager(
     inputs: SessionCompositionInputs<'_>,
 ) -> Arc<SessionManager> {
-    let agena_runtime::SessionCompositionInputs {
+        let agena_runtime::SessionCompositionInputs {
         existing,
         database: db,
         providers,
@@ -29,6 +29,7 @@ pub(super) fn build_or_reconfigure_session_manager(
         workspace_root,
         config: build_config,
         mcp_manager,
+        monitor_registry,
     } = inputs;
     let permission_inspector = mcp_manager.map(|manager| {
         Arc::new(McpRiskPermissionInspector { manager })
@@ -56,7 +57,8 @@ pub(super) fn build_or_reconfigure_session_manager(
                 workspace_root,
                 tool_presentation: build_config.tool_presentation.clone(),
                 session_manager: Some(Arc::clone(&manager)),
-                database: Arc::clone(db),
+                                database: Arc::clone(db),
+                monitor_registry: monitor_registry.clone(),
             },
             permission_inspector,
         );
@@ -71,7 +73,8 @@ pub(super) fn build_or_reconfigure_session_manager(
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
             session_manager: None,
-            database: Arc::clone(db),
+                            database: Arc::clone(db),
+                monitor_registry: monitor_registry.clone(),
         },
         permission_inspector.clone(),
     );
@@ -88,7 +91,8 @@ pub(super) fn build_or_reconfigure_session_manager(
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
             session_manager: Some(Arc::clone(&manager)),
-            database: Arc::clone(db),
+                            database: Arc::clone(db),
+                monitor_registry: monitor_registry.clone(),
         },
         permission_inspector,
     );
@@ -220,13 +224,14 @@ pub(super) fn build_tool_executor(
     inputs: ToolCompositionInputs<'_>,
     permission_inspector: Option<Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>>,
 ) -> ToolExecutor {
-    let agena_runtime::ToolCompositionInputs {
+        let agena_runtime::ToolCompositionInputs {
         plugins,
         lsp_registry,
         workspace_root,
         tool_presentation,
         session_manager,
         database,
+        monitor_registry,
     } = inputs;
     let principal = build_execution_principal(crate::authorization::PermissionConfig::default());
     let snapshot_registry = crate::tool::snapshot_registry_for_executor();
@@ -244,9 +249,9 @@ pub(super) fn build_tool_executor(
         );
     }
 
-    let scheduler = session_manager
+        let scheduler = session_manager
         .map(|session_manager| build_scheduler(session_manager, database.as_ref().clone()));
-    ToolExecutor::new(
+    let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         principal,
         plugins,
@@ -255,7 +260,11 @@ pub(super) fn build_tool_executor(
         lsp_registry,
         tool_presentation,
     )
-    .with_permission_inspector(permission_inspector)
+    .with_permission_inspector(permission_inspector);
+    if let Some(registry) = monitor_registry {
+        executor = executor.with_monitor_registry(registry);
+    }
+    executor
 }
 
 pub(super) fn build_execution_principal(

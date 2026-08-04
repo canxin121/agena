@@ -23,6 +23,7 @@ pub mod tool {
 }
 
 mod application_services;
+mod activity;
 mod background_task;
 mod background_task_completion;
 mod background_task_registry;
@@ -206,6 +207,7 @@ pub(crate) use agena_runtime_session::{
     estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,
     estimate_prompt_budget_threshold_tokens, estimate_session_context_usable_tokens,
 };
+pub use activity::{ActivityControlError, RuntimeActivityService};
 pub(crate) use agena_runtime_session::{
     record_provider_call, record_provider_stream, record_tool_execution, session_finished,
     session_started,
@@ -216,8 +218,8 @@ pub(crate) use agena_runtime_tools::snapshot_backend_capabilities;
 pub(crate) use agena_runtime_tools::snapshot_rift_binary;
 pub(crate) use agena_runtime_tools::truncate_tool_output_text;
 pub(crate) use agena_runtime_tools::{
-    MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStart, MonitorStartParams,
-    MonitorStopOutcome, default_monitor_registry,
+    MonitorError, MonitorListener, MonitorRead, MonitorReadParams, MonitorRegistry, MonitorService,
+    MonitorStart, MonitorStartParams, MonitorStopOutcome, default_monitor_registry,
 };
 pub(crate) use agena_runtime_tools::{
     SnapshotCreation, attach_existing_snapshot, create_managed_snapshot, remove_managed_snapshot,
@@ -240,7 +242,9 @@ pub use background_task::{
     RuntimeBackgroundTaskStatus,
 };
 pub(crate) use background_task_completion::RuntimeBackgroundTaskCompletion;
-pub(crate) use background_task_registry::RuntimeBackgroundTaskRegistry;
+pub(crate) use background_task_registry::{
+    RuntimeBackgroundTaskListener, RuntimeBackgroundTaskRegistry,
+};
 pub(crate) use background_task_spec::RuntimeBackgroundTaskSpec;
 pub(crate) use background_task_state::RuntimeBackgroundTaskState;
 pub use bootstrap_error::{RuntimeBootstrapError, RuntimeBootstrapErrorKind};

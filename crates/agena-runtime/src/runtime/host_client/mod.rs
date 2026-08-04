@@ -48,13 +48,13 @@ mod mappers;
 use image::*;
 use mappers::*;
 
-pub(crate) fn host_client_for(runtime: AgenaRuntime) -> Arc<dyn HostClient> {
+pub(crate) fn host_client_for(runtime: Arc<AgenaRuntime>) -> Arc<dyn HostClient> {
     Arc::new(RuntimeHostClient { runtime })
 }
 
 pub fn install_plugin_host_event_publisher(
     host_handle: Arc<agena_plugin_host::host::HostHandle>,
-    runtime: AgenaRuntime,
+    runtime: Arc<AgenaRuntime>,
 ) {
     let listener = Arc::new(
         move |event: agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent| {
@@ -75,7 +75,7 @@ pub fn install_plugin_host_event_publisher(
 }
 
 async fn publish_tool_registry_changed_event(
-    runtime: AgenaRuntime,
+    runtime: Arc<AgenaRuntime>,
     event: agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent,
 ) {
     let snapshot = runtime.current_snapshot();
@@ -151,7 +151,7 @@ fn plugin_error_from_app(error: crate::AppError) -> PluginError {
 }
 
 struct RuntimeHostClient {
-    runtime: AgenaRuntime,
+    runtime: Arc<AgenaRuntime>,
 }
 
 impl RuntimeHostClient {

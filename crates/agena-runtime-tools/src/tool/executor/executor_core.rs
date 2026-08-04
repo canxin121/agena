@@ -110,13 +110,23 @@ impl ToolExecutor {
         self
     }
 
-    pub fn with_permission_inspector(
+        pub fn with_permission_inspector(
         mut self,
         inspector: Option<Arc<dyn crate::tool::ExecutionPermissionInspector>>,
     ) -> Self {
         self.permission_inspector = inspector;
         self
     }
+
+    /// Install an explicit background-process registry. The default registry
+    /// is created lazily from the current tokio handle; runtimes that want to
+    /// observe shell processes (for example the background-activity service)
+    /// pass a registry built with a [`crate::MonitorListener`].
+    pub fn with_monitor_registry(mut self, registry: Arc<dyn crate::MonitorService>) -> Self {
+        self.monitor_registry = Some(registry);
+        self
+    }
+
 
     /// Attach a runtime-owned sink for process command lifecycle/output
     /// events. The sink is intentionally optional and is preserved when the

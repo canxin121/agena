@@ -5,6 +5,7 @@
 
 mod access;
 mod activity;
+mod background_activity;
 mod auto_compaction;
 mod command_events;
 mod context_policy;
@@ -74,6 +75,11 @@ mod usage_stats;
 mod user_input;
 
 pub use access::{AccessKind, AccessSelector};
+pub use background_activity::{
+    BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,
+    BackgroundActivityFilter, BackgroundActivityKind, BackgroundActivityLogLine,
+    BackgroundActivityLogRead, BackgroundActivityStatus,
+};
 pub use activity::{
     ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
     ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,

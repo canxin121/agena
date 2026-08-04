@@ -45,13 +45,14 @@ pub(crate) struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
-    pub(crate) async fn build(
+        pub(crate) async fn build(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
         workspace_root: &Path,
         database: Option<Arc<DatabaseConnection>>,
         existing_session_manager: Option<Arc<SessionManager>>,
+        monitor_registry: Option<Arc<dyn crate::MonitorService>>,
     ) -> Result<Self, AppError> {
         Self::build_inner(
             generation,
@@ -61,6 +62,7 @@ impl RuntimeSnapshot {
             database,
             existing_session_manager,
             None,
+            monitor_registry,
         )
         .await
     }
@@ -68,7 +70,7 @@ impl RuntimeSnapshot {
     /// Hot-reload variant that lets the new snapshot reuse plugin transports
     /// from the previous snapshot when the corresponding `plugins.list.<id>`
     /// entry is byte-identical.
-    pub(crate) async fn build_with_previous(
+        pub(crate) async fn build_with_previous(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
@@ -76,6 +78,7 @@ impl RuntimeSnapshot {
         database: Option<Arc<DatabaseConnection>>,
         existing_session_manager: Option<Arc<SessionManager>>,
         previous: Arc<RuntimeSnapshot>,
+        monitor_registry: Option<Arc<dyn crate::MonitorService>>,
     ) -> Result<Self, AppError> {
         Self::build_inner(
             generation,
@@ -85,11 +88,12 @@ impl RuntimeSnapshot {
             database,
             existing_session_manager,
             Some(previous),
+            monitor_registry,
         )
         .await
     }
 
-    async fn build_inner(
+        async fn build_inner(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
@@ -97,6 +101,7 @@ impl RuntimeSnapshot {
         database: Option<Arc<DatabaseConnection>>,
         existing_session_manager: Option<Arc<SessionManager>>,
         previous: Option<Arc<RuntimeSnapshot>>,
+        monitor_registry: Option<Arc<dyn crate::MonitorService>>,
     ) -> Result<Self, AppError> {
         let mut resolution = loader.load(load_request)?;
         // Bundled implementations are a composition concern: the pure
@@ -189,7 +194,7 @@ impl RuntimeSnapshot {
         .map_err(AppError::Config)?;
         let session_build_config =
             agena_runtime::session_build_config_from_resolved(&resolution.config);
-        let session_manager = database.as_ref().map(|db| {
+                let session_manager = database.as_ref().map(|db| {
             build_or_reconfigure_session_manager(agena_runtime::SessionCompositionInputs {
                 existing: existing_session_manager,
                 database: db,
@@ -199,6 +204,7 @@ impl RuntimeSnapshot {
                 workspace_root,
                 config: &session_build_config,
                 mcp_manager: mcp_manager.clone(),
+                monitor_registry: monitor_registry.clone(),
             })
         });
         resume_session_state(session_manager.as_ref(), reusing_session_manager).await?;

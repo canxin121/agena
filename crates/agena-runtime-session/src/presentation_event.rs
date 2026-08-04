@@ -16,6 +16,13 @@ pub enum RuntimePresentationEventKind {
         activity_id: agena_domain::ActivityId,
         delta: String,
     },
+    /// A background activity started, updated, or finished. Carries the
+    /// mutated activity so presentation consumers can refresh a management
+    /// panel without a full persisted-state replay.
+    ActivityChanged {
+        activity: Box<agena_domain::BackgroundActivity>,
+        reason: agena_domain::BackgroundActivityEventReason,
+    },
     /// A session transition that has no incremental transcript projection but
     /// requires the presentation to reload persisted state.
     Refresh {

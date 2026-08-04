@@ -13,6 +13,15 @@ use crate::{
 
 const DEFAULT_TASK_HISTORY_LIMIT: usize = 64;
 
+/// Observer hook called when a runtime background task starts or reaches a
+/// terminal state. Lets the runtime surface maintenance tasks through the
+/// unified background-activity registry without coupling the registry to it.
+#[allow(unused_variables)]
+pub trait RuntimeBackgroundTaskListener: Send + Sync {
+    fn on_started(&self, task: &RuntimeBackgroundTask) {}
+    fn on_finished(&self, task: &RuntimeBackgroundTask) {}
+}
+
 /// Runtime-owned registry algorithm parameterized by the caller's error type.
 pub(crate) struct RuntimeBackgroundTaskRegistry<E> {
     inner: Arc<Mutex<RuntimeBackgroundTaskState>>,
@@ -41,6 +50,14 @@ impl<E> Default for RuntimeBackgroundTaskRegistry<E> {
 }
 
 impl<E> RuntimeBackgroundTaskRegistry<E> {
+    /// Attach an observer notified when tasks start or finish. Only one
+    /// listener is supported per registry; later calls replace the previous
+    /// one.
+    pub(crate) fn set_listener(&self, listener: Arc<dyn RuntimeBackgroundTaskListener>) {
+        self.inner.lock().listener = Some(listener);
+    }
+
+
     pub(crate) fn list(&self) -> Vec<RuntimeBackgroundTask> {
         let state = self.inner.lock();
         state
@@ -149,9 +166,13 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             (task, token, true)
         };
 
-        if started {
+                        if started {
             let registry = self.clone();
             let task_id = task.id.clone();
+            let listener = self.inner.lock().listener.clone();
+            if let Some(listener) = listener {
+                listener.on_started(&task);
+            }
             tokio::spawn(async move {
                 let completion = tokio::select! {
                     _ = token.cancelled() => RuntimeBackgroundTaskCompletion::Cancelled {
@@ -198,38 +219,50 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         RuntimeBackgroundTaskStart { started, task }
     }
 
-    fn finish(&self, task_id: &str, completion: RuntimeBackgroundTaskCompletion) {
-        let mut state = self.inner.lock();
-        if let Some(task) = state.tasks.get_mut(task_id) {
-            task.finished_at = Some(Utc::now());
-            match completion {
-                RuntimeBackgroundTaskCompletion::Succeeded { message } => {
-                    task.status = RuntimeBackgroundTaskStatus::Succeeded;
-                    task.message = message;
-                    task.failure = None;
+            fn finish(&self, task_id: &str, completion: RuntimeBackgroundTaskCompletion) {
+        let finished = {
+            let mut state = self.inner.lock();
+            if let Some(task) = state.tasks.get_mut(task_id) {
+                task.finished_at = Some(Utc::now());
+                match completion {
+                    RuntimeBackgroundTaskCompletion::Succeeded { message } => {
+                        task.status = RuntimeBackgroundTaskStatus::Succeeded;
+                        task.message = message;
+                        task.failure = None;
+                    }
+                    RuntimeBackgroundTaskCompletion::Failed { failure } => {
+                        task.status = RuntimeBackgroundTaskStatus::Failed;
+                        task.message = None;
+                        task.failure = Some(failure);
+                    }
+                    RuntimeBackgroundTaskCompletion::Cancelled { message } => {
+                        task.status = RuntimeBackgroundTaskStatus::Cancelled;
+                        task.message = message;
+                        task.failure = None;
+                    }
                 }
-                RuntimeBackgroundTaskCompletion::Failed { failure } => {
-                    task.status = RuntimeBackgroundTaskStatus::Failed;
-                    task.message = None;
-                    task.failure = Some(failure);
-                }
-                RuntimeBackgroundTaskCompletion::Cancelled { message } => {
-                    task.status = RuntimeBackgroundTaskStatus::Cancelled;
-                    task.message = message;
-                    task.failure = None;
-                }
+                Some(task.clone())
+            } else {
+                None
             }
-        }
+        };
 
-        state.controls.remove(task_id);
-        if let Some(dedupe_key) = state.dedupe_keys.remove(task_id)
-            && state
-                .active_by_key
-                .get(&dedupe_key)
-                .is_some_and(|id| id == task_id)
         {
-            state.active_by_key.remove(&dedupe_key);
+            let mut state = self.inner.lock();
+            state.controls.remove(task_id);
+            if let Some(dedupe_key) = state.dedupe_keys.remove(task_id)
+                && state
+                    .active_by_key
+                    .get(&dedupe_key)
+                    .is_some_and(|id| id == task_id)
+            {
+                state.active_by_key.remove(&dedupe_key);
+            }
+            state.trim_history(self.history_limit);
         }
-        state.trim_history(self.history_limit);
+                if let (Some(listener), Some(task)) = (self.inner.lock().listener.clone(), finished) {
+            listener.on_finished(&task);
+        }
     }
 }
+

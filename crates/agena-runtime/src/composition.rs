@@ -42,9 +42,12 @@ pub(crate) struct SessionCompositionInputs<
     pub(crate) providers: Providers,
     pub(crate) plugins: Plugins,
     pub(crate) lsp_registry: Lsp,
-    pub(crate) workspace_root: Workspace,
+        pub(crate) workspace_root: Workspace,
     pub(crate) config: Config,
     pub(crate) mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
+    /// Background-process registry installed into every tool executor built
+    /// for this session manager.
+    pub(crate) monitor_registry: Option<Arc<dyn crate::MonitorService>>,
 }
 
 /// Default upper bound for concurrently executing tools in one session.
@@ -91,6 +94,9 @@ pub(crate) struct ToolCompositionInputs<Plugins, Lsp, Workspace, Presentation, S
     pub(crate) tool_presentation: Presentation,
     pub(crate) session_manager: Session,
     pub(crate) database: Database,
+    /// Background-process registry installed into the tool executor. When
+    /// `None` the executor lazily builds its default registry.
+    pub(crate) monitor_registry: Option<Arc<dyn crate::MonitorService>>,
 }
 
 /// Typed inputs for database connection/schema composition. Runtime owns the

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
@@ -12,6 +13,8 @@ pub(crate) struct RuntimeBackgroundTaskState {
     pub(crate) controls: HashMap<String, CancellationToken>,
     pub(crate) active_by_key: HashMap<String, String>,
     pub(crate) dedupe_keys: HashMap<String, String>,
+    /// Observer notified on start/finish transitions.
+    pub(crate) listener: Option<Arc<dyn crate::RuntimeBackgroundTaskListener>>,
 }
 
 impl RuntimeBackgroundTaskState {

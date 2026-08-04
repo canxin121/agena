@@ -7,12 +7,12 @@ use agena_storage::{
 };
 
 use crate::{
-    ModelCatalogRuntimeService, PluginRuntimeService, RuntimeAuthenticationService,
-    RuntimeConfigSettingsService, RuntimeConfigurationService, RuntimeControlService,
-    RuntimeDraftAuthenticationService, RuntimeEventPublishService, RuntimeEventQueryService,
-    RuntimeEventStreamService, RuntimeStatusService, RuntimeToolExecutionService,
-    SessionExecutionCommandService, SessionExecutionControl, SessionPluginCommandService,
-    SessionQueryService, SessionToolExecutionService,
+    ModelCatalogRuntimeService, PluginRuntimeService, RuntimeActivityService,
+    RuntimeAuthenticationService, RuntimeConfigSettingsService, RuntimeConfigurationService,
+    RuntimeControlService, RuntimeDraftAuthenticationService, RuntimeEventPublishService,
+    RuntimeEventQueryService, RuntimeEventStreamService, RuntimeStatusService,
+    RuntimeToolExecutionService, SessionExecutionCommandService, SessionExecutionControl,
+    SessionPluginCommandService, SessionQueryService, SessionToolExecutionService,
 };
 
 /// Runtime-owned result of assembling the capabilities required by the
@@ -37,8 +37,9 @@ pub struct RuntimeApplicationServices {
     pub control: Arc<dyn RuntimeControlService>,
     pub authentication: Arc<dyn RuntimeAuthenticationService>,
     pub draft_authentication: Arc<dyn RuntimeDraftAuthenticationService>,
-    pub status: Arc<dyn RuntimeStatusService>,
+        pub status: Arc<dyn RuntimeStatusService>,
     pub tools: Arc<dyn RuntimeToolExecutionService>,
+    pub activities: Option<Arc<dyn RuntimeActivityService>>,
     pub event_queries: Option<Arc<dyn RuntimeEventQueryService>>,
     pub event_stream: Option<Arc<dyn RuntimeEventStreamService>>,
     pub event_publisher: Option<Arc<dyn RuntimeEventPublishService>>,
@@ -76,8 +77,9 @@ pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) control: Arc<dyn RuntimeControlService>,
     pub(crate) authentication: Arc<dyn RuntimeAuthenticationService>,
     pub(crate) draft_authentication: Arc<dyn RuntimeDraftAuthenticationService>,
-    pub(crate) status: Arc<dyn RuntimeStatusService>,
+        pub(crate) status: Arc<dyn RuntimeStatusService>,
     pub(crate) tools: Arc<dyn RuntimeToolExecutionService>,
+    pub(crate) activities: Option<Arc<dyn RuntimeActivityService>>,
     pub(crate) event_queries: Option<Arc<dyn RuntimeEventQueryService>>,
     pub(crate) event_stream: Option<Arc<dyn RuntimeEventStreamService>>,
     pub(crate) event_publisher: Option<Arc<dyn RuntimeEventPublishService>>,
@@ -102,8 +104,9 @@ pub(crate) fn compose_runtime_application_services(
         control: inputs.control,
         authentication: inputs.authentication,
         draft_authentication: inputs.draft_authentication,
-        status: inputs.status,
+                status: inputs.status,
         tools: inputs.tools,
+        activities: inputs.activities,
         event_queries: inputs.event_queries,
         event_stream: inputs.event_stream,
         event_publisher: inputs.event_publisher,

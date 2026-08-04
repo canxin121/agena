@@ -112,7 +112,8 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
             | EventKind::PermissionRuleUpdated(_)
             | EventKind::PermissionRuleRevoked(_)
             | EventKind::ToolPolicyDenied(_)
-            | EventKind::ToolUserDeclined(_)
+                        | EventKind::ToolUserDeclined(_)
+            | EventKind::BackgroundActivityChanged(_)
             | EventKind::PluginEvent(_)
             | EventKind::PluginToolRegistryChanged(_) => {}
         }
@@ -224,8 +225,9 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         | EventKind::ToolPolicyDenied(_)
         | EventKind::ToolUserDeclined(_)
         | EventKind::RunStarted(_)
-        | EventKind::RunCompleted(_)
+                | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
+        | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
     }
@@ -276,9 +278,10 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::PermissionRuleRevoked(_)
         | EventKind::ToolPolicyDenied(_)
         | EventKind::ToolUserDeclined(_)
-        | EventKind::RunStarted(_)
+                | EventKind::RunStarted(_)
         | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
+        | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_)
         | EventKind::ToolCallIssued(_) => {}
@@ -337,8 +340,9 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         | EventKind::ToolPolicyDenied(_)
         | EventKind::ToolUserDeclined(_)
         | EventKind::RunStarted(_)
-        | EventKind::RunCompleted(_)
+                | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
+        | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
     }
@@ -392,8 +396,9 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::ToolPolicyDenied(_)
         | EventKind::ToolUserDeclined(_)
         | EventKind::RunStarted(_)
-        | EventKind::RunCompleted(_)
+                | EventKind::RunCompleted(_)
         | EventKind::RunAborted(_)
+        | EventKind::BackgroundActivityChanged(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
@@ -431,8 +436,9 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         | EventKind::RunAborted(_)
         | EventKind::UserMessageAppended(_)
         | EventKind::AssistantMessageFinished(_)
-        | EventKind::ToolCallIssued(_)
+                | EventKind::ToolCallIssued(_)
         | EventKind::ToolCallCompleted(_)
+        | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_) => {}
     }

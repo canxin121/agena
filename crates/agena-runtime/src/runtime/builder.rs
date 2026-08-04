@@ -34,13 +34,13 @@ use provider_catalog::*;
 pub async fn bootstrap_application_services(
     request: agena_runtime::RuntimeBootstrapRequest,
 ) -> Result<agena_runtime::RuntimeBootstrapResult, agena_runtime::RuntimeBootstrapError> {
-    agena_runtime::compose_runtime_bootstrap(request, |config| async move {
+        agena_runtime::compose_runtime_bootstrap(request, |config| async move {
         let runtime = AgenaRuntime::new(config)
             .await
             .map_err(runtime_bootstrap_error)?;
         Ok(agena_runtime::RuntimeBootstrapComposition::new(
             runtime.application_services(),
-            Arc::new(runtime),
+            runtime.clone() as Arc<dyn agena_runtime::RuntimeBootstrapLifecycle>,
         ))
     })
     .await
@@ -49,7 +49,7 @@ pub async fn bootstrap_application_services(
 impl AgenaRuntime {
     /// Runtime-private composition entrypoint. External consumers use the
     /// stable `bootstrap_application_services` capability result instead.
-    pub(crate) async fn new(config: RuntimeCompositionConfig) -> Result<Self, AppError> {
+        pub(crate) async fn new(config: RuntimeCompositionConfig) -> Result<Arc<Self>, AppError> {
         let mut config = config;
         let workspace_root = config.resolve_workspace_root()?;
         let RuntimeCompositionConfig {
@@ -79,7 +79,7 @@ impl AgenaRuntime {
                 ));
             }
         };
-        let database =
+                let database =
             agena_runtime::connect_runtime_database(agena_runtime::DatabaseCompositionInputs {
                 database_connection,
                 database_url,
@@ -89,6 +89,23 @@ impl AgenaRuntime {
             })
             .await
             .map_err(runtime_database_error)?;
+
+        // Unified background-activity registry: sources push in, the publisher
+        // task drains events onto the runtime bus, and the same registry backs
+        // the application-facing activity service.
+        let (activity_tx, activity_rx) =
+            tokio::sync::mpsc::unbounded_channel::<agena_domain::BackgroundActivityChangedEvent>();
+                let activity_registry = crate::activity::ActivityRegistry::new(activity_tx);
+        let monitor_registry = tokio::runtime::Handle::try_current().ok().map(|handle| {
+                        let registry = crate::MonitorRegistry::from_handle(handle);
+            let bridge = crate::activity::MonitorActivityBridge {
+                registry: activity_registry.clone(),
+            };
+            registry.with_monitor_listener(Arc::new(bridge))
+        });
+                                let monitor_service = monitor_registry
+            .map(|registry| Arc::new(registry) as Arc<dyn crate::MonitorService>);
+
         let initial_snapshot = Arc::new(
             RuntimeSnapshot::build(
                 1,
@@ -97,6 +114,7 @@ impl AgenaRuntime {
                 workspace_root.as_path(),
                 database.clone(),
                 None,
+                monitor_service.clone(),
             )
             .await?,
         );
@@ -109,7 +127,55 @@ impl AgenaRuntime {
                 database,
                 RuntimeControlState::new(initial_snapshot.clone(), tracing_reload_handle),
             )),
+            activities: Arc::new(crate::activity::ActivityRuntimeState::new(
+                activity_registry.clone(),
+                monitor_service,
+            )),
         };
+
+                        // Project runtime maintenance tasks (marketplace sync, catalog
+        // refresh, reload) into the unified activity registry.
+        {
+            let bridge = Arc::new(crate::activity::RuntimeTaskActivityBridge {
+                registry: activity_registry.clone(),
+            });
+            runtime
+                .inner
+                .control_state
+                .background_tasks()
+                .set_listener(bridge);
+        }
+
+        // Drain activity events onto the runtime bus. Resolving the session
+        // manager lazily keeps this correct across runtime reloads. The weak
+        // handle avoids a retain cycle with the registry channel.
+        let runtime = Arc::new(runtime);
+        {
+            let runtime_weak = Arc::downgrade(&runtime);
+            let mut rx = activity_rx;
+            tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    let Some(runtime) = runtime_weak.upgrade() else {
+                        break;
+                    };
+                    let Some(manager) = runtime.current_snapshot().session_manager() else {
+                        continue;
+                    };
+                    let session_id = event.activity.session_id;
+                    let ctx = match session_id {
+                        Some(id) => crate::event::PublishContext::for_session(id),
+                        None => crate::event::PublishContext::default(),
+                    };
+                    let kind = crate::event::EventKind::BackgroundActivityChanged(event);
+                    if let Err(err) = manager.event_publisher().publish(ctx, kind).await {
+                        tracing::debug!(
+                            error = %err,
+                            "failed to publish background activity event"
+                        );
+                    }
+                }
+            });
+        }
 
         // Install the runtime-backed HostClient into the plugin host so
         // plugin → host callbacks (log/read_config/etc.) actually do work.
@@ -120,9 +186,208 @@ impl AgenaRuntime {
             super::host_client::install_plugin_host_event_publisher(host_handle, runtime.clone());
         }
 
-        runtime.apply_tracing_filter(initial_snapshot.tracing_config());
+                runtime.apply_tracing_filter(initial_snapshot.tracing_config());
         runtime.spawn_background_tasks();
+        runtime.spawn_task_activity_bridge();
         Ok(runtime)
+    }
+}
+
+impl AgenaRuntime {
+    /// Subscribe to delegated-task status events and project them into the
+    /// unified background-activity registry.
+    fn spawn_task_activity_bridge(&self) {
+        let Some(manager) = self.current_snapshot().session_manager() else {
+            return;
+        };
+        let stream = manager.clone() as Arc<dyn agena_runtime::RuntimeEventStreamService>;
+        let registry = self.activities.registry.clone();
+        tokio::spawn(async move {
+                        let filter = agena_domain::EventFilter {
+                scope: agena_domain::EventScope::Global,
+                kinds: Some(
+                    [
+                        agena_domain::EventKindTag::from("subtask_status_changed"),
+                        agena_domain::EventKindTag::from("plugin_event"),
+                    ]
+                    .into_iter()
+                    .collect(),
+                ),
+                since_seq_global: None,
+            };
+                        let mut subscription = stream.subscribe_events(filter);
+            while let Some(item) = subscription.recv().await {
+                let event = match item {
+                    agena_runtime::RuntimeLiveEventSubscriptionItem::Event(event) => event,
+                    agena_runtime::RuntimeLiveEventSubscriptionItem::Lagged(_) => continue,
+                };
+                match event.kind.as_str() {
+                    "subtask_status_changed" => {
+                        if let Ok(event) = serde_json::from_value::<
+                            agena_domain::SubtaskStatusChangedEvent,
+                        >(event.payload)
+                        {
+                            crate::activity::upsert_task_activity(&registry, &event);
+                        }
+                    }
+                    "plugin_event" => {
+                        if let Ok(payload) =
+                            serde_json::from_value::<crate::event::PluginEventPayload>(event.payload)
+                            && payload.kind_label == "activity"
+                        {
+                            // Extension point: plugins can publish rich
+                            // activity records (description, prompt excerpt)
+                            // as `PluginEvent { kind_label: "activity" }`
+                            // whose payload is a serialized
+                            // `BackgroundActivity`.
+                            if let Ok(activity) = serde_json::from_value::<
+                                agena_domain::BackgroundActivity,
+                            >(payload.payload)
+                            {
+                                registry.upsert(activity);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+    }
+}
+
+#[async_trait::async_trait]
+impl agena_runtime::RuntimeActivityService for AgenaRuntime {
+    fn list_activities(
+        &self,
+        filter: &agena_domain::BackgroundActivityFilter,
+    ) -> Vec<agena_domain::BackgroundActivity> {
+        self.activities.registry.list(filter)
+    }
+
+    fn get_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
+        self.activities
+            .registry
+            .get(activity_id)
+            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
+    }
+
+    async fn activity_logs(
+        &self,
+        activity_id: &str,
+        since_seq: u64,
+        limit: Option<u32>,
+        wait_ms: u64,
+    ) -> Result<agena_domain::BackgroundActivityLogRead, agena_runtime::ActivityControlError> {
+        let activity = self.get_activity(activity_id)?;
+        match activity.kind {
+            agena_domain::BackgroundActivityKind::Shell => {
+                let Some(monitor) = self.activities.monitor.as_ref() else {
+                    return Err(agena_runtime::ActivityControlError::no_log_source(activity_id));
+                };
+                crate::activity::read_shell_logs(
+                    monitor.as_ref(),
+                    activity_id,
+                    since_seq,
+                    limit,
+                    wait_ms,
+                )
+                .map_err(|err| agena_runtime::ActivityControlError::internal(err.to_string()))
+            }
+            agena_domain::BackgroundActivityKind::Task => {
+                let (parent_session_id, task_id) = activity
+                    .parent_session_id
+                    .zip(activity_id.strip_prefix("task_"))
+                    .ok_or_else(|| {
+                        agena_runtime::ActivityControlError::no_log_source(activity_id)
+                    })?;
+                Ok(crate::activity::read_task_logs(
+                    self.current_snapshot().session_manager().as_ref(),
+                    parent_session_id,
+                    task_id,
+                    since_seq as i64,
+                )
+                .await)
+            }
+            agena_domain::BackgroundActivityKind::Runtime
+            | agena_domain::BackgroundActivityKind::Browser => Ok(
+                agena_domain::BackgroundActivityLogRead {
+                    activity_id: activity_id.to_string(),
+                    status: activity.status,
+                    lines: Vec::new(),
+                    last_seq: 0,
+                    has_more: false,
+                    dropped_lines: 0,
+                    exit_code: activity.exit_code,
+                    completion_reason: activity.message.clone(),
+                },
+            ),
+        }
+    }
+
+        async fn stop_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
+        let activity = self.get_activity(activity_id)?;
+        if !activity.is_active() {
+            return Err(agena_runtime::ActivityControlError::not_running(activity_id));
+        }
+        if !activity.cancellable {
+            return Err(agena_runtime::ActivityControlError::not_stoppable(activity_id));
+        }
+        match activity.kind {
+            agena_domain::BackgroundActivityKind::Shell => {
+                let Some(monitor) = self.activities.monitor.as_ref() else {
+                    return Err(agena_runtime::ActivityControlError::not_stoppable(activity_id));
+                };
+                monitor
+                    .stop(activity_id)
+                    .map_err(|err| agena_runtime::ActivityControlError::internal(err.to_string()))?;
+            }
+            agena_domain::BackgroundActivityKind::Runtime => {
+                self.inner
+                    .control_state
+                    .background_tasks()
+                    .cancel(activity_id)
+                    .map_err(|err| agena_runtime::ActivityControlError::internal(err.to_string()))?;
+            }
+            agena_domain::BackgroundActivityKind::Task => {
+                let Some((parent_session_id, task_id)) = activity
+                    .parent_session_id
+                    .zip(activity_id.strip_prefix("task_"))
+                else {
+                    return Err(agena_runtime::ActivityControlError::not_stoppable(activity_id));
+                };
+                                let Some(manager) = self.current_snapshot().session_manager() else {
+                    return Err(agena_runtime::ActivityControlError::not_stoppable(activity_id));
+                };
+                manager
+                    .cancel_subtask(parent_session_id, task_id)
+                    .await
+                    .map_err(|err| agena_runtime::ActivityControlError::internal(err.to_string()))?;
+            }
+            agena_domain::BackgroundActivityKind::Browser => {
+                return Err(agena_runtime::ActivityControlError::not_stoppable(activity_id));
+            }
+        }
+        self.get_activity(activity_id)
+    }
+
+    fn dismiss_activity(
+        &self,
+        activity_id: &str,
+    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
+        self.activities
+            .registry
+            .dismiss(activity_id)
+            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
+    }
+
+        fn clear_finished(&self) -> usize {
+        self.activities.registry.clear_finished().len()
     }
 }
 
@@ -1215,6 +1480,7 @@ fn runtime_database_error(error: agena_runtime::RuntimeDatabaseCompositionError)
 #[derive(Clone)]
 pub(crate) struct AgenaRuntime {
     pub(crate) inner: Arc<AgenaRuntimeInner>,
+    pub(crate) activities: Arc<crate::activity::ActivityRuntimeState>,
 }
 
 pub(crate) type AgenaRuntimeInner = agena_runtime::RuntimeProcessState<
@@ -1297,8 +1563,9 @@ impl AgenaRuntime {
                 control: Arc::new(self.clone()),
                 authentication: Arc::new(self.clone()),
                 draft_authentication: Arc::new(self.clone()),
-                status: Arc::new(self.clone()),
+                                status: Arc::new(self.clone()),
                 tools: Arc::new(self.clone()),
+                activities: Some(Arc::new(self.clone()) as Arc<dyn agena_runtime::RuntimeActivityService>),
                 event_queries: session_manager.as_ref().map(|manager| {
                     manager.clone() as Arc<dyn agena_runtime::RuntimeEventQueryService>
                 }),
@@ -1374,7 +1641,7 @@ impl AgenaRuntime {
     ) -> Result<RuntimeReloadReport, AppError> {
         let _guard = self.inner.control_state.reload_gate().acquire().await;
         let previous = self.current_snapshot();
-        let next = Arc::new(
+                let next = Arc::new(
             RuntimeSnapshot::build_with_previous(
                 previous.generation() + 1,
                 &self.inner.loader,
@@ -1383,6 +1650,7 @@ impl AgenaRuntime {
                 self.inner.database.clone(),
                 previous.session_manager(),
                 Arc::clone(&previous),
+                self.activities.monitor.clone(),
             )
             .await?,
         );
@@ -1393,9 +1661,12 @@ impl AgenaRuntime {
         // host so post-reload plugin callbacks keep working.
         {
             let host_handle = next.plugin_manager().host_handle();
-            let client = super::host_client::host_client_for(self.clone());
+                        let client = super::host_client::host_client_for(Arc::new(self.clone()));
             agena_runtime::install_plugin_host_client(Arc::clone(&host_handle), client).await;
-            super::host_client::install_plugin_host_event_publisher(host_handle, self.clone());
+            super::host_client::install_plugin_host_event_publisher(
+                host_handle,
+                Arc::new(self.clone()),
+            );
         }
         let _ = self.inner.control_state.swap_snapshot(next.clone());
         let _ = self.start_model_catalog_refresh_if_needed(RuntimeBackgroundTaskOrigin::System);

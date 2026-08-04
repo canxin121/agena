@@ -1,6 +1,13 @@
 use agena_provider::ProviderErrorKind;
 use thiserror::Error;
 
+/// SQLite busy errors are transient database-lock conflicts: another process
+/// holds the write lock. They should be retried rather than reported as a
+/// terminal internal error.
+pub(crate) fn is_database_busy(error: &sea_orm::DbErr) -> bool {
+    agena_storage_sqlite::is_sqlite_busy(error)
+}
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("configuration error: {0}")]
@@ -140,6 +147,9 @@ impl AppError {
             }
             Self::ExecutionAlreadyActive(_) => "This session is already running a response.",
             Self::NoActiveExecution(_) => "This session has no active response.",
+            Self::Database(error) if is_database_busy(error) => {
+                "The database is busy. Try again in a moment."
+            }
             Self::PolicyDenied(_)
             | Self::UserDeclined(_)
             | Self::CapabilityUnavailable(_)
@@ -314,6 +324,16 @@ impl AppError {
                 Retry::AfterRefresh,
                 Recovery::Refresh,
             ),
+            // A transient SQLite lock conflict ("database is locked") is a
+            // dependency-level, retryable condition, not an internal error.
+            // This guard must precede the `Database` catch-all arm below.
+            Self::Database(error) if is_database_busy(error) => (
+                "database.busy",
+                Category::DependencyUnavailable,
+                Responsibility::System,
+                Retry::Backoff,
+                Recovery::Retry,
+            ),
             Self::PolicyDenied(_)
             | Self::UserDeclined(_)
             | Self::CapabilityUnavailable(_)
@@ -377,6 +397,12 @@ impl AppError {
                 }
                 None => UserPresentation::new(code, self.public_message()),
             },
+            Self::Database(error) if is_database_busy(error) => {
+                // A lock conflict is a transient condition with a stable,
+                // localizable message — don't surface the internal SQLite
+                // `(code: 5)` detail to the user.
+                UserPresentation::new(code, self.public_message())
+            }
             Self::Database(error) => {
                 UserPresentation::validated_with_context(code, error.to_string())
             }
@@ -587,5 +613,71 @@ mod tests {
         assert!(!display.contains("Something went wrong."));
         assert!(display.contains("database error") || display.contains("<redacted>"));
         assert!(!display.contains("Reference:"));
+    }
+
+    #[test]
+    fn sqlite_busy_is_classified_as_retryable_not_internal() {
+        use agena_failure::{FailureCategory, FailureResponsibility, RetryDirective};
+
+        let error = AppError::Database(busy_db_err());
+        let failure = error.failure();
+
+        assert_eq!(failure.code.as_str(), "database.busy");
+        assert_eq!(failure.category, FailureCategory::DependencyUnavailable);
+        assert_eq!(failure.responsibility, FailureResponsibility::System);
+        assert_eq!(failure.retry, RetryDirective::Backoff);
+        // The user-facing message is stable prose, not the internal code.
+        let message = failure.user.fallback.as_str();
+        assert!(!message.contains("(code:"));
+        assert!(!message.contains("database is locked"));
+        assert!(message.contains("busy"));
+        assert!(error.public_message().contains("busy"));
+    }
+
+    #[test]
+    fn ordinary_database_error_stays_internal_unexpected() {
+        let error = AppError::Database(sea_orm::DbErr::Custom("something broke".to_owned()));
+        let failure = error.failure();
+        assert_eq!(failure.code.as_str(), "internal.unexpected");
+    }
+
+    /// Builds a `DbErr::Exec` wrapping a SQLite busy error through the public
+    /// `DatabaseError` trait (the real `SqliteError` constructor is private).
+    fn busy_db_err() -> sea_orm::DbErr {
+        sea_orm::DbErr::Exec(sea_orm::RuntimeErr::SqlxError(
+            sea_orm::sqlx::Error::Database(Box::new(BusyDbError)),
+        ))
+    }
+
+    #[derive(Debug)]
+    struct BusyDbError;
+
+    impl std::fmt::Display for BusyDbError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "(code: 5) database is locked")
+        }
+    }
+
+    impl std::error::Error for BusyDbError {}
+
+    impl sea_orm::sqlx::error::DatabaseError for BusyDbError {
+        fn message(&self) -> &str {
+            "database is locked"
+        }
+        fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
+            Some("5".into())
+        }
+        fn kind(&self) -> sea_orm::sqlx::error::ErrorKind {
+            sea_orm::sqlx::error::ErrorKind::Other
+        }
+        fn as_error(&self) -> &(dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn std::error::Error + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn std::error::Error + Send + Sync + 'static> {
+            self
+        }
     }
 }

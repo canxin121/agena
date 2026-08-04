@@ -27,8 +27,9 @@ use agena_storage_sqlite::{StoredExecutionStatus, StoredPartKind};
 
 use super::{RunAborted, RunId, RunStarted};
 use agena_domain::{
-    EventFilter, EventScope, ExecutionFinishedEvent, ExecutionOutcome, ExecutionStartedEvent,
-    ExecutionStatus, MessageSource, PromptCompactionCompletedEvent, Role, RunAbortReason,
+    ActivityId, ActivityPayload, ErrorActivity, EventFilter, EventScope, ExecutionFinishedEvent,
+    ExecutionOutcome, ExecutionStartedEvent, ExecutionStatus, MessageSource,
+    PromptCompactionCompletedEvent, Role, RunAbortReason,
 };
 
 #[cfg(test)]
@@ -764,6 +765,55 @@ fn failure_json_for_outcome(outcome: &ExecutionOutcome) -> sea_orm::Value {
     }
 }
 
+/// Persist a reply-level failure as a durable Error Activity owned by the
+/// assistant reply, exactly like a failed tool call. The node lives only in
+/// `agena_content_nodes` (the transcript history) and never in the
+/// model-message parts that form the provider prompt, so it is user-facing
+/// only and is never sent to the AI server. A later successful continuation
+/// keeps the node (the reply recovers, the historical error stays visible),
+/// and a repeated failure replaces the same stable node with the latest
+/// problem instead of appending duplicates.
+async fn project_reply_error_activity<C: ConnectionTrait>(
+    db: &C,
+    payload: &ExecutionFinishedEvent,
+    revision_seq: i64,
+) -> Result<(), DbErr> {
+    let agena_domain::ExecutionOutcome::Failed { failure } = &payload.outcome else {
+        return Ok(());
+    };
+    let reply_id = payload.reply_id.to_string();
+    // Deterministic stable id derived from the reply id: repeated failures
+    // upsert the same node instead of appending duplicates. Flipping one byte
+    // keeps it distinct from the reply id itself and from every random
+    // ActivityId without requiring an extra uuid feature.
+    let reply_uuid: uuid::Uuid = payload.reply_id.into();
+    let mut bytes = *reply_uuid.as_bytes();
+    bytes[0] ^= 0x80;
+    let activity_id = ActivityId::from(uuid::Uuid::from_bytes(bytes));
+    let position = next_content_position(db, "assistant_reply", reply_id.as_str()).await?;
+    let payload_json = serde_json::to_value(ActivityPayload::Error(ErrorActivity {
+        problem: failure.clone(),
+    }))
+    .map_err(|error| DbErr::Custom(format!("encode reply error activity: {error}")))?;
+    db.execute(Statement::from_sql_and_values(
+        db.get_database_backend(),
+        "INSERT INTO agena_content_nodes          (node_id, owner_kind, owner_id, node_type, actor, title, payload_json, text, state,           position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms)          VALUES (?, 'assistant_reply', ?, 'activity', 'runtime', '', ?, NULL, 'failed', ?, ?, ?, ?, ?, ?)          ON CONFLICT(node_id) DO UPDATE SET          payload_json = excluded.payload_json, state = excluded.state,          revision_seq = excluded.revision_seq, finished_at_ms = excluded.finished_at_ms,          updated_at_ms = excluded.updated_at_ms          WHERE agena_content_nodes.owner_kind = excluded.owner_kind            AND agena_content_nodes.owner_id = excluded.owner_id            AND excluded.revision_seq >= agena_content_nodes.revision_seq",
+        [
+            activity_id.to_string().into(),
+            reply_id.clone().into(),
+            payload_json.into(),
+            position.into(),
+            revision_seq.into(),
+            payload.ts_ms.into(),
+            payload.ts_ms.into(),
+            payload.ts_ms.into(),
+            chrono::Utc::now().timestamp_millis().into(),
+        ],
+    ))
+    .await?;
+    Ok(())
+}
+
 async fn project_execution_finished<C, W>(
     db: &C,
     _part_writer: &W,
@@ -831,6 +881,9 @@ where
             if !matches!(payload.outcome, ExecutionOutcome::Completed) {
                 cancel_reply_interactions(db, payload, revision_seq).await?;
             }
+            if matches!(payload.outcome, ExecutionOutcome::Failed { .. }) {
+                project_reply_error_activity(db, payload, revision_seq).await?;
+            }
         }
         return Ok(reply_waits_for_user);
     }
@@ -867,6 +920,9 @@ where
             if !matches!(payload.outcome, ExecutionOutcome::Completed) {
                 cancel_reply_interactions(db, payload, revision_seq).await?;
             }
+            if matches!(payload.outcome, ExecutionOutcome::Failed { .. }) {
+                project_reply_error_activity(db, payload, revision_seq).await?;
+            }
         }
         return Ok(reply_waits_for_user);
     }
@@ -886,6 +942,7 @@ where
     {
         terminalize_reply_operations(db, payload, revision_seq).await?;
         cancel_reply_interactions(db, payload, revision_seq).await?;
+        project_reply_error_activity(db, payload, revision_seq).await?;
         // The earlier projection is authoritative, but a synthetic reconcile
         // finish may carry the first structured failure details: backfill the
         // failure projection when it is still missing.

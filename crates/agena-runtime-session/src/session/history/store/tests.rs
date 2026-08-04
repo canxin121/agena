@@ -1894,4 +1894,195 @@ mod tests {
         assert_eq!(message.state, StoredExecutionStatus::Completed);
         assert_eq!(part.status, StoredExecutionStatus::Failed);
     }
+    #[tokio::test]
+    async fn failed_reply_persists_a_durable_error_activity_that_survives_recovery() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/reply-error")
+            .await
+            .expect("workspace");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "reply-error")
+                .await
+                .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let continuation_execution_id = agena_domain::ExecutionId::new();
+        let retry_execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let writer = RuntimeProjectionPartWriter;
+
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+            1,
+        )
+        .await
+        .expect("started reply");
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: provider_execution_problem(),
+                },
+                ts_ms: 20,
+            },
+            2,
+        )
+        .await
+        .expect("failed reply");
+
+        // The failure is persisted as a durable Error Activity, like a
+        // failed tool call, owned by the assistant reply.
+        let nodes = db
+            .query_all(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT node_id, state, position, revision_seq, payload_json                  FROM agena_content_nodes                  WHERE owner_kind = 'assistant_reply' AND owner_id = ? AND node_type = 'activity'",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query error activity");
+        assert_eq!(nodes.len(), 1, "one durable error activity");
+        let payload: agena_domain::ActivityPayload =
+            serde_json::from_value(nodes[0].try_get("", "payload_json").unwrap()).unwrap();
+        assert!(
+            matches!(payload, agena_domain::ActivityPayload::Error(_)),
+            "payload must be an Error activity"
+        );
+        assert_eq!(nodes[0].try_get::<String>("", "state").unwrap(), "failed");
+        assert_eq!(nodes[0].try_get::<i64>("", "revision_seq").unwrap(), 2);
+        let node_id = nodes[0].try_get::<String>("", "node_id").unwrap();
+
+        // /continue recovers: a new execution on the same reply completes and
+        // the runtime clears its failure projection.
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id: continuation_execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::Continue,
+                ts_ms: 30,
+            },
+            3,
+        )
+        .await
+        .expect("started continuation");
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id: continuation_execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Completed,
+                ts_ms: 40,
+            },
+            4,
+        )
+        .await
+        .expect("completed continuation");
+
+        let reply = db
+            .query_one(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT status, failure_json FROM agena_assistant_replies WHERE reply_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query reply")
+            .expect("reply");
+        assert_eq!(reply.try_get::<String>("", "status").unwrap(), "completed");
+        assert!(
+            reply
+                .try_get::<Option<serde_json::Value>>("", "failure_json")
+                .unwrap()
+                .is_none(),
+            "failure projection is cleared after recovery"
+        );
+
+        // The durable error activity remains visible after recovery.
+        let nodes_after = db
+            .query_all(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT node_id FROM agena_content_nodes                  WHERE owner_kind = 'assistant_reply' AND owner_id = ? AND node_type = 'activity'",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query error activity after recovery");
+        assert_eq!(nodes_after.len(), 1, "error activity survives recovery");
+        assert_eq!(
+            nodes_after[0].try_get::<String>("", "node_id").unwrap(),
+            node_id
+        );
+
+        // A later failure replaces the same stable node instead of appending.
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id: retry_execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::Continue,
+                ts_ms: 50,
+            },
+            5,
+        )
+        .await
+        .expect("started retry");
+        project_execution_finished(
+            &db,
+            &writer,
+            &ExecutionFinishedEvent {
+                session_id: session.id,
+                execution_id: retry_execution_id,
+                reply_id,
+                outcome: ExecutionOutcome::Failed {
+                    failure: provider_execution_problem(),
+                },
+                ts_ms: 60,
+            },
+            6,
+        )
+        .await
+        .expect("retry failed");
+        let nodes_retry = db
+            .query_all(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT node_id, revision_seq FROM agena_content_nodes                  WHERE owner_kind = 'assistant_reply' AND owner_id = ? AND node_type = 'activity'",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query error activity after retry");
+        assert_eq!(nodes_retry.len(), 1, "repeated failure upserts one node");
+        assert_eq!(
+            nodes_retry[0].try_get::<String>("", "node_id").unwrap(),
+            node_id
+        );
+        assert_eq!(
+            nodes_retry[0].try_get::<i64>("", "revision_seq").unwrap(),
+            6
+        );
+    }
 }

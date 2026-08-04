@@ -114,9 +114,24 @@ fn assistant_reply_document_entry(
     failure: Option<agena_failure::UserProblem>,
 ) -> TranscriptEntry<'_> {
     let mut parts = assistant_reply_document_parts(document);
-    // A reply that recovered after a failure still carries its remembered
-    // failure so the transcript keeps the error Activity visible.
-    if document.is_empty() || assistant_reply_state_requires_outcome(state) || failure.is_some() {
+    // A reply-level failure is now persisted as a durable Error Activity in
+    // the reply content (like a failed tool call), so it renders through the
+    // shared canonical Activity path. Only fall back to the legacy
+    // "Response failed" lifecycle row when no durable Error Activity exists
+    // (for example a reply that failed before this projection was written, or
+    // a failure remembered in the terminal after a recovery).
+    let has_error_activity = document.nodes().iter().any(|node| {
+        matches!(
+            node,
+            ContentNode::Activity { activity }
+                if matches!(activity.payload, ActivityPayload::Error(_))
+        )
+    });
+    let failure_shown_by_activity = matches!(state, MessageStatus::Failed) && has_error_activity;
+    if document.is_empty()
+        || (assistant_reply_state_requires_outcome(state) && !failure_shown_by_activity)
+        || (failure.is_some() && !has_error_activity)
+    {
         parts.push(assistant_reply_lifecycle_part(reply_id, state, failure));
     }
     TranscriptEntry {
@@ -2092,5 +2107,87 @@ mod tests {
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("Reference:"), "{expanded_text}");
+    }
+    #[test]
+    fn durable_error_activity_renders_once_without_a_lifecycle_duplicate() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let full_error = "The provider response ended unexpectedly.";
+        let problem = invalid_tool_input_error(full_error).problem;
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Runtime,
+            state: ActivityState::Failed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Error(agena_domain::ErrorActivity {
+                problem: problem.clone(),
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let defaults = crate::TranscriptDetailDefaults {
+            activity_expanded: false,
+        };
+
+        // A reply that recovered keeps its durable Error Activity in content
+        // while the runtime failure projection is cleared; the error must
+        // still render, and without a duplicate lifecycle row.
+        let recovered = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            2,
+            &document,
+            None,
+        );
+        let rendered = crate::render_entry_detailed(
+            &recovered,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(text.contains("Error"), "{text}");
+        assert!(text.contains(full_error), "{text}");
+        assert!(!text.contains("Response failed"), "{text}");
+
+        // While the reply is still marked failed, the durable error activity
+        // is the single representation of the failure.
+        let failed = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Failed,
+            1,
+            &document,
+            Some(problem),
+        );
+        let failed_text = crate::render_entry_detailed(
+            &failed,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &Default::default(),
+        )
+        .lines
+        .iter()
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        );
+        assert!(failed_text.contains(full_error), "{failed_text}");
+        assert!(!failed_text.contains("Response failed"), "{failed_text}");
     }
 }

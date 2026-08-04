@@ -478,6 +478,14 @@ impl App {
             parts.push(status_line.trim().to_string());
         }
         for segment in self.backend.plugin_statusline_segments() {
+            // The `agena.terminal.*` segments are internal terminal-integration
+            // signals (window-title/notification activity like `blocked`,
+            // `running`, `idle`). They are not user-facing footer content and
+            // their raw payloads must not be rendered above the composer; the
+            // terminal integration consumes them separately.
+            if segment.segment_id.starts_with("agena.terminal.") {
+                continue;
+            }
             if segment.content.trim().is_empty() {
                 continue;
             }

@@ -39,6 +39,7 @@ impl TranscriptState {
             #[cfg(test)]
             messages: Vec::new(),
             snapshot: agena_domain::TranscriptSnapshot::default(),
+            reply_failures: BTreeMap::new(),
             pending_user_messages: Vec::new(),
             refreshing: false,
             state_loading: false,
@@ -71,6 +72,7 @@ impl TranscriptState {
             session_id,
             ..Default::default()
         };
+        self.reply_failures.clear();
         self.pending_user_messages.clear();
         self.refreshing = false;
         self.state_loading = false;
@@ -122,6 +124,11 @@ impl TranscriptState {
             .collect::<BTreeSet<_>>();
 
         change(&mut self.snapshot);
+        for turn in &self.snapshot.turns {
+            if let Some(failure) = turn.reply.failure.clone() {
+                self.reply_failures.insert(turn.reply.id, failure);
+            }
+        }
 
         let newly_visible_user_inputs = self
             .snapshot
@@ -209,11 +216,7 @@ impl TranscriptState {
     /// output to the compact result's derived Markdown so the expanded
     /// Activity shows live progress. Nothing here is persisted — this is pure
     /// in-memory presentation state.
-    fn append_live_operation_detail(
-        &mut self,
-        activity_id: agena_domain::ActivityId,
-        delta: &str,
-    ) {
+    fn append_live_operation_detail(&mut self, activity_id: agena_domain::ActivityId, delta: &str) {
         // Only expanded Operations receive live detail. Collapsed Activities
         // (or non-Operations) are untouched — this is what lets expanding
         // start and collapsing stop detail computation and transfer.
@@ -868,7 +871,13 @@ impl TranscriptState {
         let mut lines = Vec::new();
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
-        let snapshot_entries = transcript_entries(&self.snapshot);
+        let mut presentation_snapshot = self.snapshot.clone();
+        for turn in &mut presentation_snapshot.turns {
+            if let Some(failure) = self.reply_failures.get(&turn.reply.id) {
+                turn.reply.failure = Some(failure.clone());
+            }
+        }
+        let snapshot_entries = transcript_entries(&presentation_snapshot);
         #[cfg(not(test))]
         let entries = snapshot_entries;
         #[cfg(test)]
@@ -2935,10 +2944,9 @@ use super::TranscriptAction;
 use crate::{
     BTreeMap, BTreeSet, I18n, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
     RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
-    TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
-    TranscriptContentId, TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection,
-    TranscriptNodeKey, TranscriptNodeKind, TranscriptState, TranscriptTextPosition,
-    TranscriptTextSelection,
+    TranscriptBlockSelectionMode, TranscriptContentId, TranscriptCursor, TranscriptCursorAnchor,
+    TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
+    TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
     contains_case_insensitive, initial_search_match_index, min,
     normalize_transcript_text_selection, render_entry_detailed, transcript_entries,

@@ -46,7 +46,6 @@ pub enum PermissionStudioSectionId {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionStudioPage {
-    Overview,
     PathDefaults,
     PathRules,
     NetworkZones,
@@ -59,14 +58,6 @@ pub type PermissionStudioFocus = SectionedListFocus;
 
 pub fn nav_items(i18n: &I18n) -> Vec<PermissionStudioNavItem> {
     vec![
-        nav_item(
-            i18n,
-            "permission-studio-nav-overview",
-            0,
-            PermissionStudioPage::Overview,
-            Some(PermissionStudioSectionId::RootPath),
-            true,
-        ),
         nav_item(
             i18n,
             "permission-studio-nav-filesystem",
@@ -161,13 +152,12 @@ fn nav_item(
 
 pub fn nav_index_for_page(page: &PermissionStudioPage) -> usize {
     match page {
-        PermissionStudioPage::Overview => 0,
-        PermissionStudioPage::PathDefaults => 2,
-        PermissionStudioPage::PathRules => 3,
-        PermissionStudioPage::NetworkZones => 5,
-        PermissionStudioPage::NetworkRules => 6,
-        PermissionStudioPage::ToolNames => 8,
-        PermissionStudioPage::ToolCommandRules => 10,
+        PermissionStudioPage::PathDefaults => 1,
+        PermissionStudioPage::PathRules => 2,
+        PermissionStudioPage::NetworkZones => 4,
+        PermissionStudioPage::NetworkRules => 5,
+        PermissionStudioPage::ToolNames => 7,
+        PermissionStudioPage::ToolCommandRules => 8,
     }
 }
 

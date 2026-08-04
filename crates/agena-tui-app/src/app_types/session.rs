@@ -176,6 +176,10 @@ pub(crate) struct TranscriptState {
     #[cfg(test)]
     pub(crate) messages: Vec<MessageResource>,
     pub(crate) snapshot: agena_domain::TranscriptSnapshot,
+    /// Last failure observed per assistant reply. A continuation run clears
+    /// the runtime failure projection when the reply recovers, but the chat
+    /// keeps the last failure so the error Activity remains visible.
+    pub(crate) reply_failures: BTreeMap<agena_domain::AssistantReplyId, agena_failure::UserProblem>,
     pub(crate) pending_user_messages: Vec<PendingUserMessage>,
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,

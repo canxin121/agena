@@ -114,7 +114,9 @@ fn assistant_reply_document_entry(
     failure: Option<agena_failure::UserProblem>,
 ) -> TranscriptEntry<'_> {
     let mut parts = assistant_reply_document_parts(document);
-    if document.is_empty() || assistant_reply_state_requires_outcome(state) {
+    // A reply that recovered after a failure still carries its remembered
+    // failure so the transcript keeps the error Activity visible.
+    if document.is_empty() || assistant_reply_state_requires_outcome(state) || failure.is_some() {
         parts.push(assistant_reply_lifecycle_part(reply_id, state, failure));
     }
     TranscriptEntry {
@@ -165,6 +167,10 @@ fn assistant_reply_lifecycle_part(
         MessageStatus::Pending | MessageStatus::InProgress => (
             PartExecutionStatusResource::InProgress,
             TranscriptAssistantReplyLifecycle::Running,
+        ),
+        MessageStatus::Completed if failure.is_some() => (
+            PartExecutionStatusResource::Failed,
+            TranscriptAssistantReplyLifecycle::Failed { problem: failure },
         ),
         MessageStatus::Completed => (
             PartExecutionStatusResource::Completed,
@@ -510,8 +516,8 @@ mod tests {
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
         CustomActivity, OperationActivity, OperationActivityError, OperationAuthorization,
         OperationPermission, PermissionAction, PermissionReply, PermissionReplyKind,
-        PermissionRequest, ResourceActivity, SkillReferenceActivity,
-        StructuredObject, ToolCallId, ToolInvocation,
+        PermissionRequest, ResourceActivity, SkillReferenceActivity, StructuredObject, ToolCallId,
+        ToolInvocation,
     };
     use agena_failure::{
         Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
@@ -1609,7 +1615,10 @@ mod tests {
             "{expanded_text}"
         );
         // The summary is collapsed-only; expanded shows the derived detail.
-        assert!(expanded_text.contains("src/tool_result.rs"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("src/tool_result.rs"),
+            "{expanded_text}"
+        );
     }
 
     #[test]
@@ -1641,7 +1650,8 @@ mod tests {
         };
 
         let ordinary_title = "Process run Create a tiny test PNG with pure python";
-        let ordinary_document = operation_document(ordinary_title, &"PNG result details ".repeat(30));
+        let ordinary_document =
+            operation_document(ordinary_title, &"PNG result details ".repeat(30));
         let ordinary = assistant_reply_document_entry(
             response_id,
             MessageStatus::Completed,

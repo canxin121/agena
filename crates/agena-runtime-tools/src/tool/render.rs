@@ -215,9 +215,10 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                     // Numbered file previews (``N: content``) are readable as a
                     // plain code card; bare entries (directory listing) render
                     // as a Markdown list.
-                    let looks_like_dir = !preview
-                        .lines()
-                        .any(|line| line.split_once(':').is_some_and(|(n, _)| n.trim().parse::<u32>().is_ok()));
+                    let looks_like_dir = !preview.lines().any(|line| {
+                        line.split_once(':')
+                            .is_some_and(|(n, _)| n.trim().parse::<u32>().is_ok())
+                    });
                     if looks_like_dir {
                         for entry in preview.lines() {
                             w.list_item(format!("`{entry}`"));
@@ -276,7 +277,8 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                 ..
             } => {
                 w.heading(format!("`task` {task_id} · {status}"));
-                if let Some(final_text) = final_text.as_ref().filter(|text| !text.trim().is_empty()) {
+                if let Some(final_text) = final_text.as_ref().filter(|text| !text.trim().is_empty())
+                {
                     w.code_block("", final_text.as_str());
                 }
                 w.line(format!(
@@ -291,7 +293,11 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                 }
             }
             P::AskUser { answers, timed_out } => {
-                w.heading(if *timed_out { "ask_user · timed out" } else { "ask_user" });
+                w.heading(if *timed_out {
+                    "ask_user · timed out"
+                } else {
+                    "ask_user"
+                });
                 for (question, values) in answers {
                     w.list_item(format!("**{question}**: {}", values.join(", ")));
                 }
@@ -336,7 +342,10 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                     if let Some(status) = status {
                         params.push(("status".to_owned(), status.to_string()));
                     }
-                    params.push(("hint".to_owned(), "use `shell.logs` to read output".to_owned()));
+                    params.push((
+                        "hint".to_owned(),
+                        "use `shell.logs` to read output".to_owned(),
+                    ));
                 }
                 w.table(&params);
 
@@ -389,7 +398,10 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                 note,
             } => {
                 w.heading(format!("`enter_snapshot` · {branch}"));
-                w.line(format!("path: `{path}` · backend: {}", backend.as_deref().unwrap_or("—")));
+                w.line(format!(
+                    "path: `{path}` · backend: {}",
+                    backend.as_deref().unwrap_or("—")
+                ));
                 if let Some(note) = note.as_ref().filter(|text| !text.trim().is_empty()) {
                     w.line(note);
                 }
@@ -445,13 +457,19 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                 w.line(format!("next fire {next_fire_at}"));
             }
             P::LspDefinition { locations } => {
-                w.heading(format!("`lsp_definition` · {} location(s)", locations.len()));
+                w.heading(format!(
+                    "`lsp_definition` · {} location(s)",
+                    locations.len()
+                ));
                 for location in locations {
                     w.list_item(format!("`{location}`"));
                 }
             }
             P::LspReferences { locations } => {
-                w.heading(format!("`lsp_references` · {} reference(s)", locations.len()));
+                w.heading(format!(
+                    "`lsp_references` · {} reference(s)",
+                    locations.len()
+                ));
                 for location in locations {
                     w.list_item(format!("`{location}`"));
                 }
@@ -463,7 +481,10 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                 }
             }
             P::LspDiagnostics { entries } => {
-                w.heading(format!("`lsp_diagnostics` · {} diagnostic(s)", entries.len()));
+                w.heading(format!(
+                    "`lsp_diagnostics` · {} diagnostic(s)",
+                    entries.len()
+                ));
                 for entry in entries {
                     let marker = if entry.contains("[error]") {
                         "❌"
@@ -555,12 +576,15 @@ mod tests {
     }
 
     fn render_with_command(payload: serde_json::Value, command: Option<&str>) -> String {
-        super::render_tool_payload_markdown(&payload, &crate::tool::RenderContext {
-            workspace_root: std::path::Path::new("/tmp"),
-            live_tail: None,
-            command,
-            read_managed: &|_| None,
-        })
+        super::render_tool_payload_markdown(
+            &payload,
+            &crate::tool::RenderContext {
+                workspace_root: std::path::Path::new("/tmp"),
+                live_tail: None,
+                command,
+                read_managed: &|_| None,
+            },
+        )
     }
 
     #[test]
@@ -630,5 +654,66 @@ mod tests {
         let out = render(serde_json::json!({"some": "opaque"}));
         assert!(out.contains("```json"));
         assert!(out.contains("opaque"));
+    }
+    #[test]
+    fn shell_payload_without_tool_tag_renders_table_and_output() {
+        let out = super::render_tool_payload_markdown_with_name(
+            "agena.shell.run",
+            &serde_json::json!({
+                "action": "run",
+                "background": false,
+                "dropped_lines": 0,
+                "exit_code": 0,
+                "has_more": false,
+                "last_seq": 0,
+                "output": "total 64\ndrwxr-xr-x",
+                "shell": "bash",
+                "status": "exited"
+            }),
+            &crate::tool::RenderContext {
+                workspace_root: std::path::Path::new("/tmp"),
+                live_tail: None,
+                command: Some("ls -la"),
+                read_managed: &|_| None,
+            },
+        );
+        assert!(out.contains("| shell | bash |"), "{out}");
+        assert!(out.contains("| status | exited |"), "{out}");
+        assert!(out.contains("| exit | 0 |"), "{out}");
+        assert!(out.contains("`$ ls -la`"), "{out}");
+        assert!(out.contains("```\ntotal 64"), "{out}");
+        assert!(!out.contains("\"output\": \"total 64\""), "{out}");
+    }
+
+    #[test]
+    fn reproduces_users_exact_grep_shell_payload() {
+        let data = serde_json::json!({
+            "action": "run",
+            "background": false,
+            "description": "Command exited with code 0 in 1589 ms.",
+            "dropped_lines": 0,
+            "exit_code": 0,
+            "has_more": false,
+            "last_seq": 0,
+            "output": "   1 /Volumes/Rc20/Projects/agena/crates/agena-tui/src/input.rs:51:\n   1 /Volumes/Rc20/Projects/agena/crates/agena-tui/src/help.rs:179:",
+            "shell": "bash",
+            "status": "exited"
+        });
+        let out = super::render_tool_payload_markdown_with_name(
+            "agena.shell.run",
+            &data,
+            &crate::tool::RenderContext {
+                workspace_root: std::path::Path::new("/tmp"),
+                live_tail: None,
+                command: Some("grep -n foo"),
+                read_managed: &|_| None,
+            },
+        );
+        assert!(out.contains("| shell | bash |"), "{out}");
+        assert!(out.contains("| exit | 0 |"), "{out}");
+        assert!(out.contains("| status | exited |"), "{out}");
+        assert!(out.contains("`$ grep -n foo`"), "{out}");
+        assert!(out.contains("input.rs:51"), "{out}");
+        assert!(!out.contains("\"output\": \""), "{out}");
     }
 }

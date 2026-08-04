@@ -109,6 +109,24 @@ impl App {
         }
     }
 
+    pub(crate) fn handle_client_versions_studio_overlay_key(
+        &mut self,
+        key: KeyEvent,
+        dialog: &mut SettingsStudioOverlay,
+    ) -> bool {
+        match agena_tui_settings::handle_key(&mut dialog.state, key) {
+            agena_tui_settings::SettingsStudioEffect::Close => true,
+            agena_tui_settings::SettingsStudioEffect::Refresh => {
+                self.refresh_client_versions_studio_overlay(dialog);
+                false
+            }
+            agena_tui_settings::SettingsStudioEffect::Activate => {
+                self.activate_settings_studio_selection(dialog)
+            }
+            agena_tui_settings::SettingsStudioEffect::KeepOpen => false,
+        }
+    }
+
     pub(crate) fn handle_permission_studio_overlay_key(
         &mut self,
         key: KeyEvent,
@@ -282,9 +300,8 @@ use crate::{
     PermissionReplyKind, PermissionRuleStudioAction, PermissionRuleStudioOverlay,
     PermissionRuleStudioPathField, PermissionStudioOverlay, PermissionStudioPaneFocus, Route,
     SettingsStudioOverlay, drive_editor_dialog_key, drive_input_dialog_key,
-    permission_overlay_choice, permission_overlay_reply_label,
-    permission_rule_draft_from_request, permission_studio_nav_move_step,
-    set_permission_studio_pane_focus, ui_text,
+    permission_overlay_choice, permission_overlay_reply_label, permission_rule_draft_from_request,
+    permission_studio_nav_move_step, set_permission_studio_pane_focus, ui_text,
 };
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;

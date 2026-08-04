@@ -183,16 +183,16 @@ impl App {
         ));
         let ui_items =
             settings_studio_field_items(&self.i18n, &sources, SettingsStudioSectionId::Interface);
-        let mut runtime_session_items = settings_studio_field_items(
+        let mut runtime_session_items = vec![SettingsStudioItem::new(
+            ui_text::t(&self.i18n, "settings-client-versions-entry-label"),
+            ui_text::t(&self.i18n, "settings-client-versions-entry-value"),
+            ui_text::t(&self.i18n, "settings-client-versions-entry-detail"),
+            SettingsPickerAction::OpenProviderClientVersions,
+        )];
+        runtime_session_items.extend(settings_studio_field_items(
             &self.i18n,
             &sources,
             SettingsStudioSectionId::RuntimeSession,
-        );
-        runtime_session_items.push(SettingsStudioItem::new(
-            ui_text::t(&self.i18n, "settings-client-versions-refresh-label"),
-            ui_text::t(&self.i18n, "settings-client-versions-refresh-value"),
-            ui_text::t(&self.i18n, "settings-client-versions-refresh-description"),
-            SettingsPickerAction::RefreshProviderClientVersions,
         ));
         let permission_items = settings_studio_permission_items(
             &self.i18n,
@@ -314,6 +314,66 @@ impl App {
 
     pub(crate) fn refresh_settings_studio_overlay(&mut self, dialog: &mut SettingsStudioOverlay) {
         match self.rebuild_settings_studio_overlay(dialog) {
+            Ok(updated) => *dialog = updated,
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    pub(crate) fn build_client_versions_studio_overlay(&self) -> UiResult<SettingsStudioOverlay> {
+        let sources = self
+            .backend
+            .config_json_sources()
+            .map_err(crate::UiFailure::internal)?;
+        let mut items = settings_studio_field_items(
+            &self.i18n,
+            &sources,
+            SettingsStudioSectionId::ProviderClientVersions,
+        );
+        items.push(SettingsStudioItem::new(
+            ui_text::t(&self.i18n, "settings-client-versions-refresh-label"),
+            ui_text::t(&self.i18n, "settings-client-versions-refresh-value"),
+            ui_text::t(&self.i18n, "settings-client-versions-refresh-description"),
+            SettingsPickerAction::RefreshProviderClientVersions,
+        ));
+        let sections = vec![SettingsStudioSection {
+            id: SettingsStudioSectionId::ProviderClientVersions,
+            label: ui_text::t(&self.i18n, "settings-client-versions-section-label"),
+            summary: ui_text::t(&self.i18n, "settings-client-versions-section-summary"),
+            description: ui_text::t(&self.i18n, "settings-client-versions-section-description"),
+            items,
+        }];
+        Ok(SettingsStudioOverlay {
+            title: ui_text::t(&self.i18n, "overlay-client-versions-title"),
+            footer: ui_text::t(&self.i18n, "overlay-settings-footer"),
+            state: SettingsStudioPresentation::new(sections, 0, 0, SettingsStudioFocus::Items),
+        })
+    }
+
+    pub(crate) fn rebuild_client_versions_studio_overlay(
+        &self,
+        dialog: &SettingsStudioOverlay,
+    ) -> UiResult<SettingsStudioOverlay> {
+        let mut rebuilt = self.build_client_versions_studio_overlay()?;
+        rebuilt.state.set_indices(
+            dialog.state.selected_section_index(),
+            dialog.state.selected_item_index(),
+        );
+        rebuilt.state.set_focus(dialog.state.focus());
+        Ok(rebuilt)
+    }
+
+    pub(crate) fn open_client_versions_studio(&mut self) {
+        match self.build_client_versions_studio_overlay() {
+            Ok(dialog) => self.current_route = Route::ClientVersionsStudio(dialog),
+            Err(error) => self.flash_error(error),
+        }
+    }
+
+    pub(crate) fn refresh_client_versions_studio_overlay(
+        &mut self,
+        dialog: &mut SettingsStudioOverlay,
+    ) {
+        match self.rebuild_client_versions_studio_overlay(dialog) {
             Ok(updated) => *dialog = updated,
             Err(error) => self.flash_error(error),
         }

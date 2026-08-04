@@ -199,7 +199,8 @@ pub(crate) fn settings_studio_provider_items(
     sources: &ConfigJsonSources,
     providers: &[ProviderSummaryResource],
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
-    let mut items =
+    let mut items = vec![settings_studio_provider_workbench_item(i18n, providers)];
+    items.extend(
         settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ModelsProviders)
             .into_iter()
             .map(|item| {
@@ -208,9 +209,8 @@ pub(crate) fn settings_studio_provider_items(
                 } else {
                     item
                 }
-            })
-            .collect::<Vec<_>>();
-    items.push(settings_studio_provider_workbench_item(i18n, providers));
+            }),
+    );
     items
 }
 

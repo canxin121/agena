@@ -31,13 +31,7 @@ impl App {
                 build_accented_two_line_list_item(
                     sanitize_display_text(section.label.as_str()).into(),
                     Some(section.items.len().to_string().into()),
-                    Some(
-                        sanitize_display_text(
-                            agena_tui_settings::section_group_label(&self.i18n, section.id)
-                                .as_str(),
-                        )
-                        .into(),
-                    ),
+                    None,
                 )
             })
             .collect::<Vec<_>>();
@@ -73,7 +67,7 @@ impl App {
             sanitize_display_text(dialog.footer.as_str()).into(),
             ListWorkbenchPanelState::items(
                 BoundedListPanelHeight {
-                    lines_per_item: 2,
+                    lines_per_item: 1,
                     min_body_height: 8,
                     max_body_height: 30,
                 },

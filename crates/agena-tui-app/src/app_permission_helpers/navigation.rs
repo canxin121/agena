@@ -71,11 +71,6 @@ pub(crate) fn refresh_permission_studio_dialog(
 
 pub(crate) fn permission_studio_title(i18n: &I18n, dialog: &PermissionStudioOverlay) -> String {
     match &dialog.page {
-        PermissionStudioPage::Overview => format!(
-            "{} · {}",
-            ui_text::t(i18n, "overlay-permission-studio-title"),
-            dialog.title_context
-        ),
         page => format!(
             "{} · {} · {}",
             ui_text::t(i18n, "overlay-permission-studio-title"),
@@ -87,7 +82,6 @@ pub(crate) fn permission_studio_title(i18n: &I18n, dialog: &PermissionStudioOver
 
 pub(crate) fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage) -> String {
     match page {
-        PermissionStudioPage::Overview => ui_text::t(i18n, "overlay-permission-studio-footer"),
         PermissionStudioPage::PathDefaults
         | PermissionStudioPage::PathRules
         | PermissionStudioPage::NetworkZones
@@ -103,14 +97,12 @@ pub(crate) fn permission_studio_default_focus(
     page: &PermissionStudioPage,
 ) -> PermissionStudioFocus {
     match page {
-        PermissionStudioPage::Overview => PermissionStudioFocus::Navigation,
         _ => PermissionStudioFocus::Items,
     }
 }
 
 pub(crate) fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioPage) -> String {
     match page {
-        PermissionStudioPage::Overview => ui_text::t(i18n, "permission-studio-page-overview"),
         PermissionStudioPage::PathDefaults => {
             ui_text::t(i18n, "permission-studio-page-path-defaults")
         }

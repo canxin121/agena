@@ -7,10 +7,10 @@ impl App {
     pub(crate) fn open_global_permission_studio(&mut self) {
         match self.build_permission_studio_overlay(
             PermissionStudioSource::GlobalConfig,
-            PermissionStudioPage::Overview,
-            Some(PermissionStudioSectionId::RootPath),
+            PermissionStudioPage::PathDefaults,
+            Some(PermissionStudioSectionId::PathDefaults),
             None,
-            PermissionStudioFocus::Navigation,
+            PermissionStudioFocus::Items,
         ) {
             Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
             Err(error) => self.flash_error(error),
@@ -20,10 +20,10 @@ impl App {
     pub(crate) fn open_workspace_permission_studio(&mut self) {
         match self.build_permission_studio_overlay(
             PermissionStudioSource::WorkspaceConfig,
-            PermissionStudioPage::Overview,
-            Some(PermissionStudioSectionId::RootPath),
+            PermissionStudioPage::PathDefaults,
+            Some(PermissionStudioSectionId::PathDefaults),
             None,
-            PermissionStudioFocus::Navigation,
+            PermissionStudioFocus::Items,
         ) {
             Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
             Err(error) => self.flash_error(error),
@@ -33,10 +33,10 @@ impl App {
     pub(crate) fn open_session_permission_studio(&mut self, session_id: i64) {
         match self.build_permission_studio_overlay(
             PermissionStudioSource::Session { session_id },
-            PermissionStudioPage::Overview,
-            Some(PermissionStudioSectionId::RootPath),
+            PermissionStudioPage::PathDefaults,
+            Some(PermissionStudioSectionId::PathDefaults),
             None,
-            PermissionStudioFocus::Navigation,
+            PermissionStudioFocus::Items,
         ) {
             Ok(dialog) => self.current_route = Route::PermissionStudio(dialog),
             Err(error) => self.flash_error(error),

@@ -1264,12 +1264,6 @@ impl SessionManager {
         }
     }
 
-    /// The per-process execution-lease owner id, shared by the registry and
-    /// startup reconciliation so this process recognizes its own leases.
-    pub(crate) fn owner_id(&self) -> String {
-        self.execution_registry.owner_id()
-    }
-
     /// Returns the unified event publisher used by Runtime composition and
     /// service adapters to emit `EventKind`.
     pub fn event_publisher(&self) -> Arc<crate::event::EventPublisher> {
@@ -1463,9 +1457,15 @@ impl SessionManager {
             if !streamed_output.is_empty()
                 && let Some(pending_tool) = outer_pending_tool.as_ref()
             {
-                let preview = agena_runtime_tools::truncate_tool_output_text(&streamed_output, 16 * 1024);
-                self.apply_streaming_terminal_output(session_id, pending_tool, preview.as_str(), state.clone())
-                    .await?;
+                let preview =
+                    agena_runtime_tools::truncate_tool_output_text(&streamed_output, 16 * 1024);
+                self.apply_streaming_terminal_output(
+                    session_id,
+                    pending_tool,
+                    preview.as_str(),
+                    state.clone(),
+                )
+                .await?;
             }
             let end = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {

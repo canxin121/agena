@@ -70,10 +70,7 @@ pub(crate) fn settings_studio_permission_items(
         items.push(SettingsStudioItem::from_parts(
             ui_text::t(i18n, "settings-permission-effective-label"),
             effective_summary.clone(),
-            i18n.text_args(
-                "settings-permission-effective-detail",
-                &agena_tui::fl_args!("session" => session.session_title.clone()),
-            ),
+            ui_text::t(i18n, "settings-permission-effective-detail"),
             None,
             Some(effective_summary.clone()),
             Some(effective_summary),
@@ -104,10 +101,7 @@ pub(crate) fn settings_studio_permission_items(
         items.push(SettingsStudioItem::from_parts(
             ui_text::t(i18n, "settings-permission-current-label"),
             session_summary.clone(),
-            i18n.text_args(
-                "settings-permission-current-detail",
-                &agena_tui::fl_args!("session" => session.session_title.clone()),
-            ),
+            ui_text::t(i18n, "settings-permission-current-detail"),
             None,
             Some(session_summary.clone()),
             Some(session_effective_summary),

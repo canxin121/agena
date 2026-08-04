@@ -62,6 +62,7 @@ pub enum SettingsStudioSectionId {
     Permissions,
     PluginsTools,
     RuntimeSession,
+    ProviderClientVersions,
     Interface,
     Diagnostics,
 }
@@ -72,9 +73,9 @@ pub fn section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> Str
         | SettingsStudioSectionId::Agents
         | SettingsStudioSectionId::Permissions
         | SettingsStudioSectionId::PluginsTools => "overlay-settings-group-core",
-        SettingsStudioSectionId::RuntimeSession | SettingsStudioSectionId::Interface => {
-            "overlay-settings-group-application"
-        }
+        SettingsStudioSectionId::RuntimeSession
+        | SettingsStudioSectionId::ProviderClientVersions
+        | SettingsStudioSectionId::Interface => "overlay-settings-group-application",
         SettingsStudioSectionId::Diagnostics => "overlay-settings-group-system",
     };
     i18n.text(key)

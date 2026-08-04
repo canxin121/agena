@@ -153,21 +153,21 @@ pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 15] = [
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::RuntimeSession,
+        section: SettingsStudioSectionId::ProviderClientVersions,
         path: "runtime.providers.client_versions.codex",
         label_key: "settings-field-runtime-codex-version-label",
         description_key: "settings-field-runtime-codex-version-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::RuntimeSession,
+        section: SettingsStudioSectionId::ProviderClientVersions,
         path: "runtime.providers.client_versions.claude",
         label_key: "settings-field-runtime-claude-version-label",
         description_key: "settings-field-runtime-claude-version-description",
         kind: SettingsFieldKind::String,
     },
     SettingsFieldSpec {
-        section: SettingsStudioSectionId::RuntimeSession,
+        section: SettingsStudioSectionId::ProviderClientVersions,
         path: "runtime.providers.client_versions.gemini",
         label_key: "settings-field-runtime-gemini-version-label",
         description_key: "settings-field-runtime-gemini-version-description",
@@ -414,7 +414,7 @@ pub struct App {
     pub(super) last_transcript_click: Option<TranscriptClick>,
     pub(super) mouse_events_seen: u64,
     pub(super) last_mouse_event: Option<String>,
-        pub(super) bootstrap_done: bool,
+    pub(super) bootstrap_done: bool,
     pub(super) last_refresh_at: Instant,
     /// A refresh request that arrived while another refresh was already in
     /// flight. `request_refresh` used to drop it, which could stall the
@@ -775,6 +775,7 @@ pub(super) enum Route {
     Main,
     Usage(UsageDashboardState),
     SettingsStudio(SettingsStudioOverlay),
+    ClientVersionsStudio(SettingsStudioOverlay),
     PermissionStudio(PermissionStudioOverlay),
     PermissionRuleStudio(PermissionRuleStudioOverlay),
     SessionSearch(SessionSearchOverlay),
@@ -914,10 +915,7 @@ mod terminal_integration_state_tests {
         state.queue_notification(NotificationMethod::Bell);
 
         // The most recently queued method wins; the queue drains empty.
-        assert_eq!(
-            state.take_notification(),
-            Some(NotificationMethod::Bell)
-        );
+        assert_eq!(state.take_notification(), Some(NotificationMethod::Bell));
         assert_eq!(state.take_notification(), None);
     }
 

@@ -210,6 +210,7 @@ impl CanonicalActivityDetail {
 }
 
 fn canonical_activity_details(
+    i18n: &I18n,
     payload: &agena_domain::ActivityPayload,
     summary: &str,
     error_equivalence_text: Option<&str>,
@@ -490,7 +491,49 @@ fn canonical_activity_details(
                 .collect()
         }
         // The problem is rendered once by the shared red Error section.
-        agena_domain::ActivityPayload::Error(_) => Vec::new(),
+        agena_domain::ActivityPayload::Error(error) => {
+            let problem = &error.problem;
+            let lines = vec![
+                format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "failure-detail-code"),
+                    problem.code
+                ),
+                format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "failure-detail-category"),
+                    failure_category_label(problem.category, i18n)
+                ),
+                format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "failure-detail-responsibility"),
+                    failure_responsibility_label(problem.responsibility, i18n)
+                ),
+                format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "failure-detail-impact"),
+                    failure_impact_label(problem.impact, i18n)
+                ),
+                format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "failure-detail-recovery"),
+                    recovery_directive_label(problem.recovery, i18n)
+                ),
+                format!(
+                    "{}: {}",
+                    ui_text::t(i18n, "failure-detail-retry"),
+                    retry_directive_label(problem.retry, i18n)
+                ),
+            ];
+            vec![CanonicalActivityDetail::section(
+                ui_text::t(i18n, "failure-detail-section-title").as_str(),
+                lines.join(
+                    "
+",
+                ),
+                CanonicalActivityDetailFormat::Plain,
+            )]
+        }
         agena_domain::ActivityPayload::Custom(custom) => {
             let mut details = vec![CanonicalActivityDetail::section(
                 "Schema",
@@ -612,56 +655,6 @@ fn patch_rendered_lines_style(lines: &mut [RenderedLine], style: Style) {
             line.rich_line = Some(rich_line.patch_style(style));
         }
     }
-}
-
-/// Render the expandable detail body for a structured public failure
-/// projection. Every field is derived from the already-public `UserProblem`;
-/// the renderer never accepts a raw diagnostic string on this path.
-fn render_failure_detail(
-    out: &mut Vec<RenderedLine>,
-    problem: &agena_failure::UserProblem,
-    i18n: &I18n,
-    width: u16,
-) {
-    let danger = Style::default().fg(agena_tui_components::theme::danger_color());
-    let mut push = |label: &str, value: &str, style: Style| {
-        push_label_value(out, "    ", &format!("{label}: {value}"), style, width);
-    };
-    push(
-        &ui_text::t(i18n, "failure-detail-message"),
-        problem.user.fallback.as_str(),
-        danger,
-    );
-    push(
-        &ui_text::t(i18n, "failure-detail-code"),
-        problem.code.as_str(),
-        Style::default(),
-    );
-    push(
-        &ui_text::t(i18n, "failure-detail-category"),
-        &failure_category_label(problem.category, i18n),
-        Style::default(),
-    );
-    push(
-        &ui_text::t(i18n, "failure-detail-responsibility"),
-        &failure_responsibility_label(problem.responsibility, i18n),
-        Style::default(),
-    );
-    push(
-        &ui_text::t(i18n, "failure-detail-impact"),
-        &failure_impact_label(problem.impact, i18n),
-        Style::default(),
-    );
-    push(
-        &ui_text::t(i18n, "failure-detail-recovery"),
-        &recovery_directive_label(problem.recovery, i18n),
-        Style::default(),
-    );
-    push(
-        &ui_text::t(i18n, "failure-detail-retry"),
-        &retry_directive_label(problem.retry, i18n),
-        Style::default(),
-    );
 }
 
 fn failure_category_label(category: agena_failure::FailureCategory, i18n: &I18n) -> String {
@@ -978,16 +971,13 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
             let error_text = error.as_ref().map(|e| e.user.fallback.clone());
             let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
             let details =
-                canonical_activity_details(payload, summary.as_str(), error_equivalence_text);
+                canonical_activity_details(i18n, payload, summary.as_str(), error_equivalence_text);
             Some(canonical_activity_copy_text(
                 title,
                 summary,
                 details.as_slice(),
                 error_text,
-                !matches!(
-                    payload,
-                    agena_domain::ActivityPayload::Operation(_)
-                ),
+                !matches!(payload, agena_domain::ActivityPayload::Operation(_)),
             ))
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
@@ -1345,158 +1335,9 @@ pub(crate) fn render_part_node(
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
-            let key = TranscriptNodeKey::Activity {
-                entry_id: message.id,
-                content_id: part.id,
-            };
-            let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or(defaults.activity_expanded);
-            let (_, title, summary, error) = activity_presentation(payload);
-            let error_text = error.as_ref().map(|e| e.user.fallback.clone());
-            let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
-            let details =
-                canonical_activity_details(payload, summary.as_str(), error_equivalence_text);
-            let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
-            push_activity_headline(
-                out,
-                part.status,
-                expanded,
-                toggleable,
-                title.as_str(),
-                summary.as_str(),
-                width,
-            );
-            let headline_end = out.len();
-            let mut children = Vec::new();
-            let mut detail_index = 0_usize;
-            let is_operation = matches!(
-                payload,
-                agena_domain::ActivityPayload::Operation(_)
-            );
-            let render_summary =
-                expanded && !is_operation && error.is_none() && !summary.trim().is_empty();
-            if render_summary {
-                let summary_start = out.len();
-                render_expanded_tool_text_block(out, "    ", summary.as_str(), width);
-                patch_rendered_lines_style(
-                    &mut out[summary_start..],
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                );
-                if let Some(child) = rendered_activity_section_node(
-                    TranscriptNodeKey::ActivitySection {
-                        entry_id: message.id,
-                        content_id: part.id,
-                        section: TranscriptActivitySection::Detail(detail_index),
-                    },
-                    summary_start,
-                    out.len(),
-                    summary.clone(),
-                    false,
-                    true,
-                    out,
-                ) {
-                    children.push(child);
-                    detail_index = detail_index.saturating_add(1);
-                }
-            }
-            if expanded {
-                for detail in &details {
-                    let section = detail.navigation_section(&mut detail_index);
-                    let section_key = TranscriptNodeKey::ActivitySection {
-                        entry_id: message.id,
-                        content_id: part.id,
-                        section,
-                    };
-                    let section_expanded = detail.default_expanded.is_none_or(|default_expanded| {
-                        expansions
-                            .get(&section_key)
-                            .copied()
-                            .unwrap_or(default_expanded)
-                    });
-                    let section_start = out.len();
-                    render_canonical_activity_detail(out, detail, width, None, section_expanded);
-                    if let Some(child) = rendered_activity_section_node(
-                        section_key,
-                        section_start,
-                        out.len(),
-                        detail.copy_text(),
-                        detail.default_expanded.is_some(),
-                        section_expanded,
-                        out,
-                    ) {
-                        children.push(child);
-                    }
-                }
-                if let agena_domain::ActivityPayload::Resource(resource) = payload {
-                    let section_start = out.len();
-                    let attachment = canonical_resource_attachment(resource);
-                    let _ = render_attachment_image(out, "    ", &attachment, width);
-                    if let Some(child) = rendered_activity_section_node(
-                        TranscriptNodeKey::ActivitySection {
-                            entry_id: message.id,
-                            content_id: part.id,
-                            section: TranscriptActivitySection::Detail(detail_index),
-                        },
-                        section_start,
-                        out.len(),
-                        resource.name.clone(),
-                        false,
-                        true,
-                        out,
-                    ) {
-                        children.push(child);
-                    }
-                }
-            }
-            if expanded && let Some(ref error_str) = error_text {
-                let section_key = TranscriptNodeKey::ActivitySection {
-                    entry_id: message.id,
-                    content_id: part.id,
-                    section: TranscriptActivitySection::Error,
-                };
-                let section_expanded = expansions.get(&section_key).copied().unwrap_or(true);
-                let section_start = out.len();
-                render_canonical_activity_detail(
-                    out,
-                    &CanonicalActivityDetail::section(
-                        "Error",
-                        error_str,
-                        CanonicalActivityDetailFormat::Auto,
-                    ),
-                    width,
-                    Some(Style::default().fg(agena_tui_components::theme::danger_color())),
-                    section_expanded,
-                );
-                if let Some(child) = rendered_activity_section_node(
-                    section_key,
-                    section_start,
-                    out.len(),
-                    error_str.clone(),
-                    true,
-                    section_expanded,
-                    out,
-                ) {
-                    children.push(child);
-                }
-            }
-            let copy_text = canonical_activity_copy_text(
-                title,
-                summary,
-                details.as_slice(),
-                error_text,
-                !is_operation,
-            );
-            RenderedNodeDraft {
-                key,
-                kind: TranscriptNodeKind::Activity,
-                copy_text,
-                toggleable,
-                expanded,
-                end_line: Some(headline_end),
-                children,
-            }
+            render_activity_canonical(
+                message, part, payload, None, out, width, i18n, defaults, expansions,
+            )
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let key = TranscriptNodeKey::Activity {
@@ -1508,10 +1349,7 @@ pub(crate) fn render_part_node(
             // transcript. It defaults to expanded (so the full trail is
             // immediately visible) but the user may still collapse it via the
             // normal toggle.
-            let expanded = expansions
-                .get(&key)
-                .copied()
-                .unwrap_or(true);
+            let expanded = expansions.get(&key).copied().unwrap_or(true);
             let summary = reasoning.preferred_text();
             let headline = summary
                 .lines()
@@ -1570,37 +1408,48 @@ pub(crate) fn render_part_node(
             }
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
-            let key = TranscriptNodeKey::Activity {
-                entry_id: message.id,
-                content_id: part.id,
-            };
-            let expanded = expansions.get(&key).copied().unwrap_or(true);
-            let title = error.problem.user.fallback.clone();
-            push_activity_headline(
+            render_activity_canonical(
+                message,
+                part,
+                &agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
+                    problem: error.problem.clone(),
+                }),
+                None,
                 out,
-                part.status,
-                expanded,
-                true,
-                title.as_str(),
-                "",
                 width,
-            );
-            if expanded {
-                render_failure_detail(out, &error.problem, i18n, width);
-            }
-            RenderedNodeDraft {
-                key,
-                kind: TranscriptNodeKind::Activity,
-                copy_text: title,
-                toggleable: true,
-                expanded,
-                end_line: None,
-                children: Vec::new(),
-            }
+                i18n,
+                defaults,
+                expansions,
+            )
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
         )) => {
+            let problem = match status {
+                TranscriptAssistantReplyLifecycle::Failed { problem } => problem,
+                _ => &None,
+            };
+            let failed_title = ui_text::t(i18n, "message-activity-response-failed");
+            if let Some(problem) = problem.as_ref() {
+                // A failed reply reuses the canonical Error Activity
+                // presentation: same headline, expandable detail sections,
+                // copy text and node structure as every other tool-call
+                // error, so the transcript does not carry a bespoke failure
+                // row.
+                return render_activity_canonical(
+                    message,
+                    part,
+                    &agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
+                        problem: problem.clone(),
+                    }),
+                    Some(failed_title.as_str()),
+                    out,
+                    width,
+                    i18n,
+                    defaults,
+                    expansions,
+                );
+            }
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
@@ -1622,50 +1471,13 @@ pub(crate) fn render_part_node(
                     }
                 },
             );
-            let problem = match status {
-                TranscriptAssistantReplyLifecycle::Failed { problem } => problem,
-                _ => &None,
-            };
-            let summary = problem
-                .as_ref()
-                .map(|problem| problem.user.fallback.as_str())
-                .unwrap_or("");
-            // A failed reply is expandable whenever the runtime persisted a
-            // structured failure; the collapsed row shows the readable
-            // summary and the expanded body carries the full field set.
-            let toggleable = problem.is_some();
-            let expanded = if toggleable {
-                expansions
-                    .get(&key)
-                    .copied()
-                    .unwrap_or(defaults.activity_expanded)
-            } else {
-                true
-            };
-            push_activity_headline(
-                out,
-                part.status,
-                expanded,
-                toggleable,
-                title.as_str(),
-                summary,
-                width,
-            );
-            if toggleable && expanded
-                && let Some(problem) = problem.as_ref()
-            {
-                render_failure_detail(out, problem, i18n, width);
-            }
+            push_activity_headline(out, part.status, true, false, title.as_str(), "", width);
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: if summary.is_empty() {
-                    title
-                } else {
-                    format!("{title}: {summary}")
-                },
-                toggleable,
-                expanded,
+                copy_text: title,
+                toggleable: false,
+                expanded: true,
                 end_line: None,
                 children: Vec::new(),
             }
@@ -1814,6 +1626,173 @@ pub(crate) fn render_part_node(
                 }
             }
         }
+    }
+}
+
+/// Shared renderer for canonical Activity payloads. Tool-call operations,
+/// resources, reasoning and errors all flow through this single path so the
+/// transcript keeps one headline/expandable-section contract. The legacy
+/// `Error` part and a failed reply lifecycle both project into
+/// `ActivityPayload::Error` here instead of owning separate renderers.
+fn render_activity_canonical(
+    message: &TranscriptEntry,
+    part: &TranscriptEntryPart,
+    payload: &agena_domain::ActivityPayload,
+    title_override: Option<&str>,
+    out: &mut Vec<RenderedLine>,
+    width: u16,
+    i18n: &I18n,
+    defaults: TranscriptDetailDefaults,
+    expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
+) -> RenderedNodeDraft {
+    let key = TranscriptNodeKey::Activity {
+        entry_id: message.id,
+        content_id: part.id,
+    };
+    let expanded = expansions
+        .get(&key)
+        .copied()
+        .unwrap_or(defaults.activity_expanded);
+    let (_, canonical_title, summary, error) = activity_presentation(payload);
+    let title = title_override.unwrap_or(canonical_title.as_str());
+    let error_text = error.as_ref().map(|e| e.user.fallback.clone());
+    let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
+    let details =
+        canonical_activity_details(i18n, payload, summary.as_str(), error_equivalence_text);
+    let toggleable = !summary.trim().is_empty() || error.is_some() || !details.is_empty();
+    push_activity_headline(
+        out,
+        part.status,
+        expanded,
+        toggleable,
+        title,
+        summary.as_str(),
+        width,
+    );
+    let headline_end = out.len();
+    let mut children = Vec::new();
+    let mut detail_index = 0_usize;
+    let is_operation = matches!(payload, agena_domain::ActivityPayload::Operation(_));
+    let render_summary = expanded && !is_operation && error.is_none() && !summary.trim().is_empty();
+    if render_summary {
+        let summary_start = out.len();
+        render_expanded_tool_text_block(out, "    ", summary.as_str(), width);
+        patch_rendered_lines_style(
+            &mut out[summary_start..],
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        );
+        if let Some(child) = rendered_activity_section_node(
+            TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section: TranscriptActivitySection::Detail(detail_index),
+            },
+            summary_start,
+            out.len(),
+            summary.clone(),
+            false,
+            true,
+            out,
+        ) {
+            children.push(child);
+            detail_index = detail_index.saturating_add(1);
+        }
+    }
+    if expanded {
+        for detail in &details {
+            let section = detail.navigation_section(&mut detail_index);
+            let section_key = TranscriptNodeKey::ActivitySection {
+                entry_id: message.id,
+                content_id: part.id,
+                section,
+            };
+            let section_expanded = detail.default_expanded.is_none_or(|default_expanded| {
+                expansions
+                    .get(&section_key)
+                    .copied()
+                    .unwrap_or(default_expanded)
+            });
+            let section_start = out.len();
+            render_canonical_activity_detail(out, detail, width, None, section_expanded);
+            if let Some(child) = rendered_activity_section_node(
+                section_key,
+                section_start,
+                out.len(),
+                detail.copy_text(),
+                detail.default_expanded.is_some(),
+                section_expanded,
+                out,
+            ) {
+                children.push(child);
+            }
+        }
+        if let agena_domain::ActivityPayload::Resource(resource) = payload {
+            let section_start = out.len();
+            let attachment = canonical_resource_attachment(resource);
+            let _ = render_attachment_image(out, "    ", &attachment, width);
+            if let Some(child) = rendered_activity_section_node(
+                TranscriptNodeKey::ActivitySection {
+                    entry_id: message.id,
+                    content_id: part.id,
+                    section: TranscriptActivitySection::Detail(detail_index),
+                },
+                section_start,
+                out.len(),
+                resource.name.clone(),
+                false,
+                true,
+                out,
+            ) {
+                children.push(child);
+            }
+        }
+    }
+    if expanded && let Some(ref error_str) = error_text {
+        let section_key = TranscriptNodeKey::ActivitySection {
+            entry_id: message.id,
+            content_id: part.id,
+            section: TranscriptActivitySection::Error,
+        };
+        let section_expanded = expansions.get(&section_key).copied().unwrap_or(true);
+        let section_start = out.len();
+        render_canonical_activity_detail(
+            out,
+            &CanonicalActivityDetail::section(
+                "Error",
+                error_str,
+                CanonicalActivityDetailFormat::Auto,
+            ),
+            width,
+            Some(Style::default().fg(agena_tui_components::theme::danger_color())),
+            section_expanded,
+        );
+        if let Some(child) = rendered_activity_section_node(
+            section_key,
+            section_start,
+            out.len(),
+            error_str.clone(),
+            true,
+            section_expanded,
+            out,
+        ) {
+            children.push(child);
+        }
+    }
+    let copy_text = canonical_activity_copy_text(
+        title.to_owned(),
+        summary,
+        details.as_slice(),
+        error_text,
+        !is_operation,
+    );
+    RenderedNodeDraft {
+        key,
+        kind: TranscriptNodeKind::Activity,
+        copy_text,
+        toggleable,
+        expanded,
+        end_line: Some(headline_end),
+        children,
     }
 }
 

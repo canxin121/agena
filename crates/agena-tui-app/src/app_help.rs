@@ -81,6 +81,9 @@ impl App {
             Route::SettingsStudio(dialog) => {
                 self.help_for(HelpPreset::Settings, dialog.title.clone())
             }
+            Route::ClientVersionsStudio(dialog) => {
+                self.help_for(HelpPreset::Settings, dialog.title.clone())
+            }
             Route::PermissionStudio(dialog) => {
                 if let Some(editor) = dialog.editor.as_ref() {
                     self.help_for_editor(editor.title.clone(), editor.multiline)

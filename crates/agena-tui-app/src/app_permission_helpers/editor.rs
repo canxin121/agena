@@ -1,9 +1,8 @@
 use super::{
-    network_defaults_summary, normalize_permission_config, parse_permission_studio_key_input,
-    parse_permission_studio_optional_mode_input, path_access_modes_summary, path_rule_modes,
-    permission_mode_input_text, permission_mode_label, permission_mode_token_text,
-    permission_rule_count_summary, permission_studio_mode_target_value, rename_network_rule,
-    rename_path_rule, rename_tool_name, rename_tool_rule,
+    normalize_permission_config, parse_permission_studio_key_input,
+    parse_permission_studio_optional_mode_input, path_rule_modes, permission_mode_input_text,
+    permission_mode_label, permission_mode_token_text, permission_studio_mode_target_value,
+    rename_network_rule, rename_path_rule, rename_tool_name, rename_tool_rule,
     set_path_default_mode,
 };
 
@@ -319,119 +318,6 @@ pub(crate) fn permission_studio_sections(
                 items: tool_rule_items,
             }]
         }
-        PermissionStudioPage::Overview => vec![
-            PermissionStudioSection {
-                id: PermissionStudioSectionId::RootPath,
-                label: ui_text::t(i18n, "permission-studio-page-path"),
-                items: vec![
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-section-workspace"),
-                        value: path_access_modes_summary(
-                            i18n,
-                            dialog
-                                .permission
-                                .path
-                                .as_ref()
-                                .and_then(|path| path.workspace.as_ref()),
-                        ),
-                        action: PermissionStudioAction::Noop,
-                    },
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-section-external"),
-                        value: path_access_modes_summary(
-                            i18n,
-                            dialog
-                                .permission
-                                .path
-                                .as_ref()
-                                .and_then(|path| path.external.as_ref()),
-                        ),
-                        action: PermissionStudioAction::Noop,
-                    },
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-section-rules"),
-                        value: permission_rule_count_summary(
-                            i18n,
-                            dialog
-                                .permission
-                                .path
-                                .as_ref()
-                                .map(|path| path.rules.len())
-                                .unwrap_or_default(),
-                        ),
-                        action: PermissionStudioAction::Noop,
-                    },
-                ],
-            },
-            PermissionStudioSection {
-                id: PermissionStudioSectionId::RootNetwork,
-                label: ui_text::t(i18n, "permission-studio-page-network"),
-                items: vec![
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-section-defaults"),
-                        value: network_defaults_summary(i18n, dialog.permission.network.as_ref()),
-                        action: PermissionStudioAction::Noop,
-                    },
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-section-rules"),
-                        value: permission_rule_count_summary(
-                            i18n,
-                            dialog
-                                .permission
-                                .network
-                                .as_ref()
-                                .map(|network| network.rules.len())
-                                .unwrap_or_default(),
-                        ),
-                        action: PermissionStudioAction::Noop,
-                    },
-                ],
-            },
-            PermissionStudioSection {
-                id: PermissionStudioSectionId::RootTools,
-                label: ui_text::t(i18n, "permission-studio-page-tools"),
-                items: vec![
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-tool-default"),
-                        value: permission_mode_input_text(
-                            dialog
-                                .permission
-                                .tools
-                                .as_ref()
-                                .and_then(|tools| tools.default),
-                            i18n,
-                        ),
-                        action: PermissionStudioAction::Noop,
-                    },
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-page-names"),
-                        value: permission_rule_count_summary(
-                            i18n,
-                            dialog
-                                .permission
-                                .tools
-                                .as_ref()
-                                .map(|tools| tools.names.len())
-                                .unwrap_or_default(),
-                        ),
-                        action: PermissionStudioAction::Noop,
-                    },
-                    PermissionStudioItem {
-                        label: ui_text::t(i18n, "permission-studio-page-tool-rules"),
-                        value: permission_rule_count_summary(
-                            i18n,
-                            dialog
-                                .permission
-                                .tools
-                                .as_ref()
-                                .map(|tools| tools.rules.len())
-                                .unwrap_or_default(),
-                        ),
-                        action: PermissionStudioAction::Noop,
-                    },
-                ],
-            },
-        ],
     }
 }
 

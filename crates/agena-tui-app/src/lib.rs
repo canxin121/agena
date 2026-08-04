@@ -35,9 +35,8 @@ use agena_domain::ModelRef;
 use agena_domain::PermissionRequest;
 use agena_domain::get_json_path;
 use agena_domain::{
-    NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
-    PermissionAction, PermissionConfig, PermissionMode, PermissionReplyKind, PermissionScope,
-    ToolPermissionConfig, ToolPermissionRules, UserInputReplyKind,
+    PathAccessModes, PathAccessRuleConfig, PermissionAction, PermissionConfig, PermissionMode,
+    PermissionReplyKind, PermissionScope, ToolPermissionRules, UserInputReplyKind,
 };
 use agena_domain::{UserInputQuestion, UserInputReply, UserInputRequest};
 use agena_plugin_sdk::AttachmentKind;
@@ -231,7 +230,6 @@ mod app_provider_runtime;
 mod app_provider_text;
 mod app_session_events;
 mod app_session_helpers;
-mod app_terminal_integration;
 mod app_session_input;
 mod app_session_interactive;
 mod app_settings;
@@ -242,6 +240,7 @@ mod app_skill_studio;
 mod app_status_context;
 mod app_studio_overlays;
 mod app_studio_state_impls;
+mod app_terminal_integration;
 #[cfg(test)]
 mod app_tests;
 mod app_timeline_helpers;
@@ -279,13 +278,13 @@ pub fn tui_config_from_preferences(ui: &TuiPreferencesResource) -> TuiConfig {
 use self::app_choice_helpers::*;
 use self::app_command_helpers::*;
 use self::app_composer_helpers::*;
-use self::app_terminal_integration::*;
 use self::app_permission_display::*;
 use self::app_permission_helpers::*;
 use self::app_permission_studio::apply_permission_studio_entries_mode;
 use self::app_provider_text::*;
 use self::app_session_helpers::*;
 use self::app_settings_helpers::*;
+use self::app_terminal_integration::*;
 use self::app_timeline_helpers::*;
 use self::app_transcript_helpers::*;
 pub(crate) use self::app_types::ComposerDraft;

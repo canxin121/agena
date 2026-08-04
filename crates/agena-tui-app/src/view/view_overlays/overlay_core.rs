@@ -93,6 +93,9 @@ impl App {
             Route::SettingsStudio(dialog) => {
                 self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }
+            Route::ClientVersionsStudio(dialog) => {
+                self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
+            }
             Route::PermissionStudio(dialog) => {
                 self.render_permission_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }

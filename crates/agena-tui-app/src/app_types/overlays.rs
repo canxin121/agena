@@ -11,8 +11,8 @@ use agena_domain::{PermissionMode, PermissionReplyKind, PermissionRequest, Permi
 use agena_application::dto::{CatalogModelResource, ModelCatalogResponse};
 use agena_provider::AgenaToolMode;
 use agena_tui::model_catalog::ModelCatalogPresentation;
-use agena_tui::permission_prompt::PermissionPromptPresentation;
 use agena_tui::permission_prompt::PermissionPromptAutoApproveStatus;
+use agena_tui::permission_prompt::PermissionPromptPresentation;
 use agena_tui_backend::ProviderConfigDraft;
 use agena_tui_components::{
     ConfirmDialogState, DashboardSelectionState, EditorDialogState, InputDialogState,
@@ -66,7 +66,6 @@ pub(crate) struct PermissionStudioItem {
 
 #[derive(Debug, Clone)]
 pub(crate) enum PermissionStudioAction {
-    Noop,
     CreateRule,
     EditMode(PermissionStudioModeTarget),
     AddToolCommandPattern { tool_name: String },
@@ -186,6 +185,7 @@ pub(crate) enum SettingsPickerAction {
     OpenPermissionApprovalModelChooser,
     OpenProviderList,
     OpenModelCatalogWorkbench,
+    OpenProviderClientVersions,
     OpenGlobalPermissionWorkbench,
     OpenWorkspacePermissionWorkbench,
     OpenCurrentSessionPermissionWorkbench,

@@ -11,7 +11,6 @@ impl App {
             return false;
         };
         match item.action {
-            PermissionStudioAction::Noop => false,
             PermissionStudioAction::CreateRule => {
                 self.open_permission_studio_add_current(dialog);
                 false
@@ -187,9 +186,7 @@ impl App {
                     PermissionStudioPage::ToolCommandRules => {
                         Some(PermissionStudioSectionId::ToolCommandRules)
                     }
-                    PermissionStudioPage::PathDefaults
-                    | PermissionStudioPage::NetworkZones
-                    | PermissionStudioPage::Overview => None,
+                    PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => None,
                 };
                 self.set_permission_studio_page_with_section(
                     dialog,

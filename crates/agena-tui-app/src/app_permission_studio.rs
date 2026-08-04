@@ -31,9 +31,7 @@ impl App {
             return;
         }
         let action = match &dialog.page {
-            PermissionStudioPage::PathDefaults
-            | PermissionStudioPage::NetworkZones
-            | PermissionStudioPage::Overview => {
+            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
                 return;
             }
@@ -133,9 +131,7 @@ impl App {
         }
         let selected_action = dialog.state.selected_item().map(|item| item.action.clone());
         let (title, body, action) = match &dialog.page {
-            PermissionStudioPage::PathDefaults
-            | PermissionStudioPage::NetworkZones
-            | PermissionStudioPage::Overview => {
+            PermissionStudioPage::PathDefaults | PermissionStudioPage::NetworkZones => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-delete"));
                 return;
             }
@@ -385,6 +381,11 @@ impl App {
                 self.open_model_catalog_studio();
                 false
             }
+            SettingsPickerAction::OpenProviderClientVersions => {
+                self.route_stack.push(Route::SettingsStudio(dialog.clone()));
+                self.open_client_versions_studio();
+                false
+            }
             SettingsPickerAction::OpenGlobalPermissionWorkbench => {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 self.open_global_permission_studio();
@@ -408,10 +409,10 @@ impl App {
                 self.route_stack.push(Route::SettingsStudio(dialog.clone()));
                 match self.build_permission_studio_overlay(
                     PermissionStudioSource::EffectiveSession { session_id },
-                    PermissionStudioPage::Overview,
-                    Some(PermissionStudioSectionId::RootPath),
+                    PermissionStudioPage::PathDefaults,
+                    Some(PermissionStudioSectionId::PathDefaults),
                     None,
-                    PermissionStudioFocus::Navigation,
+                    PermissionStudioFocus::Items,
                 ) {
                     Ok(permission) => self.current_route = Route::PermissionStudio(permission),
                     Err(error) => self.flash_error(error),
@@ -440,7 +441,11 @@ impl App {
                     )),
                     Err(error) => self.flash_error(error),
                 }
-                self.refresh_settings_studio_overlay(dialog);
+                if matches!(self.current_route, Route::ClientVersionsStudio(_)) {
+                    self.refresh_client_versions_studio_overlay(dialog);
+                } else {
+                    self.refresh_settings_studio_overlay(dialog);
+                }
                 false
             }
             SettingsPickerAction::OpenConfigFile => {
@@ -460,6 +465,10 @@ impl App {
                 .rebuild_settings_studio_overlay(&dialog)
                 .map(Route::SettingsStudio)
                 .unwrap_or(Route::SettingsStudio(dialog)),
+            Route::ClientVersionsStudio(dialog) => self
+                .rebuild_client_versions_studio_overlay(&dialog)
+                .map(Route::ClientVersionsStudio)
+                .unwrap_or(Route::ClientVersionsStudio(dialog)),
             Route::PermissionStudio(dialog) => self
                 .build_permission_studio_overlay(
                     dialog.source.clone(),
@@ -666,9 +675,9 @@ impl App {
     }
 }
 use crate::{
-    App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction,
-    DialogHost, ModelCatalogStudioOverlay, Overlay, PERMISSION_STUDIO_CUSTOM_ENTRY,
-    PermissionConfig, PermissionMode, PermissionStudioAction, PermissionStudioCatalogKind,
+    App, BTreeSet, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, DialogHost,
+    ModelCatalogStudioOverlay, Overlay, PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionConfig,
+    PermissionMode, PermissionStudioAction, PermissionStudioCatalogKind,
     PermissionStudioEditorAction, PermissionStudioFocus, PermissionStudioModeTarget,
     PermissionStudioOverlay, PermissionStudioPage, PermissionStudioSectionId,
     PermissionStudioSource, ProviderPickerPurpose, ProviderStudioOverlay, Route,

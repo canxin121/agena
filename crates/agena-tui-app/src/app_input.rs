@@ -261,6 +261,9 @@ impl App {
             Route::Main => false,
             Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
+            Route::ClientVersionsStudio(dialog) => {
+                self.handle_client_versions_studio_overlay_key(key, dialog)
+            }
             Route::PermissionStudio(dialog) => {
                 self.handle_permission_studio_overlay_key(key, dialog)
             }

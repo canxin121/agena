@@ -77,7 +77,9 @@ pub(crate) async fn connect_database(
         });
         // A bounded connection pool lets concurrent reads proceed in parallel;
         // writes remain serialized by SQLite and guarded by the busy timeout.
-        options.max_connections(8);
+        // Larger pools reduce the chance that a write waits on a connection
+        // checkout while a session concurrently reads history or projections.
+        options.max_connections(16);
     }
     Database::connect(options).await
 }

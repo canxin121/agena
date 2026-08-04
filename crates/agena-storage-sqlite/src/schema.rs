@@ -93,7 +93,7 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
     // window is small while every commit stays crash-safe.
     for pragma in [
         "PRAGMA journal_mode = WAL",
-        "PRAGMA busy_timeout = 5000",
+        "PRAGMA busy_timeout = 15000",
         "PRAGMA synchronous = NORMAL",
     ] {
         db.execute(Statement::from_string(db.get_database_backend(), pragma.to_owned()))

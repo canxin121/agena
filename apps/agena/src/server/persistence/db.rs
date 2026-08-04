@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 const DB_BUSY_TIMEOUT_MS: u64 = 15000;
-const DB_POOL_MAX_CONNECTIONS: u32 = 8;
+const DB_POOL_MAX_CONNECTIONS: u32 = 16;
 const DB_POOL_ACQUIRE_TIMEOUT_MS: u64 = 1500;
 const DB_POOL_IDLE_TIMEOUT_SECS: u64 = 120;
 

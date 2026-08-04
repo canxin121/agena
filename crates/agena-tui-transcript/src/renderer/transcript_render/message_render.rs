@@ -1503,23 +1503,37 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
+            // Reasoning must never be truncated: it is the model's full
+            // thought trail, for both the provider and the human reading the
+            // transcript. It defaults to expanded (so the full trail is
+            // immediately visible) but the user may still collapse it via the
+            // normal toggle.
             let expanded = expansions
                 .get(&key)
                 .copied()
-                .unwrap_or(defaults.activity_expanded);
+                .unwrap_or(true);
             let summary = reasoning.preferred_text();
+            let headline = summary
+                .lines()
+                .next()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .unwrap_or("thinking");
             push_activity_headline(
                 out,
                 part.status,
                 expanded,
                 true,
                 "thinking",
-                concise_text(summary.as_str(), 112).as_str(),
+                headline,
                 width,
             );
             if expanded {
                 let body_start = out.len();
-                render_expanded_tool_text_block(out, "    ", summary.as_str(), width);
+                // Render reasoning as plain multi-line text, never through the
+                // markdown path, so the full thought trail is shown verbatim
+                // with no ellipsis or reformatting.
+                push_expanded_tool_text(out, "    ", summary.as_str(), Style::default(), width);
                 patch_rendered_lines_style(
                     &mut out[body_start..],
                     Style::default().fg(agena_tui_components::theme::muted_color()),

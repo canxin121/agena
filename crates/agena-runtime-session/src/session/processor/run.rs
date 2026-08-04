@@ -202,7 +202,12 @@ impl SessionProcessor {
                 Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
                     visible_text.push_str(delta.as_str());
                     if let Some(part_id) = active_reasoning_part.take() {
+                        // A thinking segment is complete the moment the model
+                        // starts producing text. Publish its Completed state
+                        // immediately so the terminal stops showing the
+                        // spinner instead of waiting for the stream end.
                         complete_part_status(&mut assistant, part_id)?;
+                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
                     let part_id = match active_text_part {
                         Some(part_id) => part_id,
@@ -235,6 +240,7 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let stream_key =
@@ -275,6 +281,7 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let stream_key =
@@ -314,6 +321,7 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let pending = pending_provider_native_tool_calls
@@ -344,6 +352,7 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let pending = pending_provider_native_tool_calls

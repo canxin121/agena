@@ -338,7 +338,10 @@ pub(crate) fn activity_presentation(
         ActivityPayload::Reasoning(reasoning) => (
             "reasoning".to_owned(),
             "Thinking".to_owned(),
-            bounded_presentation_summary(reasoning.content.preferred_text().as_str()),
+            // The collapsed headline shows the first line as a natural preview;
+            // the full thought trail is rendered verbatim when expanded. Never
+            // ellipsize reasoning with a truncation marker.
+            reasoning_first_line(reasoning.content.preferred_text().as_str()),
             None,
         ),
         ActivityPayload::Operation(operation) => (
@@ -435,6 +438,17 @@ pub(crate) fn activity_presentation(
 /// content remains reachable through the expanded detail sections, which are
 /// rendered lazily.
 const PRESENTATION_SUMMARY_CHAR_LIMIT: usize = 512;
+
+/// Collapsed preview for a reasoning Activity. Uses the first non-empty line
+/// so the headline is a natural preview and the full reasoning body is never
+/// marked as truncated — the expanded detail renders it verbatim.
+fn reasoning_first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("Thinking")
+        .to_owned()
+}
 
 fn bounded_presentation_summary(text: &str) -> String {
     // Early-exit with `char_indices().nth()`: arbitrarily large pastes or

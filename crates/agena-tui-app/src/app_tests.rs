@@ -1846,6 +1846,81 @@ mod transcript_expansion_tests {
     }
 
     #[test]
+    fn reasoning_renders_the_full_body_verbatim_and_expands_by_default() {
+        let now = Utc::now();
+        let message_id = 25;
+        // A long, multi-line reasoning body that must never be ellipsized.
+        let body = (0..40)
+            .map(|line| format!("deep thought line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let part = api_message_part!(
+            26,
+            message_id,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(ReasoningPart {
+                summary: vec![body.clone()],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        let key = TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(message_id),
+            content_id: agena_tui_transcript::TranscriptContentId::Activity(
+                part.activity_id.expect("reasoning activity identity"),
+            ),
+        };
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: message_id,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![part]),
+            }],
+            ..TranscriptState::default()
+        };
+
+        let rendered = transcript.rendered(120);
+        let node = rendered
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("reasoning node");
+        // Reasoning defaults to expanded so the full trail is immediately visible.
+        assert!(node.expanded, "reasoning must default to expanded");
+        // The full multi-line body is present verbatim, including the last line.
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("deep thought line 0")),
+            "reasoning first line must be present"
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("deep thought line 39")),
+            "reasoning last line must be present and not truncated"
+        );
+        assert!(
+            !rendered
+                .lines
+                .iter()
+                .any(|line| line.text.contains("truncated")),
+            "reasoning body must never carry a truncation marker"
+        );
+    }
+
+    #[test]
     fn expanding_the_final_activity_scrolls_its_new_lines_into_view() {
         let now = Utc::now();
         let preceding_part = api_message_part!(
@@ -1902,6 +1977,11 @@ mod transcript_expansion_tests {
             ],
             ..TranscriptState::default()
         };
+        // Reasoning defaults to expanded; explicitly collapse it first so the
+        // toggle below exercises the expand-then-scroll path it tests.
+        transcript
+            .node_expansions
+            .insert(activity_key.clone(), false);
         let node_index = transcript
             .rendered(80)
             .nodes

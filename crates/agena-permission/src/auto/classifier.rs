@@ -16,7 +16,7 @@ pub const AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS: usize = 32_000;
 /// Guidance appended to classifier/heuristic denials so the model does not
 /// retry the exact denied action or attempt to work around it (which would
 /// otherwise re-trigger repeated approvals). Mirrors grok's `AUTO_DENY_GUIDANCE`.
-pub const AUTO_DENY_GUIDANCE: &str = "Take a safer approach that stays within what the user asked for; do not retry this exact action or attempt to work around the denial. If no safer alternative exists, ask the user how to proceed.";
+pub const AUTO_DENY_GUIDANCE: &str = "Take a safer approach that stays within what the user asked for; do not retry this exact action or attempt to work around the denial. The action is denied once; if no safer alternative exists, stop and report the denial to the user.";
 
 /// Build a denial reason with the standard guidance suffix.
 pub fn deny_reason(why: impl Into<String>) -> String {

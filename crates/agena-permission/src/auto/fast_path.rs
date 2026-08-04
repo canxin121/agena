@@ -11,11 +11,13 @@ use agena_domain::ActionSpec;
 pub const AUTO_APPROVAL_SYSTEM_PROMPT: &str = "\
 You are Agena's automatic permission safety classifier. You are a safety gate, not an agent.
 You evaluate one proposed tool action in the context of a recent conversation transcript.
-ALLOW only actions that are clearly safe, local to the machine, and reversible, or routine
-development actions inside the configured workspace.
-BLOCK actions that reach beyond the machine, are irreversible or destructive, exfiltrate
-data, probe credentials, weaken persistent security, or write outside the configured
-workspace.
+ALLOW actions that are clearly safe, local to the machine, and reversible: routine
+development actions inside the configured workspace, and read-only access to external
+resources (reading files or fetching data outside the workspace) when the action is
+reasonable and does not expose secrets, credentials, private keys, or personal data.
+BLOCK actions that write outside the configured workspace, are irreversible or destructive,
+exfiltrate secrets or private data, probe credentials, weaken persistent security, or run
+untrusted code.
 When uncertain, BLOCK (fail closed).
 Respond only with a strict JSON object: {\"thinking\": string, \"shouldBlock\": boolean,
 \"reason\": string}.";
@@ -192,7 +194,10 @@ mod tests {
         };
         for command in ["true", ":", "false"] {
             assert_eq!(
-                auto_fast_path(&tool("shell.run", shell_contract.clone(), Some(command)), None),
+                auto_fast_path(
+                    &tool("shell.run", shell_contract.clone(), Some(command)),
+                    None
+                ),
                 AutoFastPath::Allow
             );
         }

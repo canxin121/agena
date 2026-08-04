@@ -209,6 +209,10 @@ pub struct AnthropicSseMessage {
 pub struct AnthropicToolCallState {
     pub id: String,
     pub name: String,
+    /// Accumulated JSON arguments for one tool_use block. Structured-output
+    /// requests surface this as the completion text, so it is tracked even
+    /// though the stream only yields deltas.
+    pub arguments: String,
 }
 
 #[cfg(test)]

@@ -183,9 +183,7 @@ impl ModelRuntime for AnthropicAdapter {
         if let Some((tool, _)) = &structured_output {
             tools.get_or_insert_with(Vec::new).push(tool.clone());
         }
-        let tool_choice = structured_output
-            .as_ref()
-            .map(|(_, choice)| choice.clone());
+        let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
 
         let mut messages = Vec::new();
         for msg in &request.messages {
@@ -346,14 +344,26 @@ impl ModelRuntime for AnthropicAdapter {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
 
+        // Mirror the non-streaming path: structured-output requests force a
+        // single tool whose input_schema is the requested JSON schema, and the
+        // tool input is surfaced as text deltas below so aggregated streaming
+        // (including the complete() empty-response fallback) yields clean JSON
+        // instead of prose or an empty text field.
+        let structured_output = AnthropicAdapter::structured_output_tool_and_choice(&request);
+
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
         let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_native_tools.bindings().is_empty())
+            || !request.provider_native_tools.bindings().is_empty()
+            || structured_output.is_some())
         .then(|| self.tools(&request))
         .transpose()?;
+        if let Some((tool, _)) = &structured_output {
+            tools.get_or_insert_with(Vec::new).push(tool.clone());
+        }
+        let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
 
         let mut messages = Vec::new();
         for msg in &request.messages {
@@ -398,7 +408,7 @@ impl ModelRuntime for AnthropicAdapter {
             system: (!system_chunks.is_empty()).then_some(system_chunks),
             messages,
             tools,
-            tool_choice: None,
+            tool_choice,
             temperature: (!omit_sampling).then_some(request.temperature).flatten(),
             stream: Some(true),
             thinking: thinking_parts.thinking,
@@ -536,6 +546,9 @@ impl ModelRuntime for AnthropicAdapter {
                             .map(json_value_to_string)
                             .filter(|value| !value.is_empty() && value != "{}")
                             .unwrap_or_default();
+                        if structured_output.is_some() {
+                            state.arguments.push_str(arguments_delta.as_str());
+                        }
 
                         // Always emit at least one ToolCallDelta so the
                         // shared aggregator records the tool call. Without
@@ -606,6 +619,9 @@ impl ModelRuntime for AnthropicAdapter {
                                 )
                             })?;
 
+                            if structured_output.is_some() {
+                                state.arguments.push_str(arguments_delta.as_str());
+                            }
                             stream_has_content = true;
                             yield CompletionStreamEvent::ToolCallDelta {
                                 provider_id: provider_id.clone(),
@@ -619,6 +635,19 @@ impl ModelRuntime for AnthropicAdapter {
                     }
                     AnthropicSseEvent::ContentBlockStop { index } => {
                         if let Some(index) = index {
+                            if structured_output.is_some()
+                                && let Some(state) = pending_tool_calls.get(&index)
+                            {
+                                let arguments = state.arguments.trim().to_owned();
+                                if !arguments.is_empty() {
+                                    stream_has_content = true;
+                                    yield CompletionStreamEvent::TextDelta {
+                                        provider_id: provider_id.clone(),
+                                        model: model_name.clone(),
+                                        delta: arguments,
+                                    };
+                                }
+                            }
                             pending_tool_calls.remove(&index);
                         }
                     }

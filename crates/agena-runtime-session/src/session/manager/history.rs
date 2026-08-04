@@ -469,7 +469,26 @@ fn transcript_part_patch(
     };
     let position = u32::try_from(part.part_index).unwrap_or_default();
     let node = if let Some(activity_id) = part.activity_id {
-        let payload = crate::session::history::activity_payload(part)?;
+        let mut payload = crate::session::history::activity_payload(part)?;
+        // Live transcript patches carry the derived detail Markdown so the
+        // terminal renders the human view immediately. The durable projection
+        // (activity_payload → content_nodes) deliberately leaves it empty.
+        if let agena_domain::ActivityPayload::Operation(operation) = &mut payload
+            && operation.markdown.is_empty()
+            && !operation.data.is_null()
+        {
+            let command = operation
+                .invocation
+                .input
+                .get("command")
+                .and_then(|value| value.as_text())
+                .map(str::to_owned);
+            operation.markdown = crate::session::manager::helpers::derive_operation_markdown(
+                &operation.invocation.name,
+                &operation.data,
+                command.as_deref(),
+            );
+        }
         let state = match part.status {
             ExecutionStatus::Pending => agena_domain::ActivityState::Pending,
             ExecutionStatus::InProgress => agena_domain::ActivityState::InProgress,

@@ -124,6 +124,28 @@ impl MarkdownWriter {
         }
         let _ = writeln!(self.body, "_{}_", text.as_ref());
     }
+
+    /// A key/value line, e.g. ``- **shell**: bash``, for compact parameters.
+    pub fn kv(&mut self, key: impl AsRef<str>, value: impl AsRef<str>) {
+        let _ = writeln!(self.body, "- **{}**: {}", key.as_ref(), value.as_ref());
+    }
+
+    /// A two-column Markdown table from rows of `(label, value)`.
+    pub fn table(&mut self, rows: &[(String, String)]) {
+        if rows.is_empty() {
+            return;
+        }
+        if !self.body.is_empty() {
+            self.body.push('\n');
+        }
+        self.body.push_str("| Field | Value |\n");
+        self.body.push_str("| --- | --- |\n");
+        for (key, value) in rows {
+            let value = value.replace('|', "\\|");
+            let _ = writeln!(self.body, "| {key} | {value} |");
+        }
+        self.body.push('\n');
+    }
 }
 
 /// Render any tool result to its human-facing Markdown.
@@ -281,6 +303,8 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                 background,
                 status,
                 process_id,
+                shell,
+                dropped_lines,
                 ..
             } => {
                 if let Some(command) = ctx.command.filter(|command| !command.trim().is_empty()) {
@@ -288,6 +312,34 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                 } else {
                     w.heading("`shell`");
                 }
+                // Parameters render as a compact table; the output is a clean
+                // code block below it (never raw JSON).
+                let mut params: Vec<(String, String)> = Vec::new();
+                if *action == "run" {
+                    if let Some(shell) = shell {
+                        params.push(("shell".to_owned(), shell.to_string()));
+                    }
+                    if let Some(status) = status {
+                        params.push(("status".to_owned(), status.to_string()));
+                    }
+                    if let Some(exit_code) = exit_code {
+                        params.push(("exit".to_owned(), exit_code.to_string()));
+                    }
+                    if *background {
+                        params.push(("mode".to_owned(), "background".to_owned()));
+                    }
+                    if let Some(dropped_lines) = dropped_lines.filter(|count| *count > 0) {
+                        params.push(("dropped".to_owned(), dropped_lines.to_string()));
+                    }
+                } else if let Some(process_id) = process_id {
+                    params.push(("process".to_owned(), process_id.clone()));
+                    if let Some(status) = status {
+                        params.push(("status".to_owned(), status.to_string()));
+                    }
+                    params.push(("hint".to_owned(), "use `shell.logs` to read output".to_owned()));
+                }
+                w.table(&params);
+
                 if *action == "run" {
                     let live_tail = ctx.live_tail;
                     let body = match (output.as_deref(), live_tail) {
@@ -296,17 +348,8 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                         _ => None,
                     };
                     if let Some(body) = body.filter(|text| !text.trim().is_empty()) {
-                        w.code_block("sh", body);
+                        w.code_block("", body);
                     }
-                    if let Some(exit_code) = exit_code.filter(|code| *code != 0) {
-                        w.note(format!("exited with code {exit_code}"));
-                    }
-                } else if let Some(process_id) = process_id {
-                    w.line(format!("{action} process {process_id} · {status:?}"));
-                    w.note("use `shell.logs` to read output");
-                }
-                if *background {
-                    w.note("background process");
                 }
             }
             P::WebFetch {
@@ -557,8 +600,13 @@ mod tests {
             "output": "test result: ok",
             "status": "exited"
         }));
-        assert!(out.contains("```sh"));
-        assert!(out.contains("test result: ok"));
+        // Parameters render as a table; the output is a clean code block.
+        assert!(out.contains("| shell | bash |"), "{out}");
+        assert!(out.contains("| status | exited |"), "{out}");
+        assert!(out.contains("| exit | 0 |"), "{out}");
+        assert!(out.contains("```\ntest result: ok\n```"), "{out}");
+        // Raw JSON must never be dumped inline.
+        assert!(!out.contains("\"output\": \"test result: ok\""), "{out}");
     }
 
     #[test]
@@ -574,7 +622,7 @@ mod tests {
             Some("cargo test"),
         );
         assert!(out.contains("`$ cargo test`"), "{out}");
-        assert!(out.contains("```sh"));
+        assert!(out.contains("```\nok\n```"), "{out}");
     }
 
     #[test]

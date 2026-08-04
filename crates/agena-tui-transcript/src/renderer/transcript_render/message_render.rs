@@ -326,7 +326,7 @@ fn canonical_activity_details(
                 if !operation.markdown.trim().is_empty() {
                     details.push(CanonicalActivityDetail::identified_section(
                         TranscriptActivitySection::Result,
-                        "Result",
+                        "Output",
                         operation.markdown.clone(),
                         CanonicalActivityDetailFormat::Markdown,
                         true,
@@ -337,7 +337,7 @@ fn canonical_activity_details(
                 {
                     details.push(CanonicalActivityDetail::identified_section(
                         TranscriptActivitySection::Result,
-                        "Result",
+                        "Output",
                         output,
                         CanonicalActivityDetailFormat::Json,
                         true,
@@ -352,7 +352,7 @@ fn canonical_activity_details(
             if operation.error.is_none() && !has_result_presentation && !summary.trim().is_empty() {
                 details.push(CanonicalActivityDetail::identified_section(
                     TranscriptActivitySection::Result,
-                    "Result",
+                    "Output",
                     summary,
                     CanonicalActivityDetailFormat::Auto,
                     true,

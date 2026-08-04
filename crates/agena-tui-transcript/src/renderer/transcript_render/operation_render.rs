@@ -79,7 +79,7 @@ pub(crate) fn render_tool_execution(
     if !human_markdown.trim().is_empty() && failure_text.is_none() {
         push_section_heading(
             out,
-            "    › Result",
+            "    › Output",
             Style::default()
                 .fg(agena_tui_components::theme::special_color())
                 .add_modifier(Modifier::BOLD),
@@ -100,7 +100,7 @@ pub(crate) fn render_tool_execution(
     } else if should_render_tool_model_output(tool, failure_text) {
         push_section_heading(
             out,
-            "    › Result",
+            "    › Output",
             Style::default()
                 .fg(agena_tui_components::theme::special_color())
                 .add_modifier(Modifier::BOLD),

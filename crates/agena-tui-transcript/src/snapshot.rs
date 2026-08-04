@@ -948,7 +948,7 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(expanded_text.contains("Result\n"), "{expanded_text}");
+        assert!(expanded_text.contains("Output\n"), "{expanded_text}");
         assert!(
             expanded_text.contains("▸ Input · 2 fields"),
             "{expanded_text}"
@@ -1131,7 +1131,7 @@ mod tests {
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
-        assert!(expanded_text.contains("▾ Result"), "{expanded_text}");
+        assert!(expanded_text.contains("▾ Output"), "{expanded_text}");
         assert!(expanded_text.contains("── Checks"), "{expanded_text}");
         assert!(
             expanded_text.contains("Passed: cargo test"),
@@ -1146,7 +1146,7 @@ mod tests {
             .nodes
             .iter()
             .find(|node| node.key == result_key)
-            .expect("default-expanded Result section");
+            .expect("default-expanded Output section");
         assert!(result_node.toggleable);
         assert!(result_node.expanded);
 
@@ -1166,7 +1166,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
-            result_collapsed_text.contains("▸ Result · Checks"),
+            result_collapsed_text.contains("▸ Output · Checks"),
             "{result_collapsed_text}"
         );
         assert!(
@@ -1185,7 +1185,7 @@ mod tests {
             .nodes
             .iter()
             .find(|node| node.key == result_key)
-            .expect("collapsed Result section");
+            .expect("collapsed Output section");
         assert!(result_node.toggleable);
         assert!(!result_node.expanded);
 
@@ -1298,7 +1298,7 @@ mod tests {
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
         assert!(expanded_text.contains("▾ Error\n"), "{expanded_text}");
-        assert!(!expanded_text.contains("Result\n"), "{expanded_text}");
+        assert!(!expanded_text.contains("Output\n"), "{expanded_text}");
         assert_eq!(
             expanded_text
                 .matches("shell.run filesystem_effects must declare every accessed path")
@@ -1427,7 +1427,7 @@ mod tests {
             .find(|node| node.key == key)
             .expect("partially completed shell.run Activity node");
 
-        assert!(expanded_text.contains("Result\n"), "{expanded_text}");
+        assert!(expanded_text.contains("Output\n"), "{expanded_text}");
         assert!(expanded_text.contains("Error\n"), "{expanded_text}");
         assert_eq!(
             expanded_text.matches(partial_output).count(),

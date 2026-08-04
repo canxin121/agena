@@ -328,7 +328,7 @@ impl ToolResultRender for crate::tool::payload::ToolPayloadOutput {
                     if *background {
                         params.push(("mode".to_owned(), "background".to_owned()));
                     }
-                    if let Some(dropped_lines) = dropped_lines.filter(|count| *count > 0) {
+                    if *dropped_lines > 0 {
                         params.push(("dropped".to_owned(), dropped_lines.to_string()));
                     }
                 } else if let Some(process_id) = process_id {

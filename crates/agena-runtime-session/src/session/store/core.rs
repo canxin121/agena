@@ -29,8 +29,10 @@ use agena_storage::SequenceAllocator;
 use agena_storage_sqlite::run_transaction_effects;
 
 /// A lease whose heartbeat is older than this is considered stale and may be
-/// reclaimed by reconciliation (the owning process is presumed crashed).
-pub(crate) const LEASE_STALENESS_MS: i64 = 15_000;
+/// reclaimed by reconciliation (the owning process is presumed crashed). The
+/// authoritative definition lives in the lease layer so acquire-time stealing
+/// and periodic reaping agree on the same threshold.
+pub(crate) use agena_runtime_session_core::db::leases::LEASE_STALENESS_MS;
 
 impl SessionStore {
     /// The owner of the session's active execution lease, if any.

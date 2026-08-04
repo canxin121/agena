@@ -251,4 +251,49 @@ mod lease_tests {
             .expect("acquire after reap");
         assert!(matches!(fresh, LeaseAcquireOutcome::Acquired));
     }
+
+    #[tokio::test]
+    async fn stale_lease_is_stolen_atomically_at_acquire_time() {
+        let (db, session_id) = session_db().await;
+        let now = lease_now_ms();
+        // A crashed owner's lease whose heartbeat is well past the threshold.
+        try_acquire_lease(&db, session_id, "owner-crashed", None, now - 60_000)
+            .await
+            .expect("acquire stale");
+
+        // A new owner takes over immediately — no separate reap step needed.
+        let taken = try_acquire_lease(&db, session_id, "owner-new", None, now)
+            .await
+            .expect("steal stale lease");
+        assert!(matches!(taken, LeaseAcquireOutcome::Acquired));
+
+        // The new owner now exclusively holds a fresh lease.
+        let held = try_acquire_lease(&db, session_id, "owner-third", None, now + 1)
+            .await
+            .expect("owner-third attempts");
+        assert!(matches!(held, LeaseAcquireOutcome::HeldBy { .. }));
+        let row = crate::db::leases::lease(&db, session_id)
+            .await
+            .expect("read lease")
+            .expect("lease row");
+        assert_eq!(row.owner_id, "owner-new");
+    }
+
+    #[tokio::test]
+    async fn fresh_lease_is_never_stolen_at_acquire_time() {
+        let (db, session_id) = session_db().await;
+        let now = lease_now_ms();
+        try_acquire_lease(&db, session_id, "owner-live", None, now)
+            .await
+            .expect("acquire live");
+
+        // A fresh heartbeat must keep the lease with its current owner.
+        let held = try_acquire_lease(&db, session_id, "owner-try", None, now + 1)
+            .await
+            .expect("attempt on fresh lease");
+        let LeaseAcquireOutcome::HeldBy { owner_id, .. } = held else {
+            panic!("fresh lease must not be stolen");
+        };
+        assert_eq!(owner_id, "owner-live");
+    }
 }

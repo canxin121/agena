@@ -11,6 +11,16 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DbErr, Statement};
 
 const TABLE: &str = "agena_execution_leases";
 
+/// A lease whose heartbeat is older than this is considered stale: the owning
+/// process is presumed crashed and the lease may be reclaimed. Live processes
+/// refresh the heartbeat every 5s (see `ExecutionRegistry`'s lease heartbeat),
+/// so a stale threshold far above that interval never reclaims a live
+/// execution.
+///
+/// Living here (the storage/lease layer) lets both the reaping path and the
+/// acquire-time steal path share one definition.
+pub const LEASE_STALENESS_MS: i64 = 15_000;
+
 /// Outcome of attempting to acquire a session's execution lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LeaseAcquireOutcome {
@@ -32,8 +42,13 @@ pub struct LeaseRow {
 
 /// Try to acquire the execution lease for `session_id`.
 ///
-/// Returns `Acquired` when this caller won the insert, or `HeldBy` with the
-/// current owner when another process holds the lease.
+/// A lease row that is still fresh (heartbeat within [`LEASE_STALENESS_MS`])
+/// blocks acquisition and returns `HeldBy`; a stale row (the owning process
+/// is presumed crashed) is reclaimed atomically in the same statement, so a
+/// newly-started process can immediately take over a session whose previous
+/// owner died. The `ON CONFLICT ... DO UPDATE ... WHERE heartbeat < ?` shape
+/// is race-safe: SQLite serializes writers, so when two processes race to
+/// reclaim the same stale lease exactly one sees `RETURNING` produce a row.
 pub async fn try_acquire_lease<C>(
     db: &C,
     session_id: i64,
@@ -44,12 +59,20 @@ pub async fn try_acquire_lease<C>(
 where
     C: ConnectionTrait,
 {
-    let result = db
-        .execute(Statement::from_sql_and_values(
+    let stale_before_ms = now_ms - LEASE_STALENESS_MS;
+    let row = db
+        .query_one(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             format!(
                 "INSERT INTO {TABLE} (session_id, owner_id, run_id, lease_started_at_ms, heartbeat_at_ms) \
-                 VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO NOTHING"
+                 VALUES (?, ?, ?, ?, ?) \
+                 ON CONFLICT(session_id) DO UPDATE SET \
+                   owner_id = excluded.owner_id, \
+                   run_id = excluded.run_id, \
+                   lease_started_at_ms = excluded.lease_started_at_ms, \
+                   heartbeat_at_ms = excluded.heartbeat_at_ms \
+                 WHERE {TABLE}.heartbeat_at_ms < ? \
+                 RETURNING session_id"
             ),
             [
                 session_id.into(),
@@ -57,12 +80,17 @@ where
                 run_id.map(str::to_owned).into(),
                 now_ms.into(),
                 now_ms.into(),
+                stale_before_ms.into(),
             ],
         ))
         .await?;
-    if result.rows_affected() == 1 {
+    // RETURNING produced a row: either the insert won, or a stale lease was
+    // atomically stolen. Either way this caller now owns the lease.
+    if row.is_some() {
         return Ok(LeaseAcquireOutcome::Acquired);
     }
+    // The row exists and is fresh (conflict occurred, WHERE rejected the
+    // update). Report the current owner.
     let row = db
         .query_one(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,

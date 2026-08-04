@@ -123,6 +123,11 @@ pub(super) async fn resume_session_state(
             .map_err(|err| {
                 crate::AppError::Internal(format!("resume event sequence failed: {err}"))
             })?;
+        // Reclaim leases left behind by crashed processes before reconciling
+        // interrupted runs. `reconcile_interrupted_executions` skips sessions
+        // with a live lease, so without this a stale lease from a crashed
+        // process would keep its session permanently marked "already running".
+        manager.reap_stale_leases().await?;
         manager.reconcile_interrupted_executions().await?;
     }
     Ok(())

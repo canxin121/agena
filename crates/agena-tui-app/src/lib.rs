@@ -231,6 +231,7 @@ mod app_provider_runtime;
 mod app_provider_text;
 mod app_session_events;
 mod app_session_helpers;
+mod app_terminal_integration;
 mod app_session_input;
 mod app_session_interactive;
 mod app_settings;
@@ -278,6 +279,7 @@ pub fn tui_config_from_preferences(ui: &TuiPreferencesResource) -> TuiConfig {
 use self::app_choice_helpers::*;
 use self::app_command_helpers::*;
 use self::app_composer_helpers::*;
+use self::app_terminal_integration::*;
 use self::app_permission_display::*;
 use self::app_permission_helpers::*;
 use self::app_permission_studio::apply_permission_studio_entries_mode;

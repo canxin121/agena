@@ -215,6 +215,8 @@ pub struct TerminalCapabilities {
     pub inline_images: Capability,
     pub hyperlinks: Capability,
     pub synchronized_output: Capability,
+    pub window_title: Capability,
+    pub terminal_notifications: Capability,
 }
 
 /// A presentation diagnostic derived from terminal evidence.
@@ -268,6 +270,8 @@ mod tests {
             inline_images: capability,
             hyperlinks: capability,
             synchronized_output: capability,
+            window_title: capability,
+            terminal_notifications: capability,
         }
     }
 

@@ -31,6 +31,7 @@ use agena_tui_media::MathGraphicsConfig;
 
 mod capabilities;
 mod graphics;
+pub mod integration;
 
 pub use agena_tui::terminal::TerminalFamily;
 pub use agena_tui::terminal_color::TerminalColorDetection;
@@ -303,6 +304,15 @@ impl TerminalRuntime {
     /// exposed outside the runtime.
     pub fn write_protocol(&mut self, frame: &[u8]) -> Result<()> {
         self.broker.write_frame(self.terminal.backend_mut(), frame)
+    }
+
+    /// Serialize an ordered protocol transaction. Every frame is validated
+    /// before any byte is written, so callers can never expose a
+    /// half-written multi-frame sequence (for example a title plus its
+    /// per-family companion selector).
+    pub fn write_protocol_frames(&mut self, frames: &[&[u8]]) -> Result<()> {
+        self.broker
+            .write_transaction(self.terminal.backend_mut(), frames)
     }
 
     pub fn draw(&mut self, render: impl FnOnce(&mut Frame<'_>)) -> Result<()> {

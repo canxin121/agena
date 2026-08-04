@@ -128,6 +128,7 @@ impl App {
             transcript_search_forward: true,
             last_ctrl_c_at: None,
             double_esc_window,
+            terminal_integration: TerminalIntegrationState::default(),
         };
         if let Some(draft) = app.draft_store.get(DraftSlot::NewSession).cloned() {
             app.restore_composer_draft(draft);
@@ -227,6 +228,8 @@ impl App {
                 });
             })?;
             terminal.set_text_input_active(self.has_active_text_input());
+            crate::sync_terminal_title(self, terminal)?;
+            crate::drain_terminal_notification(self, terminal)?;
 
             tokio::select! {
                 maybe_event = terminal.next_event() => {
@@ -456,9 +459,10 @@ use crate::{
     App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
     DraftStore, Duration, Editor, Event, HashSet, I18n, Instant, LaunchOptions, LayoutCache,
     PromptHistory, REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState,
-    SessionComposerState, SessionListLoadState, TerminalRuntime, TranscriptDetailDefaults,
-    TranscriptState, UI_TICK_MS, default_draft_store_path, default_prompt_history_path, interval,
-    provider_studio_auth_poll_interval, ui_text, unbounded_channel,
+    SessionComposerState, SessionListLoadState, TerminalIntegrationState, TerminalRuntime,
+    TranscriptDetailDefaults, TranscriptState, UI_TICK_MS, default_draft_store_path,
+    default_prompt_history_path, interval, provider_studio_auth_poll_interval, ui_text,
+    unbounded_channel,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;

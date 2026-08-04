@@ -1893,3 +1893,12 @@ failure-retry-immediate-once = Retry once immediately
 failure-retry-backoff = Retry with backoff
 failure-retry-use-alternative = Use an alternative
 failure-retry-unknown = Unknown
+
+terminal-title-working = working
+terminal-title-permission = awaiting approval
+terminal-title-user-input = awaiting input
+terminal-title-blocked = blocked
+terminal-notification-working = working
+terminal-notification-permission = awaiting approval
+terminal-notification-user-input = awaiting input
+terminal-notification-blocked = blocked

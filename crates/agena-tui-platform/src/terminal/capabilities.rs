@@ -207,6 +207,35 @@ impl TerminalContext {
         let hyperlinks =
             profile_capability(profiles::hyperlinks(identity.family)).with_provider(false);
 
+        // Window/tab titles via OSC 0/2 are consumed locally even inside a
+        // multiplexer, so they are never path-gated. Notifications use the
+        // universal BEL signal as the baseline; the family-specific OSC 9
+        // method is selected at emission time. Only the capability gate lives
+        // here.
+        let window_title_override = overrides::boolean(
+            environment,
+            "AGENA_TUI_WINDOW_TITLE",
+            &mut override_diagnostics,
+        );
+        let window_title = match window_title_override {
+            Some(true) => Capability::forced(user),
+            Some(false) => Capability::unsupported(user),
+            None => profile_capability(profiles::window_title(identity.family)),
+        };
+        let notifications_override = overrides::boolean(
+            environment,
+            "AGENA_TUI_NOTIFICATIONS",
+            &mut override_diagnostics,
+        );
+        let terminal_notifications = match notifications_override {
+            Some(true) => Capability::forced(user),
+            Some(false) => Capability::unsupported(user),
+            None if minimal || !profiles::notifications_bel(identity.family) => {
+                Capability::unsupported(profile)
+            }
+            None => Capability::profiled(profile),
+        };
+
         let capabilities = TerminalCapabilities {
             alternate_screen: base_screen,
             bracketed_paste: base_screen,
@@ -226,6 +255,8 @@ impl TerminalContext {
             inline_images,
             hyperlinks,
             synchronized_output,
+            window_title,
+            terminal_notifications,
         };
         let diagnostics = build_diagnostics(
             &identity,
@@ -306,7 +337,7 @@ impl TerminalContext {
             },
         );
         format!(
-            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | color={color}/generation:{} | keyboard={} | mouse={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | warnings={}",
+            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | color={color}/generation:{} | keyboard={} | mouse={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | title={} | notifications={} | warnings={}",
             self.identity.display_name(),
             self.identity.confidence.label(),
             self.is_remote(),
@@ -319,6 +350,8 @@ impl TerminalContext {
             self.capabilities.clipboard_read_osc52.diagnostic_label(),
             self.capabilities.kitty_rich_clipboard.diagnostic_label(),
             file_transfer_label(&self.capabilities),
+            self.capabilities.window_title.diagnostic_label(),
+            self.capabilities.terminal_notifications.diagnostic_label(),
             self.diagnostics.len(),
         )
     }
@@ -678,5 +711,58 @@ mod tests {
                 .keyboard_disambiguation
                 .is_operational()
         );
+    }
+
+    #[test]
+    fn window_title_is_operational_and_never_path_gated_inside_tmux() {
+        let context = detect(&[("TERM_PROGRAM", "iTerm.app"), ("TMUX", "/tmp/tmux")]);
+        assert!(context.capabilities.window_title.is_operational());
+        assert_eq!(context.capabilities.window_title.path, CapabilityPath::Clear);
+    }
+
+    #[test]
+    fn notifications_default_to_bel_and_dumb_is_unsupported() {
+        let context = detect(&[("TERM_PROGRAM", "WezTerm")]);
+        assert!(
+            context
+                .capabilities
+                .terminal_notifications
+                .is_operational()
+        );
+        let dumb = detect(&[("TERM", "dumb")]);
+        assert!(!dumb.capabilities.terminal_notifications.is_operational());
+        let console = detect(&[("TERM", "linux")]);
+        assert!(!console.capabilities.terminal_notifications.is_operational());
+    }
+
+    #[test]
+    fn title_and_notification_overrides_force_or_block() {
+        let forced = detect(&[
+            ("TERM_PROGRAM", "iTerm.app"),
+            ("AGENA_TUI_WINDOW_TITLE", "off"),
+            ("AGENA_TUI_NOTIFICATIONS", "on"),
+        ]);
+        assert_eq!(
+            forced.capabilities.window_title.support,
+            Support::Unsupported
+        );
+        assert!(
+            forced
+                .capabilities
+                .terminal_notifications
+                .is_operational()
+        );
+        assert_eq!(
+            forced.capabilities.terminal_notifications.source,
+            CapabilitySource::UserOverride
+        );
+    }
+
+    #[test]
+    fn diagnostic_summary_includes_title_and_notification_labels() {
+        let context = detect(&[("TERM_PROGRAM", "iTerm.app")]);
+        let summary = context.diagnostic_summary();
+        assert!(summary.contains("title="));
+        assert!(summary.contains("notifications="));
     }
 }

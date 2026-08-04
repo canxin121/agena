@@ -290,6 +290,77 @@ pub(super) struct PromptHistory {
     pub(super) items: Vec<String>,
 }
 
+/// Terminal-integration presentation state owned by `App`.
+///
+/// The run loop compares the current session title and activity against this
+/// snapshot every frame and emits title changes through
+/// `TerminalRuntime::write_protocol`. Attention notifications are queued by
+/// session event handlers and drained one-per-frame so a burst of events
+/// produces a single alert.
+#[derive(Debug, Default)]
+pub(super) struct TerminalIntegrationState {
+    pub(super) last_title: Option<String>,
+    pub(super) pending_notifications:
+        Vec<agena_tui_platform::terminal::integration::NotificationMethod>,
+    title_due: bool,
+    /// Content of the `agena.terminal.notify` segment already fired. The
+    /// plugin keeps the segment present across frames; this set ensures each
+    /// lifecycle intent fires exactly once.
+    consumed_notify: std::collections::BTreeSet<String>,
+}
+
+impl TerminalIntegrationState {
+    /// Queues an attention notification for the next frame.
+    pub(super) fn queue_notification(
+        &mut self,
+        method: agena_tui_platform::terminal::integration::NotificationMethod,
+    ) {
+        self.pending_notifications.push(method);
+    }
+
+    /// Marks a title emission as due. Called whenever the session title or
+    /// activity changes.
+    pub(super) fn mark_title_pending(&mut self) {
+        self.title_due = true;
+    }
+
+    /// Returns the last emitted title; `None` before the first emission.
+    pub(super) fn last_title(&self) -> Option<&str> {
+        self.last_title.as_deref()
+    }
+
+    /// Records that the current title text has been emitted.
+    pub(super) fn note_title_emitted(&mut self, title: String) {
+        self.last_title = Some(title);
+        self.title_due = false;
+    }
+
+    pub(super) fn title_due(&self) -> bool {
+        self.title_due
+    }
+
+    /// Drains the queued notifications, returning at most one method (the
+    /// most recently queued). Bursts coalesce into a single alert.
+    pub(super) fn take_notification(
+        &mut self,
+    ) -> Option<agena_tui_platform::terminal::integration::NotificationMethod> {
+        self.pending_notifications.drain(..).next_back()
+    }
+
+    /// Returns `true` when `notify_content` (from the `agena.terminal.notify`
+    /// statusline segment) has not yet fired, and records it as consumed.
+    pub(super) fn notify_consumed_once(&mut self, notify_content: &str) -> bool {
+        if self.consumed_notify.contains(notify_content) {
+            return false;
+        }
+        self.consumed_notify.insert(notify_content.to_owned());
+        if self.consumed_notify.len() > 64 {
+            self.consumed_notify.clear();
+        }
+        true
+    }
+}
+
 pub struct App {
     pub(super) backend: Backend,
     pub(super) i18n: I18n,
@@ -387,6 +458,7 @@ pub struct App {
     /// exits the application.
     pub(super) last_ctrl_c_at: Option<Instant>,
     pub(super) double_esc_window: Duration,
+    pub(super) terminal_integration: TerminalIntegrationState,
 }
 
 impl Drop for App {
@@ -812,5 +884,48 @@ mod ui_failure_tests {
             projected.failure.user.fallback,
             "The terminal interface could not finish this action."
         );
+    }
+}
+
+#[cfg(test)]
+mod terminal_integration_state_tests {
+    use super::TerminalIntegrationState;
+    use agena_tui_platform::terminal::integration::NotificationMethod;
+
+    #[test]
+    fn title_due_is_marked_until_emitted() {
+        let mut state = TerminalIntegrationState::default();
+        assert!(!state.title_due());
+        assert!(state.last_title().is_none());
+
+        state.mark_title_pending();
+        assert!(state.title_due());
+
+        state.note_title_emitted("fix login".to_owned());
+        assert!(!state.title_due());
+        assert_eq!(state.last_title(), Some("fix login"));
+    }
+
+    #[test]
+    fn a_burst_of_notifications_coalesces_into_one_alert() {
+        let mut state = TerminalIntegrationState::default();
+        state.queue_notification(NotificationMethod::Bell);
+        state.queue_notification(NotificationMethod::Osc9);
+        state.queue_notification(NotificationMethod::Bell);
+
+        // The most recently queued method wins; the queue drains empty.
+        assert_eq!(
+            state.take_notification(),
+            Some(NotificationMethod::Bell)
+        );
+        assert_eq!(state.take_notification(), None);
+    }
+
+    #[test]
+    fn a_plugin_notify_intent_fires_exactly_once() {
+        let mut state = TerminalIntegrationState::default();
+        assert!(state.notify_consumed_once("\"done\""));
+        assert!(!state.notify_consumed_once("\"done\""));
+        assert!(state.notify_consumed_once("\"blocked\""));
     }
 }

@@ -258,6 +258,21 @@ impl App {
 
     pub(crate) fn notify(&mut self, severity: NoticeSeverity, text: impl Into<String>) {
         self.notice = Some(UiNotice::message(severity, text));
+        self.queue_notice_notification(severity);
+    }
+
+    /// Queues a terminal attention notification for the next frame when the
+    /// notice severity warrants one. Only error, warning, and success events
+    /// raise attention; routine info flashes stay silent.
+    pub(crate) fn queue_notice_notification(&mut self, severity: NoticeSeverity) {
+        use agena_tui_platform::terminal::integration::NotificationMethod;
+        if !matches!(
+            severity,
+            NoticeSeverity::Error | NoticeSeverity::Warning | NoticeSeverity::Success
+        ) {
+            return;
+        }
+        self.terminal_integration.queue_notification(NotificationMethod::Bell);
     }
 
     pub(crate) fn notify_failure(&mut self, failure: &agena_failure::Failure, scope: NoticeScope) {

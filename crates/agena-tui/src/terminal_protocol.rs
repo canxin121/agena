@@ -34,6 +34,12 @@ impl TerminalProtocolBroker {
 }
 
 fn validate_complete_frame(frame: &[u8]) -> Result<()> {
+    // A bare BEL (0x07) is the universal VT attention signal and a complete
+    // terminal frame on its own. It is used for attention notifications where
+    // the terminal family has no richer notification protocol.
+    if frame == b"\x07" {
+        return Ok(());
+    }
     if frame.len() < 3 || frame[0] != 0x1b {
         bail!("terminal protocol frame must begin with ESC and cannot be empty");
     }
@@ -101,6 +107,13 @@ mod tests {
         assert!(validate_complete_frame(b"\x1b]52;c;YQ==\x07trailing\x07").is_err());
         assert!(validate_complete_frame(b"\x1bPpayload\x1b\\trailing\x1b\\").is_err());
         assert!(validate_complete_frame(b"\x1b[?25l\x1b[2J").is_err());
+    }
+
+    #[test]
+    fn accepts_a_bare_bel_as_a_complete_attention_frame() {
+        assert!(validate_complete_frame(b"\x07").is_ok());
+        assert!(validate_complete_frame(b"\x07\x07").is_err());
+        assert!(validate_complete_frame(b"x\x07").is_err());
     }
 
     #[test]

@@ -1272,6 +1272,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "unicode-width",
  "url",
  "uuid",
 ]

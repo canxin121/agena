@@ -1893,3 +1893,12 @@ failure-retry-immediate-once = 立即重试一次
 failure-retry-backoff = 退避重试
 failure-retry-use-alternative = 使用替代方案
 failure-retry-unknown = 未知
+
+terminal-title-working = 工作中
+terminal-title-permission = 等待审批
+terminal-title-user-input = 等待输入
+terminal-title-blocked = 已阻塞
+terminal-notification-working = 工作中
+terminal-notification-permission = 等待审批
+terminal-notification-user-input = 等待输入
+terminal-notification-blocked = 已阻塞

@@ -14,6 +14,7 @@ pub mod report;
 pub mod schema_lab;
 pub mod session;
 pub mod settings;
+pub mod terminal;
 pub mod shell;
 pub mod skills;
 pub mod tasks;

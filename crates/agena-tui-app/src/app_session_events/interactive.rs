@@ -65,6 +65,12 @@ impl App {
         if execution_update_is_stale(self.transcript.last_event_seq, execution.latest_event_seq) {
             return false;
         }
+        let was_running = self
+            .transcript
+            .execution
+            .as_ref()
+            .is_some_and(|current| current.active_execution.is_some());
+        let is_terminal = execution.active_execution.is_none();
         let session_id = execution.session.id;
         let sequence = execution.latest_event_seq;
         self.transcript.apply_execution(execution);
@@ -76,7 +82,26 @@ impl App {
         self.sync_run_model_stack_from_execution();
         self.sync_seen_pending_request_ids();
         self.sync_open_pending_interactive_overlay();
+        // A run transitioned to terminal on the current session while we are
+        // not already waiting on an interactive request. Raise terminal
+        // attention so the completion is noticed even when the user is in
+        // another tab. Re-application of an already-terminal state (for
+        // example a refresh) is ignored.
+        if is_terminal && was_running && !self.current_session_pending_interactive_kind().is_some() {
+            self.raise_completion_notification();
+        }
         true
+    }
+
+    /// Queues a "reply complete" terminal notification for the next frame.
+    pub(crate) fn raise_completion_notification(&mut self) {
+        use agena_tui_platform::terminal::integration::NotificationMethod;
+        let method = crate::current_notification_method(self)
+            .unwrap_or(NotificationMethod::Bell);
+        self.terminal_integration.queue_notification(method);
+        // The title snapshot is stale until the next frame recomputes it from
+        // the now-idle activity; mark it pending so the run loop refreshes it.
+        self.terminal_integration.mark_title_pending();
     }
 
     pub(crate) fn sync_run_model_stack_from_execution(&mut self) {

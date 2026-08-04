@@ -24,6 +24,22 @@ pub struct TuiConfig {
     pub color_scheme: ColorSchemePreference,
     pub graphics: GraphicsMode,
     pub transcript: TuiTranscriptConfig,
+    /// Whether the terminal window/tab title tracks the session name and
+    /// activity.
+    pub terminal_title: TerminalIntegrationMode,
+    /// Whether terminal-native attention notifications are raised for
+    /// permission requests, user-input requests, errors, and completion.
+    pub terminal_notifications: TerminalIntegrationMode,
+}
+
+/// User-selectable mode for a terminal-integration feature. `Auto` follows the
+/// detected capability evidence; `Enabled` and `Disabled` override it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TerminalIntegrationMode {
+    #[default]
+    Auto,
+    Enabled,
+    Disabled,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -74,6 +90,8 @@ impl Default for TuiConfig {
             color_scheme: ColorSchemePreference::Auto,
             graphics: GraphicsMode::Auto,
             transcript: TuiTranscriptConfig::default(),
+            terminal_title: TerminalIntegrationMode::default(),
+            terminal_notifications: TerminalIntegrationMode::default(),
         }
     }
 }

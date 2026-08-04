@@ -200,6 +200,21 @@ pub mod profile {
             _ => ProfileSupport::Available,
         }
     }
+    /// OSC 0/2 window/tab title setting. The escape is consumed locally by a
+    /// multiplexer (becoming the pane title) rather than being forwarded, so
+    /// title support is never path-gated. The Linux console is excluded
+    /// because its title handling is not a native notification surface.
+    pub const fn window_title(f: TerminalFamily) -> ProfileSupport {
+        match f {
+            TerminalFamily::Dumb | TerminalFamily::LinuxConsole => ProfileSupport::Unsupported,
+            _ => ProfileSupport::Available,
+        }
+    }
+    /// BEL is the universal VT attention signal and therefore the base
+    /// notification method for every interactive family.
+    pub const fn notifications_bel(f: TerminalFamily) -> bool {
+        !matches!(f, TerminalFamily::Dumb | TerminalFamily::LinuxConsole)
+    }
 }
 
 /// Terminal transport evidence inferred from the environment, without making

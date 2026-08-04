@@ -195,6 +195,39 @@ hidden by containers, SSH configuration or multiplexers:
 | `AGENA_TUI_DOWNLOAD_DIR` | local path | Kitty download destination, interpreted on the local computer |
 | `AGENA_TUI_KITTEN` | executable path | Explicit standalone `kitten` helper path |
 | `AGENA_TUI_HELPER_TIMEOUT_SECS` | `15..3600` | Timeout for interactive terminal helpers; defaults to 300 seconds |
+| `AGENA_TUI_WINDOW_TITLE` | boolean | Enable or disable the session-name window/tab title |
+| `AGENA_TUI_NOTIFICATIONS` | boolean | Enable or disable native terminal attention notifications |
+
+## Window title and notifications
+
+Agena sets the terminal window/tab title to the active session name plus a
+compact activity suffix (`工作中 · awaiting approval · awaiting input ·
+blocked`) and raises a terminal-native attention notification for lifecycle
+events (run completed, run blocked), permission requests and user-input
+requests. Both behaviors are off by default only on terminals that cannot
+render them (`dumb`, the Linux console).
+
+The window title uses OSC 2 (window title) everywhere, and additionally OSC 0
+(window + icon title) for iTerm2 and Apple Terminal. Terminal-native
+notifications are selected per family from verified protocol support:
+
+| Family | Notification method |
+|---|---|
+| iTerm2 | OSC 9 desktop notification + one-shot Dock attention |
+| Windows Terminal, WezTerm, Ghostty, foot, Warp | OSC 9 desktop notification |
+| Kitty, VS Code, Apple Terminal, Alacritty, VTE, Konsole, Rio, Contour, xterm-compatible, unknown | BEL (0x07) attention |
+| dumb, Linux console | disabled |
+
+A bare BEL is a complete, accepted terminal frame; terminals with no richer
+notification protocol still render it as the audible/system bell.
+
+The lifecycle state is observed by the bundled `agena.terminal` plugin, which
+subscribes to the session lifecycle hooks (`run.pre`, `run.post`, `agent.stop`,
+`session.start`, `session.end`, `prompt.submit`) and publishes the current
+activity through the plugin statusline channel. The plugin is hooks-only and
+exposes no tools to the model. Permission and user-input waits are not
+observable through a plugin hook today, so those notifications are raised by
+the TUI layer where the interactive prompt is opened.
 
 Do not force a protocol merely because the outer terminal supports it. Every
 hop between Agena and that terminal must preserve the protocol and its replies.

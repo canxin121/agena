@@ -124,11 +124,7 @@ impl TranscriptState {
             .collect::<BTreeSet<_>>();
 
         change(&mut self.snapshot);
-        for turn in &self.snapshot.turns {
-            if let Some(failure) = turn.reply.failure.clone() {
-                self.reply_failures.insert(turn.reply.id, failure);
-            }
-        }
+        self.record_reply_failures();
 
         let newly_visible_user_inputs = self
             .snapshot
@@ -164,6 +160,18 @@ impl TranscriptState {
         }
     }
 
+    /// Remember the latest structured failure observed per assistant reply so
+    /// a later continuation that recovers the reply keeps the failure visible
+    /// in the chat. The runtime clears its failure projection when the reply
+    /// completes, but the chat is a user-facing history: the failure stays.
+    fn record_reply_failures(&mut self) {
+        for turn in &self.snapshot.turns {
+            if let Some(failure) = turn.reply.failure.clone() {
+                self.reply_failures.insert(turn.reply.id, failure);
+            }
+        }
+    }
+
     /// Apply the Runtime-owned live projection used by the terminal backend.
     /// The terminal never reconstructs a concrete event envelope from JSON.
     pub(crate) fn apply_presentation_event(
@@ -178,6 +186,7 @@ impl TranscriptState {
                     self.apply_snapshot_change(|snapshot| snapshot.apply((**patch).clone()));
                 } else {
                     self.snapshot.apply((**patch).clone());
+                    self.record_reply_failures();
                 }
                 self.invalidate_render();
                 false

@@ -3210,4 +3210,140 @@ mod live_transcript_tests {
         )]);
         turn
     }
+    #[test]
+    fn failed_reply_failure_survives_a_recovering_continue() {
+        let mut failed = turn(1);
+        let problem = agena_failure::UserProblem::from(agena_failure::Failure::new(
+            agena_failure::FailureCode::new("internal.test"),
+            agena_failure::FailureCategory::Internal,
+            agena_failure::FailureResponsibility::System,
+            agena_failure::RetryDirective::ImmediateOnce,
+            agena_failure::RecoveryDirective::Retry,
+            agena_failure::FailureImpact::OperationFailed,
+            agena_failure::UserPresentation::new(
+                "internal-test",
+                "The provider response ended unexpectedly.",
+            ),
+        ));
+        failed.reply.status = AssistantReplyStatus::Failed;
+        failed.reply.failure = Some(problem.clone());
+        failed.reply.revision_seq = 1;
+        // A failed attempt usually leaves partial content behind; the failure
+        // must still be visible after the reply recovers.
+        failed.reply.content = ContentDocument::new(vec![ContentNode::text(
+            "partial assistant output before the failure",
+        )]);
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![failed],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+
+        // The failed terminal snapshot arrives and records the failure.
+        transcript.merge_snapshot(transcript.snapshot.clone());
+        assert_eq!(transcript.reply_failures.len(), 1);
+
+        // /continue recovers: the reply completes and clears failure_json.
+        let mut recovered = transcript.snapshot.clone();
+        recovered.turns[0].reply.status = AssistantReplyStatus::Completed;
+        recovered.turns[0].reply.failure = None;
+        recovered.turns[0].reply.revision_seq = 2;
+        transcript.merge_snapshot(recovered);
+
+        let rendered = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(
+            rendered.contains("Response failed"),
+            "failure headline should survive continue: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("The provider response ended unexpectedly."),
+            "failure summary should survive continue: {rendered:?}"
+        );
+    }
+    #[test]
+    fn failed_reply_recorded_from_a_live_assistant_reply_patch() {
+        let mut turn = turn(1);
+        turn.reply.content = ContentDocument::new(vec![ContentNode::text(
+            "partial assistant output before the failure",
+        )]);
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+
+        let mut failed_reply = transcript.snapshot.turns[0].reply.clone();
+        failed_reply.status = AssistantReplyStatus::Failed;
+        failed_reply.revision_seq = 1;
+        failed_reply.failure = Some(agena_failure::UserProblem::from(
+            agena_failure::Failure::new(
+                agena_failure::FailureCode::new("internal.test"),
+                agena_failure::FailureCategory::Internal,
+                agena_failure::FailureResponsibility::System,
+                agena_failure::RetryDirective::ImmediateOnce,
+                agena_failure::RecoveryDirective::Retry,
+                agena_failure::FailureImpact::OperationFailed,
+                agena_failure::UserPresentation::new(
+                    "internal-test",
+                    "The provider stream was interrupted.",
+                ),
+            ),
+        ));
+
+        // A live AssistantReplyUpdated patch (which does not materialize a
+        // user input) must still record the failure.
+        assert!(!transcript.apply_presentation_event(
+            &event(
+                RuntimePresentationEventKind::TranscriptPatch(Box::new(
+                    TranscriptPatch::AssistantReplyUpdated {
+                        seq_session: 2,
+                        reply: failed_reply,
+                    },
+                )),
+                2,
+            ),
+            80,
+            20,
+        ));
+        assert_eq!(transcript.reply_failures.len(), 1);
+
+        // /continue recovers the reply.
+        let mut recovered = transcript.snapshot.clone();
+        recovered.turns[0].reply.status = AssistantReplyStatus::Completed;
+        recovered.turns[0].reply.failure = None;
+        recovered.turns[0].reply.revision_seq = 3;
+        transcript.merge_snapshot(recovered);
+
+        let rendered = transcript
+            .rendered(80)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(
+            rendered.contains("The provider stream was interrupted."),
+            "failure summary should survive continue when recorded from a live patch: {rendered:?}"
+        );
+    }
 }

@@ -116,7 +116,20 @@ impl App {
     ) -> bool {
         match agena_tui_settings::handle_key(&mut dialog.state, key) {
             agena_tui_settings::SettingsStudioEffect::Close => true,
+            // Ctrl+R refreshes the exact client versions from npm, then
+            // rebuilds this interface in place so the user stays here.
             agena_tui_settings::SettingsStudioEffect::Refresh => {
+                match self.block_on_async(self.backend.refresh_provider_client_versions()) {
+                    Ok(versions) => self.flash_success(self.i18n.text_args(
+                        "flash-provider-client-versions-refreshed",
+                        &agena_tui::fl_args!(
+                            "codex" => versions.codex,
+                            "claude" => versions.claude,
+                            "gemini" => versions.gemini,
+                        ),
+                    )),
+                    Err(error) => self.flash_error(error),
+                }
                 self.refresh_client_versions_studio_overlay(dialog);
                 false
             }

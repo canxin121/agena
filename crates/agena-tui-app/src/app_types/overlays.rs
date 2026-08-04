@@ -191,7 +191,6 @@ pub(crate) enum SettingsPickerAction {
     OpenCurrentSessionPermissionWorkbench,
     OpenSessionEffectivePermissionView(i64),
     OpenPluginWorkbench,
-    RefreshProviderClientVersions,
     OpenConfigFile,
     OpenTerminalDiagnostics,
 }

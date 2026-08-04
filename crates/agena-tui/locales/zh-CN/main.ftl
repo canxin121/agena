@@ -638,7 +638,7 @@ settings-client-versions-entry-detail = 打开 Provider 请求身份 Header 使�
 overlay-client-versions-title = Provider 客户端版本
 settings-client-versions-section-label = 客户端版本
 settings-client-versions-section-summary = 运行时身份版本
-settings-client-versions-section-description = Provider 请求身份 Header 使用的精确兼容版本。可逐个编辑，也可从 npm 一键刷新。
+settings-client-versions-section-description = Provider 请求身份 Header 使用的精确兼容版本。可逐个编辑，按 Ctrl+R 从 npm 刷新。
 
 settings-provider-workbench-label = 服务商列表
 settings-provider-workbench-value = {$count} 个服务商

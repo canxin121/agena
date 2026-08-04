@@ -638,7 +638,7 @@ settings-client-versions-entry-detail = Open the exact compatibility versions us
 overlay-client-versions-title = Provider Client Versions
 settings-client-versions-section-label = Client Versions
 settings-client-versions-section-summary = Runtime identity versions
-settings-client-versions-section-description = Exact compatibility versions used in provider request identity headers. Edit each value or refresh from npm.
+settings-client-versions-section-description = Exact compatibility versions used in provider request identity headers. Edit each value, or press Ctrl+R to refresh from npm.
 
 settings-provider-workbench-label = Provider List
 settings-provider-workbench-value = {$count} provider(s)

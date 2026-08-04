@@ -324,17 +324,11 @@ impl App {
             .backend
             .config_json_sources()
             .map_err(crate::UiFailure::internal)?;
-        let mut items = settings_studio_field_items(
+        let items = settings_studio_field_items(
             &self.i18n,
             &sources,
             SettingsStudioSectionId::ProviderClientVersions,
         );
-        items.push(SettingsStudioItem::new(
-            ui_text::t(&self.i18n, "settings-client-versions-refresh-label"),
-            ui_text::t(&self.i18n, "settings-client-versions-refresh-value"),
-            ui_text::t(&self.i18n, "settings-client-versions-refresh-description"),
-            SettingsPickerAction::RefreshProviderClientVersions,
-        ));
         let sections = vec![SettingsStudioSection {
             id: SettingsStudioSectionId::ProviderClientVersions,
             label: ui_text::t(&self.i18n, "settings-client-versions-section-label"),

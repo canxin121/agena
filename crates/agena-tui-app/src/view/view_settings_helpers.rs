@@ -251,8 +251,7 @@ pub(crate) fn settings_item_action_hint(
 ) -> String {
     match &item.action {
         SettingsPickerAction::OpenPluginWorkbench
-        | SettingsPickerAction::OpenTerminalDiagnostics
-        | SettingsPickerAction::RefreshProviderClientVersions => {
+        | SettingsPickerAction::OpenTerminalDiagnostics => {
             ui_text::t(i18n, "settings-detail-action-screen")
         }
         SettingsPickerAction::OpenSessionEffectivePermissionView(_) => {

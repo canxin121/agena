@@ -39,6 +39,7 @@ impl SessionManager {
         // persisted batch may also delete rules. Invalidate every cached
         // snapshot so no session keeps applying stale rules.
         self.invalidate_rule_snapshots();
+        let expected_version = Some(session.version);
         self.store
             .persist(
                 SessionCommit {
@@ -46,6 +47,7 @@ impl SessionManager {
                     checkpoints,
                     client_events,
                     persisted_rules,
+                    expected_version,
                 },
                 state.cache_policy(),
             )

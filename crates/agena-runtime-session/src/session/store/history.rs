@@ -7,6 +7,32 @@ use super::{
 
 use agena_storage_sqlite::run_transaction_effects;
 
+/// Sentinel prefix marking a `DbErr::Custom` that carries an optimistic-lock
+/// conflict, so a caller can distinguish it from an ordinary database failure.
+const VERSION_CONFLICT_PREFIX: &str = "__agena_version_conflict:";
+
+/// Translate a persistence `DbErr` into `AppError`, mapping the version
+/// conflict sentinel to `AppError::Conflict` so reply paths can reload+retry.
+fn parse_version_conflict_error(error: DbErr) -> AppError {
+    if let DbErr::Custom(message) = &error {
+        if let Some(rest) = message.strip_prefix(VERSION_CONFLICT_PREFIX) {
+            let mut parts = rest.splitn(2, ':');
+            if let (Some(session_id), Some(expected)) = (parts.next(), parts.next()) {
+                if let (Ok(session_id), Ok(expected)) =
+                    (session_id.parse::<i64>(), expected.parse::<i64>())
+                {
+                    return AppError::Conflict {
+                        session_id,
+                        expected,
+                        current: expected,
+                    };
+                }
+            }
+        }
+    }
+    AppError::from(error)
+}
+
 impl SessionStore {
     pub(crate) async fn append_history_items_inner(
         &self,
@@ -66,6 +92,7 @@ impl SessionStore {
             checkpoints,
             mut client_events,
             persisted_rules,
+            expected_version,
         } = commit;
         session.sync_workflow_state();
         let session_id = session.id;
@@ -139,12 +166,39 @@ impl SessionStore {
                         });
                     }
 
-                    let updated_session =
-                        session::touch_session_updated_at(txn, session_id, session_runtime)
+                    let updated_session = match expected_version {
+                        Some(expected) => {
+                            match session::touch_session_with_version(
+                                txn,
+                                session_id,
+                                session_runtime,
+                                Some(expected),
+                            )
                             .await?
-                            .ok_or_else(|| {
-                                DbErr::Custom(format!("session not found: {session_id}"))
-                            })?;
+                            {
+                                session::TouchOutcome::Updated(model) => *model,
+                                session::TouchOutcome::NotFound => {
+                                    return Err(DbErr::Custom(format!(
+                                        "session not found: {session_id}"
+                                    )));
+                                }
+                                session::TouchOutcome::VersionConflict => {
+                                    return Err(DbErr::Custom(format!(
+                                        "__agena_version_conflict:{session_id}:{expected}"
+                                    )));
+                                }
+                            }
+                        }
+                        None => session::touch_session_updated_at(
+                            txn,
+                            session_id,
+                            session_runtime,
+                        )
+                        .await?
+                        .ok_or_else(|| {
+                            DbErr::Custom(format!("session not found: {session_id}"))
+                        })?,
+                    };
                     let updated_session = session_from_model_db(updated_session)?;
 
                     let updated_session_for_cache = updated_session.clone();
@@ -160,7 +214,8 @@ impl SessionStore {
                     Ok((updated_session, persisted_rules_for_event))
                 })
             })
-            .await?;
+            .await
+            .map_err(parse_version_conflict_error)?;
 
         // Publish every queued event after the row update commits.
         for kind in client_events {

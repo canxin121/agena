@@ -2619,6 +2619,84 @@ mod tests {
         );
     }
 
+    /// A crashed process leaves a stale execution lease behind. `reap_stale_leases`
+    /// must reclaim it and terminalize the interrupted run so the session becomes
+    /// usable again instead of permanently reporting "already running a response".
+    #[tokio::test]
+    async fn reap_stale_leases_reclaims_crashed_lease_and_recovers_session() {
+        use agena_domain::AssistantReplyStatus;
+
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "crashed lease session".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create crashed-lease session");
+        let session_id = session.id;
+        seed_canonical_assistant_reply(&manager, session_id).await;
+
+        // A different, now-crashed process owns the session's lease with a stale
+        // heartbeat (well past LEASE_STALENESS_MS).
+        let now = agena_runtime_session_core::db::leases::lease_now_ms();
+        manager
+            .store
+            .db
+            .execute(sea_orm::Statement::from_sql_and_values(
+                manager.store.db.get_database_backend(),
+                "INSERT INTO agena_execution_leases \
+                 (session_id, owner_id, run_id, lease_started_at_ms, heartbeat_at_ms) \
+                 VALUES (?, ?, NULL, ?, ?)",
+                [
+                    session_id.into(),
+                    "crashed-process".into(),
+                    (now - 60_000).into(),
+                    (now - 60_000).into(),
+                ],
+            ))
+            .await
+            .expect("insert stale crashed lease");
+
+        // Startup-style reclamation: reclaim the stale lease and reconcile the
+        // interrupted run.
+        manager
+            .reap_stale_leases()
+            .await
+            .expect("reap stale leases");
+
+        // The stale lease row is gone.
+        let lease_row = agena_runtime_session_core::db::leases::lease(
+            &manager.store.db,
+            session_id,
+        )
+        .await
+        .expect("read lease after reap");
+        assert!(lease_row.is_none(), "stale lease must be reclaimed");
+
+        // The interrupted execution was terminalized: the assistant reply is failed.
+        let snapshot = manager
+            .transcript_snapshot(session_id)
+            .await
+            .expect("load recovered canonical transcript");
+        let terminal_reply = snapshot
+            .turns
+            .iter()
+            .any(|turn| turn.reply.status == AssistantReplyStatus::Failed);
+        assert!(terminal_reply, "interrupted reply must be terminalized as failed");
+
+        // The session is usable again: a fresh execution can register.
+        let registry = Arc::clone(&manager.execution_registry);
+        let registered = registry
+            .register(session_id, agena_domain::TurnId::new(), agena_domain::AssistantReplyId::new())
+            .await;
+        assert!(registered.is_ok(), "session must be usable after lease reclamation");
+        // Clean up the lease this registration acquired.
+        if let Ok((control, _rx)) = &registered {
+            registry.unregister_if_matches(session_id, control).await;
+        }
+    }
+
     #[tokio::test]
     async fn updating_model_selection_is_immediate_and_session_local() {
         let manager = test_manager().await;

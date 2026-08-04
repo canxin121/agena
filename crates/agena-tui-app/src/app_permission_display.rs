@@ -928,26 +928,6 @@ fn append_prompt_primary_action(
     }
 }
 
-fn append_prompt_secondary_actions(
-    i18n: &I18n,
-    lines: &mut Vec<agena_tui::permission_prompt::PermissionPromptLine>,
-    heading_key: &str,
-    actions: &[&PermissionAction],
-) {
-    if actions.is_empty() {
-        return;
-    }
-    lines.push(agena_tui::permission_prompt::PermissionPromptLine::muted(
-        i18n.text(heading_key),
-    ));
-    lines.extend(actions.iter().map(|action| {
-        agena_tui::permission_prompt::PermissionPromptLine::normal(format!(
-            "  {}",
-            permission_action_label(i18n, action)
-        ))
-    }));
-}
-
 fn append_prompt_field(
     i18n: &I18n,
     lines: &mut Vec<agena_tui::permission_prompt::PermissionPromptLine>,

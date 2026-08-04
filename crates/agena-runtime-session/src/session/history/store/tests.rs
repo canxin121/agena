@@ -2085,4 +2085,78 @@ mod tests {
             6
         );
     }
+    #[tokio::test]
+    async fn assistant_interstitial_text_persists_as_text_segment_activity() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("schema");
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::new(db.clone()))
+            .ensure_id("/test/text-segment")
+            .await
+            .expect("workspace");
+        let session =
+            crate::db::crud::session::create_session(&db, workspace_id, None, "text-segment")
+                .await
+                .expect("session");
+        let execution_id = agena_domain::ExecutionId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let writer = RuntimeProjectionPartWriter;
+        project_execution_started(
+            &db,
+            &writer,
+            &ExecutionStartedEvent {
+                session_id: session.id,
+                execution_id,
+                turn_id,
+                reply_id,
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 10,
+            },
+            1,
+        )
+        .await
+        .expect("started reply");
+
+        // A text part the processor marked as an interstitial body segment:
+        // ActivityId set, text segment id cleared.
+        let mut part = MessagePart::from_content_with_index(
+            1,
+            1,
+            0,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::text("second paragraph after a tool call"),
+        );
+        part.activity_id = Some(agena_domain::ActivityId::new());
+        part.segment_id = None;
+        project_part_content(&db, execution_id, Role::Assistant, &part, 2)
+            .await
+            .expect("project text segment activity");
+
+        let nodes = db
+            .query_all(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "SELECT node_type, state, payload_json                  FROM agena_content_nodes                  WHERE owner_kind = 'assistant_reply' AND owner_id = ?",
+                [reply_id.to_string().into()],
+            ))
+            .await
+            .expect("query content nodes");
+        assert_eq!(nodes.len(), 1, "exactly one activity node");
+        assert_eq!(
+            nodes[0].try_get::<String>("", "node_type").unwrap(),
+            "activity"
+        );
+        let payload: agena_domain::ActivityPayload =
+            serde_json::from_value(nodes[0].try_get("", "payload_json").unwrap()).unwrap();
+        match payload {
+            agena_domain::ActivityPayload::TextSegment(segment) => {
+                assert_eq!(segment.text, "second paragraph after a tool call");
+            }
+            other => panic!("expected TextSegment activity, got {other:?}"),
+        }
+    }
 }

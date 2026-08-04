@@ -293,6 +293,8 @@ fn project_runtime_timeline_event(
         EventKind::CompactionCompleted(_) => "timeline-type-compaction-completed",
         EventKind::SubtaskStatusChanged(_) => "timeline-type-subtask-status-changed",
         EventKind::StreamError(_) => "timeline-type-stream-error",
+        EventKind::ProviderRetry(_) => "timeline-type-provider-retry",
+        EventKind::ProviderRetryResolved(_) => "timeline-type-provider-retry-resolved",
         EventKind::MessagePartCheckpointed(_) => "timeline-type-message-part-checkpointed",
         EventKind::TranscriptPartUpserted(_) => "timeline-type-transcript-part-upserted",
         EventKind::CommandBegin(_) => "timeline-type-command-begin",
@@ -433,6 +435,65 @@ fn project_runtime_presentation_event(
                     }
                 })
         }
+        EventKind::ProviderRetry(update) => {
+            // A retryable provider failure observed mid-stream. Project a
+            // live retry-progress node for the reply immediately (in memory
+            // only, never persisted). The node shares the stable error id with
+            // the durable Error activity written by a final failure, so a
+            // later refresh replaces it instead of duplicating it; on success
+            // the resolved event removes it entirely.
+            let reply_id = update.reply_id;
+            let node_id = agena_domain::ActivityId::for_reply_error(reply_id);
+            let title = format!(
+                "Provider request error · retrying ({}/{})",
+                update.attempt, update.max_retries
+            );
+            let node = agena_domain::ContentNode::activity(agena_domain::ActivityNode {
+                id: node_id,
+                owner: agena_domain::ActivityOwner::AssistantReply { reply_id },
+                actor: agena_domain::ActivityActor::Runtime,
+                payload: agena_domain::ActivityPayload::Progress(agena_domain::ProgressActivity {
+                    title,
+                    detail: update.message.clone(),
+                    current: Some(update.attempt as u64),
+                    total: Some(update.max_retries as u64),
+                }),
+                state: agena_domain::ActivityState::InProgress,
+                position: agena_domain::ContentPosition { index: 0 },
+                revision_seq: seq_session,
+                lifecycle: agena_domain::ActivityLifecycle {
+                    started_at_ms: update.ts_ms,
+                    finished_at_ms: None,
+                },
+                provenance: Default::default(),
+            });
+            Some(
+                agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(
+                    agena_domain::TranscriptPatch::ContentUpserted {
+                        seq_session,
+                        owner: agena_domain::ActivityOwner::AssistantReply { reply_id },
+                        node,
+                    },
+                )),
+            )
+        }
+        EventKind::ProviderRetryResolved(update) if update.succeeded => {
+            // The retry sequence ended with a successful reply. The live node
+            // was never persisted, so removing it here (and on the follow-up
+            // refresh) is what keeps a recovered reply free of the error.
+            Some(
+                agena_runtime::RuntimePresentationEventKind::TranscriptPatch(Box::new(
+                    agena_domain::TranscriptPatch::ContentRemoved {
+                        seq_session,
+                        owner: agena_domain::ActivityOwner::AssistantReply {
+                            reply_id: update.reply_id,
+                        },
+                        node_id: agena_domain::ActivityId::for_reply_error(update.reply_id),
+                    },
+                )),
+            )
+        }
+        EventKind::ProviderRetryResolved(_) => None,
         _ => None,
     };
     Ok(kind.map(|kind| agena_runtime::RuntimePresentationEvent {
@@ -469,7 +530,7 @@ fn transcript_part_patch(
     };
     let position = u32::try_from(part.part_index).unwrap_or_default();
     let node = if let Some(activity_id) = part.activity_id {
-        let mut payload = crate::session::history::activity_payload(part)?;
+        let mut payload = crate::session::history::activity_payload(part, role)?;
         // Live transcript patches carry the derived detail Markdown so the
         // terminal renders the human view immediately. The durable projection
         // (activity_payload → content_nodes) deliberately leaves it empty.

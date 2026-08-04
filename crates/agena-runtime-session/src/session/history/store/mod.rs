@@ -783,13 +783,9 @@ async fn project_reply_error_activity<C: ConnectionTrait>(
     };
     let reply_id = payload.reply_id.to_string();
     // Deterministic stable id derived from the reply id: repeated failures
-    // upsert the same node instead of appending duplicates. Flipping one byte
-    // keeps it distinct from the reply id itself and from every random
-    // ActivityId without requiring an extra uuid feature.
-    let reply_uuid: uuid::Uuid = payload.reply_id.into();
-    let mut bytes = *reply_uuid.as_bytes();
-    bytes[0] ^= 0x80;
-    let activity_id = ActivityId::from(uuid::Uuid::from_bytes(bytes));
+    // upsert the same node instead of appending duplicates. Shared with the
+    // live retry-progress node so a later refresh replaces it in place.
+    let activity_id = ActivityId::for_reply_error(payload.reply_id);
     let position = next_content_position(db, "assistant_reply", reply_id.as_str()).await?;
     let payload_json = serde_json::to_value(ActivityPayload::Error(ErrorActivity {
         problem: failure.clone(),
@@ -1167,13 +1163,25 @@ where
     Ok(())
 }
 
-pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::ActivityPayload> {
+pub(crate) fn activity_payload(
+    part: &MessagePart,
+    role: Role,
+) -> Option<agena_domain::ActivityPayload> {
     use agena_domain::{
         ActivityPayload, ErrorActivity, InteractionActivity, OperationActivity,
         OperationActivityError, ReasoningActivity, ResourceActivity, ResourceKind,
-        ResourceReference, SkillReferenceActivity, TextArtifactActivity, ToolCallId,
+        ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
+        ToolCallId,
     };
     match part.content.as_ref()? {
+        // Assistant text parts that carry an ActivityId are interstitial body
+        // segments (produced between tool calls); they render as their own
+        // collapsible block. User text activities stay TextArtifact.
+        PartContent::Text(text) if role == Role::Assistant => {
+            Some(ActivityPayload::TextSegment(TextSegmentActivity {
+                text: text.text.clone(),
+            }))
+        }
         PartContent::Text(text) => Some(ActivityPayload::TextArtifact(TextArtifactActivity {
             text: text.text.clone(),
             language: None,
@@ -1400,7 +1408,7 @@ async fn project_part_content<C: ConnectionTrait>(
     let Some(activity_id) = part.activity_id else {
         return Ok(());
     };
-    let Some(payload) = activity_payload(part) else {
+    let Some(payload) = activity_payload(part, role) else {
         return Ok(());
     };
     let state = match part.status {

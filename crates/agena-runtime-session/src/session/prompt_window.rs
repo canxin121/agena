@@ -1379,4 +1379,32 @@ mod compaction_tests {
         assert!(estimate.delta_chars >= "old assistant".len() as u64);
         assert!(estimate.total_tokens > 100);
     }
+    #[test]
+    fn interstitial_text_segment_is_still_sent_to_the_model() {
+        use crate::message::PartContent;
+        use crate::session::history::TranscriptBlock;
+
+        let mut message = Message::prompt_parts(
+            Role::Assistant,
+            vec![PartContent::text("second paragraph after a tool call")],
+        );
+        message.id = 2;
+        // Simulate the processor marking this part as a text-segment Activity:
+        // ActivityId set, text segment id cleared. The model must still see
+        // the plain text; the Activity is only a transcript presentation.
+        if let Some(part) = message.parts.first_mut() {
+            part.activity_id = Some(agena_domain::ActivityId::new());
+            part.segment_id = None;
+        }
+
+        let content = TranscriptContent::from_message_lossy(&message);
+        assert_eq!(content.blocks.len(), 1);
+        assert!(
+            matches!(
+                &content.blocks[0],
+                TranscriptBlock::Text { text } if text == "second paragraph after a tool call"
+            ),
+            "interstitial text must be part of the provider transcript"
+        );
+    }
 }

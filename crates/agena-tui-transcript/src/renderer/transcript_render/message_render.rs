@@ -596,7 +596,8 @@ fn canonical_activity_details(
                 .into_iter()
                 .collect()
         }
-        agena_domain::ActivityPayload::Reasoning(_) => Vec::new(),
+        agena_domain::ActivityPayload::Reasoning(_)
+        | agena_domain::ActivityPayload::TextSegment(_) => Vec::new(),
     }
 }
 
@@ -1673,14 +1674,19 @@ fn render_activity_canonical(
     let mut children = Vec::new();
     let mut detail_index = 0_usize;
     let is_operation = matches!(payload, agena_domain::ActivityPayload::Operation(_));
+    // Interstitial body segments render with the normal message text color
+    // (like regular reply text), unlike thinking's muted trail.
+    let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
     let render_summary = expanded && !is_operation && error.is_none() && !summary.trim().is_empty();
     if render_summary {
         let summary_start = out.len();
         render_expanded_tool_text_block(out, "    ", summary.as_str(), width);
-        patch_rendered_lines_style(
-            &mut out[summary_start..],
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        );
+        if !is_text_segment {
+            patch_rendered_lines_style(
+                &mut out[summary_start..],
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            );
+        }
         if let Some(child) = rendered_activity_section_node(
             TranscriptNodeKey::ActivitySection {
                 entry_id: message.id,

@@ -48,6 +48,7 @@ mod plugin_invocation;
 mod process_values;
 mod prompt_compaction;
 mod prompt_tokens;
+mod provider_retry;
 mod reasoning;
 mod role;
 mod session_cache;
@@ -82,7 +83,7 @@ pub use activity::{
     OperationActivity, OperationActivityError, OperationAuthorization, OperationPermission,
     ProgressActivity, ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference,
     SearchActivity, SkillExecutionActivity, SkillReferenceActivity, TextArtifactActivity,
-    TextSegment, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
+    TextSegment, TextSegmentActivity, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
 };
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use command_events::{
@@ -165,6 +166,7 @@ pub use prompt_compaction::{
     PromptCompactionTrigger,
 };
 pub use prompt_tokens::PromptTokenUsageSnapshot;
+pub use provider_retry::{ProviderRetryEvent, ProviderRetryResolvedEvent};
 pub use reasoning::AssistantReasoningField;
 pub use role::Role;
 pub use session_cache::{SessionCacheLimits, SessionCacheStats};
@@ -177,7 +179,7 @@ pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 pub use time_range::TimeRange;
 pub use tool_api::ToolApiFunction;
-pub use tool_effects::{FilesystemAccess, FilesystemEffect, NetworkEffect};
+pub use tool_effects::{FilesystemAccess, FilesystemEffect, FilesystemEffects, NetworkEffect};
 pub use tool_invocation::{ToolApiCall, ToolInvocation};
 pub use tool_output::{ToolManagedOutput, ToolOutput};
 pub use tool_permission::ToolPermissionRules;

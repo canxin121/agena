@@ -290,13 +290,13 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
         }
         ActivityPayload::SkillReference(skill) => format!("[Skill: {}]", skill.name),
         ActivityPayload::SkillExecution(skill) => format!("[Skill: {}]", skill.skill_name),
-        ActivityPayload::TextArtifact(artifact) => {
-            let label = artifact
-                .label
-                .clone()
-                .unwrap_or_else(|| format!("paste {} chars", artifact.text.chars().count()));
-            format!("[{label}]")
-        }
+        ActivityPayload::TextArtifact(artifact) => format!(
+            "[{}]",
+            crate::text::text_artifact_display_label(
+                artifact.text.as_str(),
+                artifact.label.as_deref(),
+            )
+        ),
         _ => {
             let (_, title, _, _) = activity_presentation(payload);
             format!("[{title}]")
@@ -363,6 +363,15 @@ pub(crate) fn activity_presentation(
             // the full thought trail is rendered verbatim when expanded. Never
             // ellipsize reasoning with a truncation marker.
             reasoning_first_line(reasoning.content.preferred_text().as_str()),
+            None,
+        ),
+        ActivityPayload::TextSegment(segment) => (
+            "text_segment".to_owned(),
+            "正文".to_owned(),
+            // The full segment is the expandable body; the collapsed headline
+            // truncates it to the available width. Styled like normal body
+            // text, not like thinking's muted trail.
+            segment.text.clone(),
             None,
         ),
         ActivityPayload::Operation(operation) => (
@@ -1279,7 +1288,7 @@ mod tests {
                     StructuredObject::try_from(serde_json::json!({
                         "command": "rm -rf /tmp/agena-snapshot-test",
                         "description": "Compute pi with Python",
-                        "filesystem_effects": [],
+                        "filesystem_effects": {},
                         "network_effects": [],
                         "shell": "bash",
                         "timeout_ms": 60_000
@@ -2015,6 +2024,29 @@ mod tests {
     }
 
     #[test]
+    fn text_artifact_inline_placeholder_uses_a_compact_label() {
+        let long = "x".repeat(240);
+        let payload = ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
+            text: "pasted body".to_owned(),
+            language: None,
+            label: Some(long.clone()),
+        });
+        // The persisted message summary can reach 240 chars; the inline
+        // placeholder must stay short enough for one row.
+        let placeholder = user_activity_placeholder(&payload);
+        assert_eq!(placeholder, "[xxxxxxxxxxxxxxxxxxxxxxxx…]");
+        assert!(placeholder.chars().count() < 40);
+
+        // A label without a long summary is kept as-is.
+        let short = ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
+            text: "pasted body".to_owned(),
+            language: None,
+            label: Some("paste 1000 chars".to_owned()),
+        });
+        assert_eq!(user_activity_placeholder(&short), "[paste 1000 chars]");
+    }
+
+    #[test]
     fn failed_reply_with_structured_problem_renders_summary_and_expandable_detail() {
         let response_id = agena_domain::AssistantReplyId::new();
         let problem = agena_failure::UserProblem::from(agena_failure::Failure::new(
@@ -2189,5 +2221,77 @@ mod tests {
         );
         assert!(failed_text.contains(full_error), "{failed_text}");
         assert!(!failed_text.contains("Response failed"), "{failed_text}");
+    }
+    #[test]
+    fn text_segment_activity_renders_collapsible_with_normal_body_color() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let body = "Second paragraph after the tool call.
+It has two lines.";
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Assistant,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::TextSegment(agena_domain::TextSegmentActivity {
+                text: body.to_owned(),
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
+        let defaults = crate::TranscriptDetailDefaults {
+            activity_expanded: false,
+        };
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &std::collections::BTreeMap::from([(key, true)]),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            );
+        assert!(text.contains("正文"), "{text}");
+        assert!(
+            text.contains("Second paragraph after the tool call."),
+            "{text}"
+        );
+        assert!(text.contains("It has two lines."), "{text}");
+
+        // The expanded body must use the normal text style, not thinking's
+        // muted color.
+        let muted = agena_tui_components::theme::muted_color();
+        let body_styles = rendered
+            .lines
+            .iter()
+            .filter(|line| line.text.contains("Second paragraph after the tool call."))
+            .filter_map(|line| line.style.fg)
+            .collect::<Vec<_>>();
+        assert!(
+            body_styles.iter().all(|fg| *fg != muted),
+            "text segment body must not be muted: {body_styles:?}"
+        );
     }
 }

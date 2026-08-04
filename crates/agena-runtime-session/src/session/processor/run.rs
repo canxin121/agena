@@ -14,7 +14,7 @@ use futures_util::StreamExt;
 use tracing::Instrument;
 
 use crate::message::OperationBlock;
-use agena_domain::{ArtifactRef, SearchResultItem};
+use agena_domain::{ActivityId, ArtifactRef, SearchResultItem};
 
 impl SessionProcessor {
     pub fn new(
@@ -184,6 +184,7 @@ impl SessionProcessor {
         let mut reasoning_text = String::new();
         let mut saw_tool_call = false;
         let mut saw_provider_native_tool_call = false;
+        let mut saw_provider_retry = false;
 
         let cancel = run.cancel.clone();
         loop {
@@ -214,6 +215,20 @@ impl SessionProcessor {
                         None => {
                             let part_id = run.part_ids.reserve().await?;
                             self.start_text_part(&mut assistant, part_id, Utc::now())?;
+                            // Body text produced after the first tool call is a
+                            // distinct segment of the reply (text between tool
+                            // calls, or the closing text). Persist it as its own
+                            // Activity so the transcript can show it as a
+                            // collapsible block like thinking. The content stays
+                            // plain text, so the model still sees it later.
+                            if saw_tool_call {
+                                if let Some(part) =
+                                    assistant.parts.iter_mut().find(|part| part.id == part_id)
+                                {
+                                    part.activity_id = Some(ActivityId::new());
+                                    part.segment_id = None;
+                                }
+                            }
                             self.checkpoint_part(&run, &assistant, part_id).await?;
                             active_text_part = Some(part_id);
                             part_id
@@ -408,6 +423,17 @@ impl SessionProcessor {
 
                     self.publish_live_part(&run, &assistant, part_id).await?;
                 }
+                Ok(CompletionStreamEvent::ProviderRetry {
+                    message,
+                    retry_index,
+                    attempt,
+                    max_retries,
+                    ..
+                }) => {
+                    saw_provider_retry = true;
+                    self.publish_retry_progress(&run, retry_index, attempt, max_retries, message)
+                        .await?;
+                }
                 Err(err) => {
                     provider_err = Some(err.into());
                     break;
@@ -425,6 +451,14 @@ impl SessionProcessor {
         let cancelled = cancel.as_ref().is_some_and(|token| token.is_cancelled());
         if provider_err.is_none() && cancelled {
             provider_err = Some(AppError::Cancelled);
+        }
+
+        // A retry sequence that ended with a successful run is now resolved.
+        // The live retry-progress node is removed (never persisted); a final
+        // failure is persisted through the durable ExecutionFinished error
+        // activity instead, so no resolved event is published there.
+        if provider_err.is_none() && saw_provider_retry {
+            self.publish_retry_resolved(&run, true).await?;
         }
 
         if provider_err.is_some() {

@@ -168,6 +168,21 @@ impl ContentDocument {
         self.0.sort_by_key(ContentNode::position);
     }
 
+    /// Remove a live activity node by identity. Used to drop a transient live
+    /// node (e.g. an in-flight retry-progress activity) when the run resolves
+    /// successfully. Durable nodes are never removed by patches: they survive
+    /// as the historical error record.
+    pub fn remove_activity(&mut self, activity_id: ActivityId) -> bool {
+        let before = self.0.len();
+        self.0.retain(|node| {
+            !matches!(
+                node,
+                ContentNode::Activity { activity } if activity.id == activity_id
+            )
+        });
+        self.0.len() != before
+    }
+
     pub fn merge_from(&mut self, incoming: ContentDocument) {
         let mut canonical_identities = Vec::with_capacity(incoming.0.len());
         for node in incoming.0 {
@@ -334,6 +349,7 @@ pub enum ActivityPayload {
     SkillExecution(SkillExecutionActivity),
     TextArtifact(TextArtifactActivity),
     Reasoning(ReasoningActivity),
+    TextSegment(TextSegmentActivity),
     Operation(OperationActivity),
     Interaction(InteractionActivity),
     Progress(ProgressActivity),
@@ -642,6 +658,19 @@ pub struct ErrorActivity {
     pub problem: agena_failure::UserProblem,
 }
 
+/// One body of assistant reply text that is not the opening paragraph — a
+/// segment produced between tool calls (or the closing text after the last
+/// tool call). It is persisted as a first-class Activity so the terminal can
+/// render it as its own collapsible block, like thinking, but styled with the
+/// normal body text color. The underlying message part remains plain text, so
+/// the model still sees it on later turns; this Activity is purely a
+/// user-facing transcript presentation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TextSegmentActivity {
+    pub text: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CustomActivity {
@@ -725,6 +754,11 @@ pub enum TranscriptPatch {
         owner: ActivityOwner,
         node: ContentNode,
     },
+    ContentRemoved {
+        seq_session: i64,
+        owner: ActivityOwner,
+        node_id: ActivityId,
+    },
 }
 
 impl TranscriptSnapshot {
@@ -732,7 +766,8 @@ impl TranscriptSnapshot {
         let seq_session = match &patch {
             TranscriptPatch::TurnOpened { seq_session, .. }
             | TranscriptPatch::AssistantReplyUpdated { seq_session, .. }
-            | TranscriptPatch::ContentUpserted { seq_session, .. } => *seq_session,
+            | TranscriptPatch::ContentUpserted { seq_session, .. }
+            | TranscriptPatch::ContentRemoved { seq_session, .. } => *seq_session,
         };
         if seq_session <= self.seq_session {
             return;
@@ -782,6 +817,24 @@ impl TranscriptSnapshot {
                     if let ContentNode::Activity { activity } = node {
                         upsert_activity(&mut self.session_activities, *activity);
                     }
+                }
+                ActivityOwner::Activity { .. } | ActivityOwner::Session { .. } => {}
+            },
+            TranscriptPatch::ContentRemoved { owner, node_id, .. } => match owner {
+                ActivityOwner::TurnInput { turn_id } => {
+                    if let Some(turn) = self.turns.iter_mut().find(|turn| turn.id == turn_id) {
+                        turn.input.remove_activity(node_id);
+                    }
+                }
+                ActivityOwner::AssistantReply { reply_id } => {
+                    if let Some(turn) = self.turns.iter_mut().find(|turn| turn.reply.id == reply_id)
+                    {
+                        turn.reply.content.remove_activity(node_id);
+                    }
+                }
+                ActivityOwner::Session { session_id } if session_id == self.session_id => {
+                    self.session_activities
+                        .retain(|activity| activity.id != node_id);
                 }
                 ActivityOwner::Activity { .. } | ActivityOwner::Session { .. } => {}
             },

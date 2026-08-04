@@ -16,6 +16,7 @@ pub mod payload;
 pub(crate) mod powershell;
 pub(crate) mod process_tool;
 pub(crate) mod read;
+pub mod render;
 pub mod result;
 pub mod router;
 pub(crate) mod shell;
@@ -77,6 +78,10 @@ pub use self::tool_registry::*;
 pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStartParams};
 pub use builtin_tools::BuiltinToolSet;
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
+pub use render::{
+    DetailSource, MarkdownWriter, RenderContext, ToolResultRender, render_tool_payload_markdown,
+    render_tool_payload_markdown_with_name,
+};
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use snapshot::registry_for_executor as snapshot_registry_for_executor;
 pub use tool_registry::{

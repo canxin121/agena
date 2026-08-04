@@ -13,9 +13,10 @@ use agena_api::{
     },
     notifications::Notification,
     queries::{
-        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
-        ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
-        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
+        GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
+        ListEventsParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
+        ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
+        ListWorkspacesParams,
         PaginatedEvents, Query, QueryResult,
     },
     resource::{
@@ -855,6 +856,15 @@ impl AgenaClient {
                         .await?,
                 ))
             }
+            Query::GetOperationDetail(GetOperationDetailParams {
+                session_id,
+                activity_id,
+            }) => Ok(QueryResult::OperationDetail(
+                self.get_json(&format!(
+                    "/api/v1/sessions/{session_id}/operations/{activity_id}/detail"
+                ))
+                .await?,
+            )),
             Query::ListEvents(p) => Ok(QueryResult::Events(self.list_events(p).await?)),
             Query::ListPermissionRules(ListPermissionRulesParams {
                 cursor,

@@ -924,6 +924,7 @@ impl ToolResultEnvelope {
         let truncated = details.is_model_truncated();
         let user_summary = failure.user.fallback.clone();
         let model_output = model_visible_failure_text(&failure);
+        let human_summary = normalize_tool_summary(user_summary.clone());
         Self {
             state: ToolResultState::Failed,
             structured: details.to_json_payload(),
@@ -936,7 +937,7 @@ impl ToolResultEnvelope {
             managed_outputs: details.managed_outputs.clone(),
             display: ToolResultDisplay {
                 title: String::new(),
-                summary: normalize_tool_summary(user_summary),
+                summary: human_summary,
                 sections: Vec::new(),
             },
             attachments,
@@ -959,6 +960,7 @@ impl ToolResultEnvelope {
                 | ToolResultState::CapabilityUnavailable
                 | ToolResultState::ToolUnavailable
         ));
+        let human_summary = normalize_tool_summary(&output_text);
         Self {
             state,
             structured: details.to_json_payload(),
@@ -971,7 +973,7 @@ impl ToolResultEnvelope {
             managed_outputs: Vec::new(),
             display: ToolResultDisplay {
                 title: String::new(),
-                summary: normalize_tool_summary(output_text),
+                summary: human_summary,
                 sections: Vec::new(),
             },
             attachments: Vec::new(),
@@ -1350,16 +1352,13 @@ impl OperationPart {
         }
     }
 
+    /// Append a streamed delta to the model-visible preview. The human-facing
+    /// detail is derived at render time from the compact result, so streaming
+    /// only ever grows the flat preview (bounded at completion); it is not
+    /// persisted per-delta.
     pub fn append_output_delta(&mut self, delta: &str) -> bool {
         self.result.state = ToolResultState::Running;
         self.result.model_preview.text.push_str(delta);
-        if let Some(OperationBlock::Text { text }) = self.result.content.last_mut() {
-            text.push_str(delta);
-        } else {
-            self.result.content.push(OperationBlock::Text {
-                text: delta.to_string(),
-            });
-        }
         true
     }
 }
@@ -1430,6 +1429,33 @@ fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
     Some(AttachmentSource::Url {
         url: trimmed.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod operation_part_tests {
+    use super::{OperationPart};
+    use agena_domain::{ToolInvocation, TimeRange};
+
+    fn operation() -> OperationPart {
+        OperationPart::pending(
+            1,
+            ToolInvocation::new("shell", agena_domain::StructuredObject::default()),
+            "Run process",
+            TimeRange {
+                start_ms: 0,
+                end_ms: None,
+            },
+        )
+    }
+
+    #[test]
+    fn streamed_delta_only_grows_the_flat_model_preview() {
+        let mut op = operation();
+        assert!(op.append_output_delta("building "));
+        assert!(op.append_output_delta("thing\n"));
+        assert_eq!(op.result.model_preview.text, "building thing\n");
+        assert_eq!(op.result.state, agena_domain::ToolResultState::Running);
+    }
 }
 
 #[cfg(test)]

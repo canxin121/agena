@@ -1107,6 +1107,18 @@ pub struct SessionExecutionResource {
     pub usage: SessionUsageResource,
 }
 
+/// The lazily-derived human detail of one tool Activity. Returned by the
+/// `GetOperationDetail` query when a client expands an Operation; the runtime
+/// derives the Markdown from the compact tool data, so nothing large is
+/// persisted or transferred while the Activity stays collapsed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationDetailResource {
+    pub activity_id: agena_domain::ActivityId,
+    pub markdown: String,
+    #[serde(default)]
+    pub streaming: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingInteractiveRequestResource {
     pub session_id: i64,

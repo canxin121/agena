@@ -207,6 +207,9 @@ struct ResolvedPendingTool {
     prepared_shell_command: Option<PreparedShellCommand>,
     lifecycle: TimeRange,
     session_runtime: crate::session::SessionRuntimeState,
+    /// The tool Activity's UUID, resolved once from the session so blocking
+    /// shell sinks can route real-time output to the correct Activity.
+    activity_id: Option<agena_domain::ActivityId>,
 }
 
 struct PendingHostUserInput {
@@ -1434,50 +1437,19 @@ impl SessionManager {
             .map_err(tool_error_to_app_error)?
         {
             let stream_id = stream.stream_id.clone();
-            const DELTA_BATCH_MS: u64 = 100;
-            let mut batch_started = std::time::Instant::now();
-            let mut pending_delta = String::new();
+            // Streaming output is buffered in memory and written once (bounded)
+            // at the end; the durable record never grows per-delta.
+            let mut streamed_output = String::new();
             loop {
-                if !pending_delta.is_empty()
-                    && batch_started.elapsed() >= std::time::Duration::from_millis(DELTA_BATCH_MS)
-                {
-                    if let Some(pending_tool) = outer_pending_tool.as_ref() {
-                        self.append_streaming_tool_output_delta(
-                            session_id,
-                            pending_tool,
-                            &pending_delta,
-                            false,
-                            state.clone(),
-                        )
-                        .await?;
-                    }
-                    pending_delta.clear();
-                    batch_started = std::time::Instant::now();
-                }
                 let chunk = match cancellation.as_ref() {
                     Some(cancellation) => tokio::select! {
                         biased;
                         _ = cancellation.cancelled() => return Err(AppError::Cancelled),
                         chunk = stream.chunks.recv() => chunk,
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(DELTA_BATCH_MS)) => {
-                            continue;
-                        },
                     },
                     None => stream.chunks.recv().await,
                 };
                 let Some(chunk) = chunk else {
-                    if !pending_delta.is_empty()
-                        && let Some(pending_tool) = outer_pending_tool.as_ref()
-                    {
-                        self.append_streaming_tool_output_delta(
-                            session_id,
-                            pending_tool,
-                            &pending_delta,
-                            false,
-                            state.clone(),
-                        )
-                        .await?;
-                    }
                     break;
                 };
                 let Some(delta) = chunk.text_delta.as_deref() else {
@@ -1486,7 +1458,14 @@ impl SessionManager {
                 if delta.is_empty() {
                     continue;
                 }
-                pending_delta.push_str(delta);
+                streamed_output.push_str(delta);
+            }
+            if !streamed_output.is_empty()
+                && let Some(pending_tool) = outer_pending_tool.as_ref()
+            {
+                let preview = agena_runtime_tools::truncate_tool_output_text(&streamed_output, 16 * 1024);
+                self.apply_streaming_terminal_output(session_id, pending_tool, preview.as_str(), state.clone())
+                    .await?;
             }
             let end = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {

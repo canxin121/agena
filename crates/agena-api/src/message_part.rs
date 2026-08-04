@@ -428,6 +428,9 @@ pub struct ToolResultEnvelopeResource {
     pub managed_outputs: Vec<ToolManagedOutputResource>,
     #[serde(default, skip_serializing_if = "ToolResultDisplayResource::is_empty")]
     pub display: ToolResultDisplayResource,
+    /// Human-facing structured result (mirror of the runtime envelope).
+    #[serde(default, skip_serializing_if = "HumanToolResultResource::is_empty")]
+    pub human: HumanToolResultResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<MessageAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -446,10 +449,27 @@ impl ToolResultEnvelopeResource {
             && self.model_preview.is_empty()
             && self.managed_outputs.is_empty()
             && self.display.is_empty()
+            && self.human.is_empty()
             && self.attachments.is_empty()
             && self.error.is_none()
             && self.metadata.is_empty()
             && self.raw.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HumanToolResultResource {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub markdown: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub streaming: bool,
+}
+
+impl HumanToolResultResource {
+    pub fn is_empty(&self) -> bool {
+        self.summary.is_empty() && self.markdown.is_empty() && !self.streaming
     }
 }
 

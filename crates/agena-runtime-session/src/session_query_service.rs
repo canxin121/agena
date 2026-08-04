@@ -40,6 +40,22 @@ pub struct SessionProjectedMessageHeader {
     pub part_count: u64,
 }
 
+/// The human-facing detail of a tool Activity, derived on demand.
+///
+/// The durable record stores only the compact tool data; this value is the
+/// runtime's lazily-derived Markdown for a single expanded Activity. Clients
+/// request it when expanding and cache it while expanded; collapsing the
+/// Activity drops it, so detail is neither persisted nor transferred while
+/// collapsed.
+#[derive(Debug, Clone)]
+pub struct OperationDetail {
+    pub activity_id: agena_domain::ActivityId,
+    pub markdown: String,
+    /// True while the tool is still streaming; the client should subscribe for
+    /// live delta updates rather than treat this as a final frame.
+    pub streaming: bool,
+}
+
 /// Stable transcript projection for presentation paths that need message-part
 /// summaries without depending on private message aggregates. Detail payloads
 /// remain opaque JSON until the full transcript detail contract moves.
@@ -317,6 +333,19 @@ pub trait SessionQueryService: Send + Sync {
             session_id,
             ..Default::default()
         })
+    }
+
+    /// Lazily derive the human-facing detail of one tool Activity. The client
+    /// calls this on expansion; the runtime derives Markdown from the compact
+    /// tool data. Returning `None` means the Activity is not an Operation or
+    /// carries no derivable result.
+    async fn operation_detail(
+        &self,
+        session_id: i64,
+        activity_id: agena_domain::ActivityId,
+    ) -> Result<Option<OperationDetail>, SessionQueryError> {
+        let _ = (session_id, activity_id);
+        Ok(None)
     }
 
     async fn list_projected_message_headers(

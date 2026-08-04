@@ -497,7 +497,7 @@ mod tests {
         CustomActivity, OperationActivity, OperationActivityError, OperationAuthorization,
         OperationPermission, PermissionAction, PermissionReply, PermissionReplyKind,
         PermissionRequest, ResourceActivity, SkillReferenceActivity,
-        StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
+        StructuredObject, ToolCallId, ToolInvocation,
     };
     use agena_failure::{
         Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
@@ -613,10 +613,8 @@ mod tests {
                                 ),
                                 title: "fs.write".to_owned(),
                                 summary: "Updated config.json".to_owned(),
-                                sections: Vec::new(),
-                                model_output_text: "Updated config.json".to_owned(),
-                                details: ToolOutput::default(),
-                                resource_activity_ids: Vec::new(),
+                                data: serde_json::Value::Null,
+                                markdown: String::new(),
                                 authorization: OperationAuthorization {
                                     permissions: vec![OperationPermission {
                                         request: PermissionRequest {
@@ -842,7 +840,6 @@ mod tests {
     fn canonical_tools_list_activity_expands_text_without_structured_output() {
         let response_id = agena_domain::AssistantReplyId::new();
         let activity_id = agena_domain::ActivityId::new();
-        let output_text = "Available tools: returned 2 of 133 starting at offset 100.\n- fs.read [read_only]: Read a file\n- repo.status [read_only]: Inspect repository status\nMore available: yes. Continue with `tools_list` using `offset: 102`.";
         let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
             id: activity_id,
             owner: ActivityOwner::AssistantReply {
@@ -874,10 +871,11 @@ mod tests {
                 },
                 title: "List tools · 2/133".to_owned(),
                 summary: "Returned 2 of 133 tools; continue at offset 102.".to_owned(),
-                sections: Vec::new(),
-                model_output_text: output_text.to_owned(),
-                details: ToolOutput::default(),
-                resource_activity_ids: Vec::new(),
+                data: serde_json::json!({
+                    "tool": "tool_search",
+                    "results": ["fs.read", "repo.status"]
+                }),
+                markdown: String::new(),
                 authorization: Default::default(),
                 error: None,
             }),
@@ -1045,10 +1043,9 @@ mod tests {
                 ),
                 title: "Inspect `shell.run`".to_owned(),
                 summary: "Found **3** checks".to_owned(),
-                sections: Vec::new(),
-                model_output_text: markdown_result.to_owned(),
-                details: ToolOutput::default(),
-                resource_activity_ids: Vec::new(),
+                data: serde_json::Value::Null,
+                // Runtime-derived human detail attached to the snapshot.
+                markdown: markdown_result.to_owned(),
                 authorization: Default::default(),
                 error: None,
             }),
@@ -1256,10 +1253,8 @@ mod tests {
                 ),
                 title: "shell.run".to_owned(),
                 summary: truncated_summary.clone(),
-                sections: Vec::new(),
-                model_output_text: full_error.to_owned(),
-                details: ToolOutput::default(),
-                resource_activity_ids: Vec::new(),
+                data: serde_json::Value::Null,
+                markdown: String::new(),
                 authorization: Default::default(),
                 error: Some(invalid_tool_input_error(full_error)),
             }),
@@ -1397,10 +1392,9 @@ mod tests {
                 ),
                 title: "Build workspace".to_owned(),
                 summary: agena_tool::normalize_tool_summary(full_error),
-                sections: Vec::new(),
-                model_output_text: partial_output.to_owned(),
-                details: ToolOutput::default(),
-                resource_activity_ids: Vec::new(),
+                data: serde_json::Value::Null,
+                // Partial output the tool produced before failing.
+                markdown: partial_output.to_owned(),
                 authorization: Default::default(),
                 error: Some(invalid_tool_input_error(full_error)),
             }),
@@ -1535,16 +1529,9 @@ mod tests {
                 ),
                 title: "Search repository".to_owned(),
                 summary: "2 matches".to_owned(),
-                sections: vec![agena_domain::ToolPresentationSection {
-                    title: "Matches".to_owned(),
-                    text: "src/activity.rs\nsrc/tool_result.rs".to_owned(),
-                }],
-                model_output_text: "2 matches".to_owned(),
-                details: ToolOutput::from_json_payload(Some(&serde_json::json!({
-                    "matches": ["src/activity.rs", "src/tool_result.rs"]
-                })))
-                .expect("structured result"),
-                resource_activity_ids: Vec::new(),
+                data: serde_json::Value::Null,
+                // Runtime-derived search result detail attached to the snapshot.
+                markdown: "### Matches\n\n- `src/activity.rs`\n- `src/tool_result.rs`".to_owned(),
                 authorization: Default::default(),
                 error: None,
             }),
@@ -1607,7 +1594,8 @@ mod tests {
             !expanded_text.contains("Structured result"),
             "{expanded_text}"
         );
-        assert!(expanded_text.contains("2 matches"), "{expanded_text}");
+        // The summary is collapsed-only; expanded shows the derived detail.
+        assert!(expanded_text.contains("src/tool_result.rs"), "{expanded_text}");
     }
 
     #[test]
@@ -1629,10 +1617,8 @@ mod tests {
                     invocation: ToolInvocation::new("shell.run", StructuredObject::default()),
                     title: title.to_owned(),
                     summary: summary.to_owned(),
-                    sections: Vec::new(),
-                    model_output_text: summary.to_owned(),
-                    details: ToolOutput::default(),
-                    resource_activity_ids: Vec::new(),
+                    data: serde_json::Value::Null,
+                    markdown: String::new(),
                     authorization: Default::default(),
                     error: None,
                 }),
@@ -1739,10 +1725,8 @@ mod tests {
                 invocation,
                 title: title.to_owned(),
                 summary: String::new(),
-                sections: Vec::new(),
-                model_output_text: String::new(),
-                details: ToolOutput::default(),
-                resource_activity_ids: Vec::new(),
+                data: serde_json::Value::Null,
+                markdown: String::new(),
                 authorization: Default::default(),
                 error: None,
             }

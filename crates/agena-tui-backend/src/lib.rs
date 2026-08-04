@@ -14,16 +14,18 @@ use agena_api::{
         UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,
-    queries::{GetSessionParams, ListSessionsParams, Query, QueryResult},
+    queries::{GetOperationDetailParams, GetSessionParams, ListSessionsParams, Query, QueryResult},
     resource::{
-        PermissionReply, PermissionRuleResource, ProviderAdapterModelsResource,
-        ProviderAdapterModelsResponse, ProviderAdapterSummaryResource, ProviderDefaultsResource,
-        ProviderModelResource, ProviderSummaryResource, RunOptions, SessionExecutionResource,
-        SessionResource, WorkspaceResource,
+        OperationDetailResource, PermissionReply, PermissionRuleResource,
+        ProviderAdapterModelsResource, ProviderAdapterModelsResponse,
+        ProviderAdapterSummaryResource, ProviderDefaultsResource, ProviderModelResource,
+        ProviderSummaryResource, RunOptions, SessionExecutionResource, SessionResource,
+        WorkspaceResource,
     },
 };
 use agena_application::dto::{CatalogModelResource, ConfigJsonSources, ModelCatalogListResponse};
 use agena_application::{Application, dispatch};
+use agena_domain::ActivityId;
 use agena_domain::Model as ProviderModel;
 use agena_domain::PermissionScope;
 use agena_domain::ToolInvocation;

@@ -63,6 +63,33 @@ pub async fn get_session_state(
     session_execution_json_from_id(&state, session_id).await
 }
 
+pub async fn get_operation_detail(
+    State(state): State<AppState>,
+    Path((session_id, activity_id)): Path<(i64, String)>,
+) -> Result<impl IntoResponse, ServerError> {
+    let activity_id: agena_domain::ActivityId = serde_json::from_str(&format!("\"{activity_id}\""))
+        .map_err(|error| ServerError::internal(format!("invalid activity id: {error}")))?;
+    let services = state.application().session_execution_services()?;
+    let detail = services
+        .queries
+        .as_ref()
+        .operation_detail(session_id, activity_id)
+        .await
+        .map_err(|error| ServerError::internal(error.to_string()))?;
+    let resource = detail
+        .map(|detail| agena_api::resource::OperationDetailResource {
+            activity_id: detail.activity_id,
+            markdown: detail.markdown,
+            streaming: detail.streaming,
+        })
+        .unwrap_or(agena_api::resource::OperationDetailResource {
+            activity_id,
+            markdown: String::new(),
+            streaming: false,
+        });
+    Ok(Json(resource))
+}
+
 pub async fn replace_session_permission(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,

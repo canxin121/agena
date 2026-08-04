@@ -46,7 +46,7 @@ async fn transcript_documents_batch(
             .query_all(Statement::from_sql_and_values(
                 db.get_database_backend(),
                 format!(
-                    "SELECT owner_kind, owner_id, node_id, node_type, actor, payload_json, text, \
+                    "SELECT owner_kind, owner_id, node_id, node_type, actor, title, payload_json, text, \
                             state, position, revision_seq, started_at_ms, finished_at_ms \
                      FROM agena_content_nodes \
                      WHERE (owner_kind, owner_id) IN (VALUES {tuples}) \
@@ -141,6 +141,34 @@ fn parse_activity_row(
     let actor: String = row.try_get("", "actor")?;
     let state: String = row.try_get("", "state")?;
     let position: i64 = row.try_get("", "position")?;
+    let mut payload: agena_domain::ActivityPayload =
+        serde_json::from_value(row.try_get("", "payload_json")?)?;
+    // The durable record stores only the compact tool data. Derive the
+    // human-facing detail Markdown here, at snapshot load, so terminals get
+    // rich output without the detail ever being persisted or transferred
+    // while the Activity stays collapsed.
+    if let agena_domain::ActivityPayload::Operation(operation) = &mut payload {
+        // The title column holds the freshest running title (updated with a
+        // tiny column write during streaming); prefer it over the payload.
+        let stored_title: Option<String> = row.try_get("", "title").unwrap_or(None);
+        if let Some(stored_title) = stored_title.filter(|title| !title.is_empty()) {
+            operation.title = stored_title;
+        }
+        if !operation.data.is_null() && operation.markdown.is_empty() {
+            let tool_name = operation.invocation.name.clone();
+            let command = operation
+                .invocation
+                .input
+                .get("command")
+                .and_then(|value| value.as_text())
+                .map(str::to_owned);
+            operation.markdown = crate::session::manager::helpers::derive_operation_markdown(
+                &tool_name,
+                &operation.data,
+                command.as_deref(),
+            );
+        }
+    }
     Ok(agena_domain::ActivityNode {
         id: uuid_value(activity_id, agena_domain::ActivityId)?,
         owner,
@@ -156,7 +184,7 @@ fn parse_activity_row(
                 )));
             }
         },
-        payload: serde_json::from_value(row.try_get("", "payload_json")?)?,
+        payload,
         state: match state.as_str() {
             "pending" => agena_domain::ActivityState::Pending,
             "in_progress" => agena_domain::ActivityState::InProgress,
@@ -387,6 +415,23 @@ fn project_runtime_presentation_event(
             Some(agena_runtime::RuntimePresentationEventKind::Refresh {
                 force_refresh: true,
             })
+        }
+        EventKind::CommandOutputDelta(delta) => {
+            // Streaming tool output is broadcast live (never persisted) so an
+            // expanded terminal can render the growing detail in real time.
+            // The routing key is the tool Activity id, carried on the context.
+            delta
+                .context
+                .activity_id
+                .as_deref()
+                .and_then(|activity_id| uuid::Uuid::parse_str(activity_id).ok())
+                .map(agena_domain::ActivityId)
+                .map(|activity_id| {
+                    agena_runtime::RuntimePresentationEventKind::OperationDetailDelta {
+                        activity_id,
+                        delta: delta.preview_text.clone(),
+                    }
+                })
         }
         _ => None,
     };
@@ -970,6 +1015,72 @@ impl agena_runtime::SessionQueryService for SessionManager {
         SessionManager::transcript_snapshot(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
+    }
+
+    async fn operation_detail(
+        &self,
+        session_id: i64,
+        activity_id: agena_domain::ActivityId,
+    ) -> Result<Option<agena_runtime::OperationDetail>, agena_runtime::SessionQueryError> {
+        // Load the snapshot (which derives detail Markdown into Operation
+        // Activities on load) and locate the requested Activity.
+        let snapshot = SessionManager::transcript_snapshot(self, session_id)
+            .await
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
+        let mut found: Option<agena_domain::ActivityNode> = None;
+        for turn in &snapshot.turns {
+            for node in turn.input.nodes() {
+                if let agena_domain::ContentNode::Activity { activity } = node
+                    && activity.id == activity_id
+                {
+                    found = Some(activity.as_ref().clone());
+                }
+            }
+            for node in turn.reply.content.nodes() {
+                if let agena_domain::ContentNode::Activity { activity } = node
+                    && activity.id == activity_id
+                {
+                    found = Some(activity.as_ref().clone());
+                }
+            }
+        }
+        for activity in &snapshot.session_activities {
+            if activity.id == activity_id {
+                found = Some(activity.clone());
+            }
+        }
+        let activity = match found {
+            Some(activity) => activity,
+            None => return Ok(None),
+        };
+        let agena_domain::ActivityPayload::Operation(operation) = &activity.payload else {
+            return Ok(None);
+        };
+        // If the snapshot did not pre-derive the detail (e.g. a live in-memory
+        // node), derive it now from the compact data.
+        let markdown = if !operation.markdown.is_empty() {
+            operation.markdown.clone()
+        } else if !operation.data.is_null() {
+            let command = operation
+                .invocation
+                .input
+                .get("command")
+                .and_then(|value| value.as_text())
+                .map(str::to_owned);
+            crate::session::manager::helpers::derive_operation_markdown(
+                &operation.invocation.name,
+                &operation.data,
+                command.as_deref(),
+            )
+        } else {
+            String::new()
+        };
+        let streaming = activity.state == agena_domain::ActivityState::InProgress;
+        Ok(Some(agena_runtime::OperationDetail {
+            activity_id,
+            markdown,
+            streaming,
+        }))
     }
 
     async fn list_projected_message_headers(

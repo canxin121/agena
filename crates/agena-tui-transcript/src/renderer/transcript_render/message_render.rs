@@ -209,18 +209,6 @@ impl CanonicalActivityDetail {
     }
 }
 
-/// Read the persisted full outputs from the managed files referenced by
-/// `details.managed_outputs`. Files are only read when the expanded
-/// Operation renders its managed-output section, so large bodies stay lazy;
-/// `None` entries mean the file could not be read back.
-fn managed_output_contents(details: &agena_domain::ToolOutput) -> Vec<Option<String>> {
-    details
-        .managed_outputs
-        .iter()
-        .map(|managed| std::fs::read_to_string(&managed.path).ok())
-        .collect()
-}
-
 fn canonical_activity_details(
     payload: &agena_domain::ActivityPayload,
     summary: &str,
@@ -325,87 +313,37 @@ fn canonical_activity_details(
                     false,
                 ));
             }
-            // Failed runtime Operations intentionally mirror the safe failure
-            // text into `model_output_text` so the model can react to it.
-            // That provider-facing copy is not a second human-facing Result.
-            if !operation.model_output_text.trim().is_empty()
-                && !error_equivalence_text.is_some_and(|error| {
-                    canonical_text_equivalent(operation.model_output_text.as_str(), error)
-                })
-            {
-                details.push(CanonicalActivityDetail::identified_section(
-                    TranscriptActivitySection::Result,
-                    "Result",
-                    operation.model_output_text.clone(),
-                    CanonicalActivityDetailFormat::Auto,
-                    true,
-                ));
-                has_result_presentation = true;
-            }
-            // Named sections are the tool's explicit expanded presentation.
-            // Keep them structured through the domain projection and render
-            // each one exactly once, rather than reconstructing them from a
-            // raw JSON payload or a duplicate Markdown block.
-            for section in &operation.sections {
-                let title = section.title.trim();
-                let text = section.text.trim();
-                if title.is_empty()
-                    || text.is_empty()
-                    || canonical_text_equivalent(text, operation.model_output_text.as_str())
-                    || error_equivalence_text
-                        .is_some_and(|error| canonical_text_equivalent(text, error))
+            // The human-facing detail is derived from the compact tool result
+            // by the runtime. The durable record carries only compact `data`;
+            // the runtime attaches the derived `markdown` to the snapshot
+            // projection, and clients may also fetch it lazily on expansion.
+            // Structured data is the fallback when no derived Markdown exists.
+            // Avoid duplicating the failure text as a separate Result when the
+            // tool's detail is just the error message itself.
+            let detail_equals_error = error_equivalence_text
+                .is_some_and(|error| canonical_text_equivalent(operation.markdown.as_str(), error));
+            if !detail_equals_error {
+                if !operation.markdown.trim().is_empty() {
+                    details.push(CanonicalActivityDetail::identified_section(
+                        TranscriptActivitySection::Result,
+                        "Result",
+                        operation.markdown.clone(),
+                        CanonicalActivityDetailFormat::Markdown,
+                        true,
+                    ));
+                    has_result_presentation = true;
+                } else if !operation.data.is_null()
+                    && let Ok(output) = serde_json::to_string_pretty(&operation.data)
                 {
-                    continue;
-                }
-                let detail = CanonicalActivityDetail::section(
-                    title,
-                    text,
-                    CanonicalActivityDetailFormat::Markdown,
-                );
-                if !details.iter().any(|existing| existing == &detail) {
-                    details.push(detail);
+                    details.push(CanonicalActivityDetail::identified_section(
+                        TranscriptActivitySection::Result,
+                        "Result",
+                        output,
+                        CanonicalActivityDetailFormat::Json,
+                        true,
+                    ));
                     has_result_presentation = true;
                 }
-            }
-            // The model-visible result is the primary human-facing section.
-            // Retain raw structured data only if there is neither a primary
-            // result nor an explicit named section. Otherwise tools_list,
-            // search and plugin tools show the same payload in multiple forms.
-            if operation.model_output_text.trim().is_empty()
-                && operation.sections.is_empty()
-                && let Some(output) = operation.details.to_json_payload()
-                && let Ok(output) = serde_json::to_string_pretty(&output)
-            {
-                details.push(CanonicalActivityDetail::identified_section(
-                    TranscriptActivitySection::StructuredResult,
-                    "Structured result",
-                    output,
-                    CanonicalActivityDetailFormat::Json,
-                    true,
-                ));
-                has_result_presentation = true;
-            }
-            if !operation.details.managed_outputs.is_empty() {
-                // The persisted full outputs live only in the managed files;
-                // read them lazily so the user sees the complete content
-                // instead of only the truncated preview and a bare path.
-                // Each file is collapsible so large bodies stay lazy.
-                let managed_contents = managed_output_contents(&operation.details);
-                let mut body = Vec::new();
-                for (index, output) in operation.details.managed_outputs.iter().enumerate() {
-                    body.push(output.path.clone());
-                    if let Some(Some(content)) = managed_contents.get(index) {
-                        body.push(content.clone());
-                    }
-                }
-                details.push(CanonicalActivityDetail::identified_section(
-                    TranscriptActivitySection::ManagedOutputs,
-                    "Managed outputs",
-                    body.join("\n"),
-                    CanonicalActivityDetailFormat::Plain,
-                    true,
-                ));
-                has_result_presentation = true;
             }
             // `summary` is the compact collapsed projection. Expanded
             // Operations render the actual output/sections instead. It is

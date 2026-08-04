@@ -72,7 +72,32 @@ pub(crate) fn render_tool_execution(
         );
     }
 
-    if should_render_tool_model_output(tool, failure_text) {
+    // The human view is a single Markdown document the tool produced; it takes
+    // precedence over the flat model preview. The model preview stays available
+    // below only when there is no richer human presentation.
+    let human_markdown = tool.result.human.markdown.as_str();
+    if !human_markdown.trim().is_empty() && failure_text.is_none() {
+        push_section_heading(
+            out,
+            "    › Result",
+            Style::default()
+                .fg(agena_tui_components::theme::special_color())
+                .add_modifier(Modifier::BOLD),
+            width,
+        );
+        if expanded {
+            push_expanded_markdown(out, "      ", human_markdown, width);
+        } else {
+            push_collapsible_text(
+                out,
+                "      ",
+                human_markdown,
+                Style::default(),
+                width,
+                i18n,
+            );
+        }
+    } else if should_render_tool_model_output(tool, failure_text) {
         push_section_heading(
             out,
             "    › Result",

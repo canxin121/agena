@@ -7,8 +7,9 @@
 use std::ops::Range;
 
 pub use agena_api::message_part::{
-    MessageRequestPartResource, OperationBlockResource, OperationPartResource,
-    PartExecutionStatusResource, ToolInvocationResource,
+    FileChangeKindResource, HumanToolResultResource, MessageRequestPartResource,
+    OperationBlockResource, OperationPartResource, PartExecutionStatusResource, TodoStatusResource,
+    ToolInvocationResource,
 };
 use ratatui::layout::Rect;
 

@@ -9,6 +9,33 @@ use super::{
 use crate::session::Session;
 use agena_domain::{PermissionReply, UserInputReply, UserInputRequest};
 
+/// Derive the human-facing detail Markdown from a compact tool result payload.
+///
+/// This is the runtime's single derivation entry: the durable record stores
+/// only the compact `data` (serialized `ToolResult`), and the human view is
+/// produced here via the unified renderer (`ToolResultRender`). It is called
+/// at snapshot load and on lazy detail fetches, never during persistence.
+///
+/// `tool_name` lets the renderer reconstruct the `ToolPayloadOutput`
+/// discriminant (the compact payload is stored without its `tool` tag).
+/// `command` (when known) lets the human view show `$ command` for shell runs.
+pub(super) fn derive_operation_markdown(
+    tool_name: &str,
+    data: &serde_json::Value,
+    command: Option<&str>,
+) -> String {
+    crate::tool::render_tool_payload_markdown_with_name(
+        tool_name,
+        data,
+        &crate::tool::RenderContext {
+            workspace_root: std::path::Path::new(""),
+            live_tail: None,
+            command,
+            read_managed: &|path| std::fs::read_to_string(path).ok(),
+        },
+    )
+}
+
 pub(super) fn execution_control_to_app_error(err: ExecutionControlError) -> AppError {
     match err {
         ExecutionControlError::NoActiveExecution(id) => AppError::NoActiveExecution(id),
@@ -93,6 +120,10 @@ pub(super) fn resolve_pending_tool(
             ))
         })?;
 
+    let activity_id = session
+        .part(&normalized_pending.part)
+        .and_then(|part| part.activity_id);
+
     Ok(ResolvedPendingTool {
         pending: normalized_pending,
         operation_id: record.operation_id,
@@ -102,6 +133,7 @@ pub(super) fn resolve_pending_tool(
         prepared_shell_command: None,
         lifecycle: record.lifecycle,
         session_runtime: session.runtime.clone(),
+        activity_id,
     })
 }
 
@@ -111,12 +143,67 @@ pub(super) fn operation_blocks_from_tool_output(
     attachments: &[AttachmentItem],
     output_text: &str,
 ) -> Vec<OperationBlock> {
-    let mut blocks = text_result_blocks(output_text);
-
     let payload_tool_name = payload_tool_name_for_invocation(invocation);
+
+    // Structured human blocks take precedence over the flat text blob: shell
+    // commands, file diffs, path lists, and diagnostics each render as a
+    // first-class visual card. Only tools without a structured presentation
+    // fall back to the raw text.
+    let mut blocks = Vec::new();
+
+    // Shell/process executions render as a command card: the command line and
+    // its output, exit code, and stderr shown as a distinct human block.
+    if let Some(block) = shell_command_block_from_invocation(invocation, details) {
+        blocks.push(block);
+    }
+
     match crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details) {
-        Some(crate::tool::ToolPayloadOutput::ApplyPatch { changes, .. }) if !changes.is_empty() => {
-            blocks.push(OperationBlock::FileChanges { changes });
+        Some(crate::tool::ToolPayloadOutput::ApplyPatch { changes, diff, .. })
+            if !changes.is_empty() || !diff.trim().is_empty() =>
+        {
+            if !changes.is_empty() {
+                blocks.push(OperationBlock::FileChanges { changes });
+            }
+            // The unified diff is the human view of what changed before/after;
+            // show it as a dedicated diff card rather than hiding it in the
+            // structured payload.
+            if !diff.trim().is_empty() {
+                blocks.push(OperationBlock::Diff {
+                    diff,
+                    language: Some("diff".to_owned()),
+                });
+            }
+        }
+        // Path-list tools (glob, directory reads) render as human-readable
+        // Markdown lists rather than a flat text blob so the terminal shows
+        // each path as a first-class line.
+        Some(crate::tool::ToolPayloadOutput::Glob { .. }) => {
+            if let Some(markdown) = path_list_human_block(payload_tool_name.as_str(), details) {
+                blocks.push(markdown);
+            }
+        }
+        Some(crate::tool::ToolPayloadOutput::Read { .. }) => {
+            if let Some(markdown) = directory_read_human_block(payload_tool_name.as_str(), details)
+            {
+                blocks.push(markdown);
+            }
+        }
+        Some(crate::tool::ToolPayloadOutput::CronList { .. }) => {
+            if let Some(markdown) = cron_list_human_block(payload_tool_name.as_str(), details) {
+                blocks.push(markdown);
+            }
+        }
+        Some(crate::tool::ToolPayloadOutput::ToolSearch { .. }) => {
+            if let Some(markdown) = tool_search_human_block(payload_tool_name.as_str(), details) {
+                blocks.push(markdown);
+            }
+        }
+        Some(crate::tool::ToolPayloadOutput::LspDiagnostics { .. }) => {
+            if let Some(markdown) =
+                lsp_diagnostics_human_block(payload_tool_name.as_str(), details)
+            {
+                blocks.push(markdown);
+            }
         }
         _ => {}
     }
@@ -148,7 +235,65 @@ pub(super) fn operation_blocks_from_tool_output(
         });
     }
 
+    // Only fall back to the flat text when no structured presentation was
+    // produced, so glob/search/diagnostic lists are not duplicated.
+    if blocks.is_empty() && !output_text.trim().is_empty() {
+        blocks.extend(text_result_blocks(output_text));
+    }
+
     dedupe_operation_blocks(blocks)
+}
+
+/// Build a `Command` human block for a shell execution. The command line is
+/// read from the invocation input so the human view shows `$ command` plus the
+/// captured stdout/stderr and exit code instead of a bare text blob.
+fn shell_command_block_from_invocation(
+    invocation: &ToolInvocation,
+    details: &ToolOutput,
+) -> Option<OperationBlock> {
+    let payload_tool_name = payload_tool_name_for_invocation(invocation);
+    let action = match crate::tool::ToolPayloadOutput::from_tool_output(
+        payload_tool_name.as_str(),
+        details,
+    ) {
+        Some(crate::tool::ToolPayloadOutput::Shell { action, .. }) => action,
+        _ => return None,
+    };
+    if action != "run" {
+        return None;
+    }
+    // Extract the command line from the invocation input.
+    let command = invocation
+        .input
+        .get("command")
+        .and_then(|value| value.as_text())
+        .map(ToOwned::to_owned);
+    let command = match command {
+        Some(command) if !command.trim().is_empty() => command,
+        _ => return None,
+    };
+    let cwd = invocation
+        .input
+        .get("workdir")
+        .and_then(|value| value.as_text())
+        .map(ToOwned::to_owned);
+    let (exit_code, stdout, stderr) =
+        match crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
+        {
+            Some(crate::tool::ToolPayloadOutput::Shell {
+                exit_code,
+                output,
+                ..
+            }) => (exit_code, output.clone(), None),
+            _ => (None, None, None),
+        };
+    Some(OperationBlock::Command {
+        command,
+        cwd,
+        exit_code,
+        stdout,
+        stderr,
+    })
 }
 
 pub(super) fn payload_tool_name_for_invocation(invocation: &ToolInvocation) -> String {
@@ -265,6 +410,159 @@ pub(super) fn structured_web_crawl_results_block(
             })
             .collect(),
     })
+}
+
+/// Human-friendly Markdown list for glob results.
+///
+/// Path lists are inherently ordered and line-oriented; a Markdown list keeps
+/// each path as a first-class visual row instead of a flat text blob.
+fn path_list_human_block(payload_tool_name: &str, details: &ToolOutput) -> Option<OperationBlock> {
+    let crate::tool::ToolPayloadOutput::Glob { paths, truncated, .. } =
+        crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
+    else {
+        return None;
+    };
+    if paths.is_empty() {
+        return None;
+    }
+    let mut body = paths
+        .iter()
+        .map(|path| format!("- `{path}`"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if truncated {
+        body.push_str("\n_…more matches available_");
+    }
+    Some(OperationBlock::Markdown { text: body })
+}
+
+/// Human-friendly Markdown list for directory reads.
+///
+/// Directory listings store a newline-joined preview of entry names, while
+/// file previews carry `N: line` numbering. A listing with no line-number
+/// pattern is a directory and renders as a Markdown list.
+fn directory_read_human_block(
+    payload_tool_name: &str,
+    details: &ToolOutput,
+) -> Option<OperationBlock> {
+    let crate::tool::ToolPayloadOutput::Read {
+        preview: Some(preview),
+        truncated,
+        ..
+    } = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
+    else {
+        return None;
+    };
+    let preview = preview.trim();
+    if preview.is_empty() {
+        return None;
+    }
+    // File previews always number their lines (`1: content`); directory
+    // listings are bare entry names. A single-entry directory has no newline
+    // and no `N:` prefix, so fall through to the list branch.
+    let looks_like_file = preview.lines().any(|line| {
+        let Some((left, _)) = line.split_once(':') else {
+            return false;
+        };
+        left.trim().parse::<u32>().is_ok()
+    });
+    if looks_like_file {
+        return None;
+    }
+    let entries = preview.lines().collect::<Vec<_>>();
+    let mut body = entries
+        .iter()
+        .map(|entry| format!("- `{entry}`"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if truncated {
+        body.push_str("\n_…more entries available_");
+    }
+    Some(OperationBlock::Markdown { text: body })
+}
+
+/// Human-friendly Markdown for scheduled-job listings.
+fn cron_list_human_block(payload_tool_name: &str, details: &ToolOutput) -> Option<OperationBlock> {
+    let crate::tool::ToolPayloadOutput::CronList { jobs } =
+        crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
+    else {
+        return None;
+    };
+    if jobs.is_empty() {
+        return None;
+    }
+    let body = jobs
+        .iter()
+        .map(|job| {
+            let state = if job.paused {
+                "⏸ paused"
+            } else if job.completed {
+                "✓ completed"
+            } else {
+                "▶ active"
+            };
+            let next = job
+                .next_fire_at
+                .as_deref()
+                .map(|next| format!(" · next {next}"))
+                .unwrap_or_default();
+            let expr = job
+                .expression
+                .as_deref()
+                .map(|expr| format!(" `{expr}`"))
+                .unwrap_or_default();
+            format!("- **{state}**{expr}{next} · {}", job.prompt)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(OperationBlock::Markdown { text: body })
+}
+
+/// Human-friendly Markdown for tool-search results.
+fn tool_search_human_block(payload_tool_name: &str, details: &ToolOutput) -> Option<OperationBlock> {
+    let crate::tool::ToolPayloadOutput::ToolSearch { results } =
+        crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
+    else {
+        return None;
+    };
+    if results.is_empty() {
+        return None;
+    }
+    let body = results
+        .iter()
+        .map(|name| format!("- `{name}`"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(OperationBlock::Markdown { text: body })
+}
+
+/// Human-friendly Markdown for LSP diagnostics, using severity markers.
+fn lsp_diagnostics_human_block(
+    payload_tool_name: &str,
+    details: &ToolOutput,
+) -> Option<OperationBlock> {
+    let crate::tool::ToolPayloadOutput::LspDiagnostics { entries } =
+        crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
+    else {
+        return None;
+    };
+    if entries.is_empty() {
+        return None;
+    }
+    let body = entries
+        .iter()
+        .map(|entry| {
+            if entry.contains("[error]") {
+                format!("- ❌ `{entry}`")
+            } else if entry.contains("[warning]") {
+                format!("- ⚠️ `{entry}`")
+            } else {
+                format!("- `{entry}`")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Some(OperationBlock::Markdown { text: body })
 }
 
 pub(super) fn attachment_source_uri(source: &crate::message::AttachmentSource) -> String {
@@ -607,4 +905,117 @@ pub(super) fn validate_user_input_reply(
     }
 
     Ok(answers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::ToolPayloadOutput;
+
+    fn invocation_named(name: &str) -> ToolInvocation {
+        ToolInvocation::new(name, agena_domain::StructuredObject::default())
+    }
+
+    fn output(payload: ToolPayloadOutput) -> ToolOutput {
+        payload.into_tool_output()
+    }
+
+    #[test]
+    fn glob_produces_a_human_markdown_list_not_a_flat_blob() {
+        let invocation = invocation_named("glob");
+        let details = output(ToolPayloadOutput::Glob {
+            count: Some(2),
+            paths: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()],
+            truncated: false,
+        });
+        let blocks = operation_blocks_from_tool_output(
+            &invocation,
+            &details,
+            &[],
+            "src/a.rs\nsrc/b.rs",
+        );
+        assert!(blocks.iter().any(|block| matches!(
+            block,
+            OperationBlock::Markdown { text }
+                if text.contains("- `src/a.rs`") && text.contains("- `src/b.rs`")
+        )));
+        // No raw text blob duplicated alongside the list.
+        assert!(!blocks.iter().any(|block| matches!(block, OperationBlock::Text { .. })));
+    }
+
+    #[test]
+    fn directory_read_produces_a_markdown_list() {
+        let invocation = invocation_named("read");
+        let details = output(ToolPayloadOutput::Read {
+            preview: Some("src/\ntarget/".to_owned()),
+            truncated: false,
+            loaded_paths: vec![".".to_owned()],
+            attachment: None,
+        });
+        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "src/\ntarget/");
+        assert!(blocks.iter().any(|block| matches!(
+            block,
+            OperationBlock::Markdown { text } if text.contains("- `src/`")
+        )));
+    }
+
+    #[test]
+    fn file_read_stays_a_plain_text_card() {
+        let invocation = invocation_named("read");
+        let details = output(ToolPayloadOutput::Read {
+            preview: Some("1: fn main()".to_owned()),
+            truncated: false,
+            loaded_paths: vec!["main.rs".to_owned()],
+            attachment: None,
+        });
+        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "1: fn main()");
+        // Numbered file preview is not a directory list.
+        assert!(!blocks.iter().any(|block| matches!(block, OperationBlock::Markdown { .. })));
+        assert!(blocks.iter().any(|block| matches!(block, OperationBlock::Text { .. })));
+    }
+
+    #[test]
+    fn cron_list_produces_a_human_markdown_list() {
+        let invocation = invocation_named("cron_list");
+        let job = agena_tool::CronJobSummary {
+            id: "job-1".to_owned(),
+            kind: "cron".to_owned(),
+            expression: Some("0 9 * * *".to_owned()),
+            at: None,
+            prompt: "run backup".to_owned(),
+            next_fire_at: Some("2026-08-05T09:00:00Z".to_owned()),
+            last_fired_at: None,
+            paused: false,
+            completed: false,
+            misfire_policy: String::new(),
+            retry_max_attempts: 0,
+            retry_at: None,
+            run_count: 0,
+            last_run_status: None,
+            last_run_failure: None,
+        };
+        let details = output(ToolPayloadOutput::CronList { jobs: vec![job] });
+        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "1 job(s)");
+        assert!(blocks.iter().any(|block| matches!(
+            block,
+            OperationBlock::Markdown { text } if text.contains("▶ active") && text.contains("run backup")
+        )));
+    }
+
+    #[test]
+    fn lsp_diagnostics_render_with_severity_markers() {
+        let invocation = invocation_named("lsp_diagnostics");
+        let details = output(ToolPayloadOutput::LspDiagnostics {
+            entries: vec![
+                "src/main.rs:3:5 [error] undefined name".to_owned(),
+                "src/main.rs:7:2 [warning] unused import".to_owned(),
+            ],
+        });
+        let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "2 diagnostics");
+        assert!(blocks.iter().any(|block| matches!(
+            block,
+            OperationBlock::Markdown { text }
+                if text.contains("❌") && text.contains("⚠️")
+        )));
+    }
 }

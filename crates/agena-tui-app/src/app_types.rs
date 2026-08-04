@@ -46,8 +46,8 @@ pub(crate) use self::session::*;
 pub(crate) use crate::transcript_state::TranscriptViewportRow;
 pub(crate) use agena_tui_transcript::{
     LayoutCache, RenderedLine, RenderedTranscript, RenderedTranscriptNode, TranscriptAction,
-    TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptClick, TranscriptCursor,
-    TranscriptCursorAnchor, TranscriptDetailDefaults, TranscriptInteraction,
+    TranscriptBlockCursor, TranscriptBlockSelectionMode, TranscriptClick, TranscriptContentId,
+    TranscriptCursor, TranscriptCursorAnchor, TranscriptDetailDefaults, TranscriptInteraction,
     TranscriptMoveDirection, TranscriptNodeKey, TranscriptNodeKind, TranscriptPointerGesture,
     TranscriptScrollbarDrag, TranscriptTextPosition, TranscriptTextSelection, TranscriptViewport,
     TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,

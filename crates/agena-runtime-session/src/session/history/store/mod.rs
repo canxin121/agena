@@ -1128,6 +1128,13 @@ pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::Activ
             }))
         }
         PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+            // The compact `ToolResult` payload is the only durable tool data.
+            // The human-facing detail Markdown is derived from it at render
+            // time (`render_tool_payload_markdown`) and is never persisted.
+            let data = operation
+                .details
+                .to_json_payload()
+                .unwrap_or(serde_json::Value::Null);
             Some(ActivityPayload::Operation(OperationActivity {
                 call_id: ToolCallId::new(
                     part.operation_id
@@ -1137,10 +1144,10 @@ pub(crate) fn activity_payload(part: &MessagePart) -> Option<agena_domain::Activ
                 invocation: operation.invocation.clone(),
                 title: operation.title.clone(),
                 summary: operation.summary.clone(),
-                sections: operation.result.display.sections.clone(),
-                model_output_text: operation.result.model_preview.text.clone(),
-                details: operation.details.clone(),
-                resource_activity_ids: Vec::new(),
+                data,
+                // The durable projection carries no detail Markdown; it is
+                // derived at snapshot load / lazy detail fetch time.
+                markdown: String::new(),
                 authorization: operation.authorization.clone(),
                 error: operation
                     .error
@@ -1363,13 +1370,18 @@ async fn project_part_content<C: ConnectionTrait>(
     .then_some(part.created_at.timestamp_millis());
     // v10 unified content node mirror: activities also live in
     // `agena_content_nodes` so readers can switch to the single content table.
+    let title = match &payload {
+        agena_domain::ActivityPayload::Operation(operation) => operation.title.clone(),
+        _ => String::new(),
+    };
     db.execute(Statement::from_sql_and_values(
         db.get_database_backend(),
         "INSERT INTO agena_content_nodes \
-         (node_id, owner_kind, owner_id, node_type, actor, payload_json, text, state, \
+         (node_id, owner_kind, owner_id, node_type, actor, title, payload_json, text, state, \
           position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
-         VALUES (?, ?, ?, 'activity', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?) \
+         VALUES (?, ?, ?, 'activity', ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT(node_id) DO UPDATE SET \
+         title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE agena_content_nodes.title END, \
          payload_json = excluded.payload_json, state = excluded.state, \
          revision_seq = excluded.revision_seq, finished_at_ms = excluded.finished_at_ms, \
          updated_at_ms = excluded.updated_at_ms \
@@ -1382,6 +1394,7 @@ async fn project_part_content<C: ConnectionTrait>(
             owner_kind.into(),
             owner_id.clone().into(),
             actor.into(),
+            title.into(),
             serde_json::to_value(&payload)
                 .map_err(|error| DbErr::Custom(format!("encode input activity: {error}")))?
                 .into(),

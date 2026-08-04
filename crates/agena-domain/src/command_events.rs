@@ -21,6 +21,11 @@ pub struct CommandContext {
     pub message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub part_id: Option<i64>,
+    /// The tool Activity this command belongs to, when known. Lets live
+    /// presentation consumers route streaming output deltas to the correct
+    /// expanded Activity without a DB round trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,6 +81,7 @@ mod tests {
                 call_id: 2,
                 message_id: None,
                 part_id: None,
+                activity_id: None,
             },
             stream: CommandOutputStream::Stdout,
             seq: 3,

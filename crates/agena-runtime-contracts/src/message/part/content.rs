@@ -119,7 +119,10 @@ impl PartContent {
     }
 
     pub fn append_tool_output_delta(&mut self, delta: &str) -> bool {
-        self.append_operation_output_delta(delta)
+        match self {
+            Self::Activity(RuntimeActivity::Operation(part)) => part.append_output_delta(delta),
+            _ => false,
+        }
     }
 
     pub fn append_operation_output_delta(&mut self, delta: &str) -> bool {

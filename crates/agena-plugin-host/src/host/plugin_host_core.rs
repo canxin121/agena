@@ -630,7 +630,6 @@ impl PluginHost {
         let chunk = ToolStreamChunk {
             stream_id: stream_id.clone(),
             text_delta: Some(result.output_text.clone()),
-            payload_delta: result.payload.clone(),
             metadata: result.metadata.clone(),
         };
         let _ = tx.send(chunk).await;

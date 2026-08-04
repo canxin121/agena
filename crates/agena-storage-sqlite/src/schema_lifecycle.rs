@@ -7,13 +7,15 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 1 is the first post-refactor schema. It includes the
-/// database-backed `agena_sequences` / `agena_session_sequences` tables, the
-/// cross-process `agena_execution_leases` table, the user-message
+/// Version 2 adds the `agena_content_nodes.title` column for tool Activities,
+/// letting a running title be updated with a tiny column UPDATE instead of a
+/// full payload rewrite. Version 1 introduced the database-backed
+/// `agena_sequences` / `agena_session_sequences` tables, the cross-process
+/// `agena_execution_leases` table, the user-message
 /// `agena_user_message_idempotency` table, and the scheduler `delivery_key` /
 /// `claimed_at_ms` columns. The schema evolves in place (create-if-not-exists);
 /// older databases are rejected rather than migrated.
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 #[cfg(test)]
 mod tests {

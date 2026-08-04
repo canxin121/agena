@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::commands::CommandSpec;
 
@@ -192,6 +192,10 @@ pub(crate) struct TranscriptState {
     pub(crate) last_event_seq: Option<i64>,
     pub(crate) detail_expanded_by_default: TranscriptDetailDefaults,
     pub(crate) node_expansions: BTreeMap<TranscriptNodeKey, bool>,
+    /// Operation Activity ids whose detail the user has expanded. Live
+    /// streaming deltas are only applied to these — collapsing an Activity
+    /// removes it, so computation and transfer for its detail stop.
+    pub(crate) expanded_operation_activity_ids: BTreeSet<agena_domain::ActivityId>,
     pub(crate) rendered: Option<RenderedTranscript>,
 }
 

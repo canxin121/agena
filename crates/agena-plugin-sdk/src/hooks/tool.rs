@@ -335,8 +335,6 @@ pub struct ToolStreamChunk {
     pub stream_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_delta: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payload_delta: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
 }

@@ -164,6 +164,34 @@ pub async fn dispatch_query(
             .await?;
             Ok(QueryResult::SessionState(state_resource))
         }
+        Query::GetOperationDetail(GetOperationDetailParams {
+            session_id,
+            activity_id,
+        }) => {
+            let session_services = state.session_execution_services()?;
+            let detail = session_services
+                .queries
+                .as_ref()
+                .operation_detail(session_id, activity_id)
+                .await
+                .map_err(|error| {
+                    ApplicationError::internal(format!(
+                        "operation detail query failed: {error}"
+                    ))
+                })?;
+            let resource = detail
+                .map(|detail| OperationDetailResource {
+                    activity_id: detail.activity_id,
+                    markdown: detail.markdown,
+                    streaming: detail.streaming,
+                })
+                .unwrap_or(OperationDetailResource {
+                    activity_id,
+                    markdown: String::new(),
+                    streaming: false,
+                });
+            Ok(QueryResult::OperationDetail(resource))
+        }
         Query::ListPermissionRules(ListPermissionRulesParams {
             cursor,
             limit,
@@ -187,11 +215,11 @@ pub async fn dispatch_query(
     }
 }
 use super::{
-    Application, ApplicationError, CursorPaginationQuery, GetPermissionRuleParams,
-    GetSessionParams, GetWorkspaceParams, ListEventsParams, ListPermissionRulesParams,
-    ListProviderAdapterModelsParams, ListProviderModelsParams,
-    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, PageInfo,
-    PaginatedEvents, Query, QueryResult, SearchPaginationQuery, SessionListQuery,
-    WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
+    Application, ApplicationError, CursorPaginationQuery, GetOperationDetailParams,
+    GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
+    ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
+    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
+    OperationDetailResource, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
+    SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
     runtime_status_response,
 };

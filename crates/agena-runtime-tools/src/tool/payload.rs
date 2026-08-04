@@ -395,6 +395,16 @@ pub enum ToolPayloadOutput {
 }
 
 impl ToolPayloadOutput {
+    /// Resolve the `tool` discriminant tag for a given invocation/registry
+    /// tool name, if one maps to a typed output variant. `None` means the
+    /// payload is opaque and renders as a fallback JSON card.
+    pub fn payload_name_for(tool_name: &str) -> Option<String> {
+        payload_name_for_output_tool(tool_name).or_else(|| {
+            let canonical = canonical_tool_payload_name(tool_name);
+            payload_name_for_output_tool(canonical)
+        })
+    }
+
     /// Convert into the plugin-neutral [`ToolOutput`] payload used by
     /// persisted message parts. The tool name lives on [`ToolInvocation`],
     /// so the payload stores only the output fields.

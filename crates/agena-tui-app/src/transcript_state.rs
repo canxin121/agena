@@ -52,6 +52,7 @@ impl TranscriptState {
             last_event_seq: None,
             detail_expanded_by_default,
             node_expansions: BTreeMap::new(),
+            expanded_operation_activity_ids: BTreeSet::new(),
             rendered: None,
         }
     }
@@ -174,6 +175,18 @@ impl TranscriptState {
                 self.invalidate_render();
                 false
             }
+            agena_runtime::RuntimePresentationEventKind::OperationDetailDelta {
+                activity_id,
+                delta,
+            } => {
+                // A live slice of a streaming tool's output. Append it to the
+                // matching Operation's derived detail so the expanded Activity
+                // renders the growing output in real time. Collapsed Activities
+                // are unaffected — their detail stays unreferenced.
+                self.append_live_operation_detail(*activity_id, delta);
+                self.invalidate_render();
+                false
+            }
             agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
         };
 
@@ -188,6 +201,52 @@ impl TranscriptState {
         }
 
         refresh_needed
+    }
+
+    /// Append a live streaming-output delta to an Operation Activity's detail.
+    ///
+    /// The detail is derived at render time; a streaming tool appends raw
+    /// output to the compact result's derived Markdown so the expanded
+    /// Activity shows live progress. Nothing here is persisted — this is pure
+    /// in-memory presentation state.
+    fn append_live_operation_detail(
+        &mut self,
+        activity_id: agena_domain::ActivityId,
+        delta: &str,
+    ) {
+        // Only expanded Operations receive live detail. Collapsed Activities
+        // (or non-Operations) are untouched — this is what lets expanding
+        // start and collapsing stop detail computation and transfer.
+        if !self.expanded_operation_activity_ids.contains(&activity_id) {
+            return;
+        }
+        let append = |activity: &mut agena_domain::ActivityNode| {
+            if activity.id != activity_id {
+                return false;
+            }
+            if let agena_domain::ActivityPayload::Operation(operation) = &mut activity.payload {
+                operation.markdown.push_str(delta);
+                return true;
+            }
+            false
+        };
+        let mut matched = false;
+        for turn in &mut self.snapshot.turns {
+            for node in &mut turn.input.0 {
+                if let agena_domain::ContentNode::Activity { activity } = node {
+                    matched |= append(activity);
+                }
+            }
+            for node in &mut turn.reply.content.0 {
+                if let agena_domain::ContentNode::Activity { activity } = node {
+                    matched |= append(activity);
+                }
+            }
+        }
+        for activity in &mut self.snapshot.session_activities {
+            matched |= append(activity);
+        }
+        let _ = matched;
     }
 
     pub(crate) fn set_search_query(&mut self, query: String) {
@@ -2520,6 +2579,18 @@ impl TranscriptState {
             .unwrap_or(TranscriptMoveDirection::Down);
         let expanded = !node.expanded;
         self.node_expansions.insert(node.key.clone(), expanded);
+        // Track which Operation Activities have their detail expanded. Live
+        // streaming deltas are only applied to these; collapsing stops detail
+        // computation and transfer for that Activity.
+        if let TranscriptNodeKey::Activity { content_id, .. } = &node.key
+            && let TranscriptContentId::Activity(activity_id) = content_id
+        {
+            if expanded {
+                self.expanded_operation_activity_ids.insert(*activity_id);
+            } else {
+                self.expanded_operation_activity_ids.remove(activity_id);
+            }
+        }
         self.invalidate_render();
 
         let (start_line, end_line) = {
@@ -2865,8 +2936,9 @@ use crate::{
     BTreeMap, BTreeSet, I18n, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
     RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptCursor, TranscriptCursorAnchor,
-    TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
-    TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
+    TranscriptContentId, TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection,
+    TranscriptNodeKey, TranscriptNodeKind, TranscriptState, TranscriptTextPosition,
+    TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
     contains_case_insensitive, initial_search_match_index, min,
     normalize_transcript_text_selection, render_entry_detailed, transcript_entries,

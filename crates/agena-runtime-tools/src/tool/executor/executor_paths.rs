@@ -58,6 +58,7 @@ impl ToolExecutor {
             call_id: call_id.unwrap_or(-1),
             message_id: None,
             part_id: None,
+            activity_id: None,
         };
         let now = || chrono::Utc::now().timestamp_millis();
         (sink)(agena_tool::ToolRuntimeEvent::CommandBegin(

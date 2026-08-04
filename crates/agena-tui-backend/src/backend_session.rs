@@ -112,6 +112,28 @@ impl Backend {
         .context("failed to load session state")
     }
 
+    /// Lazily fetch the human-facing detail of one tool Activity on expansion.
+    pub async fn get_operation_detail(
+        &self,
+        session_id: i64,
+        activity_id: ActivityId,
+    ) -> Result<OperationDetailResource> {
+        match dispatch::dispatch_query(
+            &self.application,
+            Query::GetOperationDetail(GetOperationDetailParams {
+                session_id,
+                activity_id,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            QueryResult::OperationDetail(detail) => Ok(detail),
+            other => Err(anyhow!("unexpected query result: {:?}", other)),
+        }
+        .context("failed to load operation detail")
+    }
+
     pub async fn get_session_permission_studio_state(
         &self,
         session_id: i64,
@@ -594,11 +616,12 @@ impl Backend {
 
 use crate::Result;
 use crate::{
-    ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams, EventFilter,
-    GetSessionParams, HashSet, ListSessionsParams, LiveEvent, Path, PathBuf, PermissionReply,
-    PermissionReplyKind, PermissionScope, Query, QueryResult, ReplyPermissionParams,
-    ReplyUserInputParams, RewindSessionParams, RunOptions, Scope, SessionExecutionResource,
-    SessionPermissionStudioState, SessionRefresh, SessionResource, SubmitMessageParams,
-    UpdateSessionSelectionParams, UserInputReply, api_error, build_file_index,
-    direct_path_candidate, dispatch, file_search_score, mpsc,
+    ActivityId, ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams,
+    EventFilter, GetOperationDetailParams, GetSessionParams, HashSet, ListSessionsParams,
+    LiveEvent, OperationDetailResource, Path, PathBuf, PermissionReply, PermissionReplyKind,
+    PermissionScope, Query, QueryResult, ReplyPermissionParams, ReplyUserInputParams,
+    RewindSessionParams, RunOptions, Scope, SessionExecutionResource, SessionPermissionStudioState,
+    SessionRefresh, SessionResource, SubmitMessageParams, UpdateSessionSelectionParams,
+    UserInputReply, api_error, build_file_index, direct_path_candidate, dispatch, file_search_score,
+    mpsc,
 };

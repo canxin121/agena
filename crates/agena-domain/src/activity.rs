@@ -6,7 +6,7 @@ use crate::{
     ActivityId, AssistantReplyId, ExecutionId, FileChangeRecord, PermissionReply,
     PermissionRequest, ProcessSummary, PromptCompactionActivity, ReasoningPart, RunId,
     SearchResultItem, SubtaskStatus, TextSegmentId, TodoItem, ToolCallId, ToolInvocation,
-    ToolOutput, TurnId, UserInputReply, UserInputRequest,
+    TurnId, UserInputReply, UserInputRequest,
 };
 
 /// The only two kinds of content that can appear in a turn input or assistant reply.
@@ -320,6 +320,12 @@ impl ActivityNode {
 /// Exhaustive first-party structured content. Custom activities remain typed
 /// by a registered schema name and version; arbitrary clients cannot opt
 /// themselves into provider visibility.
+///
+/// `OperationActivity` legitimately carries both the structured tool output
+/// and the human-facing result blocks, making it the largest variant. Payload
+/// enums are constructed once per activity and shared immutably; boxing the
+/// variant would add an indirection everywhere without a measurable win.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "activity_type", rename_all = "snake_case")]
 pub enum ActivityPayload {
@@ -533,7 +539,7 @@ pub struct OperationPermission {
     pub replied_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct OperationActivity {
     pub call_id: ToolCallId,
@@ -542,14 +548,17 @@ pub struct OperationActivity {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sections: Vec<crate::ToolPresentationSection>,
+    /// Compact tool result data (serialized `ToolResult`). This is the only
+    /// durable representation of what the tool produced; the human-facing
+    /// detail Markdown is derived from it at render time and never persisted.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub data: serde_json::Value,
+    /// Human-facing detail Markdown, derived by the runtime from `data` and
+    /// attached to the in-memory snapshot projection only. Never written to the
+    /// durable content store; it is (re)derived whenever a client expands the
+    /// Activity. Clients may lazily fetch it instead of receiving it inline.
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub model_output_text: String,
-    #[serde(default, skip_serializing_if = "ToolOutput::is_empty")]
-    pub details: ToolOutput,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resource_activity_ids: Vec<ActivityId>,
+    pub markdown: String,
     #[serde(default, skip_serializing_if = "OperationAuthorization::is_empty")]
     pub authorization: OperationAuthorization,
     #[serde(default, skip_serializing_if = "Option::is_none")]

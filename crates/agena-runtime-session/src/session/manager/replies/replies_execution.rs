@@ -92,6 +92,7 @@ impl SessionManager {
         let message_id = pending.pending.part.message_id;
         let part_id = pending.pending.part.part_id;
         let call_id = pending.call_id;
+        let activity_id = pending.activity_id.map(|id| id.to_string());
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<EventKind>();
         handle.spawn(async move {
             while let Some(kind) = event_rx.recv().await {
@@ -116,6 +117,7 @@ impl SessionManager {
                     event.context.call_id = call_id;
                     event.context.message_id = Some(message_id);
                     event.context.part_id = Some(part_id);
+                    event.context.activity_id = activity_id.clone();
                     EventKind::CommandBegin(event)
                 }
                 agena_tool::ToolRuntimeEvent::CommandOutputDelta(mut event) => {
@@ -123,6 +125,7 @@ impl SessionManager {
                     event.context.call_id = call_id;
                     event.context.message_id = Some(message_id);
                     event.context.part_id = Some(part_id);
+                    event.context.activity_id = activity_id.clone();
                     EventKind::CommandOutputDelta(event)
                 }
                 agena_tool::ToolRuntimeEvent::CommandEnd(mut event) => {
@@ -130,6 +133,7 @@ impl SessionManager {
                     event.context.call_id = call_id;
                     event.context.message_id = Some(message_id);
                     event.context.part_id = Some(part_id);
+                    event.context.activity_id = activity_id.clone();
                     EventKind::CommandEnd(event)
                 }
             };
@@ -1005,6 +1009,41 @@ impl SessionManager {
                     .pending,
             );
         } else if !ready_tools.is_empty() {
+            // Mark every ready tool InProgress before fanning out so the live
+            // transcript shows in-flight tools during the (potentially long)
+            // parallel execution instead of pending placeholders. Group changed
+            // parts by their owning message so each checkpoint stays within one
+            // message, then persist the batch transitions.
+            let mut parts_by_message = std::collections::HashMap::<i64, Vec<i64>>::new();
+            for resolved in &ready_tools {
+                let Some(part) = session.part_mut(&resolved.pending.part) else {
+                    continue;
+                };
+                if matches!(
+                    part.status,
+                    ExecutionStatus::Pending | ExecutionStatus::InProgress
+                ) {
+                    part.status = ExecutionStatus::InProgress;
+                    parts_by_message
+                        .entry(resolved.pending.part.message_id)
+                        .or_default()
+                        .push(part.id);
+                }
+            }
+            if !parts_by_message.is_empty() {
+                let checkpoints = parts_by_message
+                    .into_iter()
+                    .map(|(message_id, part_ids)| MessageCheckpoint::parts(message_id, part_ids))
+                    .collect::<Vec<_>>();
+                session = Box::pin(self.persist_session_changes(
+                    session,
+                    checkpoints,
+                    Vec::new(),
+                    None,
+                    state.clone(),
+                ))
+                .await?;
+            }
             let executions = Box::pin(self.execute_pending_tools_concurrently(
                 state.clone(),
                 session.id,
@@ -1470,6 +1509,41 @@ impl SessionManager {
         }
 
         if session_changed {
+            session = Box::pin(self.persist_session_changes(
+                session,
+                vec![MessageCheckpoint::part(
+                    resolved.pending.part.message_id,
+                    resolved.pending.part.part_id,
+                )],
+                Vec::new(),
+                None,
+                state.clone(),
+            ))
+            .await?;
+        }
+
+        // The tool is now authorized and about to execute. Move the Activity
+        // from Pending to InProgress and checkpoint immediately so the live
+        // transcript shows an in-flight tool instead of leaving a pending
+        // placeholder while execution runs. The checkpoint carries the
+        // resolved turn/reply owner (resolved by `SessionStore::persist`), so
+        // the terminal sees an incremental update rather than a full refresh.
+        // The title itself is produced by the tool during execution; at this
+        // point the prepared invocation title is already in place.
+        let part_was_pending = session
+            .part_mut(&resolved.pending.part)
+            .map(|tool_part| {
+                let was_pending = matches!(tool_part.status, ExecutionStatus::Pending);
+                if matches!(
+                    tool_part.status,
+                    ExecutionStatus::Pending | ExecutionStatus::InProgress
+                ) {
+                    tool_part.status = ExecutionStatus::InProgress;
+                }
+                was_pending
+            })
+            .unwrap_or(false);
+        if part_was_pending {
             session = Box::pin(self.persist_session_changes(
                 session,
                 vec![MessageCheckpoint::part(
@@ -2134,40 +2208,23 @@ impl SessionManager {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<Session, AppError> {
         let stream_id = stream.stream_id.clone();
-        // Durable checkpoint cadence: deltas accumulate in memory and are
-        // persisted at most every 2s (plus the terminal flush), so a long
-        // streaming tool output no longer writes a full-content checkpoint
-        // into the event log every 100ms.
-        const DELTA_BATCH_MS: u64 = 2_000;
+        // Streaming output is accumulated in memory only. The durable record
+        // never grows per-delta: the streamed text is written once, truncated,
+        // at completion. Every 2s we emit a header-only checkpoint that only
+        // refreshes the running title (a tiny UPDATE), so a long stream costs
+        // O(delta) writes instead of re-persisting the cumulative output.
         const TITLE_REFRESH_MS: u64 = 2_000;
-        let mut batch_started = std::time::Instant::now();
+        const DETAIL_BROADCAST_MS: u64 = 200;
         let mut last_title_refresh = std::time::Instant::now();
-        let mut pending_delta = String::new();
+        let mut last_detail_broadcast = std::time::Instant::now();
+        let mut streamed_output = String::new();
+        let mut pending_detail_delta = String::new();
+        // Resolve the Activity id once so live detail broadcasts never need a
+        // per-tick session load.
+        let streaming_activity_id = session
+            .part(&pending_tool.part)
+            .and_then(|part| part.activity_id);
         loop {
-            // Flush the accumulated batch once the window elapses (also
-            // reached by the idle heartbeat below, so long silent periods
-            // still refresh the title). Batching turns a high-frequency
-            // output stream into a bounded number of load/persist cycles.
-            if !pending_delta.is_empty()
-                && batch_started.elapsed() >= std::time::Duration::from_millis(DELTA_BATCH_MS)
-            {
-                let refresh_title = last_title_refresh.elapsed()
-                    >= std::time::Duration::from_millis(TITLE_REFRESH_MS);
-                if refresh_title {
-                    last_title_refresh = std::time::Instant::now();
-                }
-                session = self
-                    .append_streaming_tool_output_delta(
-                        session.id,
-                        pending_tool,
-                        &pending_delta,
-                        refresh_title,
-                        state.clone(),
-                    )
-                    .await?;
-                pending_delta.clear();
-                batch_started = std::time::Instant::now();
-            }
             let chunk = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
                     biased;
@@ -2175,27 +2232,18 @@ impl SessionManager {
                         return self.apply_tool_cancellation(session, pending_tool, state).await;
                     },
                     chunk = stream.chunks.recv() => chunk,
-                    // Idle heartbeat: no output for the batch window; flush
-                    // any partial batch and refresh the title so a silent
+                    // Idle heartbeat: refresh the running title so a silent
                     // long-running command still shows live progress.
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(DELTA_BATCH_MS)) => {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(TITLE_REFRESH_MS)) => {
+                        session = self
+                            .refresh_streaming_title(session.id, pending_tool, state.clone())
+                            .await?;
                         continue;
                     },
                 },
                 None => stream.chunks.recv().await,
             };
             let Some(chunk) = chunk else {
-                if !pending_delta.is_empty() {
-                    session = self
-                        .append_streaming_tool_output_delta(
-                            session.id,
-                            pending_tool,
-                            &pending_delta,
-                            true,
-                            state.clone(),
-                        )
-                        .await?;
-                }
                 break;
             };
             let Some(delta) = chunk.text_delta.as_deref() else {
@@ -2204,8 +2252,32 @@ impl SessionManager {
             if delta.is_empty() {
                 continue;
             }
-            pending_delta.push_str(delta);
+            streamed_output.push_str(delta);
+            pending_detail_delta.push_str(delta);
+            // Broadcast the new output as a live, non-persisted detail delta so
+            // an expanded terminal renders the growing detail in real time.
+            if last_detail_broadcast.elapsed() >= std::time::Duration::from_millis(DETAIL_BROADCAST_MS)
+                && !pending_detail_delta.is_empty()
+            {
+                last_detail_broadcast = std::time::Instant::now();
+                self.broadcast_streaming_detail(
+                    session.id,
+                    pending_tool,
+                    &pending_detail_delta,
+                    streaming_activity_id,
+                )?;
+                pending_detail_delta.clear();
+            }
+            if last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS) {
+                last_title_refresh = std::time::Instant::now();
+                session = self
+                    .refresh_streaming_title(session.id, pending_tool, state.clone())
+                    .await?;
+            }
         }
+        session = self
+            .apply_streaming_terminal_output(session.id, pending_tool, streamed_output.as_str(), state.clone())
+            .await?;
 
         let stream_end = match cancellation.as_ref() {
             Some(cancellation) => tokio::select! {
@@ -2323,18 +2395,60 @@ impl SessionManager {
         .await
     }
 
-    /// Persist one text chunk for a pending tool operation. This is shared by
-    /// ordinary direct streaming invocations and streaming targets executed
-    /// through Tool API function `tools_call`. The caller batches deltas into
-    /// a short time window and passes `refresh_title` on a fixed cadence so
-    /// the running elapsed time is persisted with the same checkpoint instead
-    /// of a separate load/persist round trip.
-    pub(in crate::session::manager) async fn append_streaming_tool_output_delta(
+    /// Broadcast a slice of freshly streamed output to live presentation
+    /// consumers as a non-persistent `CommandOutputDelta`. Expanded terminals
+    /// render this delta into the Activity's detail in real time; collapsed
+    /// terminals drop it. Nothing is written to disk.
+    fn broadcast_streaming_detail(
         &self,
         session_id: i64,
         pending_tool: &SessionPendingTool,
         delta: &str,
-        refresh_title: bool,
+        activity_id: Option<agena_domain::ActivityId>,
+    ) -> Result<(), AppError> {
+        let event = agena_domain::CommandOutputDeltaEvent {
+            context: agena_domain::CommandContext {
+                session_id,
+                call_id: 0,
+                message_id: Some(pending_tool.part.message_id),
+                part_id: Some(pending_tool.part.part_id),
+                activity_id: activity_id.map(|id| id.to_string()),
+            },
+            stream: agena_domain::CommandOutputStream::Stdout,
+            seq: 0,
+            ts_ms: chrono::Utc::now().timestamp_millis(),
+            chunk: delta.as_bytes().to_vec(),
+            preview_text: delta.to_string(),
+            preview_lossy: false,
+        };
+        let publisher = Arc::clone(&self.publisher);
+        let context = crate::event::PublishContext::for_session(session_id);
+        let handle = tokio::runtime::Handle::current();
+        // Fire-and-forget in-memory broadcast; the bus is in-process and
+        // non-persistent for CommandOutputDelta, so this never blocks the
+        // streaming loop on disk I/O.
+        handle.spawn(async move {
+            if let Err(error) = publisher.publish(context, crate::event::EventKind::CommandOutputDelta(event)).await {
+                tracing::debug!(
+                    target: "agena::session::streaming_detail",
+                    session_id,
+                    error = %error,
+                    "failed to broadcast live streaming detail"
+                );
+            }
+        });
+        Ok(())
+    }
+
+    /// Refresh the running title of a streaming tool and emit a header-only
+    /// checkpoint. This is the only durable write during a stream: it updates
+    /// the compact title (a tiny UPDATE), never the cumulative output, so a
+    /// long stream costs O(1) writes rather than re-persisting the growing
+    /// text every 2s.
+    pub(in crate::session::manager) async fn refresh_streaming_title(
+        &self,
+        session_id: i64,
+        pending_tool: &SessionPendingTool,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let mut session = self
@@ -2344,26 +2458,19 @@ impl SessionManager {
         let tool_part_ref = session
             .resolve_part_ref(&pending_tool.part)
             .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-        {
+        let refreshed_title = {
             let tool_part = session
                 .part_mut(&tool_part_ref)
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-            if !tool_part.append_tool_output_delta(delta) {
-                return Err(AppError::Internal(format!(
-                    "streaming tool part refused output delta: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
-                )));
-            }
             if matches!(
                 tool_part.status,
                 ExecutionStatus::Pending | ExecutionStatus::InProgress
             ) {
                 tool_part.status = ExecutionStatus::InProgress;
             }
-            if refresh_title
-                && let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
-                    operation,
-                ))) = tool_part.content.as_mut()
+            if let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                operation,
+            ))) = tool_part.content.as_mut()
             {
                 let elapsed_secs = if operation.lifecycle.start_ms > 0 {
                     (Utc::now().timestamp_millis() - operation.lifecycle.start_ms) / 1000
@@ -2382,10 +2489,80 @@ impl SessionManager {
                         serde_json::json!(base_title),
                     );
                     operation.set_title(format!("{base_title} · {elapsed_secs}s"));
+                    Some(operation.title.clone())
+                } else {
+                    None
                 }
+            } else {
+                None
+            }
+        };
+        // Persist the title with a targeted column update (no content/payload
+        // rewrite), then broadcast a header checkpoint so the terminal sees
+        // the live title change. The Activity id lets the tiny UPDATE target
+        // the content-node title column directly.
+        if let Some(title) = refreshed_title {
+            let activity_id = session.part(&tool_part_ref).and_then(|part| part.activity_id);
+            self.store
+                .update_part_title(
+                    session_id,
+                    pending_tool.part.message_id,
+                    pending_tool.part.part_id,
+                    activity_id,
+                    &title,
+                )
+                .await?;
+        }
+        self.persist_session_changes(
+            session,
+            vec![MessageCheckpoint::part(
+                pending_tool.part.message_id,
+                pending_tool.part.part_id,
+            )],
+            Vec::new(),
+            None,
+            state,
+        )
+        .await
+    }
+
+    /// Persist a bounded preview of the streamed output into the Operation at
+    /// stream end. The text was buffered in memory during the stream; this
+    /// bounds the model preview (truncated for context economy) and writes a
+    /// single checkpoint instead of re-persisting cumulative text. The final
+    /// `apply_tool_success` replaces this preview with the tool's own truncated
+    /// result, so this is only a crash-recovery / TUI intermediate view.
+    pub(in crate::session::manager) async fn apply_streaming_terminal_output(
+        &self,
+        session_id: i64,
+        pending_tool: &SessionPendingTool,
+        streamed_output: &str,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        if streamed_output.is_empty() {
+            return self.store.load_session(session_id, state.cache_policy()).await;
+        }
+        // Bound the intermediate preview so a giant stream is not written in
+        // full even once; the terminal frame carries the real truncated output.
+        let preview = agena_runtime_tools::truncate_tool_output_text(streamed_output, 16 * 1024);
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        let tool_part_ref = session
+            .resolve_part_ref(&pending_tool.part)
+            .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
+        {
+            let tool_part = session
+                .part_mut(&tool_part_ref)
+                .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
+            if !tool_part.append_tool_output_delta(preview.as_str()) {
+                return Err(AppError::Internal(format!(
+                    "streaming tool part refused terminal output: message={}, part={}",
+                    pending_tool.part.message_id, pending_tool.part.part_id
+                )));
             }
         }
-
         self.persist_session_changes(
             session,
             vec![MessageCheckpoint::part(

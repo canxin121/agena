@@ -1520,7 +1520,7 @@ mod transcript_expansion_tests {
         ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
         ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
         AssistantReplyStatus, ContentDocument, ContentNode, ContentPosition, ExecutionStatus,
-        OperationActivity, ReasoningPart, StructuredObject, ToolCallId, ToolInvocation, ToolOutput,
+        OperationActivity, ReasoningPart, StructuredObject, ToolCallId, ToolInvocation,
         TranscriptSnapshot, TurnId, TurnSnapshot,
     };
 
@@ -1536,10 +1536,6 @@ mod transcript_expansion_tests {
         let turn_id = TurnId::new();
         let response_id = AssistantReplyId::new();
         let activity_id = ActivityId::new();
-        let details = ToolOutput::from_json_payload(Some(&serde_json::json!({
-            "tools": [{"name": "repo.status"}, {"name": "fs.read"}]
-        })))
-        .expect("tools_list output");
         let operation = ActivityNode {
             id: activity_id,
             owner: ActivityOwner::AssistantReply {
@@ -1559,10 +1555,13 @@ mod transcript_expansion_tests {
                 ),
                 title: "tools_list".to_owned(),
                 summary: String::new(),
-                sections: Vec::new(),
-                model_output_text: String::new(),
-                details,
-                resource_activity_ids: Vec::new(),
+                // The compact tool payload carries the structured results; the
+                // expanded Activity renders it as the human Result section.
+                data: serde_json::json!({
+                    "tool": "tool_search",
+                    "results": ["fs.read", "repo.status"]
+                }),
+                markdown: String::new(),
                 authorization: Default::default(),
                 error: None,
             }),
@@ -3035,6 +3034,88 @@ mod live_transcript_tests {
             transcript.viewport.top, reading_top,
             "new content must not drag a scrolled-up viewport"
         );
+    }
+
+    #[test]
+    fn live_detail_is_applied_only_to_expanded_operations() {
+        let turn = turn(1);
+        let response_id = turn.reply.id;
+        let activity_id = agena_domain::ActivityId::new();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+        // Seed the snapshot with an Operation Activity.
+        let op = agena_domain::ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply { reply_id: response_id },
+            actor: agena_domain::ActivityActor::Tool,
+            state: agena_domain::ActivityState::InProgress,
+            position: agena_domain::ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: agena_domain::ActivityLifecycle::default(),
+            payload: agena_domain::ActivityPayload::Operation(
+                agena_domain::OperationActivity {
+                    call_id: agena_domain::ToolCallId::new("call-1"),
+                    invocation: agena_domain::ToolInvocation::new(
+                        "shell",
+                        agena_domain::StructuredObject::default(),
+                    ),
+                    title: "Run process".to_owned(),
+                    summary: String::new(),
+                    data: serde_json::json!({"tool": "shell", "action": "run"}),
+                    markdown: String::new(),
+                    authorization: Default::default(),
+                    error: None,
+                },
+            ),
+            provenance: Default::default(),
+        };
+        transcript.snapshot.turns[0].reply.content.0.push(
+            ContentNode::activity(op.clone()),
+        );
+
+        let detail_delta = |delta: &str, seq: i64| {
+            event(
+                RuntimePresentationEventKind::OperationDetailDelta {
+                    activity_id,
+                    delta: delta.to_owned(),
+                },
+                seq,
+            )
+        };
+
+        // Collapsed: delta is ignored, detail stays empty.
+        transcript.apply_presentation_event(&detail_delta("part1 ", 2), 80, 20);
+        let op_state = |t: &TranscriptState| {
+            let node = t.snapshot.turns[0].reply.content.0.iter().find_map(|node| {
+                if let ContentNode::Activity { activity } = node {
+                    (activity.id == activity_id).then_some(activity)
+                } else {
+                    None
+                }
+            });
+            match node.map(|a| &a.payload) {
+                Some(agena_domain::ActivityPayload::Operation(operation)) => {
+                    operation.markdown.clone()
+                }
+                _ => String::new(),
+            }
+        };
+        assert_eq!(op_state(&transcript), "");
+
+        // Expanded: delta is appended to the derived detail.
+        transcript
+            .expanded_operation_activity_ids
+            .insert(activity_id);
+        transcript.apply_presentation_event(&detail_delta("part1 ", 3), 80, 20);
+        transcript.apply_presentation_event(&detail_delta("part2", 4), 80, 20);
+        assert_eq!(op_state(&transcript), "part1 part2");
     }
 
     fn tall_turn(sequence: i64, prefix: &str) -> TurnSnapshot {

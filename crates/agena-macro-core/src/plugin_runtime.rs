@@ -121,8 +121,7 @@ pub fn expand_plugin_layer_tool_stream(
             sink.chunk(::agena_plugin_sdk::ToolStreamChunk {
                 stream_id: __stream_id.clone(),
                 text_delta: Some(__result.output_text.clone()),
-                payload_delta: __result.payload.clone(),
-                metadata: __result.metadata.clone(),
+                                metadata: __result.metadata.clone(),
             })
             .await;
             Ok(::agena_plugin_sdk::ToolStreamEnd::from_output(__stream_id, __result))

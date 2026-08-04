@@ -5,7 +5,50 @@ use super::{
     permission_rule_event_from_rule, session, session_from_model_db,
 };
 
+use sea_orm::{ConnectionTrait, Statement};
 use agena_storage_sqlite::run_transaction_effects;
+
+/// Resolve the canonical turn/reply identity that owns a model message.
+///
+/// The message → reply → turn chain is only fully materialized in the durable
+/// history tables once an execution starts. Tool checkpoint events are emitted
+/// from `SessionStore::persist` after that point, so the identity is resolvable
+/// here even though the in-memory [`Message`](crate::message::Message) envelope
+/// does not carry it. Returning `None` keeps the event owner-less, which
+/// degrades the live presentation to a full refresh — acceptable only for the
+/// rare message that has no canonical reply yet.
+async fn conversation_identity_for_message(
+    db: &sea_orm::DatabaseConnection,
+    session_id: i64,
+    message_id: i64,
+) -> Result<Option<(agena_domain::TurnId, agena_domain::AssistantReplyId)>, DbErr> {
+    let Some(row) = db
+        .query_one(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT r.turn_id, r.reply_id \
+             FROM agena_model_messages m \
+             JOIN agena_reply_executions e ON e.execution_id = m.execution_id \
+             JOIN agena_assistant_replies r ON r.reply_id = e.reply_id \
+             JOIN agena_turns t ON t.turn_id = r.turn_id \
+             WHERE m.message_id = ? AND m.session_id = ? AND t.session_id = ?",
+            [message_id.into(), session_id.into(), session_id.into()],
+        ))
+        .await?
+    else {
+        return Ok(None);
+    };
+    let turn_id: String = row.try_get("", "turn_id")?;
+    let reply_id: String = row.try_get("", "reply_id")?;
+    let turn_id = match uuid::Uuid::parse_str(turn_id.as_str()) {
+        Ok(id) => agena_domain::TurnId(id),
+        Err(_) => return Ok(None),
+    };
+    let reply_id = match uuid::Uuid::parse_str(reply_id.as_str()) {
+        Ok(id) => agena_domain::AssistantReplyId(id),
+        Err(_) => return Ok(None),
+    };
+    Ok(Some((turn_id, reply_id)))
+}
 
 /// Sentinel prefix marking a `DbErr::Custom` that carries an optimistic-lock
 /// conflict, so a caller can distinguish it from an ordinary database failure.
@@ -111,6 +154,15 @@ impl SessionStore {
                         checkpoint.message_id
                     ))
                 })?;
+            // Resolve the canonical conversation identity once per message so
+            // every part in this checkpoint inherits the same turn/reply owner.
+            // Without these the live presentation event falls back to a full
+            // refresh and tool activity updates are not streamed incrementally.
+            let (turn_id, reply_id) =
+                match conversation_identity_for_message(&self.db, session_id, message.id).await? {
+                    Some((turn_id, reply_id)) => (Some(turn_id), Some(reply_id)),
+                    None => (None, None),
+                };
             for part_id in &checkpoint.part_ids {
                 let part = message
                     .parts
@@ -127,8 +179,8 @@ impl SessionStore {
                         session_id,
                         execution_id: None,
                         run_id: None,
-                        turn_id: None,
-                        reply_id: None,
+                        turn_id,
+                        reply_id,
                         message_id: message.id,
                         message_role: message.role,
                         message_state: message.state,
@@ -248,6 +300,38 @@ impl SessionStore {
     /// Persist lifecycle events and advance the transcript projection before
     /// returning. Execution completion relies on this synchronous projection
     /// barrier to close every correlated open artifact.
+    /// Update the running title of a tool Activity in place with two tiny
+    /// column writes (no content/payload rewrite). `refresh_streaming_title`
+    /// uses this so a long stream refreshes its title at O(1) disk cost.
+    pub(crate) async fn update_part_title(
+        &self,
+        session_id: i64,
+        message_id: i64,
+        part_id: i64,
+        activity_id: Option<agena_domain::ActivityId>,
+        title: &str,
+    ) -> Result<(), AppError> {
+        let db = &self.db;
+        if let Some(activity_id) = activity_id {
+            let _ = db
+                .execute(Statement::from_sql_and_values(
+                    db.get_database_backend(),
+                    "UPDATE agena_content_nodes SET title = ? WHERE node_id = ?",
+                    [title.into(), activity_id.to_string().into()],
+                ))
+                .await?;
+        }
+        let _ = db
+            .execute(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "UPDATE agena_model_message_parts SET name = ? WHERE part_id = ? AND message_id = ?",
+                [title.into(), part_id.into(), message_id.into()],
+            ))
+            .await?;
+        let _ = (session_id, db);
+        Ok(())
+    }
+
     pub(crate) async fn append_lifecycle_events(
         &self,
         session_id: i64,
@@ -381,8 +465,24 @@ mod tests {
     use agena_storage::PersistedPermissionRule;
     use sea_orm::{Database, EntityTrait, PaginatorTrait};
 
-    use super::{DbErr, run_transaction_effects, session};
+    use super::{
+        DbErr, conversation_identity_for_message, run_transaction_effects, session,
+    };
     use agena_storage_sqlite::SeaPermissionRuleTransactionWriter;
+
+    #[tokio::test]
+    async fn conversation_identity_is_none_for_message_without_reply() {
+        let db = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&db)
+            .await
+            .expect("initialize schema");
+        let identity = conversation_identity_for_message(&db, 1, 999)
+            .await
+            .expect("query succeeds");
+        assert_eq!(identity, None, "no reply chain means no owner");
+    }
 
     #[tokio::test]
     async fn permission_rule_upsert_rolls_back_when_session_update_fails() {

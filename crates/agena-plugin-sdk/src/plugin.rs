@@ -180,8 +180,7 @@ pub trait Plugin: Send + Sync + 'static {
         sink.chunk(ToolStreamChunk {
             stream_id: stream_id.clone(),
             text_delta: Some(result.output_text.clone()),
-            payload_delta: result.payload.clone(),
-            metadata: result.metadata.clone(),
+                        metadata: result.metadata.clone(),
         })
         .await;
         Ok(ToolStreamEnd::from_output(stream_id, result))
@@ -341,8 +340,7 @@ impl ToolStreamSink {
             .send(ToolStreamChunk {
                 stream_id: self.stream_id.clone(),
                 text_delta: Some(delta.into()),
-                payload_delta: None,
-                metadata: Default::default(),
+                                metadata: Default::default(),
             })
             .await;
     }

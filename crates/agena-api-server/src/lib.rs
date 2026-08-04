@@ -259,6 +259,10 @@ pub fn router(state: AppState) -> Router {
                 get(rest::get_session_state),
             )
             .route(
+                "/api/v1/sessions/{session_id}/operations/{activity_id}/detail",
+                get(rest::get_operation_detail),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/permission",
                 axum::routing::put(rest::replace_session_permission),
             )

@@ -168,6 +168,31 @@ mod tests {
     }
 
     #[test]
+    fn shift_enter_and_ctrl_j_are_newlines_and_take_precedence_over_queue() {
+        let bindings = ComposerKeyBindings::default();
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+            Some(ComposerAction::Newline)
+        );
+        assert_eq!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::Newline)
+        );
+        // A legacy terminal without the keyboard enhancement protocol sends
+        // Ctrl+J as the LF control byte, which crossterm surfaces as
+        // Char('j') + CONTROL. It must never fall through to the plain-Enter
+        // queue action.
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL)),
+            Some(ComposerAction::Queue)
+        );
+        assert_ne!(
+            bindings.match_action(&KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+            Some(ComposerAction::Queue)
+        );
+    }
+
+    #[test]
     fn ctrl_a_opens_the_unified_file_and_skill_picker() {
         let bindings = ComposerKeyBindings::default();
         assert_eq!(

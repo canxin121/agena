@@ -62,6 +62,17 @@ impl App {
             return;
         }
 
+        // Copy an active non-transcript surface selection (session header
+        // rows, composer status row, or composer editor) from any main-surface
+        // focus with Ctrl+Y.
+        if self.mouse_capture_active()
+            && key.code == KeyCode::Char('y')
+            && key.modifiers == KeyModifiers::CONTROL
+            && self.copy_active_surface_selection()
+        {
+            return;
+        }
+
         self.last_ctrl_c_at = None;
 
         if self.handle_context_help_key(key) {
@@ -407,3 +418,4 @@ mod tests {
 use crate::{App, Instant, KeyEvent, KeyEventKind, Overlay, OverlayCommit, Route, ui_text};
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
+use crossterm::event::{KeyCode, KeyModifiers};

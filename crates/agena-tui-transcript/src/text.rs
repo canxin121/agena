@@ -47,7 +47,7 @@ pub fn transcript_header_title(
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{I18n, transcript_header_title};
+    use super::{I18n, text_artifact_display_label, transcript_header_title};
 
     #[test]
     fn session_header_places_id_before_title() {
@@ -55,6 +55,23 @@ mod tests {
             transcript_header_title(&I18n::english(), Some(702), "New session 01:27"),
             " #702  New session 01:27 "
         );
+    }
+
+    #[test]
+    fn text_artifact_label_truncates_long_persisted_summaries() {
+        let long = "x".repeat(240);
+        let label = text_artifact_display_label("ignored", Some(long.as_str()));
+        assert_eq!(label, "xxxxxxxxxxxxxxxxxxxxxxxx…");
+        assert_eq!(label.chars().count(), 25);
+    }
+
+    #[test]
+    fn text_artifact_label_keeps_short_labels_and_derives_paste_count() {
+        assert_eq!(
+            text_artifact_display_label("abcdef", Some("paste 1000 chars")),
+            "paste 1000 chars"
+        );
+        assert_eq!(text_artifact_display_label("abcdef", None), "paste 6 chars");
     }
 }
 
@@ -476,6 +493,26 @@ pub fn attachment_chip_label(
             ),
         ),
     }
+}
+
+/// Maximum length of a pasted-text artifact's inline placeholder. Large
+/// pastes can carry a long persisted summary (the message-part summary is
+/// truncated to 240 chars); showing that whole string as the inline
+/// `[placeholder]` overflows the composer and transcript rows. Display only a
+/// compact prefix instead.
+pub fn text_artifact_display_label(text: &str, label: Option<&str>) -> String {
+    const MAX_PLACEHOLDER_CHARS: usize = 24;
+    let base = label
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("paste {} chars", text.chars().count()));
+    let mut chars = base.chars();
+    let mut truncated: String = chars.by_ref().take(MAX_PLACEHOLDER_CHARS).collect();
+    if chars.next().is_some() {
+        truncated.push('…');
+    }
+    truncated
 }
 
 pub fn attachment_placeholder_base(

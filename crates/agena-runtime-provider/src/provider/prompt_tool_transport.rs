@@ -711,6 +711,9 @@ fn stream_event_identity(
         }
         | CompletionStreamEvent::Completed {
             provider_id, model, ..
+        }
+        | CompletionStreamEvent::ProviderRetry {
+            provider_id, model, ..
         } => (provider_id, model),
     }
 }

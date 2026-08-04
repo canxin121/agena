@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use agena_domain::FilesystemEffect;
+use agena_domain::FilesystemEffects;
 pub(crate) use agena_tool::shell_analysis::{ExitInterpretation, analyze_command};
 
 use super::{ToolError, ToolExecutor};
@@ -22,7 +22,7 @@ pub(crate) fn resolve_workdir(
 pub(crate) fn validate_declared_filesystem_effects(
     tool_name: &str,
     command: &str,
-    effects: &[FilesystemEffect],
+    effects: &FilesystemEffects,
 ) -> Result<(), ToolError> {
     // Only require declarations when the command provably mutates or reads
     // explicit files (write/redirect, input redirect, curl file ops).

@@ -99,6 +99,8 @@ impl App {
             run_activity: RunActivityTracker::default(),
             next_pending_user_message_id: 1,
             layout: LayoutCache::default(),
+            surface_layout: crate::SurfaceLayout::default(),
+            surface_selection: None,
             transcript_scrollbar_drag: None,
             transcript_pointer_gesture: None,
             last_transcript_click: None,

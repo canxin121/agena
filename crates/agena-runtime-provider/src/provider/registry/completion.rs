@@ -748,6 +748,15 @@ impl ProviderRegistry {
                                 error = %err,
                                 "provider stream startup failed with retryable error; scheduling retry"
                             );
+                            yield CompletionStreamEvent::ProviderRetry {
+                                provider_id: model_ref.provider_id.clone(),
+                                model: model_ref.model_id.clone(),
+                                message: err.to_string(),
+                                retry_index,
+                                attempt,
+                                max_retries: retry_policy.max_retries,
+                                delay_ms: delay.as_millis() as u64,
+                            };
                             tokio::time::sleep(delay).await;
                             retry_index += 1;
                             continue;
@@ -986,6 +995,15 @@ impl ProviderRegistry {
                                     error = %err,
                                     "provider stream failed before first event with retryable error; restarting stream"
                                 );
+                                yield CompletionStreamEvent::ProviderRetry {
+                                    provider_id: model_ref.provider_id.clone(),
+                                    model: model_ref.model_id.clone(),
+                                    message: err.to_string(),
+                                    retry_index,
+                                    attempt,
+                                    max_retries: retry_policy.max_retries,
+                                    delay_ms: delay.as_millis() as u64,
+                                };
                                 tokio::time::sleep(delay).await;
                                 retry_index += 1;
                                 should_restart_stream = true;
@@ -1010,6 +1028,15 @@ impl ProviderRegistry {
                                     error = %err,
                                     "provider stream failed after output with replay-safe provider; scheduling replay-aware restart"
                                 );
+                                yield CompletionStreamEvent::ProviderRetry {
+                                    provider_id: model_ref.provider_id.clone(),
+                                    model: model_ref.model_id.clone(),
+                                    message: err.to_string(),
+                                    retry_index,
+                                    attempt,
+                                    max_retries: replay_policy.max_retries_after_output,
+                                    delay_ms: delay.as_millis() as u64,
+                                };
                                 tokio::time::sleep(delay).await;
                                 retry_index += 1;
                                 replay_retry_index += 1;

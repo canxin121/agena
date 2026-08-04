@@ -51,6 +51,12 @@ impl App {
                 self.transcript.cancel_text_selection(width, height);
             }
             Some(KeyAction::Copy) => {
+                // A mouse selection on the session header rows, composer status
+                // row, or composer editor is copied before falling back to the
+                // transcript's own yank behavior.
+                if self.copy_active_surface_selection() {
+                    return;
+                }
                 if self.transcript.has_visual_selection() {
                     self.clear_transcript_pending_command();
                     self.copy_active_transcript_text_selection();

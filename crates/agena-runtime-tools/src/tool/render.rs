@@ -716,4 +716,107 @@ mod tests {
         assert!(out.contains("input.rs:51"), "{out}");
         assert!(!out.contains("\"output\": \""), "{out}");
     }
+
+    #[test]
+    fn compact_shell_run_name_renders_table_and_output_not_raw_json() {
+        // The provider records live shell invocations under the compact name
+        // `shell.run` (not `agena.shell.run`). The renderer must reconstruct
+        // the `shell` discriminant from that name too, otherwise it falls back
+        // to dumping the whole payload as a raw JSON card.
+        let data = serde_json::json!({
+            "action": "run",
+            "background": false,
+            "description": "Command exited with code 0 in 25 ms.",
+            "dropped_lines": 0,
+            "exit_code": 0,
+            "has_more": false,
+            "last_seq": 0,
+            "output": "346:pub enum ActivityPayload {\npub enum ActivityPayload {",
+            "shell": "bash",
+            "status": "exited"
+        });
+        let out = super::render_tool_payload_markdown_with_name(
+            "shell.run",
+            &data,
+            &crate::tool::RenderContext {
+                workspace_root: std::path::Path::new("/tmp"),
+                live_tail: None,
+                command: Some("grep -n 'pub enum ActivityPayload'"),
+                read_managed: &|_| None,
+            },
+        );
+        // Parameters render as a table; the output is a clean code block.
+        assert!(out.contains("| shell | bash |"), "{out}");
+        assert!(out.contains("| exit | 0 |"), "{out}");
+        assert!(out.contains("| status | exited |"), "{out}");
+        assert!(out.contains("`$ grep -n 'pub enum ActivityPayload'`"), "{out}");
+        assert!(out.contains("pub enum ActivityPayload"), "{out}");
+        // Raw JSON must never be dumped inline.
+        assert!(!out.contains("\"output\": \""), "{out}");
+        assert!(!out.contains("\"action\": \"run\""), "{out}");
+    }
+
+    #[test]
+    fn compact_fs_glob_renders_typed_view_not_raw_json() {
+        let data = serde_json::json!({
+            "count": 2,
+            "paths": ["a.rs", "b.rs"],
+            "truncated": false
+        });
+        let out = super::render_tool_payload_markdown_with_name(
+            "fs.glob",
+            &data,
+            &crate::tool::RenderContext {
+                workspace_root: std::path::Path::new("/tmp"),
+                live_tail: None,
+                command: None,
+                read_managed: &|_| None,
+            },
+        );
+        assert!(out.contains("`glob` · 2 match(es)"), "{out}");
+        assert!(out.contains("`a.rs`"), "{out}");
+        assert!(out.contains("`b.rs`"), "{out}");
+        assert!(!out.contains("```json"), "{out}");
+    }
+
+    #[test]
+    fn compact_cron_list_renders_typed_view_not_raw_json() {
+        let data = serde_json::json!({
+            "jobs": []
+        });
+        let out = super::render_tool_payload_markdown_with_name(
+            "cron.list",
+            &data,
+            &crate::tool::RenderContext {
+                workspace_root: std::path::Path::new("/tmp"),
+                live_tail: None,
+                command: None,
+                read_managed: &|_| None,
+            },
+        );
+        assert!(out.contains("`cron_list` · 0 job(s)"), "{out}");
+        assert!(!out.contains("```json"), "{out}");
+    }
+
+    #[test]
+    fn compact_web_search_renders_typed_view_not_raw_json() {
+        let data = serde_json::json!({
+            "query": "rust async",
+            "backend": "mock",
+            "results": []
+        });
+        let out = super::render_tool_payload_markdown_with_name(
+            "web.search",
+            &data,
+            &crate::tool::RenderContext {
+                workspace_root: std::path::Path::new("/tmp"),
+                live_tail: None,
+                command: None,
+                read_managed: &|_| None,
+            },
+        );
+        assert!(out.contains("`web_search` · rust async"), "{out}");
+        assert!(out.contains("backend mock"), "{out}");
+        assert!(!out.contains("```json"), "{out}");
+    }
 }

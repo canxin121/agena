@@ -447,6 +447,129 @@ fn canonical_tool_payload_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+/// One-to-one payload variant mappings for every typed tool family:
+/// `(serialized variant tag, compact name, canonical name, plugin-format name)`.
+///
+/// The provider catalog uses compact names such as `fs.read` and `cron.create`,
+/// workflows use canonical names such as `agena.fs.read`, and the plugin wire
+/// format uses names such as `agena_fs_read` / `agena_web__fetch`. Every
+/// spelling must resolve to the same `ToolPayloadOutput` / `ToolPayloadInput`
+/// variant tag; a missed spelling makes the renderer fall back to dumping the
+/// whole payload as a raw JSON card.
+const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
+    ("read", "fs.read", "agena.fs.read", "agena_fs_read"),
+    ("glob", "fs.glob", "agena.fs.glob", "agena_fs_glob"),
+    ("grep", "fs.grep", "agena.fs.grep", "agena_fs_grep"),
+    (
+        "apply_patch",
+        "fs.apply_patch",
+        "agena.fs.apply_patch",
+        "agena_fs_apply_patch",
+    ),
+    ("task", "tasks.run", "agena.tasks.run", "agena_tasks_run"),
+    (
+        "tool_search",
+        "tools.search",
+        "agena.tools.search",
+        "agena_tools_search",
+    ),
+    (
+        "ask_user",
+        "interaction.ask",
+        "agena.interaction.ask",
+        "agena_interaction_ask",
+    ),
+    ("web_fetch", "web.fetch", "agena.web.fetch", "agena_web__fetch"),
+    ("web_search", "web.search", "agena.web.search", "agena_web__search"),
+    (
+        "enter_snapshot",
+        "snapshot.enter",
+        "agena.snapshot.enter",
+        "agena_snapshot_enter",
+    ),
+    (
+        "exit_snapshot",
+        "snapshot.exit",
+        "agena.snapshot.exit",
+        "agena_snapshot_exit",
+    ),
+    (
+        "cron_create",
+        "cron.create",
+        "agena.cron.create",
+        "agena_cron_create",
+    ),
+    ("cron_list", "cron.list", "agena.cron.list", "agena_cron_list"),
+    ("cron_delete", "cron.delete", "agena.cron.delete", "agena_cron_delete"),
+    ("cron_update", "cron.update", "agena.cron.update", "agena_cron_update"),
+    ("cron_pause", "cron.pause", "agena.cron.pause", "agena_cron_pause"),
+    ("cron_resume", "cron.resume", "agena.cron.resume", "agena_cron_resume"),
+    ("cron_history", "cron.history", "agena.cron.history", "agena_cron_history"),
+    (
+        "schedule_wakeup",
+        "cron.wakeup",
+        "agena.cron.wakeup",
+        "agena_cron_wakeup",
+    ),
+    (
+        "lsp_definition",
+        "lsp.definition",
+        "agena.lsp.definition",
+        "agena_lsp_definition",
+    ),
+    (
+        "lsp_references",
+        "lsp.references",
+        "agena.lsp.references",
+        "agena_lsp_references",
+    ),
+    ("lsp_hover", "lsp.hover", "agena.lsp.hover", "agena_lsp_hover"),
+    (
+        "lsp_diagnostics",
+        "lsp.diagnostics",
+        "agena.lsp.diagnostics",
+        "agena_lsp_diagnostics",
+    ),
+];
+
+fn payload_name_for_table(tool_name: &str) -> Option<String> {
+    PAYLOAD_OUTPUT_TOOLS
+        .iter()
+        .find(|(_, compact, canonical, plugin)| {
+            *compact == tool_name || *canonical == tool_name || *plugin == tool_name
+        })
+        .map(|(tag, _, _, _)| tag.to_string())
+}
+
+fn is_payload_variant_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "read"
+            | "glob"
+            | "grep"
+            | "apply_patch"
+            | "task"
+            | "tool_search"
+            | "ask_user"
+            | "web_fetch"
+            | "web_search"
+            | "enter_snapshot"
+            | "exit_snapshot"
+            | "cron_create"
+            | "cron_list"
+            | "cron_delete"
+            | "cron_update"
+            | "cron_pause"
+            | "cron_resume"
+            | "cron_history"
+            | "schedule_wakeup"
+            | "lsp_definition"
+            | "lsp_references"
+            | "lsp_hover"
+            | "lsp_diagnostics"
+    )
+}
+
 const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("read", "agena.fs", "read"),
     ("glob", "agena.fs", "glob"),
@@ -558,135 +681,82 @@ fn payload_name_for_invocation(
         "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
             return Some("apply_patch".to_string());
         }
-        "agena_shell_run" | "agena.shell.run" | "agena_process_run" | "agena.process.run" => {
+        "shell.run"
+        | "powershell.run"
+        | "process.run"
+        | "agena_shell_run" | "agena.shell.run" | "agena_process_run" | "agena.process.run" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("run".to_string()),
             );
             return Some("shell".to_string());
         }
-        "agena_shell_list" | "agena.shell.list" | "agena_process_list" | "agena.process.list" => {
+        "shell.list"
+        | "powershell.list"
+        | "process.list"
+        | "agena_shell_list" | "agena.shell.list" | "agena_process_list"
+        | "agena.process.list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
             return Some("shell".to_string());
         }
-        "agena_shell_logs" | "agena.shell.logs" | "agena_process_logs" | "agena.process.logs" => {
+        "shell.logs"
+        | "powershell.logs"
+        | "process.logs"
+        | "agena_shell_logs" | "agena.shell.logs" | "agena_process_logs"
+        | "agena.process.logs" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("logs".to_string()),
             );
             return Some("shell".to_string());
         }
-        "agena_shell_stop" | "agena.shell.stop" | "agena_process_stop" | "agena.process.stop" => {
+        "shell.stop"
+        | "powershell.stop"
+        | "process.stop"
+        | "agena_shell_stop" | "agena.shell.stop" | "agena_process_stop"
+        | "agena.process.stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
             );
             return Some("shell".to_string());
         }
-        "agena_cron_create" | "agena.cron.create" => {
-            return Some("cron_create".to_string());
-        }
-        "agena_cron_list" | "agena.cron.list" => {
-            return Some("cron_list".to_string());
-        }
-        "agena_cron_delete" | "agena.cron.delete" => {
-            return Some("cron_delete".to_string());
-        }
-        "agena_cron_update" | "agena.cron.update" => {
-            return Some("cron_update".to_string());
-        }
-        "agena_cron_pause" | "agena.cron.pause" => {
-            return Some("cron_pause".to_string());
-        }
-        "agena_cron_resume" | "agena.cron.resume" => {
-            return Some("cron_resume".to_string());
-        }
-        "agena_cron_history" | "agena.cron.history" => {
-            return Some("cron_history".to_string());
-        }
-        "agena_cron_wakeup" | "agena.cron.wakeup" => {
-            return Some("schedule_wakeup".to_string());
-        }
-        "agena_tasks_run" | "agena.tasks.run" => {
-            return Some("task".to_string());
-        }
-        "agena_tools_search" | "agena.tools.search" => {
-            return Some("tool_search".to_string());
-        }
-        "agena_interaction_ask" | "agena.interaction.ask" => {
-            return Some("ask_user".to_string());
-        }
-        "agena_snapshot_enter" | "agena.snapshot.enter" => {
-            return Some("enter_snapshot".to_string());
-        }
-        "agena_snapshot_exit" | "agena.snapshot.exit" => {
-            return Some("exit_snapshot".to_string());
-        }
-        "agena_lsp_definition" | "agena.lsp.definition" => {
-            return Some("lsp_definition".to_string());
-        }
-        "agena_lsp_references" | "agena.lsp.references" => {
-            return Some("lsp_references".to_string());
-        }
-        "agena_lsp_hover" | "agena.lsp.hover" => {
-            return Some("lsp_hover".to_string());
-        }
-        "agena_lsp_diagnostics" | "agena.lsp.diagnostics" => {
-            return Some("lsp_diagnostics".to_string());
-        }
         _ => {}
     }
-    None
+    // Every other typed payload reuses the output-tag mapping, which
+    // recognizes compact (`fs.read`), canonical (`agena.fs.read`), plugin
+    // (`agena_fs_read`), and bare (`read`) spellings for every family.
+    payload_name_for_output_tool(invocation_name)
 }
 
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
-    match tool_name {
-        "agena_web__fetch" | "web.fetch" | "web_fetch" | "fetch" => Some("web_fetch".to_string()),
-        "agena_web__search" | "web.search" | "web_search" | "search" => {
-            Some("web_search".to_string())
-        }
-        "agena.shell.run" | "agena.shell.list" | "agena.shell.logs" | "agena.shell.stop"
-        | "agena_shell_run" | "agena_shell_list" | "agena_shell_logs" | "agena_shell_stop"
-        | "agena.process.run" | "agena.process.list" | "agena.process.logs"
-        | "agena.process.stop" | "agena_process_run" | "agena_process_list"
-        | "agena_process_logs" | "agena_process_stop" => Some("shell".to_string()),
-        "agena.cron.create" | "agena_cron_create" => Some("cron_create".to_string()),
-        "agena.cron.list" | "agena_cron_list" => Some("cron_list".to_string()),
-        "agena.cron.delete" | "agena_cron_delete" => Some("cron_delete".to_string()),
-        "agena.cron.update" | "agena_cron_update" => Some("cron_update".to_string()),
-        "agena.cron.pause" | "agena_cron_pause" => Some("cron_pause".to_string()),
-        "agena.cron.resume" | "agena_cron_resume" => Some("cron_resume".to_string()),
-        "agena.cron.history" | "agena_cron_history" => Some("cron_history".to_string()),
-        "agena.cron.wakeup" | "agena_cron_wakeup" => Some("schedule_wakeup".to_string()),
-        "agena.fs.read"
-        | "agena.fs.glob"
-        | "agena.fs.grep"
-        | "agena.fs.apply_patch"
-        | "agena_fs_read"
-        | "agena_fs_glob"
-        | "agena_fs_grep"
-        | "agena_fs_apply_patch" => None,
-        "agena.tasks.run" | "agena_tasks_run" => Some("task".to_string()),
-        "agena.tools.search" | "agena_tools_search" => Some("tool_search".to_string()),
-        "agena.interaction.ask" | "agena_interaction_ask" => Some("ask_user".to_string()),
-        "agena.plan.get" | "agena.plan.set" | "agena.plan.update" | "agena.plan.clear" => None,
-        "agena.snapshot.enter"
-        | "agena.snapshot.exit"
-        | "agena_snapshot_enter"
-        | "agena_snapshot_exit" => None,
-        "agena.lsp.definition"
-        | "agena.lsp.references"
-        | "agena.lsp.hover"
-        | "agena.lsp.diagnostics"
-        | "agena_lsp_definition"
-        | "agena_lsp_references"
-        | "agena_lsp_hover"
-        | "agena_lsp_diagnostics" => None,
-        _ => None,
+    // Shell/process tools share one `shell` payload variant; the subcommand
+    // (`run`/`list`/`logs`/`stop`) lives in `action`, not in the variant tag.
+    if matches!(
+        tool_name,
+        "shell"
+            | "shell.run" | "shell.list" | "shell.logs" | "shell.stop"
+            | "process" | "process.run" | "process.list" | "process.logs" | "process.stop"
+            | "powershell" | "powershell.run" | "powershell.list" | "powershell.logs"
+            | "powershell.stop"
+            | "agena.shell.run" | "agena.shell.list" | "agena.shell.logs" | "agena.shell.stop"
+            | "agena_shell_run" | "agena_shell_list" | "agena_shell_logs" | "agena_shell_stop"
+            | "agena.process.run" | "agena.process.list" | "agena.process.logs"
+            | "agena.process.stop" | "agena_process_run" | "agena_process_list"
+            | "agena_process_logs" | "agena_process_stop"
+    ) {
+        return Some("shell".to_string());
     }
+    payload_name_for_table(tool_name).or_else(|| {
+        // The terminal segment of a tool name may already be the serialized
+        // variant tag (`read`, `glob`, `cron_create`, ...). Accept bare tags
+        // and names whose last segment is one of them.
+        let canonical = canonical_tool_payload_name(tool_name);
+        is_payload_variant_tag(canonical).then(|| canonical.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -800,5 +870,222 @@ mod tests {
             payload,
             ToolPayloadInput::Shell(ShellToolInput::List {})
         ));
+    }
+
+    #[test]
+    fn compact_shell_run_invocations_decode_in_both_directions() {
+        // The provider emits the compact name `shell.run`; the payload layer
+        // must reconstruct the `shell` discriminant from it exactly like it
+        // does for the canonical `agena.shell.run` form.
+        let invocation = ToolInvocation::new(
+            "shell.run",
+            StructuredObject::try_from(serde_json::json!({
+                "command": "cargo test",
+                "background": false,
+                "filesystem_effects": {"read": [], "write": []},
+                "network_effects": [],
+            }))
+            .expect("structured shell.run input"),
+        );
+        let input = ToolPayloadInput::from_invocation(&invocation).expect("shell.run input");
+        assert!(matches!(
+            input,
+            ToolPayloadInput::Shell(ShellToolInput::Run { .. })
+        ));
+
+        let details = ToolOutput {
+            payload: StructuredObject::try_from(serde_json::json!({
+                "action": "run",
+                "shell": "bash",
+                "background": false,
+                "status": "exited",
+                "exit_code": 0,
+                "output": "test result: ok",
+            }))
+            .expect("shell.run output"),
+            managed_outputs: Vec::new(),
+            truncated: false,
+        };
+        let output =
+            ToolPayloadOutput::from_tool_output("shell.run", &details).expect("shell.run output");
+        assert!(matches!(
+            output,
+            ToolPayloadOutput::Shell { action, .. } if action == "run"
+        ));
+    }
+
+    #[test]
+    fn every_payload_tool_spelling_resolves_to_its_variant_tag() {
+        // The provider catalog, workflows, plugin wire format, and legacy bare
+        // tags each spell the same tool differently. Every spelling must map to
+        // the same output variant tag, otherwise the renderer falls back to
+        // dumping the whole payload as a raw JSON card.
+        let cases: &[(&str, &str)] = &[
+            // fs family
+            ("fs.read", "read"),
+            ("agena.fs.read", "read"),
+            ("agena_fs_read", "read"),
+            ("read", "read"),
+            ("fs.glob", "glob"),
+            ("agena.fs.glob", "glob"),
+            ("agena_fs_glob", "glob"),
+            ("glob", "glob"),
+            ("fs.grep", "grep"),
+            ("agena.fs.grep", "grep"),
+            ("agena_fs_grep", "grep"),
+            ("grep", "grep"),
+            ("fs.apply_patch", "apply_patch"),
+            ("agena.fs.apply_patch", "apply_patch"),
+            ("agena_fs_apply_patch", "apply_patch"),
+            ("apply_patch", "apply_patch"),
+            // shell / process family
+            ("shell", "shell"),
+            ("shell.run", "shell"),
+            ("shell.list", "shell"),
+            ("shell.logs", "shell"),
+            ("shell.stop", "shell"),
+            ("process", "shell"),
+            ("process.run", "shell"),
+            ("powershell.run", "shell"),
+            ("agena.shell.run", "shell"),
+            ("agena_shell_run", "shell"),
+            ("agena.process.list", "shell"),
+            ("agena_process_stop", "shell"),
+            // tasks / tools / interaction family
+            ("tasks.run", "task"),
+            ("agena.tasks.run", "task"),
+            ("agena_tasks_run", "task"),
+            ("task", "task"),
+            ("tools.search", "tool_search"),
+            ("agena.tools.search", "tool_search"),
+            ("agena_tools_search", "tool_search"),
+            ("tool_search", "tool_search"),
+            ("interaction.ask", "ask_user"),
+            ("agena.interaction.ask", "ask_user"),
+            ("agena_interaction_ask", "ask_user"),
+            ("ask_user", "ask_user"),
+            // web family
+            ("web.fetch", "web_fetch"),
+            ("agena.web.fetch", "web_fetch"),
+            ("agena_web__fetch", "web_fetch"),
+            ("web_fetch", "web_fetch"),
+            ("web.search", "web_search"),
+            ("agena.web.search", "web_search"),
+            ("agena_web__search", "web_search"),
+            ("web_search", "web_search"),
+            // snapshot family
+            ("snapshot.enter", "enter_snapshot"),
+            ("agena.snapshot.enter", "enter_snapshot"),
+            ("agena_snapshot_enter", "enter_snapshot"),
+            ("enter_snapshot", "enter_snapshot"),
+            ("snapshot.exit", "exit_snapshot"),
+            ("agena.snapshot.exit", "exit_snapshot"),
+            ("agena_snapshot_exit", "exit_snapshot"),
+            ("exit_snapshot", "exit_snapshot"),
+            // cron family
+            ("cron.create", "cron_create"),
+            ("agena.cron.create", "cron_create"),
+            ("agena_cron_create", "cron_create"),
+            ("cron_create", "cron_create"),
+            ("cron.list", "cron_list"),
+            ("agena.cron.list", "cron_list"),
+            ("agena_cron_list", "cron_list"),
+            ("cron_list", "cron_list"),
+            ("cron.delete", "cron_delete"),
+            ("cron.update", "cron_update"),
+            ("cron.pause", "cron_pause"),
+            ("cron.resume", "cron_resume"),
+            ("cron.history", "cron_history"),
+            ("cron.wakeup", "schedule_wakeup"),
+            ("agena.cron.wakeup", "schedule_wakeup"),
+            ("agena_cron_wakeup", "schedule_wakeup"),
+            ("schedule_wakeup", "schedule_wakeup"),
+            // lsp family
+            ("lsp.definition", "lsp_definition"),
+            ("agena.lsp.definition", "lsp_definition"),
+            ("agena_lsp_definition", "lsp_definition"),
+            ("lsp_definition", "lsp_definition"),
+            ("lsp.references", "lsp_references"),
+            ("lsp.hover", "lsp_hover"),
+            ("lsp.diagnostics", "lsp_diagnostics"),
+            ("agena.lsp.diagnostics", "lsp_diagnostics"),
+            ("agena_lsp_diagnostics", "lsp_diagnostics"),
+        ];
+        for (name, expected) in cases {
+            assert_eq!(
+                ToolPayloadOutput::payload_name_for(name).as_deref(),
+                Some(*expected),
+                "tool name {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn input_invocations_resolve_for_every_compact_tool_name() {
+        let cases: &[(&str, &str)] = &[
+            ("fs.read", "read"),
+            ("fs.glob", "glob"),
+            ("fs.grep", "grep"),
+            ("fs.apply_patch", "apply_patch"),
+            ("web.fetch", "web_fetch"),
+            ("web.search", "web_search"),
+            ("tasks.run", "task"),
+            ("tools.search", "tool_search"),
+            ("interaction.ask", "ask_user"),
+            ("snapshot.enter", "enter_snapshot"),
+            ("snapshot.exit", "exit_snapshot"),
+            ("cron.create", "cron_create"),
+            ("cron.list", "cron_list"),
+            ("cron.wakeup", "schedule_wakeup"),
+            ("lsp.definition", "lsp_definition"),
+            ("lsp.diagnostics", "lsp_diagnostics"),
+            ("shell.run", "shell"),
+            ("shell.list", "shell"),
+            ("shell.logs", "shell"),
+            ("shell.stop", "shell"),
+        ];
+        for (name, expected) in cases {
+            let mut input = serde_json::Map::new();
+            let tag = payload_name_for_invocation(name, &mut input)
+                .unwrap_or_else(|| panic!("{name} must resolve"));
+            assert_eq!(tag, *expected, "tool name {name}");
+        }
+
+        // Shell invocations also carry the concrete subcommand in `action`.
+        let mut run_input = serde_json::Map::new();
+        assert_eq!(
+            payload_name_for_invocation("shell.run", &mut run_input),
+            Some("shell".to_string())
+        );
+        assert_eq!(
+            run_input.get("action").and_then(serde_json::Value::as_str),
+            Some("run")
+        );
+    }
+
+    #[test]
+    fn output_payloads_decode_from_compact_tool_names() {
+        let glob_details = ToolOutput {
+            payload: StructuredObject::try_from(serde_json::json!({
+                "paths": ["src/a.rs"],
+                "count": 1,
+            }))
+            .expect("glob output"),
+            managed_outputs: Vec::new(),
+            truncated: false,
+        };
+        let output = ToolPayloadOutput::from_tool_output("fs.glob", &glob_details)
+            .expect("fs.glob output must decode");
+        assert!(matches!(output, ToolPayloadOutput::Glob { .. }));
+
+        let cron_details = ToolOutput {
+            payload: StructuredObject::try_from(serde_json::json!({ "jobs": [] }))
+                .expect("cron list output"),
+            managed_outputs: Vec::new(),
+            truncated: false,
+        };
+        let output = ToolPayloadOutput::from_tool_output("cron.list", &cron_details)
+            .expect("cron.list output must decode");
+        assert!(matches!(output, ToolPayloadOutput::CronList { .. }));
     }
 }

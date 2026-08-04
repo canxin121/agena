@@ -114,6 +114,15 @@ impl SessionListPresentation {
         true
     }
 
+    /// Drops the current row selection so no session is highlighted.
+    ///
+    /// Used when the TUI starts with no session at all: without this, the
+    /// newest row would be highlighted by default and the next submit would
+    /// silently target that session instead of creating a fresh one.
+    pub fn clear_selection(&mut self) {
+        self.list.selected = self.list.items.len();
+    }
+
     /// Replaces the application-provided row projection while retaining a
     /// useful selected session whenever it remains visible.
     pub fn replace_items(
@@ -383,6 +392,26 @@ mod tests {
             None,
         );
 
+        assert_eq!(state.current_selected_id(), Some(1));
+    }
+
+    #[test]
+    fn cleared_selection_reports_no_current_session_until_rebuilt() {
+        let mut state = SessionListPresentation::new("");
+        state.replace_items(
+            vec![item(1, None, "one", 1), item(2, None, "two", 2)],
+            None,
+            None,
+        );
+        // Without a preferred id the newest row (item 2) is highlighted.
+        assert_eq!(state.current_selected_id(), Some(2));
+
+        state.clear_selection();
+        assert_eq!(state.current_selected_id(), None);
+        assert_eq!(state.current_selected(), None);
+
+        // A later explicit selection still works.
+        assert!(state.select_by_id(1));
         assert_eq!(state.current_selected_id(), Some(1));
     }
 

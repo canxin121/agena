@@ -317,7 +317,7 @@ pub(super) fn access_kind_name(access: AccessKind) -> &'static str {
 pub(super) fn validate_shell_filesystem_effects(
     tool_name: &str,
     command: &str,
-    effects: &[FilesystemEffect],
+    effects: &FilesystemEffects,
 ) -> Result<(), ToolError> {
     shell_tools::validate_declared_filesystem_effects(tool_name, command, effects)
 }
@@ -345,7 +345,7 @@ pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Opti
 
 pub(super) fn filesystem_effects_from_input(
     input: &serde_json::Value,
-) -> Result<Option<Vec<FilesystemEffect>>, ToolError> {
+) -> Result<Option<FilesystemEffects>, ToolError> {
     let Some(value) = input
         .get("filesystem_effects")
         .or_else(|| input.pointer("/args/filesystem_effects"))
@@ -672,5 +672,5 @@ use super::{
     TOOL_MODEL_STRUCTURED_OUTPUT_MAX_BYTES, TOOL_MODEL_STRUCTURED_STRING_MAX_BYTES, ToolError,
     ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput, Write, fs, shell_tools,
 };
-use agena_domain::{FilesystemEffect, PluginInvocation};
+use agena_domain::{FilesystemEffects, PluginInvocation};
 use agena_tool::{AppliedFileChange, ApplyPatchExecution, PatchOpKind};

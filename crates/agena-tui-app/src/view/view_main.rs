@@ -175,6 +175,22 @@ impl App {
             footer_height,
             1,
         );
+        let header_inner = inset_rect(
+            ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::BOTTOM)
+                .inner(layout.header),
+            1,
+            0,
+        );
+        self.surface_layout.header_title = Rect {
+            height: 1,
+            ..header_inner
+        };
+        self.surface_layout.header_subtitle = Rect {
+            y: header_inner.y.saturating_add(1),
+            height: 1,
+            ..header_inner
+        };
 
         let has_transcript_content = self.transcript.session_id.is_some()
             || !self.transcript.pending_user_messages.is_empty();
@@ -286,6 +302,8 @@ impl App {
                 right_style: Style::default().fg(agena_tui_components::theme::muted_color()),
             },
         );
+        self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::HeaderTitle);
+        self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::HeaderSubtitle);
         let scrollbar_area = agena_tui_transcript::scrollbar_area(area, layout.body);
         if let Some(metrics) = agena_tui_transcript::scrollbar_metrics(
             transcript_line_count,
@@ -333,14 +351,28 @@ impl App {
         )
     }
 
-    pub(crate) fn render_composer(&self, frame: &mut Frame, area: Rect) {
+    pub(crate) fn render_composer(&mut self, frame: &mut Frame, area: Rect) {
         let status_rows = u16::from(!self.composer_status_parts().is_empty());
         let item_rows = u16::from(self.has_composer_item_summary_row());
         let layout = layout_composer_surface(area, status_rows, item_rows, 0);
+        self.surface_layout.composer_status = layout
+            .status
+            .map(|status_area| inset_rect(status_area, 1, 0))
+            .unwrap_or_default();
+        self.surface_layout.composer_editor = Rect {
+            x: layout.editor.x.saturating_add(1),
+            y: layout.editor.y,
+            width: layout.editor.width.saturating_sub(2).max(1),
+            height: layout.editor.height,
+        };
 
         if layout.inner.width == 0 || layout.inner.height == 0 {
             if let Some(status_area) = layout.status {
                 self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
+                self.render_surface_selection_highlight(
+                    frame,
+                    crate::SurfaceSelectionKind::ComposerStatus,
+                );
             }
             return;
         }
@@ -380,6 +412,8 @@ impl App {
         if let Some(status_area) = layout.status {
             self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
         }
+        self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::ComposerEditor);
+        self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::ComposerStatus);
         if let Some(search) = self.prompt_history_search.as_ref() {
             agena_tui::prompt_history::render_overlay(frame, frame.area(), search, &self.i18n);
         }
@@ -662,10 +696,180 @@ impl App {
         parts
     }
 
+    /// Project the currently displayed text of a selectable chat surface into
+    /// absolute-cell display lines. The projection must match the renderers
+    /// exactly so mouse selection copies what the user sees.
+    pub(crate) fn surface_display_lines(
+        &self,
+        kind: crate::SurfaceSelectionKind,
+    ) -> Vec<crate::SurfaceDisplayLine> {
+        let layout = self.surface_layout;
+        match kind {
+            crate::SurfaceSelectionKind::HeaderTitle => {
+                let title = sanitize_display_text(self.transcript_surface_title());
+                let right =
+                    sanitize_display_text(self.transcript_surface_top_right().join("  ·  "));
+                vec![header_row_display_line(layout.header_title, title, right)]
+            }
+            crate::SurfaceSelectionKind::HeaderSubtitle => {
+                let text = self
+                    .current_session_path_label()
+                    .map(|path| sanitize_display_text(path.as_str()))
+                    .unwrap_or_default();
+                let displayed = truncate_display_text_middle(
+                    text.as_str(),
+                    layout.header_subtitle.width as usize,
+                );
+                vec![crate::SurfaceDisplayLine {
+                    text: displayed,
+                    row: layout.header_subtitle.y,
+                    column: layout.header_subtitle.x,
+                }]
+            }
+            crate::SurfaceSelectionKind::ComposerStatus => {
+                let area = layout.composer_status;
+                let text =
+                    sanitize_display_text(self.composer_status_parts().join("  |  ").as_str());
+                let spec = WrappedTextSpec {
+                    text: text.into(),
+                    style: Style::default(),
+                };
+                build_wrapped_text_lines(&spec, area.width)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| crate::SurfaceDisplayLine {
+                        text: line_plain_text(&line),
+                        row: area.y.saturating_add(index as u16),
+                        column: area.x,
+                    })
+                    .collect()
+            }
+            crate::SurfaceSelectionKind::ComposerEditor => {
+                let area = layout.composer_editor;
+                let view = self
+                    .composer
+                    .render_wrapped_view(area.width.max(1), area.height.max(1));
+                view.lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| crate::SurfaceDisplayLine {
+                        text: line_plain_text(&line),
+                        row: area.y.saturating_add(index as u16),
+                        column: area.x,
+                    })
+                    .collect()
+            }
+        }
+    }
+
+    /// Re-render the selected cells of one chat surface with an inverse-video
+    /// highlight. The base render already drew the text; this overlay draws the
+    /// same glyphs with the selected spans reversed so the selection is visible
+    /// without duplicating or restyling the rest of the surface.
+    fn render_surface_selection_highlight(
+        &self,
+        frame: &mut Frame,
+        kind: crate::SurfaceSelectionKind,
+    ) {
+        let Some(selection) = self
+            .surface_selection
+            .filter(|selection| selection.kind == kind)
+        else {
+            return;
+        };
+        let area = self.surface_layout.rect_for(kind);
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        match kind {
+            crate::SurfaceSelectionKind::HeaderTitle
+            | crate::SurfaceSelectionKind::HeaderSubtitle => {
+                let lines = self.surface_display_lines(kind);
+                let ranges = crate::surface_selection_ranges(&lines, &selection);
+                let base_style = match kind {
+                    crate::SurfaceSelectionKind::HeaderTitle => {
+                        Style::default().add_modifier(Modifier::BOLD)
+                    }
+                    crate::SurfaceSelectionKind::HeaderSubtitle => Style::default()
+                        .fg(agena_tui_components::theme::muted_color())
+                        .add_modifier(Modifier::DIM | Modifier::ITALIC),
+                    _ => Style::default(),
+                };
+                for (line, range) in lines.iter().zip(ranges) {
+                    if let Some(range) = range {
+                        let rendered = crate::apply_cell_range_highlight(
+                            Line::from(Span::styled(line.text.clone(), base_style)),
+                            Some(range),
+                        );
+                        frame.render_widget(
+                            Paragraph::new(rendered),
+                            Rect {
+                                x: area.x,
+                                y: line.row,
+                                width: area.width,
+                                height: 1,
+                            },
+                        );
+                    }
+                }
+            }
+            crate::SurfaceSelectionKind::ComposerStatus => {
+                let lines = self.surface_display_lines(kind);
+                let ranges = crate::surface_selection_ranges(&lines, &selection);
+                let base_style = Style::default().fg(agena_tui_components::theme::muted_color());
+                for (line, range) in lines.iter().zip(ranges) {
+                    if let Some(range) = range {
+                        let rendered = crate::apply_cell_range_highlight(
+                            Line::from(Span::styled(line.text.clone(), base_style)),
+                            Some(range),
+                        );
+                        frame.render_widget(
+                            Paragraph::new(rendered),
+                            Rect {
+                                x: area.x,
+                                y: line.row,
+                                width: area.width,
+                                height: 1,
+                            },
+                        );
+                    }
+                }
+            }
+            crate::SurfaceSelectionKind::ComposerEditor => {
+                let view = self
+                    .composer
+                    .render_wrapped_view(area.width.max(1), area.height.max(1));
+                let lines = self.surface_display_lines(kind);
+                let ranges = crate::surface_selection_ranges(&lines, &selection);
+                let highlighted = view
+                    .lines
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, line)| {
+                        if let Some(range) = ranges.get(index).and_then(Clone::clone) {
+                            crate::apply_cell_range_highlight(line, Some(range))
+                        } else {
+                            line
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                frame.render_widget(
+                    Paragraph::new(Text::from(highlighted)),
+                    Rect {
+                        x: area.x,
+                        y: area.y,
+                        width: area.width,
+                        height: area.height,
+                    },
+                );
+            }
+        }
+    }
+
     pub(crate) fn main_surface_mode_label(&self) -> String {
         let key = if self.focus == Focus::Composer {
             "surface-mode-insert"
-        } else if self.transcript.has_active_text_selection() {
+        } else if self.transcript.has_active_text_selection() || self.surface_selection.is_some() {
             "surface-mode-select"
         } else {
             "surface-mode-navigate"
@@ -685,6 +889,49 @@ fn transcript_visible_range(
 ) -> std::ops::Range<usize> {
     let start = scroll.min(line_count);
     start..start.saturating_add(viewport_height).min(line_count)
+}
+
+/// Reconstruct the visible header row exactly as `render_header_row` lays it
+/// out: the title (truncated to the left budget) followed by the right-side
+/// text right-aligned in its reserved column. Used both to copy mouse
+/// selections and to render their highlight.
+fn header_row_display_line(area: Rect, left: String, right: String) -> crate::SurfaceDisplayLine {
+    let text = if right.trim().is_empty() {
+        agena_tui_components::text::truncate_display_text(left.as_str(), area.width as usize)
+    } else {
+        let max_right_width = if area.width < 52 {
+            area.width.saturating_div(2).max(8)
+        } else {
+            area.width.saturating_mul(2).saturating_div(5).max(16)
+        };
+        let truncated_right = agena_tui_components::text::truncate_display_text(
+            right.as_str(),
+            max_right_width as usize,
+        );
+        let right_width = UnicodeWidthStr::width(truncated_right.as_str()).saturating_add(1) as u16;
+        let left_budget = area
+            .width
+            .saturating_sub(right_width)
+            .saturating_sub(1)
+            .max(1);
+        let truncated_left =
+            agena_tui_components::text::truncate_display_text(left.as_str(), left_budget as usize);
+        let left_text_width = UnicodeWidthStr::width(truncated_left.as_str()) as u16;
+        let right_text_width = UnicodeWidthStr::width(truncated_right.as_str()) as u16;
+        let gap = area
+            .width
+            .saturating_sub(left_text_width)
+            .saturating_sub(right_text_width);
+        format!(
+            "{truncated_left}{}{truncated_right}",
+            " ".repeat(gap as usize)
+        )
+    };
+    crate::SurfaceDisplayLine {
+        text,
+        row: area.y,
+        column: area.x,
+    }
 }
 
 fn transcript_surface_top_right_parts(activity: Option<String>, mode: String) -> Vec<String> {
@@ -742,4 +989,6 @@ use crate::NoticeSeverity;
 use crate::ui_text;
 use crate::{current_spinner_millis, refresh_spinner_line, spinner_frame};
 use agena_tui::main_focus::Focus;
+use agena_tui_components::text::{line_plain_text, truncate_display_text_middle};
 use ratatui::widgets::{Scrollbar, ScrollbarOrientation, ScrollbarState};
+use unicode_width::UnicodeWidthStr;

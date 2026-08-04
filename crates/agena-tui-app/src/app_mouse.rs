@@ -10,6 +10,7 @@ impl App {
             self.transcript_scrollbar_drag = None;
             self.transcript_pointer_gesture = None;
             self.last_transcript_click = None;
+            self.cancel_surface_selection();
             self.transcript.cancel_text_selection(
                 self.layout.transcript_body.width,
                 self.layout.transcript_body.height,
@@ -26,28 +27,47 @@ impl App {
             // a body hit made otherwise valid events silently disappear.
             MouseEventKind::ScrollUp => {
                 self.cancel_active_pointer_gesture();
+                self.cancel_surface_selection();
                 self.move_transcript_cursor_by_wheel(-TRANSCRIPT_WHEEL_LINES);
             }
             MouseEventKind::ScrollDown => {
                 self.cancel_active_pointer_gesture();
+                self.cancel_surface_selection();
                 self.move_transcript_cursor_by_wheel(TRANSCRIPT_WHEEL_LINES);
             }
-            MouseEventKind::Down(MouseButton::Left)
-                if rect_contains(scrollbar, mouse.column, mouse.row) =>
-            {
-                self.transcript_pointer_gesture = None;
-                self.last_transcript_click = None;
-                self.transcript.cancel_text_selection(
-                    self.layout.transcript_body.width,
-                    self.layout.transcript_body.height,
-                );
-                self.begin_transcript_scrollbar_drag(mouse.row);
+            // Dragging a selection that already started on a chat surface
+            // (header rows, composer status row, or composer editor) keeps
+            // extending that selection instead of starting a transcript
+            // gesture.
+            MouseEventKind::Drag(MouseButton::Left) if self.surface_selection.is_some() => {
+                self.update_surface_selection(mouse.column, mouse.row);
             }
-            MouseEventKind::Down(MouseButton::Left)
-                if rect_contains(transcript, mouse.column, mouse.row) =>
-            {
-                self.transcript_scrollbar_drag = None;
-                self.begin_transcript_pointer_gesture(mouse.column, mouse.row);
+            MouseEventKind::Up(MouseButton::Left) if self.surface_selection.is_some() => {
+                self.update_surface_selection(mouse.column, mouse.row);
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Any new left-click cancels the previous surface selection.
+                self.cancel_surface_selection();
+                if let Some(kind) = self.surface_layout.kind_at(mouse.column, mouse.row) {
+                    self.surface_selection = Some(SurfaceSelection {
+                        kind,
+                        anchor: (mouse.column, mouse.row),
+                        head: (mouse.column, mouse.row),
+                    });
+                    return;
+                }
+                if rect_contains(scrollbar, mouse.column, mouse.row) {
+                    self.transcript_pointer_gesture = None;
+                    self.last_transcript_click = None;
+                    self.transcript.cancel_text_selection(
+                        self.layout.transcript_body.width,
+                        self.layout.transcript_body.height,
+                    );
+                    self.begin_transcript_scrollbar_drag(mouse.row);
+                } else if rect_contains(transcript, mouse.column, mouse.row) {
+                    self.transcript_scrollbar_drag = None;
+                    self.begin_transcript_pointer_gesture(mouse.column, mouse.row);
+                }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if self.transcript_scrollbar_drag.is_some() {
@@ -66,10 +86,41 @@ impl App {
             }
             MouseEventKind::Down(_) => {
                 self.cancel_active_pointer_gesture();
+                self.cancel_surface_selection();
             }
-            MouseEventKind::Up(_) => self.cancel_active_pointer_gesture(),
+            MouseEventKind::Up(_) => {
+                self.cancel_active_pointer_gesture();
+                self.cancel_surface_selection();
+            }
             _ => {}
         }
+    }
+
+    pub(crate) fn cancel_surface_selection(&mut self) {
+        self.surface_selection = None;
+    }
+
+    fn update_surface_selection(&mut self, column: u16, row: u16) {
+        if let Some(mut selection) = self.surface_selection.take() {
+            selection.head = (column, row);
+            self.surface_selection = Some(selection);
+        }
+    }
+
+    /// Copy the active surface selection (session header rows, composer status
+    /// row, or composer editor) through the OSC 52 clipboard path. Returns
+    /// whether a non-empty selection was copied.
+    pub(crate) fn copy_active_surface_selection(&mut self) -> bool {
+        let Some(selection) = self.surface_selection else {
+            return false;
+        };
+        let lines = self.surface_display_lines(selection.kind);
+        let text = surface_selection_text(&lines, &selection);
+        if text.trim().is_empty() {
+            return false;
+        }
+        self.request_clipboard_copy(text, ui_text::t(&self.i18n, "flash-copied-mouse-selection"));
+        true
     }
 
     pub(crate) fn cancel_active_pointer_gesture(&mut self) {
@@ -310,9 +361,9 @@ fn rect_contains(rect: Rect, column: u16, row: u16) -> bool {
 }
 
 use crate::{
-    App, MouseButton, MouseEvent, MouseEventKind, Rect, TranscriptClick, TranscriptPointerGesture,
-    TranscriptScrollbarDrag, TranscriptTextPosition, current_spinner_millis, spinner_frame,
-    ui_text,
+    App, MouseButton, MouseEvent, MouseEventKind, Rect, SurfaceSelection, TranscriptClick,
+    TranscriptPointerGesture, TranscriptScrollbarDrag, TranscriptTextPosition,
+    current_spinner_millis, spinner_frame, surface_selection_text, ui_text,
 };
 #[cfg(test)]
 use crate::{RenderedLine, RenderedTranscriptNode, Style, TranscriptNodeKey, TranscriptNodeKind};

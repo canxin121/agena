@@ -2004,7 +2004,7 @@ Run one shell process.
 | `background` | 否 | `boolean` | default=false | — |
 | `command` | 是 | `string` | minLength=1 | — |
 | `description` | 否 | `string` | default= | — |
-| `filesystem_effects` | 是 | `array<FilesystemEffect>` | — | Filesystem paths the command may read or write. Pass an empty list only<br>when the command has no filesystem effect beyond entering `workdir`. |
+| `filesystem_effects` | 是 | `object { read: string[], write: string[] }` | — | Filesystem paths the command may read or write, grouped by access. A path the command both reads and writes appears in both arrays. Pass `{}` only<br>when the command has no filesystem effect beyond entering `workdir`. |
 | `network_effects` | 是 | `array<NetworkEffect>` | — | Outbound network targets the command may connect to. Pass an empty list<br>when the command has no network effect. |
 | `shell` | 否 | `ProcessShell` | default=bash | — |
 | `timeout_ms` | 否 | `integer \| null` | minimum=0; format=uint64 | — |
@@ -2025,21 +2025,20 @@ Run one shell process.
       ],
       "type": "string"
     },
-    "FilesystemEffect": {
-      "description": "One path a command may read, write, or both.",
+    "FilesystemEffects": {
+      "description": "Declared filesystem effects grouped by access. A path that both reads and writes appears in both arrays.",
       "properties": {
-        "access": {
-          "$ref": "#/$defs/FilesystemAccess"
+        "read": {
+          "description": "Paths the command may read.",
+          "items": { "type": "string" },
+          "type": "array"
         },
-        "path": {
-          "description": "File or directory path affected by the command. For shell tools,\nrelative paths are resolved from the command working directory.",
-          "type": "string"
+        "write": {
+          "description": "Paths the command may write.",
+          "items": { "type": "string" },
+          "type": "array"
         }
       },
-      "required": [
-        "path",
-        "access"
-      ],
       "type": "object"
     },
     "NetworkEffect": {
@@ -2083,11 +2082,8 @@ Run one shell process.
       "x-agena-order": "000001.000001"
     },
     "filesystem_effects": {
-      "description": "Filesystem paths the command may read or write. Pass an empty list only\nwhen the command has no filesystem effect beyond entering `workdir`.",
-      "items": {
-        "$ref": "#/$defs/FilesystemEffect"
-      },
-      "type": "array",
+      "$ref": "#/$defs/FilesystemEffects",
+      "description": "Filesystem paths the command may read or write, grouped by access. A path the command both reads and writes appears in both arrays. Pass `{}` only\nwhen the command has no filesystem effect beyond entering `workdir`.",
       "x-agena-order": "000001.000004"
     },
     "network_effects": {

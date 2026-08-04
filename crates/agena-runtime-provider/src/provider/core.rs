@@ -589,6 +589,23 @@ pub fn remap_stream_event_provider_id(
             usage,
             provider_metadata,
         },
+        CompletionStreamEvent::ProviderRetry {
+            model,
+            message,
+            retry_index,
+            attempt,
+            max_retries,
+            delay_ms,
+            ..
+        } => CompletionStreamEvent::ProviderRetry {
+            provider_id: provider_id.clone(),
+            model,
+            message,
+            retry_index,
+            attempt,
+            max_retries,
+            delay_ms,
+        },
     }
 }
 
@@ -689,6 +706,22 @@ pub fn remap_stream_event_provider_and_model(
             finish_reason,
             usage,
             provider_metadata,
+        },
+        CompletionStreamEvent::ProviderRetry {
+            message,
+            retry_index,
+            attempt,
+            max_retries,
+            delay_ms,
+            ..
+        } => CompletionStreamEvent::ProviderRetry {
+            provider_id: provider_id.clone(),
+            model: model.clone(),
+            message,
+            retry_index,
+            attempt,
+            max_retries,
+            delay_ms,
         },
     }
 }

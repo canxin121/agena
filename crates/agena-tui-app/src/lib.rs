@@ -255,6 +255,7 @@ mod plugin_workbench;
 mod provider_studio;
 mod run_options_state;
 mod state_store_impls;
+mod surface_selection;
 mod transcript_state;
 mod view;
 
@@ -296,6 +297,10 @@ use self::provider_studio::provider_auth::*;
 use self::provider_studio::provider_fields::*;
 use self::provider_studio::provider_selection::*;
 use self::state_store_impls::*;
+pub(crate) use self::surface_selection::{
+    SurfaceDisplayLine, SurfaceLayout, SurfaceSelection, SurfaceSelectionKind,
+    apply_cell_range_highlight, surface_selection_ranges, surface_selection_text,
+};
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{

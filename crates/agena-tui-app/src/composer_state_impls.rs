@@ -74,10 +74,10 @@ pub(crate) fn composer_activity_presentation(payload: &ActivityPayload) -> (Stri
             format!("Skill: {}", skill.name),
         ),
         ActivityPayload::TextArtifact(artifact) => {
-            let label = artifact
-                .label
-                .clone()
-                .unwrap_or_else(|| format!("paste {} chars", artifact.text.chars().count()));
+            let label = crate::ui_text::text_artifact_display_label(
+                artifact.text.as_str(),
+                artifact.label.as_deref(),
+            );
             (format!("[{label}]"), label)
         }
         _ => ("[activity]".to_owned(), "activity".to_owned()),

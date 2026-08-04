@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use agena_domain::{
-    ArtifactRef, ExecutionStatus, FilesystemEffect, InteractionNotificationLevel, NetworkEffect,
+    ArtifactRef, ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, NetworkEffect,
     OperationAuthorization, OperationError, ProcessShell, SearchResultItem, TableColumn, TodoItem,
     ToolInvocation, ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay,
     ToolResultState, UserInputQuestion,
@@ -21,7 +21,8 @@ use agena_domain::{StructuredValue, TimeRange};
         "command",
         "description",
         "workdir",
-        "filesystem_effects[].path",
+        "filesystem_effects.read[]",
+        "filesystem_effects.write[]",
         "network_effects[].target"
     ),
     non_empty("command")
@@ -35,12 +36,14 @@ pub struct ShellCommandInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(path.read, fallback = "")]
     pub workdir: Option<String>,
-    /// Files and directories the command reads or modifies. Declare only the
-    /// actual files/directories affected - never the executables, interpreters,
-    /// or tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or
-    /// their installation directories. Pass an explicit empty list `[]` when the
-    /// command has no file reads/writes beyond the executables it invokes.
-    pub filesystem_effects: Vec<FilesystemEffect>,
+    /// Files and directories the command reads or modifies, grouped by access:
+    /// a path the command may both read and write appears in both `read` and
+    /// `write`. Declare only the actual files/directories affected - never the
+    /// executables, interpreters, or tools being invoked (e.g. `node`, `python`,
+    /// `uv`, `git`, `cargo`) or their installation directories. Pass an empty
+    /// object `{}` when the command has no file reads/writes beyond the
+    /// executables it invokes.
+    pub filesystem_effects: FilesystemEffects,
     /// Outbound network targets the command may connect to. Pass an empty list
     /// when the command has no network effect.
     pub network_effects: Vec<NetworkEffect>,
@@ -141,7 +144,8 @@ pub struct GrepToolInput {
     /// Regex pattern to search for.
     #[arg(trim, non_empty)]
     pub pattern: String,
-    /// Optional base path. Defaults to the workspace root.
+    /// Optional target: a directory to search recursively, or a single file.
+    /// Defaults to the workspace root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present, path.read, fallback = "")]
     pub path: Option<String>,
@@ -218,7 +222,8 @@ pub struct ToolSearchToolInput {
     "command",
     "description",
     "workdir",
-    "filesystem_effects[].path",
+    "filesystem_effects.read[]",
+    "filesystem_effects.write[]",
     "network_effects[].target",
     "process_id"
 ))]

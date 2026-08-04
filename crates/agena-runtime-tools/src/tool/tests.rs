@@ -87,6 +87,11 @@ impl ExecutorBackedFsAdapter {
     async fn read(&self, _input: &crate::message::ReadToolInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
+
+    #[tool(name = "grep", summary = "Search file contents with regex.", read_only)]
+    async fn grep(&self, _input: &crate::message::GrepToolInput) -> String {
+        "plugin adapter must not execute".to_owned()
+    }
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -237,7 +242,7 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
         "shell": "bash",
         "command": "python3 --version",
         "description": "Check Python version",
-        "filesystem_effects": [{"access": "read", "path": "/usr/bin"}],
+        "filesystem_effects": {"read": ["/usr/bin"]},
         "network_effects": []
     }))
     .expect("valid shell input");
@@ -301,6 +306,109 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
     );
 
     std::fs::remove_dir_all(workspace_root).expect("remove direct builtin workspace");
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grep_targets_a_single_file_or_a_directory() {
+    let workspace_root =
+        std::env::temp_dir().join(format!("agena-grep-test-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(workspace_root.join("nested")).expect("create grep workspace");
+    std::fs::write(
+        workspace_root.join("fixture.txt"),
+        "alpha\nbeta\nalpha again\n",
+    )
+    .expect("write grep fixture");
+    std::fs::write(workspace_root.join("nested/other.txt"), "alpha only\n")
+        .expect("write nested grep fixture");
+
+    let mut plugins_config = PluginsConfig::default();
+    plugins_config
+        .list
+        .insert("agena.fs".to_owned(), ConfiguredPlugin::static_default());
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            "agena.fs".parse().expect("valid fs plugin key"),
+            ExecutorBackedFsAdapter,
+        )],
+        config: plugins_config,
+        workspace_root: workspace_root.clone(),
+        agena_version: "test".to_owned(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build grep plugin host");
+    let executor = ToolExecutor::new(
+        workspace_root.clone(),
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::allow_all(),
+        ),
+        plugins,
+        None,
+        None,
+        None,
+        ToolPresentationConfig::default(),
+    );
+
+    let file_invocation = ToolInvocation::new(
+        "fs.grep",
+        StructuredObject::try_from(serde_json::json!({
+            "pattern": "alpha",
+            "path": "fixture.txt"
+        }))
+        .expect("valid grep file input"),
+    );
+    let prepared_file = executor
+        .prepare_invocation(&file_invocation, 1, 1)
+        .expect("prepare grep file");
+    let file_execution = executor
+        .execute_invocation_detailed(&prepared_file.invocation, 1, 1)
+        .expect("execute grep file");
+    assert!(
+        file_execution
+            .view
+            .output_text
+            .contains("fixture.txt:1: alpha")
+    );
+    assert!(
+        file_execution
+            .view
+            .output_text
+            .contains("fixture.txt:3: alpha again")
+    );
+    assert!(!file_execution.view.output_text.contains("nested/other.txt"));
+    assert!(
+        !file_execution
+            .view
+            .output_text
+            .contains("plugin adapter must not execute")
+    );
+
+    let dir_invocation = ToolInvocation::new(
+        "fs.grep",
+        StructuredObject::try_from(serde_json::json!({
+            "pattern": "alpha",
+            "path": "nested"
+        }))
+        .expect("valid grep dir input"),
+    );
+    let prepared_dir = executor
+        .prepare_invocation(&dir_invocation, 1, 2)
+        .expect("prepare grep dir");
+    let dir_execution = executor
+        .execute_invocation_detailed(&prepared_dir.invocation, 1, 2)
+        .expect("execute grep dir");
+    assert!(
+        dir_execution
+            .view
+            .output_text
+            .contains("nested/other.txt:1: alpha only")
+    );
+    assert!(!dir_execution.view.output_text.contains("fixture.txt"));
+
+    std::fs::remove_dir_all(workspace_root).expect("remove grep workspace");
 }
 
 #[tokio::test]

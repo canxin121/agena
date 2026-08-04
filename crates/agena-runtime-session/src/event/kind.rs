@@ -7,8 +7,8 @@ use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, EventEnvelope, EventKindTag,
     ExecutionFinishedEvent, ExecutionStartedEvent, KindMatcher, KindPersistence,
     PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
-    PromptCompactionCompletedEvent, StreamErrorEvent, SubtaskStatusChangedEvent,
-    ToolPolicyDeniedEvent, ToolUserDeclinedEvent,
+    PromptCompactionCompletedEvent, ProviderRetryEvent, ProviderRetryResolvedEvent,
+    StreamErrorEvent, SubtaskStatusChangedEvent, ToolPolicyDeniedEvent, ToolUserDeclinedEvent,
 };
 use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,8 @@ pub enum EventKind {
     CompactionCompleted(PromptCompactionCompletedEvent),
     SubtaskStatusChanged(SubtaskStatusChangedEvent),
     StreamError(StreamErrorEvent),
+    ProviderRetry(ProviderRetryEvent),
+    ProviderRetryResolved(ProviderRetryResolvedEvent),
     MessagePartCheckpointed(MessagePartCheckpointedEvent),
     TranscriptPartUpserted(TranscriptPartUpsertedEvent),
     CommandBegin(CommandBeginEvent),
@@ -77,6 +79,8 @@ impl EventKind {
             Self::CompactionCompleted(_) => "compaction_completed",
             Self::SubtaskStatusChanged(_) => "subtask_status_changed",
             Self::StreamError(_) => "stream_error",
+            Self::ProviderRetry(_) => "provider_retry",
+            Self::ProviderRetryResolved(_) => "provider_retry_resolved",
             Self::MessagePartCheckpointed(_) => "message_part_checkpointed",
             Self::TranscriptPartUpserted(_) => "transcript_part_upserted",
             Self::CommandBegin(_) => "command_begin",
@@ -109,6 +113,8 @@ impl EventKind {
         !matches!(
             self,
             Self::StreamError(_)
+                | Self::ProviderRetry(_)
+                | Self::ProviderRetryResolved(_)
                 | Self::TranscriptPartUpserted(_)
                 | Self::CommandBegin(_)
                 | Self::CommandOutputDelta(_)

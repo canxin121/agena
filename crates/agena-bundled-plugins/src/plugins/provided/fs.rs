@@ -164,7 +164,7 @@ impl FsPlugin {
     #[tool(
         tags(query, filesystem, discovery),
         summary = "Search file contents with regex.",
-        help = "Use `grep` for regex text search across files in the workspace.",
+        help = "Use `grep` for regex text search. `path` may be a directory (searched recursively) or a single file; it defaults to the workspace root.",
         read_only,
 
         discovery,

@@ -409,6 +409,8 @@ pub struct App {
     pub(super) run_activity: RunActivityTracker,
     pub(super) next_pending_user_message_id: u64,
     pub(super) layout: LayoutCache,
+    pub(super) surface_layout: crate::SurfaceLayout,
+    pub(super) surface_selection: Option<crate::SurfaceSelection>,
     pub(super) transcript_scrollbar_drag: Option<TranscriptScrollbarDrag>,
     pub(super) transcript_pointer_gesture: Option<TranscriptPointerGesture>,
     pub(super) last_transcript_click: Option<TranscriptClick>,

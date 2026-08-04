@@ -206,6 +206,9 @@ impl App {
     }
 
     pub(crate) fn after_composer_text_mutated(&mut self) {
+        // Editing invalidates any mouse selection over the composer editor;
+        // the stored cell range no longer maps to the same text.
+        self.cancel_surface_selection();
         self.sync_composer_items_with_editor();
         self.clamp_selected_composer_item();
         self.sync_composer_suggestions();

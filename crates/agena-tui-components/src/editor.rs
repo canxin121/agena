@@ -382,7 +382,7 @@ impl Editor {
                 code: KeyCode::Left,
                 modifiers,
                 ..
-            } if modifiers == KeyModifiers::CONTROL => {
+            } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
                 self.move_word_left();
             }
             KeyEvent {
@@ -418,7 +418,7 @@ impl Editor {
                 code: KeyCode::Right,
                 modifiers,
                 ..
-            } if modifiers == KeyModifiers::CONTROL => {
+            } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
                 self.move_word_right();
             }
             KeyEvent {
@@ -473,6 +473,33 @@ impl Editor {
             } => {
                 self.move_end(false);
             }
+            // Word-level deletion. Alt+Backspace is Option+Delete on macOS
+            // and Alt+Backspace in most Linux terminals; Ctrl+Backspace is the
+            // common Windows/Linux word-delete chord. Terminals without the
+            // enhanced keyboard protocol send Alt+Backspace as ESC DEL, which
+            // crossterm surfaces as an ALT-modified 0x7F char. Ctrl+Alt+H is
+            // kept as the historical Emacs-style word-kill chord.
+            KeyEvent {
+                code: KeyCode::Backspace,
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::ALT || modifiers == KeyModifiers::CONTROL => {
+                self.delete_backward_word();
+            }
+            KeyEvent {
+                code: KeyCode::Char('\u{007f}'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::ALT || modifiers == KeyModifiers::CONTROL => {
+                self.delete_backward_word();
+            }
+            KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers,
+                ..
+            } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.delete_backward_word();
+            }
             KeyEvent {
                 code: KeyCode::Char('\u{007f}'),
                 modifiers: KeyModifiers::NONE,
@@ -495,6 +522,15 @@ impl Editor {
                 } else {
                     self.delete();
                 }
+            }
+            // Forward word deletion (Option+Delete on macOS, Ctrl+Delete on
+            // Windows/Linux).
+            KeyEvent {
+                code: KeyCode::Delete,
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::ALT || modifiers == KeyModifiers::CONTROL => {
+                self.delete_forward_word();
             }
             KeyEvent {
                 code: KeyCode::Char('\u{0004}'),
@@ -687,6 +723,11 @@ impl Editor {
     fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
         self.kill_buffer = self.remove_range(start, self.cursor);
+    }
+
+    fn delete_forward_word(&mut self) {
+        let end = self.end_of_next_word();
+        self.kill_buffer = self.remove_range(self.cursor, end);
     }
 
     fn kill_to_start_of_line(&mut self, multiline: bool) {
@@ -1350,5 +1391,56 @@ mod tests {
         editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{0008}'), KeyModifiers::NONE));
 
         assert_eq!(editor.text(), "text");
+    }
+
+    #[test]
+    fn alt_left_and_right_move_by_words() {
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 8);
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 4);
+
+        // Word-right stops before the trailing space (end of "two"), the
+        // same semantics as Ctrl+Right.
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 7);
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 13);
+    }
+
+    #[test]
+    fn alt_and_ctrl_backspace_delete_backward_word() {
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(editor.text(), "one two ");
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL));
+        assert_eq!(editor.text(), "one ");
+
+        // ESC DEL encoding of Alt+Backspace on terminals without the
+        // enhanced keyboard protocol.
+        let mut raw = Editor::from_text("one two".to_string());
+        raw.set_cursor(raw.text().len());
+        raw.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{007f}'), KeyModifiers::ALT));
+        assert_eq!(raw.text(), "one ");
+    }
+
+    #[test]
+    fn alt_and_ctrl_delete_delete_forward_word() {
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(0);
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT));
+        assert_eq!(editor.text(), " two three");
+
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(0);
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL));
+        assert_eq!(editor.text(), " two three");
     }
 }

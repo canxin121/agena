@@ -2778,6 +2778,7 @@ fn transcript_patch_can_materialize_user_input(patch: &agena_domain::TranscriptP
             matches!(owner, agena_domain::ActivityOwner::TurnInput { .. })
         }
         agena_domain::TranscriptPatch::AssistantReplyUpdated { .. } => false,
+        agena_domain::TranscriptPatch::ContentRemoved { .. } => false,
     }
 }
 

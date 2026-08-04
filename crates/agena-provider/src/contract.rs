@@ -1608,6 +1608,23 @@ pub enum CompletionStreamEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<serde_json::Value>,
     },
+    /// A retryable provider failure observed while streaming this completion.
+    /// The provider layer schedules a retry internally; this event is a live
+    /// notification so the runtime can render an immediate retry-progress
+    /// activity without waiting for the final outcome.
+    ProviderRetry {
+        provider_id: ProviderId,
+        model: agena_domain::ModelId,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        message: String,
+        /// Zero-based retry counter at the provider retry loop.
+        retry_index: u32,
+        /// One-based attempt number (retry_index + 1) shown to the user.
+        attempt: u32,
+        /// Maximum attempts for this retry phase.
+        max_retries: u32,
+        delay_ms: u64,
+    },
 }
 
 /// Provider-ready attachment category, independent of core message storage.

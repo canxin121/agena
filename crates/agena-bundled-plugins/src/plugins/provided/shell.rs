@@ -203,9 +203,23 @@ mod tests {
                 .expect("shell.run example must be JSON");
         assert!(example.get("filesystem_effects").is_some());
         assert!(example.get("network_effects").is_some());
-        assert_eq!(
-            example.pointer("/filesystem_effects/0/access"),
-            Some(&serde_json::json!("read"))
+        assert!(
+            example
+                .pointer("/filesystem_effects/read")
+                .and_then(serde_json::Value::as_array)
+                .is_some(),
+            "filesystem_effects groups read paths"
+        );
+        assert!(
+            example
+                .pointer("/filesystem_effects/write")
+                .and_then(serde_json::Value::as_array)
+                .is_some(),
+            "filesystem_effects groups write paths"
+        );
+        assert!(
+            example.pointer("/filesystem_effects/read/0").is_some(),
+            "generated example includes a read path"
         );
         assert_eq!(
             example.pointer("/network_effects/0/target"),

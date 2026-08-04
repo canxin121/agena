@@ -79,6 +79,22 @@ uuid_id!(AssistantReplyId);
 uuid_id!(TextSegmentId);
 uuid_id!(ActivityId);
 
+impl ActivityId {
+    /// Deterministic stable activity id for a reply's error presentation.
+    ///
+    /// Both the live retry-progress node and the durable error node share
+    /// this id so a later refresh replaces (never duplicates) the earlier
+    /// node. Flipping one byte keeps the id distinct from the reply id
+    /// itself and from every random `ActivityId` without requiring an extra
+    /// uuid feature.
+    pub fn for_reply_error(reply_id: AssistantReplyId) -> Self {
+        let reply_uuid: Uuid = reply_id.into();
+        let mut bytes = *reply_uuid.as_bytes();
+        bytes[0] ^= 0x80;
+        Self(Uuid::from_bytes(bytes))
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ToolCallId(pub SmolStr);

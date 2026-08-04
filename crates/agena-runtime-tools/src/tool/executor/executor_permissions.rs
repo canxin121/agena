@@ -326,14 +326,14 @@ impl ToolExecutor {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
             if !command.is_empty() {
-                validate_shell_filesystem_effects(tool_name, command, effects.as_slice())?;
+                validate_shell_filesystem_effects(tool_name, command, &effects)?;
             }
             let workdir = input
                 .get("workdir")
                 .or_else(|| input.pointer("/args/workdir"))
                 .and_then(serde_json::Value::as_str);
             let base = self.shell_effect_base_path(workdir);
-            self.push_filesystem_effect_checks(checks, effects.as_slice(), base.as_path());
+            self.push_filesystem_effect_checks(checks, &effects, base.as_path());
         }
         Ok(())
     }
@@ -361,10 +361,10 @@ impl ToolExecutor {
     pub(crate) fn push_filesystem_effect_checks(
         &self,
         checks: &mut Vec<ToolPermissionCheck>,
-        effects: &[FilesystemEffect],
+        effects: &FilesystemEffects,
         base_path: &Path,
     ) {
-        for effect in effects {
+        for effect in effects.to_effects() {
             let target = self.resolve_filesystem_effect_path(effect.path.as_str(), base_path);
             if effect.access.includes_read() {
                 self.push_path_checks(checks, AccessKind::Read, &target);
@@ -386,4 +386,4 @@ use super::{
     invocation_name, is_concurrency_safe_tool_invocation, sdk_path_kind_to_access_kind,
     shell_command_from_invocation, unique_registered_tool_match, validate_shell_filesystem_effects,
 };
-use agena_domain::FilesystemEffect;
+use agena_domain::FilesystemEffects;

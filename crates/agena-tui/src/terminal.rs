@@ -136,14 +136,38 @@ pub mod profile {
         Unknown,
     }
 
+    /// Whether the terminal family supports the Kitty keyboard protocol
+    /// (`CSI u`, aka keyboard disambiguation / enhancement).
+    ///
+    /// The composer's Enter-family bindings (Ctrl+Enter = submit, Shift+Enter /
+    /// Ctrl+J = newline) depend on the terminal reporting modifier+Enter chords
+    /// distinctly. Without the protocol, Ctrl+Enter and Shift+Enter are
+    /// byte-identical to plain Enter (CR), so those chords can never be
+    /// distinguished. Modern terminal emulators ignore the push sequence when
+    /// they do not implement it (they keep sending legacy bytes), so enabling
+    /// the protocol for the well-known CSI-u families is safe and strictly
+    /// improves key disambiguation. xterm-compatible and Apple Terminal do not
+    /// implement the protocol and stay disabled.
     pub const fn keyboard(f: TerminalFamily) -> ProfileSupport {
         match f {
-            TerminalFamily::Kitty | TerminalFamily::Ghostty | TerminalFamily::Foot => {
-                ProfileSupport::Available
-            }
-            TerminalFamily::Dumb | TerminalFamily::LinuxConsole | TerminalFamily::AppleTerminal => {
-                ProfileSupport::Unsupported
-            }
+            TerminalFamily::Kitty
+            | TerminalFamily::Ghostty
+            | TerminalFamily::Foot
+            | TerminalFamily::Iterm2
+            | TerminalFamily::WezTerm
+            | TerminalFamily::WindowsTerminal
+            | TerminalFamily::VsCode
+            | TerminalFamily::JetBrains
+            | TerminalFamily::Alacritty
+            | TerminalFamily::Vte
+            | TerminalFamily::Konsole
+            | TerminalFamily::Warp
+            | TerminalFamily::Rio
+            | TerminalFamily::Contour => ProfileSupport::Available,
+            TerminalFamily::Dumb
+            | TerminalFamily::LinuxConsole
+            | TerminalFamily::AppleTerminal
+            | TerminalFamily::XtermCompatible => ProfileSupport::Unsupported,
             _ => ProfileSupport::Unknown,
         }
     }
@@ -647,7 +671,9 @@ impl fmt::Display for TerminalVersion {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalEnvironment, TerminalFamily, TerminalVersion, identity, transport};
+    use super::{
+        TerminalEnvironment, TerminalFamily, TerminalVersion, identity, profile, transport,
+    };
 
     fn identify(pairs: &[(&str, &str)]) -> identity::TerminalIdentity {
         identity::TerminalIdentity::detect(&TerminalEnvironment::from_pairs(pairs))
@@ -661,6 +687,51 @@ mod tests {
         );
         assert!(TerminalVersion::parse("240800").is_some());
         assert!(TerminalVersion::parse("nightly").is_none());
+    }
+
+    #[test]
+    fn keyboard_disambiguation_covers_modern_csi_u_families() {
+        use profile::ProfileSupport;
+        for family in [
+            TerminalFamily::Kitty,
+            TerminalFamily::Ghostty,
+            TerminalFamily::Foot,
+            TerminalFamily::Iterm2,
+            TerminalFamily::WezTerm,
+            TerminalFamily::WindowsTerminal,
+            TerminalFamily::VsCode,
+            TerminalFamily::JetBrains,
+            TerminalFamily::Alacritty,
+            TerminalFamily::Vte,
+            TerminalFamily::Konsole,
+            TerminalFamily::Warp,
+            TerminalFamily::Rio,
+            TerminalFamily::Contour,
+        ] {
+            assert_eq!(
+                profile::keyboard(family),
+                ProfileSupport::Available,
+                "{} should enable keyboard disambiguation",
+                family.label()
+            );
+        }
+        for family in [
+            TerminalFamily::AppleTerminal,
+            TerminalFamily::XtermCompatible,
+            TerminalFamily::LinuxConsole,
+            TerminalFamily::Dumb,
+        ] {
+            assert_eq!(
+                profile::keyboard(family),
+                ProfileSupport::Unsupported,
+                "{} cannot disambiguate Enter chords",
+                family.label()
+            );
+        }
+        assert_eq!(
+            profile::keyboard(TerminalFamily::Unknown),
+            ProfileSupport::Unknown
+        );
     }
 
     #[test]

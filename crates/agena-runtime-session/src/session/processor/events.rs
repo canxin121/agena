@@ -145,4 +145,58 @@ impl SessionProcessor {
             .map_err(|err| AppError::Internal(format!("publish transcript part failed: {err}")))?;
         Ok(())
     }
+
+    pub(crate) async fn publish_retry_progress(
+        &self,
+        run: &SessionRunRequest,
+        retry_index: u32,
+        attempt: u32,
+        max_retries: u32,
+        message: String,
+    ) -> Result<(), AppError> {
+        let Some(publisher) = run.event_publisher.as_ref() else {
+            return Ok(());
+        };
+
+        let kind = EventKind::ProviderRetry(agena_domain::ProviderRetryEvent {
+            session_id: run.session_id,
+            execution_id: run.execution_id,
+            reply_id: run.reply_id,
+            retry_index,
+            attempt,
+            max_retries,
+            message,
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        publisher
+            .publish(PublishContext::for_session(run.session_id), kind)
+            .await
+            .map_err(|err| AppError::Internal(format!("publish provider retry failed: {err}")))?;
+        Ok(())
+    }
+
+    pub(crate) async fn publish_retry_resolved(
+        &self,
+        run: &SessionRunRequest,
+        succeeded: bool,
+    ) -> Result<(), AppError> {
+        let Some(publisher) = run.event_publisher.as_ref() else {
+            return Ok(());
+        };
+
+        let kind = EventKind::ProviderRetryResolved(agena_domain::ProviderRetryResolvedEvent {
+            session_id: run.session_id,
+            execution_id: run.execution_id,
+            reply_id: run.reply_id,
+            succeeded,
+            ts_ms: Utc::now().timestamp_millis(),
+        });
+        publisher
+            .publish(PublishContext::for_session(run.session_id), kind)
+            .await
+            .map_err(|err| {
+                AppError::Internal(format!("publish provider retry resolved failed: {err}"))
+            })?;
+        Ok(())
+    }
 }

@@ -100,6 +100,8 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
             }
             EventKind::SubtaskStatusChanged(_)
             | EventKind::StreamError(_)
+            | EventKind::ProviderRetry(_)
+            | EventKind::ProviderRetryResolved(_)
             | EventKind::TranscriptPartUpserted(_)
             | EventKind::CommandBegin(_)
             | EventKind::CommandOutputDelta(_)
@@ -208,6 +210,8 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
+        | EventKind::ProviderRetry(_)
+        | EventKind::ProviderRetryResolved(_)
         | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
@@ -259,6 +263,8 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
+        | EventKind::ProviderRetry(_)
+        | EventKind::ProviderRetryResolved(_)
         | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
@@ -317,6 +323,8 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
+        | EventKind::ProviderRetry(_)
+        | EventKind::ProviderRetryResolved(_)
         | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
@@ -370,6 +378,8 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::ExecutionFinished(_)
         | EventKind::SubtaskStatusChanged(_)
         | EventKind::StreamError(_)
+        | EventKind::ProviderRetry(_)
+        | EventKind::ProviderRetryResolved(_)
         | EventKind::TranscriptPartUpserted(_)
         | EventKind::CommandBegin(_)
         | EventKind::CommandOutputDelta(_)
@@ -398,6 +408,8 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         EventKind::CompactionCompleted(p) => p.session_id = session_id,
         EventKind::SubtaskStatusChanged(p) => p.session_id = session_id,
         EventKind::StreamError(p) => p.session_id = session_id,
+        EventKind::ProviderRetry(p) => p.session_id = session_id,
+        EventKind::ProviderRetryResolved(p) => p.session_id = session_id,
         EventKind::MessagePartCheckpointed(p) => p.session_id = session_id,
         EventKind::TranscriptPartUpserted(p) => p.session_id = session_id,
         EventKind::CommandBegin(p) => p.context.session_id = session_id,

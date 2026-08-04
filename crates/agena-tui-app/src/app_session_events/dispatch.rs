@@ -158,11 +158,13 @@ impl App {
                 );
                 self.session_load.initialized = true;
 
-                if self.transcript.session_id.is_none()
-                    && self.launch.initial_session_id.is_none()
-                    && let Some(session) = self.sessions.current_selected().cloned()
-                {
-                    self.open_session(session.session_id, session.title);
+                // Launch with no session at all: when nothing was explicitly
+                // opened, selected, or requested on the command line, drop the
+                // implicit highlight of the newest row so the transcript stays
+                // empty and the next submit creates a fresh session instead of
+                // silently targeting the most recent one.
+                if selected_id.is_none() {
+                    self.sessions.clear_selection();
                 }
             }
             Err(error) => {

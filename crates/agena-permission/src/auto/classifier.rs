@@ -168,16 +168,113 @@ Return the strict JSON verdict object described in the system prompt. Never retu
 /// A loose substring like `"shouldBlock": false` inside prose is deliberately
 /// never honored as an allow.
 pub fn parse_classifier_verdict(text: &str) -> Option<bool> {
-    if let Some(json) = extract_embedded_json(text)
-        && let Ok(value) = serde_json::from_str::<Value>(json)
-        && let Some(should_block) = value
-            .get("shouldBlock")
-            .or_else(|| value.get("should_block"))
-            .and_then(Value::as_bool)
-    {
+    if let Some(should_block) = parse_structured_should_block(text) {
         return Some(!should_block);
     }
+    if contains_explicit_block_flag(text) {
+        // Fail-closed salvage: an explicit `"shouldBlock": true` (possibly in
+        // pretty-printed, fenced, or truncated JSON) is a block we can honor
+        // without a full parse. Allow is deliberately never inferred from a
+        // loose substring (mirrors grok).
+        return Some(false);
+    }
     parse_single_word_verdict(text)
+}
+
+/// Extract a `shouldBlock` decision from a clean or repairable JSON object.
+fn parse_structured_should_block(text: &str) -> Option<bool> {
+    let json = extract_embedded_json(text)?;
+    if let Some(should_block) = parse_json_should_block(json) {
+        return Some(should_block);
+    }
+    // Providers that ignore structured-output hints (e.g. Anthropic's Messages
+    // API without a forced tool) often return pretty-printed JSON with raw
+    // newlines/tabs inside string values, which is not valid JSON. Repair those
+    // control characters and retry; a repaired parse is treated exactly like a
+    // clean one.
+    repair_json_control_characters(json)
+        .as_deref()
+        .and_then(parse_json_should_block)
+}
+
+fn parse_json_should_block(json: &str) -> Option<bool> {
+    let value: Value = serde_json::from_str(json).ok()?;
+    value
+        .get("shouldBlock")
+        .or_else(|| value.get("should_block"))
+        .and_then(Value::as_bool)
+}
+
+/// Whether the text carries an explicit `shouldBlock: true` flag (also inside
+/// truncated JSON that cannot be parsed). Block-only: an explicit allow flag is
+/// never inferred from a loose substring because prose or multiple JSON
+/// fragments can contain it without a reliable decision.
+fn contains_explicit_block_flag(text: &str) -> bool {
+    let compact = text
+        .chars()
+        .filter(|character| !character.is_whitespace() && *character != '"')
+        .collect::<String>()
+        .to_ascii_lowercase();
+    compact.contains("shouldblock:true") || compact.contains("should_block:true")
+}
+
+/// Repair the most common LLM JSON violations that make `serde_json` reject a
+/// verdict object: literal control characters (newlines, tabs, carriage
+/// returns) inside string values and trailing commas before `}` / `]`.
+fn repair_json_control_characters(json: &str) -> Option<String> {
+    let mut out = String::with_capacity(json.len() + 16);
+    let mut chars = json.chars().peekable();
+    let mut in_string = false;
+    let mut backslash_run: usize = 0;
+    let mut changed = false;
+    while let Some(character) = chars.next() {
+        if in_string {
+            match character {
+                '\\' => {
+                    backslash_run += 1;
+                    out.push(character);
+                }
+                '"' => {
+                    if backslash_run % 2 == 0 {
+                        in_string = false;
+                    }
+                    backslash_run = 0;
+                    out.push(character);
+                }
+                _ if character.is_control() && backslash_run % 2 == 0 => {
+                    match character {
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        other => out.push_str(&format!("\\u{:04x}", other as u32)),
+                    }
+                    backslash_run = 0;
+                    changed = true;
+                }
+                _ => {
+                    backslash_run = 0;
+                    out.push(character);
+                }
+            }
+        } else if character == '"' {
+            in_string = true;
+            out.push(character);
+        } else if character == ',' {
+            // Outside a string: drop trailing commas before `}` / `]`.
+            let mut lookahead = chars.clone();
+            if matches!(
+                lookahead.find(|next| !next.is_whitespace()),
+                Some('}') | Some(']')
+            ) {
+                changed = true;
+                continue;
+            }
+            out.push(character);
+        } else {
+            out.push(character);
+        }
+    }
+    changed.then_some(out)
 }
 
 fn extract_embedded_json(text: &str) -> Option<&str> {
@@ -250,6 +347,47 @@ DENY
         assert_eq!(
             parse_classifier_verdict("This should not be blocked: it is fine to allow."),
             None
+        );
+    }
+
+    #[test]
+    fn parses_pretty_printed_json_with_raw_newlines_inside_strings() {
+        // Providers that ignore structured-output hints (Anthropic without a
+        // forced tool) commonly return pretty-printed JSON with real newlines
+        // inside string values, which is invalid JSON and previously produced
+        // `UnparseableVerdict` every time.
+        let blocked = "{\"thinking\":\"The action writes to /opt/homebrew,\nwhich is outside the workspace.\",\"shouldBlock\":true,\"reason\":\"write outside workspace\"}";
+        assert_eq!(parse_classifier_verdict(blocked), Some(false));
+        // Whitespace between JSON tokens is valid and must keep working.
+        let allowed = "{\n  \"thinking\": \"safe\",\n  \"shouldBlock\": false,\n  \"reason\": \"routine\"\n}";
+        assert_eq!(parse_classifier_verdict(allowed), Some(true));
+        // Escaped newlines stay untouched.
+        let escaped = "{\"thinking\":\"line1\\nline2\",\"shouldBlock\":false,\"reason\":\"safe\"}";
+        assert_eq!(parse_classifier_verdict(escaped), Some(true));
+    }
+
+    #[test]
+    fn salvages_block_from_truncated_or_prose_json_but_never_allow() {
+        // Truncated JSON: no closing brace, but an explicit block flag.
+        assert_eq!(parse_classifier_verdict("{\"thinking\":\"...\",\"shouldBlock\": true"), Some(false));
+        // Fenced JSON with a raw newline inside the thinking string.
+        let fenced = "```json\n{\"thinking\":\"unsafe\npath\",\"shouldBlock\":true,\"reason\":\"x\"}\n```";
+        assert_eq!(parse_classifier_verdict(fenced), Some(false));
+        // Whitespace around the flag is tolerated.
+        assert_eq!(parse_classifier_verdict("{\"thinking\":\"x\",\"shouldBlock\" : true, \"reason\":\"y\"}"), Some(false));
+        // An explicit allow flag inside prose without a complete object must
+        // not auto-allow (fail closed).
+        assert_eq!(
+            parse_classifier_verdict("The system says \"shouldBlock\": false is required for allow."),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_json_with_trailing_comma() {
+        assert_eq!(
+            parse_classifier_verdict("{\"thinking\":\"x\",\"shouldBlock\":false,\"reason\":\"safe\",}"),
+            Some(true)
         );
     }
 

@@ -15,6 +15,8 @@ pub struct AnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
@@ -207,4 +209,46 @@ pub struct AnthropicSseMessage {
 pub struct AnthropicToolCallState {
     pub id: String,
     pub name: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(tool_choice: Option<Value>) -> AnthropicMessagesRequest {
+        AnthropicMessagesRequest {
+            model: "claude-test".to_owned(),
+            max_tokens: 256,
+            system: None,
+            messages: Vec::new(),
+            tools: Some(vec![serde_json::json!({
+                "name": "permission_verdict",
+                "input_schema": { "type": "object" }
+            })]),
+            tool_choice,
+            temperature: None,
+            stream: None,
+            thinking: None,
+            output_config: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+        }
+    }
+
+    #[test]
+    fn tool_choice_serializes_when_present_and_is_omitted_when_absent() {
+        let json = serde_json::to_value(request(Some(serde_json::json!({
+            "type": "tool",
+            "name": "permission_verdict"
+        }))))
+        .expect("request should serialize");
+        assert_eq!(
+            json["tool_choice"],
+            serde_json::json!({ "type": "tool", "name": "permission_verdict" })
+        );
+
+        let json = serde_json::to_value(request(None)).expect("request should serialize");
+        assert!(json.get("tool_choice").is_none());
+    }
 }

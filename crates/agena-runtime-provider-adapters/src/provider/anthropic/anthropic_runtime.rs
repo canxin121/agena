@@ -164,14 +164,28 @@ impl ModelRuntime for AnthropicAdapter {
         let include_thinking = thinking_parts.include_thinking();
         let omit_sampling = include_thinking || anthropic_model_rejects_sampling(model.as_ref());
 
+        // Structured output (e.g. the auto-approval classifier's JSON verdict)
+        // is enforced on Anthropic by forcing a single tool whose
+        // `input_schema` is the requested JSON schema. The model's tool input
+        // is surfaced as the response text below, so the classifier receives
+        // clean JSON instead of relying on best-effort text parsing.
+        let structured_output = AnthropicAdapter::structured_output_tool_and_choice(&request);
+
         let mut system_chunks = Vec::new();
         if let Some(system) = request.system.as_ref().filter(|s| !s.trim().is_empty()) {
             system_chunks.push(AnthropicTextBlock::text(system.clone()));
         }
         let mut tools = (!request.tool_api_functions.is_empty()
-            || !request.provider_native_tools.bindings().is_empty())
+            || !request.provider_native_tools.bindings().is_empty()
+            || structured_output.is_some())
         .then(|| self.tools(&request))
         .transpose()?;
+        if let Some((tool, _)) = &structured_output {
+            tools.get_or_insert_with(Vec::new).push(tool.clone());
+        }
+        let tool_choice = structured_output
+            .as_ref()
+            .map(|(_, choice)| choice.clone());
 
         let mut messages = Vec::new();
         for msg in &request.messages {
@@ -211,6 +225,7 @@ impl ModelRuntime for AnthropicAdapter {
             system: (!system_chunks.is_empty()).then_some(system_chunks),
             messages,
             tools,
+            tool_choice,
             temperature: (!omit_sampling).then_some(request.temperature).flatten(),
             stream: None,
             thinking: thinking_parts.thinking,
@@ -285,6 +300,21 @@ impl ModelRuntime for AnthropicAdapter {
             })
             .collect::<Result<Vec<_>, ProviderError>>()?;
         let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
+
+        // Forced structured output arrives as a tool_use block; surface its
+        // input as the completion text so callers parse clean JSON.
+        let text = if structured_output.is_some() {
+            tool_calls
+                .iter()
+                .find_map(|tool_call| match tool_call {
+                    CompletionToolCall::Function { arguments_json, .. } => {
+                        Some(arguments_json.clone())
+                    }
+                })
+                .unwrap_or(text)
+        } else {
+            text
+        };
         let provider_metadata = anthropic_thinking_metadata(response.content.as_slice());
 
         if text.is_empty() && tool_calls.is_empty() {
@@ -368,6 +398,7 @@ impl ModelRuntime for AnthropicAdapter {
             system: (!system_chunks.is_empty()).then_some(system_chunks),
             messages,
             tools,
+            tool_choice: None,
             temperature: (!omit_sampling).then_some(request.temperature).flatten(),
             stream: Some(true),
             thinking: thinking_parts.thinking,

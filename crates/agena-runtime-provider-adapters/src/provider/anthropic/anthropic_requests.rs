@@ -322,6 +322,29 @@ impl AnthropicAdapter {
         Ok(tools)
     }
 
+    /// Build the synthetic tool and forced `tool_choice` that enforce a JSON
+    /// schema response on Anthropic's Messages API. Anthropic has no native
+    /// structured-output field, so the portable contract is a forced tool whose
+    /// `input_schema` is the requested schema; the model's tool input is then
+    /// surfaced as the completion text by the caller. Returns `None` unless the
+    /// request asks for a JSON-schema response.
+    pub(crate) fn structured_output_tool_and_choice(
+        request: &CompletionRequest,
+    ) -> Option<(Value, Value)> {
+        let agena_provider::ResponseFormat::JsonSchema { name, schema, .. } =
+            request.response_format.as_ref()?
+        else {
+            return None;
+        };
+        let tool = serde_json::json!({
+            "name": name,
+            "description": "Return the requested JSON object. Do not call any other tool.",
+            "input_schema": schema,
+        });
+        let choice = serde_json::json!({ "type": "tool", "name": name });
+        Some((tool, choice))
+    }
+
     pub(crate) fn tool_api_function_tools(&self, request: &CompletionRequest) -> Vec<Value> {
         let mut tools = Vec::new();
         for tool in &request.tool_api_functions {
@@ -483,6 +506,7 @@ impl AnthropicAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agena_domain::ModelId;
 
     #[test]
     fn adjacent_user_messages_are_combined_into_one_anthropic_turn() {
@@ -516,5 +540,56 @@ mod tests {
             messages[1].content[1].tool_use_id.as_deref(),
             Some("toolu_2")
         );
+    }
+
+    #[test]
+    fn structured_output_forces_anthropic_tool_and_choice() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "thinking": { "type": "string" },
+                "shouldBlock": { "type": "boolean" },
+                "reason": { "type": "string" }
+            },
+            "required": ["thinking", "shouldBlock", "reason"]
+        });
+        let mut request = CompletionRequest {
+            model: ModelId::new("claude-test"),
+            system: None,
+            messages: Vec::new(),
+            tool_api_functions: Vec::new(),
+            provider_native_tools: Default::default(),
+            disable_tools: false,
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: Some(agena_provider::ResponseFormat::JsonSchema {
+                name: "permission_verdict".to_owned(),
+                schema: schema.clone(),
+                strict: true,
+            }),
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        };
+        let (tool, choice) = AnthropicAdapter::structured_output_tool_and_choice(&request)
+            .expect("structured output tool");
+        assert_eq!(tool["name"], "permission_verdict");
+        assert_eq!(tool["input_schema"], schema);
+        assert_eq!(
+            choice,
+            serde_json::json!({ "type": "tool", "name": "permission_verdict" })
+        );
+
+        request.response_format = None;
+        assert!(AnthropicAdapter::structured_output_tool_and_choice(&request).is_none());
     }
 }

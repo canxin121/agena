@@ -11,7 +11,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 use sea_orm::{
-    ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement,
+    ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait,
 };
 
 use crate::{SeaPermissionRuleRepository, SeaWorkspaceRepository, SqliteSequenceAllocator};
@@ -184,6 +184,98 @@ async fn concurrent_permission_upsert_never_conflicts() {
         .try_get("", "count")
         .expect("count value");
     assert_eq!(count, 1);
+}
+
+/// The canonical read-before-write pattern that used to fail with SQLITE_BUSY:
+/// two independent connection pools race a transaction that SELECTs a parent
+/// row and then INSERTs a child, exactly like the model-catalog freshness gate
+/// and the session-summary parent lineage. The write-lock fence must let both
+/// complete instead of one failing on the read→write lock upgrade.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
+    let directory = tempfile::tempdir().expect("temporary database directory");
+    let db_a = Arc::new(connect_file(&directory, "rbw.db").await);
+    let db_b = Arc::new(connect_file(&directory, "rbw.db").await);
+    crate::initialize_schema(&db_a).await.expect("schema");
+
+    // Seed a workspace and one parent session so the read-before-write path has
+    // a row to read (the parent FK requires the workspace row to exist).
+    for db in [&db_a, &db_b] {
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "INSERT OR IGNORE INTO agena_workspaces \
+             (id, path, created_at_ms, updated_at_ms) VALUES (1, '/rbw', 1, 1)"
+                .to_owned(),
+        ))
+        .await
+        .expect("seed workspace");
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "INSERT OR IGNORE INTO agena_sessions \
+             (id, parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, \
+              creation_failure_json, runtime_state_json, created_at_ms, updated_at_ms) \
+             VALUES (1, NULL, 0, 0, 1, 'parent', 1, 'ready', NULL, '{}', 1, 1)"
+                .to_owned(),
+        ))
+        .await
+        .expect("seed parent session");
+    }
+
+    // Both pools race the same read-then-write shape. Each child session reads
+    // the parent's depth/root_id and then INSERTs its own row. Each pool uses a
+    // disjoint id range so the only contention is the shared write lock.
+    async fn run_read_before_write(db: &DatabaseConnection, id_offset: i64) {
+        for attempt in 0..25i64 {
+            let txn = db.begin().await.expect("begin rbw transaction");
+            crate::acquire_write_lock(&txn).await.expect("acquire write lock");
+            let row = txn
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    "SELECT depth, root_id FROM agena_sessions WHERE id = 1".to_owned(),
+                ))
+                .await
+                .expect("read parent")
+                .expect("parent row");
+            let depth: i64 = row.try_get("", "depth").expect("depth value");
+            let root_id: i64 = row.try_get("", "root_id").expect("root_id value");
+            txn.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO agena_sessions \
+                 (id, parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, \
+                  creation_failure_json, runtime_state_json, created_at_ms, updated_at_ms) \
+                 VALUES (?, 1, ?, ?, 1, ?, 1, 'ready', NULL, '{}', ?, ?)",
+                [
+                    (id_offset + attempt).into(),
+                    (depth + 1).into(),
+                    root_id.into(),
+                    format!("child-{attempt}").into(),
+                    1i64.into(),
+                    1i64.into(),
+                ],
+            ))
+            .await
+            .expect("insert child after read");
+            txn.commit().await.expect("commit rbw transaction");
+        }
+    }
+
+    tokio::join!(
+        run_read_before_write(&db_a, 100),
+        run_read_before_write(&db_b, 200),
+    );
+
+    // Both processes inserted 25 children each — no BUSY failure in either.
+    let count: i64 = db_a
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT COUNT(*) AS count FROM agena_sessions WHERE parent_id = 1".to_owned(),
+        ))
+        .await
+        .expect("count")
+        .expect("count row")
+        .try_get("", "count")
+        .expect("count value");
+    assert_eq!(count, 50, "all 50 concurrent read-before-write inserts landed");
 }
 
 /// Real two-process test: a child OS process re-runs this exact test against

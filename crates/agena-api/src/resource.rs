@@ -1584,9 +1584,7 @@ pub struct ToolPermissionConfigResource {
 
 impl ToolPermissionConfigResource {
     pub fn is_empty(&self) -> bool {
-        self.default.is_none()
-            && self.names.is_empty()
-            && self.rules.is_empty()
+        self.default.is_none() && self.names.is_empty() && self.rules.is_empty()
     }
 }
 

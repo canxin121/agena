@@ -572,14 +572,16 @@ mod tests {
     fn duplicate_execution_tool_names_are_rejected_instead_of_picking_one() {
         let tools = vec![
             ToolDescriptor {
-                name: "notes.format".to_string(), plugin_id: None,
+                name: "notes.format".to_string(),
+                plugin_id: None,
                 summary: None,
                 help: None,
                 examples: Vec::new(),
                 input_schema: None,
             },
             ToolDescriptor {
-                name: "notes.format".to_string(), plugin_id: None,
+                name: "notes.format".to_string(),
+                plugin_id: None,
                 summary: None,
                 help: None,
                 examples: Vec::new(),
@@ -614,7 +616,8 @@ mod tests {
     #[test]
     fn execution_tools_require_exact_tool_names() {
         let tools = vec![ToolDescriptor {
-            name: "web.fetch".to_string(), plugin_id: None,
+            name: "web.fetch".to_string(),
+            plugin_id: None,
             summary: None,
             help: None,
             examples: Vec::new(),
@@ -638,14 +641,16 @@ mod tests {
     fn unknown_tool_requires_search_and_help_instead_of_suggestion_guessing() {
         let tools = vec![
             ToolDescriptor {
-                name: "shell.run".to_string(), plugin_id: None,
+                name: "shell.run".to_string(),
+                plugin_id: None,
                 summary: Some("Run one shell process.".to_string()),
                 help: None,
                 examples: Vec::new(),
                 input_schema: None,
             },
             ToolDescriptor {
-                name: "shell.logs".to_string(), plugin_id: None,
+                name: "shell.logs".to_string(),
+                plugin_id: None,
                 summary: Some("Read process logs.".to_string()),
                 help: None,
                 examples: Vec::new(),
@@ -732,7 +737,8 @@ mod tests {
             .find(|tool| tool.name == "run")
             .expect("shell.run manifest");
         let descriptor = ToolDescriptor {
-            name: "shell.run".to_string(), plugin_id: None,
+            name: "shell.run".to_string(),
+            plugin_id: None,
             summary: Some("Run one shell process.".to_string()),
             help: None,
             examples: Vec::new(),

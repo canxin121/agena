@@ -1736,13 +1736,11 @@ mod openai_protocol_adapter_tests {
             }
         });
         let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let error = raw
-            .resolve_with_env(&crate::ProcessEnvironment)
-            .expect_err("default_selection adapter referencing a disabled adapter must be rejected");
+        let error = raw.resolve_with_env(&crate::ProcessEnvironment).expect_err(
+            "default_selection adapter referencing a disabled adapter must be rejected",
+        );
         assert!(
-            error
-                .to_string()
-                .contains("references disabled adapter"),
+            error.to_string().contains("references disabled adapter"),
             "unexpected error: {error}"
         );
     }
@@ -1772,13 +1770,11 @@ mod openai_protocol_adapter_tests {
             }
         });
         let raw = serde_json::from_value::<RawConfig>(value).expect("config should parse");
-        let error = raw
-            .resolve_with_env(&crate::ProcessEnvironment)
-            .expect_err("default_selection adapter referencing an unknown adapter must be rejected");
+        let error = raw.resolve_with_env(&crate::ProcessEnvironment).expect_err(
+            "default_selection adapter referencing an unknown adapter must be rejected",
+        );
         assert!(
-            error
-                .to_string()
-                .contains("references unknown adapter"),
+            error.to_string().contains("references unknown adapter"),
             "unexpected error: {error}"
         );
     }

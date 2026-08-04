@@ -3,7 +3,7 @@ use agena_tui::i18n::I18n;
 
 #[test]
 fn visible_shortcut_hints_track_the_central_keymap() {
-        let english = I18n::english();
+    let english = I18n::english();
     let transcript = ui_text::t(&english, "status-transcript");
     let composer = ui_text::t(&english, "status-composer");
     let composer_help = ui_text::t(&english, "help-composer-line-10");
@@ -15,7 +15,7 @@ fn visible_shortcut_hints_track_the_central_keymap() {
     let permission_footer = ui_text::t(&english, "overlay-permission-studio-footer-nested");
     let permission_rule_footer = ui_text::t(&english, "overlay-permission-rule-studio-footer");
 
-        assert!(transcript.contains("i insert"));
+    assert!(transcript.contains("i insert"));
     assert!(composer.contains("Esc view"));
     assert!(!composer.contains("Ctrl+Up"));
     assert!(!composer.contains("edit pending"));

@@ -6,7 +6,7 @@ impl App {
         self.session_controller.current_session_id = Some(session_id);
         self.session_controller.active = false;
         self.session_controller.sequence = None;
-                self.focus = Focus::Transcript;
+        self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
         // A refresh requested for the previous session must not be re-issued
         // against the newly opened one.
@@ -87,7 +87,8 @@ impl App {
         // attention so the completion is noticed even when the user is in
         // another tab. Re-application of an already-terminal state (for
         // example a refresh) is ignored.
-        if is_terminal && was_running && !self.current_session_pending_interactive_kind().is_some() {
+        if is_terminal && was_running && !self.current_session_pending_interactive_kind().is_some()
+        {
             self.raise_completion_notification();
         }
         true
@@ -96,8 +97,7 @@ impl App {
     /// Queues a "reply complete" terminal notification for the next frame.
     pub(crate) fn raise_completion_notification(&mut self) {
         use agena_tui_platform::terminal::integration::NotificationMethod;
-        let method = crate::current_notification_method(self)
-            .unwrap_or(NotificationMethod::Bell);
+        let method = crate::current_notification_method(self).unwrap_or(NotificationMethod::Bell);
         self.terminal_integration.queue_notification(method);
         // The title snapshot is stale until the next frame recomputes it from
         // the now-idle activity; mark it pending so the run loop refreshes it.

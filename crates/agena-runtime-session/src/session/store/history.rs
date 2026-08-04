@@ -5,8 +5,8 @@ use super::{
     permission_rule_event_from_rule, session, session_from_model_db,
 };
 
-use sea_orm::{ConnectionTrait, Statement};
 use agena_storage_sqlite::run_transaction_effects;
+use sea_orm::{ConnectionTrait, Statement};
 
 /// Resolve the canonical turn/reply identity that owns a model message.
 ///
@@ -465,9 +465,7 @@ mod tests {
     use agena_storage::PersistedPermissionRule;
     use sea_orm::{Database, EntityTrait, PaginatorTrait};
 
-    use super::{
-        DbErr, conversation_identity_for_message, run_transaction_effects, session,
-    };
+    use super::{DbErr, conversation_identity_for_message, run_transaction_effects, session};
     use agena_storage_sqlite::SeaPermissionRuleTransactionWriter;
 
     #[tokio::test]

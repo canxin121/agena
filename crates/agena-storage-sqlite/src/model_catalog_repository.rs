@@ -320,7 +320,8 @@ mod tests {
         for sql in [
             // The write-lock fence (transaction.rs) inserts into agena_sequences,
             // so the fixture must provide that table alongside the catalog tables.
-            "CREATE TABLE agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)".to_owned(),
+            "CREATE TABLE agena_sequences (seq_name TEXT PRIMARY KEY, next_val INTEGER NOT NULL)"
+                .to_owned(),
             format!(
                 "CREATE TABLE {ENTRY_TABLE} (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)"
             ),

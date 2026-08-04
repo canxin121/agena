@@ -175,10 +175,7 @@ impl UserPresentation {
     /// "failed to save session: disk full"). Scrubbing and prompt-directive
     /// rejection behave as in [`Self::validated`], but wrapper noise is
     /// stripped so the user sees the actionable cause.
-    pub fn validated_with_context(
-        key: impl Into<String>,
-        message: impl AsRef<str>,
-    ) -> Self {
+    pub fn validated_with_context(key: impl Into<String>, message: impl AsRef<str>) -> Self {
         let clean = crate::diagnostic::user_message_with_context(message.as_ref(), 240);
         let fallback = if clean.is_empty() {
             "The request is invalid. Review the input and try again.".to_owned()

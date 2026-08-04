@@ -138,30 +138,86 @@ fn inject_resolved_provider_defaults(
     let Some(providers) = providers.and_then(serde_json::Value::as_object_mut) else {
         return;
     };
-    if let Some(provider) = selection.provider.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        providers.insert("default".to_owned(), serde_json::Value::String(provider.to_owned()));
+    if let Some(provider) = selection
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        providers.insert(
+            "default".to_owned(),
+            serde_json::Value::String(provider.to_owned()),
+        );
     }
     if selection.is_empty() {
         return;
     }
     let mut default_selection = serde_json::Map::new();
-    if let Some(provider) = selection.provider.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        default_selection.insert("provider".to_owned(), serde_json::Value::String(provider.to_owned()));
+    if let Some(provider) = selection
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        default_selection.insert(
+            "provider".to_owned(),
+            serde_json::Value::String(provider.to_owned()),
+        );
     }
-    if let Some(adapter) = selection.adapter.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        default_selection.insert("adapter".to_owned(), serde_json::Value::String(adapter.to_owned()));
+    if let Some(adapter) = selection
+        .adapter
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        default_selection.insert(
+            "adapter".to_owned(),
+            serde_json::Value::String(adapter.to_owned()),
+        );
     }
-    if let Some(model) = selection.model.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        default_selection.insert("model".to_owned(), serde_json::Value::String(model.to_owned()));
+    if let Some(model) = selection
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        default_selection.insert(
+            "model".to_owned(),
+            serde_json::Value::String(model.to_owned()),
+        );
     }
-    if let Some(mode) = selection.thinking_mode.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        default_selection.insert("thinking_mode".to_owned(), serde_json::Value::String(mode.to_owned()));
+    if let Some(mode) = selection
+        .thinking_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        default_selection.insert(
+            "thinking_mode".to_owned(),
+            serde_json::Value::String(mode.to_owned()),
+        );
     }
-    if let Some(mode) = selection.speed_mode.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        default_selection.insert("speed_mode".to_owned(), serde_json::Value::String(mode.to_owned()));
+    if let Some(mode) = selection
+        .speed_mode
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        default_selection.insert(
+            "speed_mode".to_owned(),
+            serde_json::Value::String(mode.to_owned()),
+        );
     }
-    if let Some(mode) = selection.verbosity.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
-        default_selection.insert("verbosity".to_owned(), serde_json::Value::String(mode.to_owned()));
+    if let Some(mode) = selection
+        .verbosity
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        default_selection.insert(
+            "verbosity".to_owned(),
+            serde_json::Value::String(mode.to_owned()),
+        );
     }
     if let Some(parallel_tool_calls) = selection.parallel_tool_calls {
         default_selection.insert(
@@ -169,7 +225,10 @@ fn inject_resolved_provider_defaults(
             serde_json::Value::Bool(parallel_tool_calls),
         );
     }
-    providers.insert("default_selection".to_owned(), serde_json::Value::Object(default_selection));
+    providers.insert(
+        "default_selection".to_owned(),
+        serde_json::Value::Object(default_selection),
+    );
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -191,8 +250,8 @@ pub struct ResolvedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
     use crate::TuiUiConfig;
+    use serde_json::json;
 
     fn minimal_config(selection: ExecutionSelection) -> ResolvedConfig {
         ResolvedConfig {

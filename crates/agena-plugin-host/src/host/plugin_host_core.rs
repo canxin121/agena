@@ -1620,6 +1620,5 @@ use super::{
     UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
     block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
     block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
-    merge_json, method, shutdown_transport,
-    tool_hook_context, transport_to_plugin_error,
+    merge_json, method, shutdown_transport, tool_hook_context, transport_to_plugin_error,
 };

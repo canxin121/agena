@@ -82,7 +82,7 @@ impl SessionManager {
         Ok(snapshot)
     }
 
-        pub(crate) fn invalidate_rule_snapshots(&self) {
+    pub(crate) fn invalidate_rule_snapshots(&self) {
         if let Ok(mut snapshots) = self.execution_state().rule_snapshots.write() {
             snapshots.clear();
         }
@@ -196,7 +196,11 @@ impl SessionManager {
                         .to_owned();
                 return candidates
                     .into_iter()
-                    .map(|_| Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(reason.clone())))
+                    .map(|_| {
+                        Err(agena_permission::ClassifyFailure::ApprovalModelUnavailable(
+                            reason.clone(),
+                        ))
+                    })
                     .collect();
             }
             Err(error) => {
@@ -228,7 +232,7 @@ impl SessionManager {
             request_override: Default::default(),
             system: None,
             temperature: Some(0.0),
-                        max_output_tokens: Some(256),
+            max_output_tokens: Some(256),
         };
         if let Some(parallel_tool_calls) = selection
             .as_ref()
@@ -241,11 +245,15 @@ impl SessionManager {
         if let Err(error) = self.apply_model_mode_requests(&mut options) {
             return candidates
                 .into_iter()
-                .map(|_| Err(agena_permission::ClassifyFailure::ModeUnavailable(error.to_string())))
+                .map(|_| {
+                    Err(agena_permission::ClassifyFailure::ModeUnavailable(
+                        error.to_string(),
+                    ))
+                })
                 .collect();
         }
 
-                let transcript_budget_chars = state
+        let transcript_budget_chars = state
             .processor
             .model_metadata(&model)
             .ok()
@@ -258,7 +266,7 @@ impl SessionManager {
                     .clamp(8_000, agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS)
             })
             .unwrap_or(agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS);
-                let transcript = session.map(|session| {
+        let transcript = session.map(|session| {
             let cached = state
                 .auto_projection
                 .lock()
@@ -284,7 +292,7 @@ impl SessionManager {
             &recent_decisions,
         );
 
-                                let mut futures = Vec::with_capacity(candidates.len());
+        let mut futures = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let model_ref = model.clone();
             let context = context_message.clone();
@@ -292,86 +300,86 @@ impl SessionManager {
             let verbosity = options.verbosity.clone();
             let request_override = options.request_override.clone();
             futures.push(async move {
-            let action = serde_json::to_string(&candidate.action)
-                .unwrap_or_else(|_| r#"{"action":"unserializable"}"#.to_owned());
-                        let action_message = agena_permission::build_classifier_action_message(
-                &action,
-                &candidate.policy_reason,
-            );
-            let request = agena_provider::CompletionRequest {
-                                model: model_ref.model_id.clone(),
-                system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
-                                messages: {
-                    let mut messages = Vec::with_capacity(2);
-                                        if let Some(context) = &context {
+                let action = serde_json::to_string(&candidate.action)
+                    .unwrap_or_else(|_| r#"{"action":"unserializable"}"#.to_owned());
+                let action_message = agena_permission::build_classifier_action_message(
+                    &action,
+                    &candidate.policy_reason,
+                );
+                let request = agena_provider::CompletionRequest {
+                    model: model_ref.model_id.clone(),
+                    system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
+                    messages: {
+                        let mut messages = Vec::with_capacity(2);
+                        if let Some(context) = &context {
+                            messages.push(agena_provider::CompletionInputMessage {
+                                role: Role::User,
+                                parts: vec![agena_provider::CompletionInputPart::Text {
+                                    text: context.clone(),
+                                }],
+                                provider_state: Default::default(),
+                            });
+                        }
                         messages.push(agena_provider::CompletionInputMessage {
                             role: Role::User,
                             parts: vec![agena_provider::CompletionInputPart::Text {
-                                text: context.clone(),
+                                text: action_message,
                             }],
                             provider_state: Default::default(),
                         });
-                    }
-                    messages.push(agena_provider::CompletionInputMessage {
-                        role: Role::User,
-                        parts: vec![agena_provider::CompletionInputPart::Text {
-                            text: action_message,
-                        }],
-                        provider_state: Default::default(),
-                    });
-                    messages
-                },
-                tool_api_functions: Vec::new(),
-                provider_native_tools: Default::default(),
-                disable_tools: true,
-                temperature: Some(0.0),
-                                max_output_tokens: Some(256),
-                                                prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
-                previous_response_id: None,
-                prompt_window_generation: None,
-                provider_compaction: None,
-                stop_sequences: Vec::new(),
-                top_p: None,
-                top_k: None,
-                seed: None,
-                                thinking,
-                verbosity,
-                response_format: Some(agena_provider::ResponseFormat::JsonSchema {
-                    name: "permission_verdict".to_owned(),
-                    schema: agena_permission::classifier_json_schema(),
-                    strict: true,
-                }),
-                responses_api_metadata: None,
-                                request_override,
-            };
-            match tokio::time::timeout(
-                agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT,
-                state
-                    .processor
-                    .provider_registry()
-                                        .complete(&model_ref, request),
-            )
-            .await
-            {
-                Ok(Ok(response)) => {
-                    if response.text.trim().is_empty() {
-                        return Err(agena_permission::ClassifyFailure::EmptyResponse);
-                    }
-                    match agena_permission::parse_classifier_verdict(response.text.as_str()) {
-                        Some(allowed) => {
-                            self.record_auto_decision(session_id, allowed);
-                            Ok(allowed)
+                        messages
+                    },
+                    tool_api_functions: Vec::new(),
+                    provider_native_tools: Default::default(),
+                    disable_tools: true,
+                    temperature: Some(0.0),
+                    max_output_tokens: Some(256),
+                    prompt_cache_key: Some(format!("agena:auto:{}", model_ref.model_id)),
+                    previous_response_id: None,
+                    prompt_window_generation: None,
+                    provider_compaction: None,
+                    stop_sequences: Vec::new(),
+                    top_p: None,
+                    top_k: None,
+                    seed: None,
+                    thinking,
+                    verbosity,
+                    response_format: Some(agena_provider::ResponseFormat::JsonSchema {
+                        name: "permission_verdict".to_owned(),
+                        schema: agena_permission::classifier_json_schema(),
+                        strict: true,
+                    }),
+                    responses_api_metadata: None,
+                    request_override,
+                };
+                match tokio::time::timeout(
+                    agena_permission::AUTO_APPROVAL_CLASSIFY_TIMEOUT,
+                    state
+                        .processor
+                        .provider_registry()
+                        .complete(&model_ref, request),
+                )
+                .await
+                {
+                    Ok(Ok(response)) => {
+                        if response.text.trim().is_empty() {
+                            return Err(agena_permission::ClassifyFailure::EmptyResponse);
                         }
-                        None => Err(agena_permission::ClassifyFailure::UnparseableVerdict(
-                            truncate_classifier_text(response.text.as_str()),
-                        )),
+                        match agena_permission::parse_classifier_verdict(response.text.as_str()) {
+                            Some(allowed) => {
+                                self.record_auto_decision(session_id, allowed);
+                                Ok(allowed)
+                            }
+                            None => Err(agena_permission::ClassifyFailure::UnparseableVerdict(
+                                truncate_classifier_text(response.text.as_str()),
+                            )),
+                        }
                     }
+                    Ok(Err(error)) => Err(agena_permission::ClassifyFailure::Provider(
+                        error.to_string(),
+                    )),
+                    Err(_elapsed) => Err(agena_permission::ClassifyFailure::Timeout),
                 }
-                Ok(Err(error)) => Err(agena_permission::ClassifyFailure::Provider(
-                    error.to_string(),
-                )),
-                Err(_elapsed) => Err(agena_permission::ClassifyFailure::Timeout),
-            }
             });
         }
         futures_util::future::join_all(futures).await

@@ -86,7 +86,9 @@ mod tests {
         .await
         .expect("insert legacy marker");
 
-        let error = initialize_schema(&db).await.expect_err("reject legacy schema");
+        let error = initialize_schema(&db)
+            .await
+            .expect_err("reject legacy schema");
 
         assert!(error.to_string().contains("does not migrate"));
         assert_eq!(read_schema_version(&db).await, 11);
@@ -107,7 +109,9 @@ mod tests {
     #[tokio::test]
     async fn newer_database_is_rejected() {
         let db = database_with_version(CURRENT_SCHEMA_VERSION + 1).await;
-        let error = initialize_schema(&db).await.expect_err("reject newer schema");
+        let error = initialize_schema(&db)
+            .await
+            .expect_err("reject newer schema");
         assert!(error.to_string().contains("does not migrate"));
     }
 }

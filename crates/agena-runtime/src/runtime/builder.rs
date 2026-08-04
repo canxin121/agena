@@ -1031,14 +1031,10 @@ impl agena_runtime::RuntimeStatusService for AgenaRuntime {
             };
             let has_custom_tag = |entry: &agena_plugin_host::registry::RegisteredTool,
                                   expected: &str| {
-                entry
-                    .definition
-                    .tags
-                    .iter()
-                    .any(|tag| match tag {
-                        agena_plugin_host::sdk::ToolTag::Custom(value) => value == expected,
-                        _ => false,
-                    })
+                entry.definition.tags.iter().any(|tag| match tag {
+                    agena_plugin_host::sdk::ToolTag::Custom(value) => value == expected,
+                    _ => false,
+                })
             };
             let mut aliases_by_skill = HashMap::<String, Vec<String>>::new();
             for entry in &entries {

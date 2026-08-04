@@ -226,7 +226,7 @@ impl App {
         });
     }
 
-        pub(crate) fn request_refresh(&mut self, session_id: i64, force: bool) {
+    pub(crate) fn request_refresh(&mut self, session_id: i64, force: bool) {
         if self.transcript.refreshing {
             // A refresh is already in flight. Remember the request instead of
             // dropping it: the transcript may have advanced past the snapshot

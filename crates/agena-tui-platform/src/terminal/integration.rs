@@ -27,7 +27,13 @@ const MAX_NOTIFICATION_TEXT_BYTES: usize = 512;
 /// notification consumers render them inconsistently.
 pub fn sanitize_osc_text(text: &str) -> String {
     text.chars()
-        .map(|ch| if ch == '\n' || ch == '\r' || ch.is_control() { ' ' } else { ch })
+        .map(|ch| {
+            if ch == '\n' || ch == '\r' || ch.is_control() {
+                ' '
+            } else {
+                ch
+            }
+        })
         .collect()
 }
 
@@ -190,7 +196,10 @@ mod tests {
             TerminalFamily::Foot,
             TerminalFamily::Warp,
         ] {
-            assert_eq!(notification_method(osc9_family), Some(NotificationMethod::Osc9));
+            assert_eq!(
+                notification_method(osc9_family),
+                Some(NotificationMethod::Osc9)
+            );
         }
         for bel_family in [
             TerminalFamily::Kitty,
@@ -204,7 +213,10 @@ mod tests {
             TerminalFamily::XtermCompatible,
             TerminalFamily::Unknown,
         ] {
-            assert_eq!(notification_method(bel_family), Some(NotificationMethod::Bell));
+            assert_eq!(
+                notification_method(bel_family),
+                Some(NotificationMethod::Bell)
+            );
         }
         assert_eq!(notification_method(TerminalFamily::Dumb), None);
         assert_eq!(notification_method(TerminalFamily::LinuxConsole), None);

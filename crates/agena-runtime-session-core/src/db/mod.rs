@@ -1,8 +1,8 @@
 pub mod crud;
 pub mod entities;
-pub mod leases;
 #[cfg(test)]
 pub mod event_entity;
+pub mod leases;
 
 #[cfg(test)]
 mod usage_adapter_tests {
@@ -178,11 +178,13 @@ mod event_store_adapter_tests {
 mod lease_tests {
     use std::sync::Arc;
 
-    use sea_orm::{ConnectionTrait, Database};
     use agena_storage::WorkspaceRepository;
+    use sea_orm::{ConnectionTrait, Database};
 
+    use crate::db::leases::{
+        LeaseAcquireOutcome, lease_now_ms, reap_stale_leases, release_lease, try_acquire_lease,
+    };
     use agena_storage_sqlite::initialize_schema;
-    use crate::db::leases::{LeaseAcquireOutcome, lease_now_ms, release_lease, reap_stale_leases, try_acquire_lease};
 
     async fn session_db() -> (sea_orm::DatabaseConnection, i64) {
         let db = Database::connect("sqlite::memory:")
@@ -223,9 +225,11 @@ mod lease_tests {
             .expect("acquire b");
         assert!(matches!(second, LeaseAcquireOutcome::HeldBy { .. }));
 
-        assert!(release_lease(&db, session_id, "owner-a")
-            .await
-            .expect("release a"));
+        assert!(
+            release_lease(&db, session_id, "owner-a")
+                .await
+                .expect("release a")
+        );
         let third = try_acquire_lease(&db, session_id, "owner-b", None, now + 2)
             .await
             .expect("acquire b again");
@@ -240,9 +244,7 @@ mod lease_tests {
             .await
             .expect("acquire stale");
 
-        let reclaimed = reap_stale_leases(&db, now - 30_000)
-            .await
-            .expect("reap");
+        let reclaimed = reap_stale_leases(&db, now - 30_000).await.expect("reap");
         assert!(reclaimed.contains(&session_id));
 
         // After reclaim the lease is gone and a new owner can acquire.

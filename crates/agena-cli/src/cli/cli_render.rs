@@ -712,7 +712,9 @@ impl AgenaCli {
                     // actual providers.
                     providers
                         .keys()
-                        .filter(|key| key.as_str() != "default" && key.as_str() != "default_selection")
+                        .filter(|key| {
+                            key.as_str() != "default" && key.as_str() != "default_selection"
+                        })
                         .count()
                 });
             let plugin_count = config

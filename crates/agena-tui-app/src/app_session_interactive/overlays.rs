@@ -249,7 +249,8 @@ impl App {
         if let Some(method) = crate::current_notification_method(self) {
             self.terminal_integration.queue_notification(method);
         } else {
-            self.terminal_integration.queue_notification(NotificationMethod::Bell);
+            self.terminal_integration
+                .queue_notification(NotificationMethod::Bell);
         }
     }
 

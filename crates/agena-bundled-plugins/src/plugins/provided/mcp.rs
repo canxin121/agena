@@ -21,7 +21,10 @@ use sha2::{Digest, Sha256};
 
 use crate::message::{AttachmentItem, OperationBlock};
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch,
+    ToolInvokeOutput,
+};
 
 pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,

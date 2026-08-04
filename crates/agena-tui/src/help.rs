@@ -129,20 +129,11 @@ pub fn preset_specs(
                         ("o / O", "context-help-key-visual-endpoints"),
                         ("gv", "context-help-key-visual-restore"),
                         ("Esc", "context-help-key-cancel-selection"),
-                        (
-                            "viw / vaw / vip / vap",
-                            "context-help-key-text-object",
-                        ),
-                        (
-                            "vim / vam / viM / vaM",
-                            "context-help-key-text-object",
-                        ),
+                        ("viw / vaw / vip / vap", "context-help-key-text-object"),
+                        ("vim / vam / viM / vaM", "context-help-key-text-object"),
                         ("yy / Y", "context-help-key-copy-line"),
                         ("y$ / y{motion}", "context-help-key-copy-motion"),
-                        (
-                            "yiw / yap / yam / yaM",
-                            "context-help-key-copy-text-object",
-                        ),
+                        ("yiw / yap / yam / yaM", "context-help-key-copy-text-object"),
                         ("/ ?", "context-help-key-search-transcript"),
                         ("n / N", "context-help-key-search-transcript"),
                         ("Mouse", "context-help-key-mouse"),
@@ -179,7 +170,7 @@ pub fn preset_specs(
                     editing,
                     vec![
                         ("↑ at start", "context-help-key-history"),
-                                                ("Ctrl+P", "context-help-key-recover"),
+                        ("Ctrl+P", "context-help-key-recover"),
                         ("Ctrl+X", "context-help-key-cancel-pending"),
                         ("Ctrl+C", "context-help-key-clear-composer"),
                         ("Ctrl+G", "context-help-key-items"),

@@ -1074,7 +1074,10 @@ fn visual_row_index_for_cursor(
         index = row_index;
     }
     // The cursor is at or past the last row's end column.
-    if lines.iter().any(|row| row.logical_line_index == logical_line_index) {
+    if lines
+        .iter()
+        .any(|row| row.logical_line_index == logical_line_index)
+    {
         Some(index)
     } else {
         None

@@ -67,7 +67,9 @@ impl std::fmt::Display for ClassifyFailure {
             Self::ApprovalModelUnavailable(message) => {
                 write!(f, "automatic approval model is unavailable: {message}")
             }
-            Self::ModeUnavailable(message) => write!(f, "auto-approval model mode is unavailable: {message}"),
+            Self::ModeUnavailable(message) => {
+                write!(f, "auto-approval model mode is unavailable: {message}")
+            }
             Self::Timeout => write!(f, "automatic approval classifier timed out"),
             Self::Provider(message) => write!(f, "automatic approval provider error: {message}"),
             Self::EmptyResponse => write!(
@@ -144,14 +146,18 @@ pub fn build_classifier_context_message(
         ));
     }
     if let Some(transcript) = transcript.filter(|text| !text.trim().is_empty()) {
-        sections.push(format!("Recent conversation transcript:
-{transcript}"));
+        sections.push(format!(
+            "Recent conversation transcript:
+{transcript}"
+        ));
     }
     if sections.is_empty() {
         None
     } else {
-        Some(sections.join("
-"))
+        Some(sections.join(
+            "
+",
+        ))
     }
 }
 
@@ -332,9 +338,14 @@ mod tests {
         assert_eq!(parse_classifier_verdict("approve"), Some(true));
         assert_eq!(parse_classifier_verdict("DENY"), Some(false));
         assert_eq!(parse_classifier_verdict("blocked"), Some(false));
-        assert_eq!(parse_classifier_verdict("```text
+        assert_eq!(
+            parse_classifier_verdict(
+                "```text
 DENY
-```"), Some(false));
+```"
+            ),
+            Some(false)
+        );
         assert_eq!(parse_classifier_verdict("ALLOW."), Some(true));
         assert_eq!(parse_classifier_verdict("maybe"), None);
         assert_eq!(parse_classifier_verdict("ALLOW because this is safe"), None);
@@ -368,7 +379,8 @@ DENY
         let blocked = "{\"thinking\":\"The action writes to /opt/homebrew,\nwhich is outside the workspace.\",\"shouldBlock\":true,\"reason\":\"write outside workspace\"}";
         assert_eq!(parse_classifier_verdict(blocked), Some(false));
         // Whitespace between JSON tokens is valid and must keep working.
-        let allowed = "{\n  \"thinking\": \"safe\",\n  \"shouldBlock\": false,\n  \"reason\": \"routine\"\n}";
+        let allowed =
+            "{\n  \"thinking\": \"safe\",\n  \"shouldBlock\": false,\n  \"reason\": \"routine\"\n}";
         assert_eq!(parse_classifier_verdict(allowed), Some(true));
         // Escaped newlines stay untouched.
         let escaped = "{\"thinking\":\"line1\\nline2\",\"shouldBlock\":false,\"reason\":\"safe\"}";
@@ -378,16 +390,27 @@ DENY
     #[test]
     fn salvages_block_from_truncated_or_prose_json_but_never_allow() {
         // Truncated JSON: no closing brace, but an explicit block flag.
-        assert_eq!(parse_classifier_verdict("{\"thinking\":\"...\",\"shouldBlock\": true"), Some(false));
+        assert_eq!(
+            parse_classifier_verdict("{\"thinking\":\"...\",\"shouldBlock\": true"),
+            Some(false)
+        );
         // Fenced JSON with a raw newline inside the thinking string.
-        let fenced = "```json\n{\"thinking\":\"unsafe\npath\",\"shouldBlock\":true,\"reason\":\"x\"}\n```";
+        let fenced =
+            "```json\n{\"thinking\":\"unsafe\npath\",\"shouldBlock\":true,\"reason\":\"x\"}\n```";
         assert_eq!(parse_classifier_verdict(fenced), Some(false));
         // Whitespace around the flag is tolerated.
-        assert_eq!(parse_classifier_verdict("{\"thinking\":\"x\",\"shouldBlock\" : true, \"reason\":\"y\"}"), Some(false));
+        assert_eq!(
+            parse_classifier_verdict(
+                "{\"thinking\":\"x\",\"shouldBlock\" : true, \"reason\":\"y\"}"
+            ),
+            Some(false)
+        );
         // An explicit allow flag inside prose without a complete object must
         // not auto-allow (fail closed).
         assert_eq!(
-            parse_classifier_verdict("The system says \"shouldBlock\": false is required for allow."),
+            parse_classifier_verdict(
+                "The system says \"shouldBlock\": false is required for allow."
+            ),
             None
         );
     }
@@ -395,7 +418,9 @@ DENY
     #[test]
     fn parses_json_with_trailing_comma() {
         assert_eq!(
-            parse_classifier_verdict("{\"thinking\":\"x\",\"shouldBlock\":false,\"reason\":\"safe\",}"),
+            parse_classifier_verdict(
+                "{\"thinking\":\"x\",\"shouldBlock\":false,\"reason\":\"safe\",}"
+            ),
             Some(true)
         );
     }
@@ -434,4 +459,3 @@ DENY
         assert!(text.contains("choose an option below or retry"));
     }
 }
-

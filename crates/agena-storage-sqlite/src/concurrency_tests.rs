@@ -17,7 +17,7 @@ use sea_orm::{
 use crate::{SeaPermissionRuleRepository, SeaWorkspaceRepository, SqliteSequenceAllocator};
 use agena_domain::{PermissionMode, PermissionScope};
 use agena_storage::{
-    PersistedPermissionRule, PermissionRuleRepository, SequenceAllocator, WorkspaceRepository,
+    PermissionRuleRepository, PersistedPermissionRule, SequenceAllocator, WorkspaceRepository,
 };
 
 async fn connect_file(tempdir: &tempfile::TempDir, name: &str) -> DatabaseConnection {
@@ -114,7 +114,10 @@ async fn concurrent_ensure_id_returns_one_shared_workspace() {
     );
     let id_a = id_a.expect("repo a ensure_id");
     let id_b = id_b.expect("repo b ensure_id");
-    assert_eq!(id_a, id_b, "both processes must resolve the same workspace id");
+    assert_eq!(
+        id_a, id_b,
+        "both processes must resolve the same workspace id"
+    );
 
     // Exactly one row exists.
     let count: i64 = db_a
@@ -163,14 +166,17 @@ async fn concurrent_permission_upsert_never_conflicts() {
     // error.
     let allow = rule(PermissionMode::Allow);
     let deny = rule(PermissionMode::Deny);
-    let (res_a, res_b) = tokio::join!(
-        repo_a.upsert(&allow),
-        repo_b.upsert(&deny),
-    );
+    let (res_a, res_b) = tokio::join!(repo_a.upsert(&allow), repo_b.upsert(&deny),);
     let (record_a, created_a) = res_a.expect("repo a upsert");
     let (record_b, created_b) = res_b.expect("repo b upsert");
-    assert_eq!(record_a.id, record_b.id, "both upserts must land on one row");
-    assert_ne!(created_a, created_b, "exactly one upsert must create the row");
+    assert_eq!(
+        record_a.id, record_b.id,
+        "both upserts must land on one row"
+    );
+    assert_ne!(
+        created_a, created_b,
+        "exactly one upsert must create the row"
+    );
 
     // The final persisted rule is one of the two modes, never corrupted.
     let count: i64 = db_a
@@ -227,7 +233,9 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
     async fn run_read_before_write(db: &DatabaseConnection, id_offset: i64) {
         for attempt in 0..25i64 {
             let txn = db.begin().await.expect("begin rbw transaction");
-            crate::acquire_write_lock(&txn).await.expect("acquire write lock");
+            crate::acquire_write_lock(&txn)
+                .await
+                .expect("acquire write lock");
             let row = txn
                 .query_one(Statement::from_string(
                     DatabaseBackend::Sqlite,
@@ -275,7 +283,10 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
         .expect("count row")
         .try_get("", "count")
         .expect("count value");
-    assert_eq!(count, 50, "all 50 concurrent read-before-write inserts landed");
+    assert_eq!(
+        count, 50,
+        "all 50 concurrent read-before-write inserts landed"
+    );
 }
 
 /// Real two-process test: a child OS process re-runs this exact test against
@@ -297,7 +308,11 @@ async fn two_os_processes_share_one_database_without_locking() {
     // Parent: spawn the child, then do the same work concurrently.
     let exe = std::env::current_exe().expect("test binary path");
     let mut child = Command::new(&exe)
-        .args(["--exact", "concurrency_tests::two_os_processes_share_one_database_without_locking", "--nocapture"])
+        .args([
+            "--exact",
+            "concurrency_tests::two_os_processes_share_one_database_without_locking",
+            "--nocapture",
+        ])
         .env("AGENA_CONCURRENCY_CHILD", "1")
         .env("AGENA_DB_PATH", &path_str)
         .spawn()
@@ -326,7 +341,10 @@ async fn two_os_processes_share_one_database_without_locking() {
         .expect("count row")
         .try_get("", "count")
         .expect("count value");
-    assert_eq!(count, 1, "both processes must converge on one workspace row");
+    assert_eq!(
+        count, 1,
+        "both processes must converge on one workspace row"
+    );
 }
 
 async fn two_process_work(path: &std::path::Path) {
@@ -349,4 +367,3 @@ async fn two_process_work(path: &std::path::Path) {
         alloc.next_seq_global().await.expect("allocate seq");
     }
 }
-

@@ -5,7 +5,10 @@ use crate::plugins::provided::workflow::{
     planning_plugin_config_schema,
 };
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{CommandBeforeInput, CommandBeforeResponse, InitContext, InitOutcome, Result as SdkResult, ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    CommandBeforeInput, CommandBeforeResponse, InitContext, InitOutcome, Result as SdkResult,
+    ToolBeforeInput, ToolBeforePatch, ToolInvokeOutput,
+};
 
 pub(crate) const PLAN_PLUGIN_ID: &str = "agena.plan";
 

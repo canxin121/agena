@@ -1054,7 +1054,7 @@ mod tests {
             bindings.match_action(&key(KeyCode::Up, KeyModifiers::NONE)),
             None
         );
-                assert_eq!(
+        assert_eq!(
             bindings.match_action(&key(KeyCode::Char('p'), KeyModifiers::CONTROL)),
             Some(ComposerAction::EditQueue)
         );

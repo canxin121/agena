@@ -272,7 +272,8 @@ impl App {
         ) {
             return;
         }
-        self.terminal_integration.queue_notification(NotificationMethod::Bell);
+        self.terminal_integration
+            .queue_notification(NotificationMethod::Bell);
     }
 
     pub(crate) fn notify_failure(&mut self, failure: &agena_failure::Failure, scope: NoticeScope) {

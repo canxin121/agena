@@ -372,10 +372,10 @@ fn choice_selection_value(selection: &agena_tui::choice::ChoiceSelection) -> Str
 use crate::{
     App, ChoiceOverlay, ChoiceOverlayAction, Editor, JsonValue, Overlay,
     PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionMode, PermissionRuleStudioChoiceField,
-    PermissionRuleSubjectKind, PermissionStudioEditorAction, Route,
-    SessionModelModeStep, SettingsFieldSpec, SettingsValueEditOverlay,
-    apply_permission_studio_entries_mode, apply_permission_studio_mode_input, get_json_path,
-    parse_settings_field_input, refresh_permission_rule_studio_dialog, setting_value_input_text,
-    settings_edit_title, settings_field_edit_title, settings_path_cleared_message,
-    settings_path_updated_message, settings_value_edit_prompt, ui_text,
+    PermissionRuleSubjectKind, PermissionStudioEditorAction, Route, SessionModelModeStep,
+    SettingsFieldSpec, SettingsValueEditOverlay, apply_permission_studio_entries_mode,
+    apply_permission_studio_mode_input, get_json_path, parse_settings_field_input,
+    refresh_permission_rule_studio_dialog, setting_value_input_text, settings_edit_title,
+    settings_field_edit_title, settings_path_cleared_message, settings_path_updated_message,
+    settings_value_edit_prompt, ui_text,
 };

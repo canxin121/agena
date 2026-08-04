@@ -27,7 +27,10 @@ pub enum LeaseAcquireOutcome {
     /// This caller now owns the lease and may execute the session.
     Acquired,
     /// Another process owns the lease and is (or was recently) active.
-    HeldBy { owner_id: String, heartbeat_at_ms: i64 },
+    HeldBy {
+        owner_id: String,
+        heartbeat_at_ms: i64,
+    },
 }
 
 /// A single lease row.
@@ -94,14 +97,14 @@ where
     let row = db
         .query_one(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            format!(
-                "SELECT owner_id, heartbeat_at_ms FROM {TABLE} WHERE session_id = ?"
-            ),
+            format!("SELECT owner_id, heartbeat_at_ms FROM {TABLE} WHERE session_id = ?"),
             [session_id.into()],
         ))
         .await?
         .ok_or_else(|| {
-            DbErr::Custom(format!("lease row vanished after failed acquire for session {session_id}"))
+            DbErr::Custom(format!(
+                "lease row vanished after failed acquire for session {session_id}"
+            ))
         })?;
     Ok(LeaseAcquireOutcome::HeldBy {
         owner_id: row.try_get("", "owner_id")?,
@@ -111,11 +114,7 @@ where
 
 /// Release the lease for `session_id` only if this caller still owns it.
 /// Returns `true` when a row was released.
-pub async fn release_lease<C>(
-    db: &C,
-    session_id: i64,
-    owner_id: &str,
-) -> Result<bool, DbErr>
+pub async fn release_lease<C>(db: &C, session_id: i64, owner_id: &str) -> Result<bool, DbErr>
 where
     C: ConnectionTrait,
 {
@@ -143,9 +142,7 @@ where
     let result = db
         .execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            format!(
-                "UPDATE {TABLE} SET heartbeat_at_ms = ? WHERE session_id = ? AND owner_id = ?"
-            ),
+            format!("UPDATE {TABLE} SET heartbeat_at_ms = ? WHERE session_id = ? AND owner_id = ?"),
             [now_ms.into(), session_id.into(), owner_id.to_owned().into()],
         ))
         .await?;
@@ -182,10 +179,7 @@ where
 /// Delete every lease whose heartbeat is older than `stale_before_ms` and
 /// return the session ids that were reclaimed. The caller may then reconcile
 /// those sessions' interrupted runs.
-pub async fn reap_stale_leases<C>(
-    db: &C,
-    stale_before_ms: i64,
-) -> Result<Vec<i64>, DbErr>
+pub async fn reap_stale_leases<C>(db: &C, stale_before_ms: i64) -> Result<Vec<i64>, DbErr>
 where
     C: ConnectionTrait,
 {

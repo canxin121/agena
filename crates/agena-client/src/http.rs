@@ -16,8 +16,7 @@ use agena_api::{
         GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
         ListEventsParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
         ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
-        ListWorkspacesParams,
-        PaginatedEvents, Query, QueryResult,
+        ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
     },
     resource::{
         HealthResponse, PermissionRuleResource, ProviderAdapterModelsRequest,

@@ -7,12 +7,12 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub use super::manifest_support::normalize_tool_tag_name;
+use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 pub use agena_domain::{
     InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
     ToolPermissionContract,
 };
-pub use super::manifest_support::normalize_tool_tag_name;
-use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginManifest {
@@ -492,7 +492,6 @@ impl ToolDefinition {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStreamingMode {
@@ -892,10 +891,6 @@ fn default_studio_view_location() -> String {
 fn default_studio_view_kind() -> String {
     "markdown".to_string()
 }
-
-
-
-
 
 #[cfg(test)]
 mod tests {

@@ -694,7 +694,10 @@ impl Backend {
             return Err(anyhow!("provider id is required"));
         }
         let mut changes = JsonMap::new();
-        changes.insert("default".to_owned(), JsonValue::String(provider_id.to_owned()));
+        changes.insert(
+            "default".to_owned(),
+            JsonValue::String(provider_id.to_owned()),
+        );
         changes.insert("default_selection".to_owned(), selection);
         let response = self
             .application
@@ -928,9 +931,12 @@ mod tests {
         );
         adapters.insert("anthropic".to_owned(), json!({ "enabled": true }));
 
-        let (default_adapter, default_model) =
-            resolve_provider_defaults_from_value_for_save(&adapters, Some("openai_chat_completions"), None)
-                .expect("defaults resolve");
+        let (default_adapter, default_model) = resolve_provider_defaults_from_value_for_save(
+            &adapters,
+            Some("openai_chat_completions"),
+            None,
+        )
+        .expect("defaults resolve");
 
         assert_eq!(default_adapter, "anthropic");
         assert_eq!(default_model, None);
@@ -952,10 +958,7 @@ mod tests {
     #[test]
     fn defaults_resolution_errors_when_no_adapter_is_enabled() {
         let mut adapters = JsonMap::new();
-        adapters.insert(
-            "openai_responses".to_owned(),
-            json!({ "enabled": false }),
-        );
+        adapters.insert("openai_responses".to_owned(), json!({ "enabled": false }));
 
         let error = resolve_provider_defaults_from_value_for_save(&adapters, None, None)
             .expect_err("no enabled adapter must be rejected");

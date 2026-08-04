@@ -119,7 +119,6 @@ impl SeaModelMessageTransactionWriter {
         transaction: &DatabaseTransaction,
         session_id: i64,
     ) -> Result<(), ModelMessageRepositoryError> {
-        
         transaction
             .execute(statement(
                 "DELETE FROM agena_content_nodes WHERE \
@@ -556,7 +555,7 @@ impl ModelMessageRepository for SeaModelMessageRepository {
         let placeholders = std::iter::repeat_n("?", message_ids.len())
             .collect::<Vec<_>>()
             .join(", ");
-                let columns = if include_content {
+        let columns = if include_content {
             PART_COLUMNS
         } else {
             PART_COLUMNS_HEADER_ONLY

@@ -3,9 +3,7 @@ use std::collections::BTreeSet;
 use quote::quote;
 use syn::{Attribute, Data, LitStr, Result, Type};
 
-use crate::plugin_tooling::{
-    expand_input_network_specs, expand_input_path_specs,
-};
+use crate::plugin_tooling::{expand_input_network_specs, expand_input_path_specs};
 
 use super::{
     NestedInputShapeField, PluginInputNetworkSpec, PluginInputPathSpec, flatten_shape_type,

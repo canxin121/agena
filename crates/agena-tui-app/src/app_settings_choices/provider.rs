@@ -11,9 +11,7 @@ impl App {
                 (selection.provider.as_deref(), selection.model.as_deref())
         {
             return Some(match selection.adapter.as_deref() {
-                Some(adapter_id) => {
-                    ModelRef::new_with_adapter(provider_id, adapter_id, model_id)
-                }
+                Some(adapter_id) => ModelRef::new_with_adapter(provider_id, adapter_id, model_id),
                 None => ModelRef::new(provider_id, model_id),
             });
         }

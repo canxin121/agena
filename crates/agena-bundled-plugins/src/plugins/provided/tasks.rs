@@ -12,7 +12,10 @@ use agena_plugin_host::sdk::host_api::{
     RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskResponse,
     RunSubtaskStatus, run_in_host_callback_context,
 };
-use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, SessionEndInput, ToolInvokeContext, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitContext, InitOutcome, Result as SdkResult, SessionEndInput, ToolInvokeContext,
+    ToolInvokeOutput,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
@@ -990,7 +993,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::message::{TaskAccess, TaskToolInput};
-    use agena_plugin_host::sdk::{Plugin};
+    use agena_plugin_host::sdk::Plugin;
 
     use super::{AsyncTaskEntry, AsyncTaskState, TasksPlugin, lock_state};
 

@@ -323,7 +323,6 @@ fn plugin_capability(
     }
 }
 
-
 fn json_sha256(value: &serde_json::Value) -> String {
     let digest = Sha256::digest(serde_json::to_vec(value).unwrap_or_default());
     hex::encode(digest)

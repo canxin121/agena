@@ -521,7 +521,9 @@ impl ToolError {
         // Give the model the scrubbed root cause so it can correct its
         // approach rather than retrying a blank "plugin failed".
         if public.model.is_some() {
-            public.model = public.model.map(|model| model.with_text(proposed_public_detail.clone()));
+            public.model = public
+                .model
+                .map(|model| model.with_text(proposed_public_detail.clone()));
         }
         Self::Plugin(Box::new(PluginToolFailure {
             public,

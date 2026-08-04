@@ -60,9 +60,8 @@ impl App {
                     if let Some(Overlay::Permission(dialog)) = self.overlay.as_mut()
                         && dialog.request.request_id == request_id
                     {
-                        dialog.auto_approve = Some(PermissionPromptAutoApproveStatus::Failed(
-                            error.to_string(),
-                        ));
+                        dialog.auto_approve =
+                            Some(PermissionPromptAutoApproveStatus::Failed(error.to_string()));
                     } else {
                         self.flash_error(error);
                     }
@@ -810,13 +809,12 @@ impl App {
 }
 use crate::view::model_catalog_presentation_item;
 use crate::{
-    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, ModelCatalogListResponse,
-    Overlay, PaginatedResponse, PermissionReplyKind, ProviderAdapterModelsResponse,
-    ProviderPickerPurpose, ProviderStudioFocus, ProviderSummaryResource, Route,
-    RunActivityTarget, RunOperation, SelectableListState, SelectionPickerCommand,
-    SelectionPickerQuery, SessionExecutionResource, SessionNavigationCommand,
-    SessionNavigationQuery, SessionResource, UiResult, build_timeline_item,
-    i18n_provider_list_detail, provider_draft_auth_action_message,
+    App, ComposerDraft, CurrentLineageState, DraftSlot, Instant, ModelCatalogListResponse, Overlay,
+    PaginatedResponse, PermissionReplyKind, ProviderAdapterModelsResponse, ProviderPickerPurpose,
+    ProviderStudioFocus, ProviderSummaryResource, Route, RunActivityTarget, RunOperation,
+    SelectableListState, SelectionPickerCommand, SelectionPickerQuery, SessionExecutionResource,
+    SessionNavigationCommand, SessionNavigationQuery, SessionResource, UiResult,
+    build_timeline_item, i18n_provider_list_detail, provider_draft_auth_action_message,
     provider_draft_auth_error_message, provider_draft_auth_message_is_pending,
     provider_list_create_item, provider_studio_available_model_keys,
     provider_studio_merge_refreshed_adapter_models, provider_studio_model_key,

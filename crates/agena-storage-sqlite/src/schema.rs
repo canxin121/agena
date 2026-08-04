@@ -36,7 +36,10 @@ impl SchemaLock {
             .write(true)
             .open(&lock_path)
             .map_err(|error| {
-                DbErr::Custom(format!("open schema lock file {}: {error}", lock_path.display()))
+                DbErr::Custom(format!(
+                    "open schema lock file {}: {error}",
+                    lock_path.display()
+                ))
             })?;
         let started = std::time::Instant::now();
         loop {
@@ -96,8 +99,11 @@ pub async fn initialize_schema(db: &DatabaseConnection) -> Result<(), DbErr> {
         "PRAGMA busy_timeout = 15000",
         "PRAGMA synchronous = NORMAL",
     ] {
-        db.execute(Statement::from_string(db.get_database_backend(), pragma.to_owned()))
-            .await?;
+        db.execute(Statement::from_string(
+            db.get_database_backend(),
+            pragma.to_owned(),
+        ))
+        .await?;
     }
     let current_version = read_schema_version(db).await?;
     match current_version {
@@ -139,7 +145,9 @@ async fn read_schema_version(db: &DatabaseConnection) -> Result<i64, DbErr> {
 
 /// Seed rows for the database-backed sequence allocators. `next_val` is the
 /// next value to hand out, so every allocator starts at 1.
-const SEEDS: &[&str] = &["INSERT OR IGNORE INTO agena_sequences (seq_name, next_val) VALUES ('seq_global', 1), ('message_id', 1), ('part_id', 1)"];
+const SEEDS: &[&str] = &[
+    "INSERT OR IGNORE INTO agena_sequences (seq_name, next_val) VALUES ('seq_global', 1), ('message_id', 1), ('part_id', 1)",
+];
 
 const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL, created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)",
@@ -272,7 +280,6 @@ mod tests {
         row.try_get("", "count").expect("integer count")
     }
 
-
     #[tokio::test]
     async fn canonical_reply_and_execution_lifecycles_are_database_invariants() {
         let db = initialized_database().await;
@@ -396,7 +403,11 @@ mod tests {
         )
         .await
         .expect_err("content node owner must exist");
-        assert!(error.to_string().contains("invalid content node owner or content position"));
+        assert!(
+            error
+                .to_string()
+                .contains("invalid content node owner or content position")
+        );
 
         // Text node requires text and no actor; lifecycle rejects completed without finish.
         let error = execute(
@@ -433,9 +444,15 @@ mod tests {
         assert!(error.to_string().contains("revision cannot decrease"));
 
         // Deleting the reply cascades its content nodes.
-        execute(&db, "DELETE FROM agena_assistant_replies WHERE reply_id = 'reply-1'")
-            .await
-            .expect("delete reply");
-        assert_eq!(count(&db, "agena_content_nodes", "owner_id = 'reply-1'").await, 0);
+        execute(
+            &db,
+            "DELETE FROM agena_assistant_replies WHERE reply_id = 'reply-1'",
+        )
+        .await
+        .expect("delete reply");
+        assert_eq!(
+            count(&db, "agena_content_nodes", "owner_id = 'reply-1'").await,
+            0
+        );
     }
 }

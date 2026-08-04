@@ -259,12 +259,12 @@ impl App {
         }
     }
 
-        pub(crate) fn handle_session_refreshed(
+    pub(crate) fn handle_session_refreshed(
         &mut self,
         session_id: i64,
         result: UiResult<SessionRefresh>,
     ) {
-                if self.transcript.session_id != Some(session_id) {
+        if self.transcript.session_id != Some(session_id) {
             // A refresh for a session the user navigated away from is ignored.
             // `open_session` resets the transcript (including `refreshing`),
             // so there is nothing to restore here; clearing state would

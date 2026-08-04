@@ -199,8 +199,7 @@ pub(super) fn operation_blocks_from_tool_output(
             }
         }
         Some(crate::tool::ToolPayloadOutput::LspDiagnostics { .. }) => {
-            if let Some(markdown) =
-                lsp_diagnostics_human_block(payload_tool_name.as_str(), details)
+            if let Some(markdown) = lsp_diagnostics_human_block(payload_tool_name.as_str(), details)
             {
                 blocks.push(markdown);
             }
@@ -252,13 +251,12 @@ fn shell_command_block_from_invocation(
     details: &ToolOutput,
 ) -> Option<OperationBlock> {
     let payload_tool_name = payload_tool_name_for_invocation(invocation);
-    let action = match crate::tool::ToolPayloadOutput::from_tool_output(
-        payload_tool_name.as_str(),
-        details,
-    ) {
-        Some(crate::tool::ToolPayloadOutput::Shell { action, .. }) => action,
-        _ => return None,
-    };
+    let action =
+        match crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
+        {
+            Some(crate::tool::ToolPayloadOutput::Shell { action, .. }) => action,
+            _ => return None,
+        };
     if action != "run" {
         return None;
     }
@@ -281,9 +279,7 @@ fn shell_command_block_from_invocation(
         match crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name.as_str(), details)
         {
             Some(crate::tool::ToolPayloadOutput::Shell {
-                exit_code,
-                output,
-                ..
+                exit_code, output, ..
             }) => (exit_code, output.clone(), None),
             _ => (None, None, None),
         };
@@ -417,8 +413,9 @@ pub(super) fn structured_web_crawl_results_block(
 /// Path lists are inherently ordered and line-oriented; a Markdown list keeps
 /// each path as a first-class visual row instead of a flat text blob.
 fn path_list_human_block(payload_tool_name: &str, details: &ToolOutput) -> Option<OperationBlock> {
-    let crate::tool::ToolPayloadOutput::Glob { paths, truncated, .. } =
-        crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
+    let crate::tool::ToolPayloadOutput::Glob {
+        paths, truncated, ..
+    } = crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
     else {
         return None;
     };
@@ -519,7 +516,10 @@ fn cron_list_human_block(payload_tool_name: &str, details: &ToolOutput) -> Optio
 }
 
 /// Human-friendly Markdown for tool-search results.
-fn tool_search_human_block(payload_tool_name: &str, details: &ToolOutput) -> Option<OperationBlock> {
+fn tool_search_human_block(
+    payload_tool_name: &str,
+    details: &ToolOutput,
+) -> Option<OperationBlock> {
     let crate::tool::ToolPayloadOutput::ToolSearch { results } =
         crate::tool::ToolPayloadOutput::from_tool_output(payload_tool_name, details)?
     else {
@@ -928,19 +928,19 @@ mod tests {
             paths: vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()],
             truncated: false,
         });
-        let blocks = operation_blocks_from_tool_output(
-            &invocation,
-            &details,
-            &[],
-            "src/a.rs\nsrc/b.rs",
-        );
+        let blocks =
+            operation_blocks_from_tool_output(&invocation, &details, &[], "src/a.rs\nsrc/b.rs");
         assert!(blocks.iter().any(|block| matches!(
             block,
             OperationBlock::Markdown { text }
                 if text.contains("- `src/a.rs`") && text.contains("- `src/b.rs`")
         )));
         // No raw text blob duplicated alongside the list.
-        assert!(!blocks.iter().any(|block| matches!(block, OperationBlock::Text { .. })));
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(block, OperationBlock::Text { .. }))
+        );
     }
 
     #[test]
@@ -970,8 +970,16 @@ mod tests {
         });
         let blocks = operation_blocks_from_tool_output(&invocation, &details, &[], "1: fn main()");
         // Numbered file preview is not a directory list.
-        assert!(!blocks.iter().any(|block| matches!(block, OperationBlock::Markdown { .. })));
-        assert!(blocks.iter().any(|block| matches!(block, OperationBlock::Text { .. })));
+        assert!(
+            !blocks
+                .iter()
+                .any(|block| matches!(block, OperationBlock::Markdown { .. }))
+        );
+        assert!(
+            blocks
+                .iter()
+                .any(|block| matches!(block, OperationBlock::Text { .. }))
+        );
     }
 
     #[test]

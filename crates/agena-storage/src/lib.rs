@@ -285,13 +285,11 @@ impl SequenceAllocator for InMemorySequenceAllocator {
     }
     async fn seed_global(&self, high: i64) -> Result<(), EventStoreError> {
         let target = Self::next_after(high);
-        self.next_global
-            .fetch_max(target, Ordering::SeqCst);
+        self.next_global.fetch_max(target, Ordering::SeqCst);
         Ok(())
     }
     async fn seed_message_id(&self, high: i64) -> Result<(), EventStoreError> {
-        self.next_message_id
-            .fetch_max(high + 1, Ordering::SeqCst);
+        self.next_message_id.fetch_max(high + 1, Ordering::SeqCst);
         Ok(())
     }
     async fn seed_part_id(&self, high: i64) -> Result<(), EventStoreError> {
@@ -959,8 +957,8 @@ impl MessageIdAllocator for SequentialIdAllocator {
 #[cfg(test)]
 mod tests {
     use super::{
-        InMemorySequenceAllocator, MessageIdAllocator, ModelCatalogCacheRecord,
-        SequenceAllocator, SequentialIdAllocator,
+        InMemorySequenceAllocator, MessageIdAllocator, ModelCatalogCacheRecord, SequenceAllocator,
+        SequentialIdAllocator,
     };
 
     #[tokio::test]

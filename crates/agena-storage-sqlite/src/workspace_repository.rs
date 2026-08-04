@@ -149,11 +149,11 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
             ))
             .await
             .map_err(map_error)?;
-        self.lookup_id(&path)
-            .await?
-            .ok_or_else(|| WorkspaceRepositoryError::Backend(format!(
+        self.lookup_id(&path).await?.ok_or_else(|| {
+            WorkspaceRepositoryError::Backend(format!(
                 "workspace row is missing after ensure_id for {path}"
-            )))
+            ))
+        })
     }
 }
 

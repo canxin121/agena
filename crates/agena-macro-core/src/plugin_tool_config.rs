@@ -255,10 +255,7 @@ fn parse_plugin_inline_tool_config(
                         let exprs = parse_expr_list(list.tokens)?;
                         for expr in &exprs {
                             let ident = match expr {
-                                Expr::Path(path) => path
-                                    .path
-                                    .get_ident()
-                                    .map(Ident::to_string),
+                                Expr::Path(path) => path.path.get_ident().map(Ident::to_string),
                                 _ => None,
                             };
                             if let Some(ident) = ident {

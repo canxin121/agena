@@ -105,9 +105,7 @@ pub(crate) fn provider_draft_auth_error_message(
             "flash-provider-auth-error-required-field",
             &agena_tui::fl_args!("field" => provider_draft_auth_field_label(i18n, field)),
         ),
-        agena_tui_backend::ProviderDraftAuthError::Other(problem) => {
-            problem.user.fallback.clone()
-        }
+        agena_tui_backend::ProviderDraftAuthError::Other(problem) => problem.user.fallback.clone(),
     }
 }
 

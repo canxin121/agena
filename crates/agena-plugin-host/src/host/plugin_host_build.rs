@@ -226,6 +226,5 @@ impl PluginHost {
 use super::{
     Arc, ConfiguredPlugin, HashMap, HostError, HostHandle, LoadedPlugin, NoopHostClient,
     PluginHost, PluginHostBuildConfig, PluginKey, PluginLogStore, PluginToolRegistry, RwLock,
-    StaticRegistration, hook_registration_for_plugin,
-    load_entry,
+    StaticRegistration, hook_registration_for_plugin, load_entry,
 };

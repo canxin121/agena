@@ -9,7 +9,9 @@ use std::{
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitContext, InitOutcome, PathRequest, Result as SdkResult, ToolInvokeOutput,
+};
 use base64::Engine as _;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -5,8 +5,8 @@ use crate::plugins::provided::workflow::{
 };
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    InitContext, InitOutcome, PluginCommandOutput, PluginUiAction,
-    Result as SdkResult, ToolInvokeOutput,
+    InitContext, InitOutcome, PluginCommandOutput, PluginUiAction, Result as SdkResult,
+    ToolInvokeOutput,
 };
 
 pub(crate) const SNAPSHOT_PLUGIN_ID: &str = "agena.snapshot";
@@ -156,9 +156,7 @@ mod tests {
         assert_eq!(schema["properties"], serde_json::json!({}));
         assert_eq!(manifest.tools[0].name, "status");
         assert!(
-            manifest.tools[0]
-                .tags
-                .contains(&ToolTag::Snapshot),
+            manifest.tools[0].tags.contains(&ToolTag::Snapshot),
             "snapshot remains a discovery/UI metadata tag"
         );
         assert!(

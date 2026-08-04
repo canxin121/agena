@@ -176,7 +176,9 @@ mod tests {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("open database");
-        crate::initialize_schema(&db).await.expect("initialize schema");
+        crate::initialize_schema(&db)
+            .await
+            .expect("initialize schema");
         db
     }
 
@@ -238,12 +240,22 @@ mod tests {
     async fn busy_detection_recognizes_sqlite_busy_and_rejects_others() {
         // SQLITE_BUSY via structured code (5) and SQLITE_BUSY_SNAPSHOT (31).
         assert!(is_sqlite_busy(&db_error_with("5", "database is locked")));
-        assert!(is_sqlite_busy(&db_error_with("31", "database table is locked")));
+        assert!(is_sqlite_busy(&db_error_with(
+            "31",
+            "database table is locked"
+        )));
         // An unrelated SQLite code and a custom error are not busy.
-        assert!(!is_sqlite_busy(&db_error_with("1", "no such table: missing")));
-        assert!(!is_sqlite_busy(&sea_orm::DbErr::Custom("unrelated".to_owned())));
+        assert!(!is_sqlite_busy(&db_error_with(
+            "1",
+            "no such table: missing"
+        )));
+        assert!(!is_sqlite_busy(&sea_orm::DbErr::Custom(
+            "unrelated".to_owned()
+        )));
         // A wrapper that never contains a SQLx database error is not busy.
-        assert!(!is_sqlite_busy(&sea_orm::DbErr::RecordNotFound("x".to_owned())));
+        assert!(!is_sqlite_busy(&sea_orm::DbErr::RecordNotFound(
+            "x".to_owned()
+        )));
     }
 
     /// Builds a `DbErr::Exec` carrying a fake `DatabaseError` with the given

@@ -16,10 +16,7 @@ use crate::dispatcher::{self, call_with_timeout};
 use crate::error::{HostError, TransportError};
 use crate::loader::{StaticRegistration, load_entry, shutdown_transport};
 use crate::logs::{PluginLogRecord, PluginLogStore};
-use crate::registry::{
-    PluginToolRegistry, RegisteredTool,
-    validate_tool_definition,
-};
+use crate::registry::{PluginToolRegistry, RegisteredTool, validate_tool_definition};
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription,
     HostCallbackContext, HostClient, HostConfigReloadResponse, HostContextStatusRequest,
@@ -51,15 +48,14 @@ use crate::sdk::{
     ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput, ChatSystemTransformPatch,
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
-    NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput,
-    PluginCommandOutput, PluginError, PluginErrorKind, PluginKey, PluginManifest,
-    PluginStudioControl, PluginStudioView, PluginTuiContentBlock, PluginUiAction, PostRunInput,
-    PreRunInput, ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput,
-    SessionStartPatch, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
-    ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput,
-    ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd, UserPromptSubmitInput,
-    UserPromptSubmitPatch,
+    NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
+    PluginError, PluginErrorKind, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
+    PluginTuiContentBlock, PluginUiAction, PostRunInput, PreRunInput, ProviderListInput,
+    ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
+    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
 use crate::transport::inproc::InProcessTransport;

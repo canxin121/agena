@@ -717,18 +717,16 @@ mod tests {
     fn window_title_is_operational_and_never_path_gated_inside_tmux() {
         let context = detect(&[("TERM_PROGRAM", "iTerm.app"), ("TMUX", "/tmp/tmux")]);
         assert!(context.capabilities.window_title.is_operational());
-        assert_eq!(context.capabilities.window_title.path, CapabilityPath::Clear);
+        assert_eq!(
+            context.capabilities.window_title.path,
+            CapabilityPath::Clear
+        );
     }
 
     #[test]
     fn notifications_default_to_bel_and_dumb_is_unsupported() {
         let context = detect(&[("TERM_PROGRAM", "WezTerm")]);
-        assert!(
-            context
-                .capabilities
-                .terminal_notifications
-                .is_operational()
-        );
+        assert!(context.capabilities.terminal_notifications.is_operational());
         let dumb = detect(&[("TERM", "dumb")]);
         assert!(!dumb.capabilities.terminal_notifications.is_operational());
         let console = detect(&[("TERM", "linux")]);
@@ -746,12 +744,7 @@ mod tests {
             forced.capabilities.window_title.support,
             Support::Unsupported
         );
-        assert!(
-            forced
-                .capabilities
-                .terminal_notifications
-                .is_operational()
-        );
+        assert!(forced.capabilities.terminal_notifications.is_operational());
         assert_eq!(
             forced.capabilities.terminal_notifications.source,
             CapabilitySource::UserOverride

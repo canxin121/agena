@@ -279,7 +279,9 @@ mod tests {
     use agena_domain::ExecutionStatus;
     use chrono::{DateTime, Utc};
 
-    fn operation_resource<'a>(part: &'a crate::TranscriptEntryPart<'a>) -> &'a crate::OperationPartResource {
+    fn operation_resource<'a>(
+        part: &'a crate::TranscriptEntryPart<'a>,
+    ) -> &'a crate::OperationPartResource {
         match &part.content {
             crate::TranscriptPartContent::Activity(
                 crate::TranscriptActivityContent::Operation(operation),

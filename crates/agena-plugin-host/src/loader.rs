@@ -9,9 +9,7 @@ use std::sync::Arc;
 use crate::config::{ConfiguredPlugin, PluginPackage, PluginSignature};
 use crate::error::{HostError, TransportError};
 use crate::host::{HostHandle, LoadedPlugin};
-use crate::registry::{
-    validate_tool_definition,
-};
+use crate::registry::validate_tool_definition;
 use crate::sdk::rpc::method;
 use crate::sdk::{InitContext, InitOutcome, PluginKey, PluginManifest};
 use crate::transport::{

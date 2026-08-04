@@ -671,9 +671,9 @@ pub(crate) fn permission_prompt_content(
     let requested_actions =
         permission_requested_actions_for_display(Some(&request.action), &request.requested_actions);
     if !requested_actions.is_empty() {
-        details.push(PermissionPromptLine::muted(i18n.text(
-            "overlay-permission-detail-requested-actions",
-        )));
+        details.push(PermissionPromptLine::muted(
+            i18n.text("overlay-permission-detail-requested-actions"),
+        ));
         details.extend(requested_actions.iter().map(|action| {
             PermissionPromptLine::markdown(format!(
                 "- {}",
@@ -687,9 +687,9 @@ pub(crate) fn permission_prompt_content(
         request.requested_actions.as_slice(),
     );
     if !related_actions.is_empty() {
-        details.push(PermissionPromptLine::muted(i18n.text(
-            "overlay-permission-detail-related-actions",
-        )));
+        details.push(PermissionPromptLine::muted(
+            i18n.text("overlay-permission-detail-related-actions"),
+        ));
         details.extend(related_actions.iter().map(|action| {
             PermissionPromptLine::markdown(format!(
                 "- {}",
@@ -765,7 +765,10 @@ fn permission_action_markdown(i18n: &I18n, action: &PermissionAction) -> String 
             tool_name,
             qualifier,
         } => {
-            let command = qualifier.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let command = qualifier
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
             let title = i18n.text_args(
                 "overlay-permission-action-tool",
                 &agena_tui::fl_args!("tool" => tool_name.clone()),
@@ -823,7 +826,11 @@ fn permission_action_markdown_single_line(i18n: &I18n, action: &PermissionAction
                 "overlay-permission-action-tool",
                 &agena_tui::fl_args!("tool" => tool_name.clone()),
             );
-            match qualifier.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            match qualifier
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
                 Some(command) => format!("{base} · `{command}`"),
                 None => base,
             }

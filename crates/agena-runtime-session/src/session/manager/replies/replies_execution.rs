@@ -2256,7 +2256,8 @@ impl SessionManager {
             pending_detail_delta.push_str(delta);
             // Broadcast the new output as a live, non-persisted detail delta so
             // an expanded terminal renders the growing detail in real time.
-            if last_detail_broadcast.elapsed() >= std::time::Duration::from_millis(DETAIL_BROADCAST_MS)
+            if last_detail_broadcast.elapsed()
+                >= std::time::Duration::from_millis(DETAIL_BROADCAST_MS)
                 && !pending_detail_delta.is_empty()
             {
                 last_detail_broadcast = std::time::Instant::now();
@@ -2276,7 +2277,12 @@ impl SessionManager {
             }
         }
         session = self
-            .apply_streaming_terminal_output(session.id, pending_tool, streamed_output.as_str(), state.clone())
+            .apply_streaming_terminal_output(
+                session.id,
+                pending_tool,
+                streamed_output.as_str(),
+                state.clone(),
+            )
             .await?;
 
         let stream_end = match cancellation.as_ref() {
@@ -2428,7 +2434,10 @@ impl SessionManager {
         // non-persistent for CommandOutputDelta, so this never blocks the
         // streaming loop on disk I/O.
         handle.spawn(async move {
-            if let Err(error) = publisher.publish(context, crate::event::EventKind::CommandOutputDelta(event)).await {
+            if let Err(error) = publisher
+                .publish(context, crate::event::EventKind::CommandOutputDelta(event))
+                .await
+            {
                 tracing::debug!(
                     target: "agena::session::streaming_detail",
                     session_id,
@@ -2502,7 +2511,9 @@ impl SessionManager {
         // the live title change. The Activity id lets the tiny UPDATE target
         // the content-node title column directly.
         if let Some(title) = refreshed_title {
-            let activity_id = session.part(&tool_part_ref).and_then(|part| part.activity_id);
+            let activity_id = session
+                .part(&tool_part_ref)
+                .and_then(|part| part.activity_id);
             self.store
                 .update_part_title(
                     session_id,
@@ -2540,7 +2551,10 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         if streamed_output.is_empty() {
-            return self.store.load_session(session_id, state.cache_policy()).await;
+            return self
+                .store
+                .load_session(session_id, state.cache_policy())
+                .await;
         }
         // Bound the intermediate preview so a giant stream is not written in
         // full even once; the terminal frame carries the real truncated output.

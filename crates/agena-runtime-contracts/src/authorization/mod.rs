@@ -2,9 +2,7 @@
 
 use std::path::Path;
 
-use agena_domain::{
-    AccessKind, AccessSelector, NetworkTarget, PermissionDecision, PermissionMode,
-};
+use agena_domain::{AccessKind, AccessSelector, NetworkTarget, PermissionDecision, PermissionMode};
 pub use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
     PermissionConfig, ToolPermissionConfig, ToolPermissionRules,
@@ -353,15 +351,10 @@ impl ExecutionPrincipal {
                 reason: "execution principal is blocked".to_owned(),
             };
         }
-        let decision = self
-            .tool_policy
-            .check_tool(tool_name, command, contract);
+        let decision = self.tool_policy.check_tool(tool_name, command, contract);
         match self.tool_ceiling_policy.as_ref() {
             Some(ceiling) => {
-                restrictive_decision(
-                    decision,
-                    ceiling.check_tool(tool_name, command, contract),
-                )
+                restrictive_decision(decision, ceiling.check_tool(tool_name, command, contract))
             }
             None => decision,
         }

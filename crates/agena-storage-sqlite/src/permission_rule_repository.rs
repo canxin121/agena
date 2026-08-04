@@ -495,9 +495,15 @@ mod tests {
         // Mirror the three partial unique indexes from the real schema so the
         // ON CONFLICT upsert clauses resolve to a matching constraint.
         for sql in [
-            format!("CREATE UNIQUE INDEX uq_rule_global ON {TABLE}(action_key, scope) WHERE session_id IS NULL AND workspace_id IS NULL"),
-            format!("CREATE UNIQUE INDEX uq_rule_workspace ON {TABLE}(action_key, scope, workspace_id) WHERE session_id IS NULL AND workspace_id IS NOT NULL"),
-            format!("CREATE UNIQUE INDEX uq_rule_session ON {TABLE}(action_key, scope, session_id) WHERE session_id IS NOT NULL AND workspace_id IS NULL"),
+            format!(
+                "CREATE UNIQUE INDEX uq_rule_global ON {TABLE}(action_key, scope) WHERE session_id IS NULL AND workspace_id IS NULL"
+            ),
+            format!(
+                "CREATE UNIQUE INDEX uq_rule_workspace ON {TABLE}(action_key, scope, workspace_id) WHERE session_id IS NULL AND workspace_id IS NOT NULL"
+            ),
+            format!(
+                "CREATE UNIQUE INDEX uq_rule_session ON {TABLE}(action_key, scope, session_id) WHERE session_id IS NOT NULL AND workspace_id IS NULL"
+            ),
         ] {
             db.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
                 .await

@@ -670,17 +670,12 @@ impl WorkflowPlugin {
             if summary.is_empty() {
                 lines.push(format!(
                     "- {} [{}] ({})",
-                    tool.name,
-                    tags_part,
-                    tool.plugin_id
+                    tool.name, tags_part, tool.plugin_id
                 ));
             } else {
                 lines.push(format!(
                     "- {} [{}] ({}): {}",
-                    tool.name,
-                    tags_part,
-                    tool.plugin_id,
-                    summary
+                    tool.name, tags_part, tool.plugin_id, summary
                 ));
             }
         }
@@ -776,7 +771,11 @@ impl WorkflowPlugin {
         for plugin in &plugins {
             let summary = compact_tool_summary(&plugin.summary, max_summary_chars);
             if summary.is_empty() {
-                lines.push(format!("- {} [{}]", plugin.plugin_id, tags_summary(&plugin.tags)));
+                lines.push(format!(
+                    "- {} [{}]",
+                    plugin.plugin_id,
+                    tags_summary(&plugin.tags)
+                ));
             } else {
                 lines.push(format!(
                     "- {} [{}] (v{}): {} · tools: {}",
@@ -1083,8 +1082,8 @@ use super::{
     ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor,
     ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
     ToolTagRecord, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
-    WorkflowPlugin, ask_user, compact_tool_summary, search_tools,
-    snapshot_enter_permission_paths, tags_summary,
+    WorkflowPlugin, ask_user, compact_tool_summary, search_tools, snapshot_enter_permission_paths,
+    tags_summary,
 };
 
 fn append_discovery_page_hint(

@@ -23,7 +23,6 @@ pub struct ToolPermissionConfig {
     pub declared_tags_present: bool,
 }
 
-
 impl<'de> Deserialize<'de> for ToolPermissionConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

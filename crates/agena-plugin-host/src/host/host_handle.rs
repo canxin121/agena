@@ -35,7 +35,6 @@ impl HostHandle {
         Self {
             inner: tokio::sync::RwLock::new(inner),
 
-
             tokens: tokio::sync::Mutex::new(HashMap::new()),
             callback_base_url,
             tool_registry,
@@ -344,7 +343,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_EVENT_PUBLISH => {
-                        
                         let env: EventEnvelope = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
@@ -354,7 +352,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_EVENT_SUBSCRIBE => {
-                        
                         let p: HostSubscribeParams = parse(params)?;
                         let sub: EventSubscription = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
@@ -364,7 +361,6 @@ impl HostHandle {
                         Ok(serde_json::json!({ "subscription_id": sub.id }))
                     }
                     method::HOST_EVENT_UNSUBSCRIBE => {
-                        
                         let p: HostUnsubscribeParams = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, None),
@@ -374,7 +370,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_CONFIG_READ => {
-                        
                         let p: HostConfigReadParams = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -383,7 +378,6 @@ impl HostHandle {
                         .await
                     }
                     method::HOST_CONFIG_RELOAD => {
-                        
                         let p: HostConfigReloadParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -394,7 +388,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_TOOL_INVOKE => {
-                        
                         let p: HostInvokeToolParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -405,7 +398,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_ASK_USER => {
-                        
                         let p: HostAskUserParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -416,7 +408,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SUBTASK_RUN => {
-                        
                         let p: HostRunSubtaskParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -427,7 +418,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SUBTASK_CANCEL => {
-                        
                         let p: HostCancelSubtaskParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -438,7 +428,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SUBTASK_MESSAGE => {
-                        
                         let p: HostMessageSubtaskParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -449,7 +438,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SUBTASK_OUTPUT => {
-                        
                         let p: HostReadSubtaskOutputParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -460,7 +448,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_TOOL_LIST => {
-                        
                         let p: HostListToolsParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -471,7 +458,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_CONTEXT_STATUS => {
-                        
                         let p: HostContextStatusParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -482,7 +468,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SESSION_SET_MODEL => {
-                        
                         let p: HostSetSessionModelParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -493,7 +478,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_IMAGE_EXECUTE => {
-                        
                         let p: HostImageExecuteParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -504,7 +488,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SNAPSHOT_ENTER => {
-                        
                         let p: HostEnterSnapshotParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -515,7 +498,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SNAPSHOT_EXIT => {
-                        
                         let p: HostExitSnapshotParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -526,7 +508,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_MONITOR_START => {
-                        
                         let p: HostMonitorStartParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -537,7 +518,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_MONITOR_LIST => {
-                        
                         let p: HostMonitorListParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -548,7 +528,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_MONITOR_READ => {
-                        
                         let p: HostMonitorReadParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -559,7 +538,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_MONITOR_STOP => {
-                        
                         let p: HostMonitorStopParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -570,7 +548,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_TOOL_REGISTRY_REGISTER => {
-                        
                         let p: HostToolRegisterParams = parse(params)?;
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("tool.registry.register requires plugin id")
@@ -580,7 +557,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_TOOL_REGISTRY_UPDATE => {
-                        
                         let p: HostToolUpdateParams = parse(params)?;
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("tool.registry.update requires plugin id")
@@ -590,7 +566,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_TOOL_REGISTRY_REMOVE => {
-                        
                         let p: HostToolRemoveParams = parse(params)?;
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("tool.registry.remove requires plugin id")
@@ -604,13 +579,11 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_TOOL_REGISTRY_LIST => {
-                        
                         let response = self.registered_tool_list_response()?;
                         serde_json::to_value(&response)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_STORAGE_GET => {
-                        
                         let p: HostStorageGetParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -621,7 +594,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_STORAGE_SET => {
-                        
                         let p: HostStorageSetParams = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -631,7 +603,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_STORAGE_DELETE => {
-                        
                         let p: HostStorageDeleteParams = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -641,7 +612,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_STORAGE_LIST => {
-                        
                         let p: HostStorageListParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -652,7 +622,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SECRET_GET => {
-                        
                         let p: HostSecretGetParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -663,7 +632,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SECRET_SET => {
-                        
                         let p: HostSecretSetParams = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -673,7 +641,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_SECRET_DELETE => {
-                        
                         let p: HostSecretDeleteParams = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -683,7 +650,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_SECRET_LIST => {
-                        
                         let p: HostSecretListParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -694,20 +660,17 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_PLUGIN_STATUS_LIST => {
-                        
                         let response = self.plugin_status_list_response();
                         serde_json::to_value(&response)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_PLUGIN_STATUS_GET => {
-                        
                         let p: HostPluginStatusGetParams = parse(params)?;
                         let response = self.plugin_status_get_response(&p.request.plugin_id);
                         serde_json::to_value(&response)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_LSP_LIST_SERVERS => {
-                        
                         let p: HostLspListServersParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -718,7 +681,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_LSP_LIST_DIAGNOSTICS => {
-                        
                         let p: HostLspListDiagnosticsParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -729,7 +691,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SNAPSHOT_LIST => {
-                        
                         let p: HostSnapshotListParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -740,7 +701,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SCHEDULER_LIST => {
-                        
                         let p: HostSchedulerListParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -751,7 +711,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SCHEDULER_CREATE => {
-                        
                         let p: HostSchedulerCreateParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -762,7 +721,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_SCHEDULER_DELETE => {
-                        
                         let p: HostSchedulerDeleteParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -773,13 +731,11 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_HOOK_LIST => {
-                        
                         let response = self.hook_list_response().await;
                         serde_json::to_value(&response)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_MCP_LIST_SERVERS => {
-                        
                         let p: HostMcpListServersParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -790,7 +746,6 @@ impl HostHandle {
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_MCP_ADD_SERVER => {
-                        
                         let p: HostMcpAddServerParams = parse(params)?;
                         host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -800,7 +755,6 @@ impl HostHandle {
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_MCP_REMOVE_SERVER => {
-                        
                         let p: HostMcpRemoveServerParams = parse(params)?;
                         let out = host_api::run_in_host_callback_context(
                             scoped_context(plugin_id, p.context),
@@ -814,12 +768,11 @@ impl HostHandle {
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("ui.statusline.contribute requires plugin id")
                         })?;
-                                                let p: HostStatuslineContributeParams = parse(params)?;
+                        let p: HostStatuslineContributeParams = parse(params)?;
                         self.statusline_contribute(&plugin_id, p.request);
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_UI_STATUSLINE_LIST => {
-                        
                         let response = self.statusline_list_response();
                         serde_json::to_value(&response)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
@@ -828,7 +781,7 @@ impl HostHandle {
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("ui.statusline.remove requires plugin id")
                         })?;
-                                                let p: HostStatuslineRemoveParams = parse(params)?;
+                        let p: HostStatuslineRemoveParams = parse(params)?;
                         let removed = self.statusline_remove(&plugin_id, &p.request.segment_id);
                         serde_json::to_value(&HostStatuslineRemoveResponse { removed })
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
@@ -837,12 +790,11 @@ impl HostHandle {
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("ui.theme.register requires plugin id")
                         })?;
-                                                let p: HostThemeRegisterParams = parse(params)?;
+                        let p: HostThemeRegisterParams = parse(params)?;
                         self.theme_register(&plugin_id, p.request)?;
                         Ok(serde_json::Value::Object(Default::default()))
                     }
                     method::HOST_UI_THEME_LIST => {
-                        
                         let response = self.theme_list_response();
                         serde_json::to_value(&response)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
@@ -851,7 +803,7 @@ impl HostHandle {
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("ui.theme.remove requires plugin id")
                         })?;
-                                                let p: HostThemeRemoveParams = parse(params)?;
+                        let p: HostThemeRemoveParams = parse(params)?;
                         let removed = self.theme_remove(&plugin_id, &p.request.id);
                         serde_json::to_value(&HostThemeRemoveResponse { removed })
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
@@ -1150,27 +1102,27 @@ impl HostHandle {
 }
 use super::{
     Arc, BTreeMap, EventEnvelope, EventSubscription, HashMap, HostAskUserParams,
-    HostCancelSubtaskParams, HostClient, HostConfigReadParams,
-    HostConfigReloadParams, HostContextStatusParams, HostEnterSnapshotParams,
-    HostExitSnapshotParams, HostHandle, HostHookListResponse, HostHookRegistration,
-    HostImageExecuteParams, HostInvokeToolParams, HostListToolsParams, HostLogParams,
-    HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
-    HostMcpListServersParams, HostMcpRemoveServerParams, HostMessageSubtaskParams,
-    HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
-    HostPluginStatusGetParams, HostPluginStatusGetResponse, HostPluginStatusListResponse,
-    HostReadSubtaskOutputParams, HostRegisteredToolDescriptor, HostRegisteredToolListResponse,
-    HostRunSubtaskParams, HostSchedulerCreateParams, HostSchedulerDeleteParams,
-    HostSchedulerListParams, HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams,
-    HostSecretSetParams, HostSetSessionModelParams, HostSnapshotListParams,
-    HostStatuslineContributeParams, HostStatuslineContributeRequest, HostStatuslineListResponse,
-    HostStatuslineRemoveParams, HostStatuslineRemoveResponse, HostStatuslineSegment,
-    HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams, HostStorageSetParams,
-    HostSubscribeParams, HostThemeListResponse, HostThemePalette, HostThemeRegisterParams,
-    HostThemeRegisterRequest, HostThemeRemoveParams, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams,
-    HostUnsubscribeParams, PluginError, PluginKey, PluginLogRecord,
-    PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient,
-    ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,
-    callback_context_from_params, host_api, host_status_from, host_unavailable, method, parse,
-    scoped_context, transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
+    HostCancelSubtaskParams, HostClient, HostConfigReadParams, HostConfigReloadParams,
+    HostContextStatusParams, HostEnterSnapshotParams, HostExitSnapshotParams, HostHandle,
+    HostHookListResponse, HostHookRegistration, HostImageExecuteParams, HostInvokeToolParams,
+    HostListToolsParams, HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams,
+    HostMcpAddServerParams, HostMcpListServersParams, HostMcpRemoveServerParams,
+    HostMessageSubtaskParams, HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams,
+    HostMonitorStopParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredToolDescriptor,
+    HostRegisteredToolListResponse, HostRunSubtaskParams, HostSchedulerCreateParams,
+    HostSchedulerDeleteParams, HostSchedulerListParams, HostSecretDeleteParams,
+    HostSecretGetParams, HostSecretListParams, HostSecretSetParams, HostSetSessionModelParams,
+    HostSnapshotListParams, HostStatuslineContributeParams, HostStatuslineContributeRequest,
+    HostStatuslineListResponse, HostStatuslineRemoveParams, HostStatuslineRemoveResponse,
+    HostStatuslineSegment, HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams,
+    HostStorageSetParams, HostSubscribeParams, HostThemeListResponse, HostThemePalette,
+    HostThemeRegisterParams, HostThemeRegisterRequest, HostThemeRemoveParams,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterParams,
+    HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams, PluginError, PluginKey,
+    PluginLogRecord, PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
+    ScopedHostClient, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    ToolRegistryEventListener, VecDeque, callback_context_from_params, host_api, host_status_from,
+    host_unavailable, method, parse, scoped_context, transport_to_plugin_error, unix_timestamp_ms,
+    validate_tool_definition,
 };

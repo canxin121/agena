@@ -653,11 +653,7 @@ mod tests {
         );
         // Finish requeues it; the delivery key is cleared.
         let next = job.next_fire_at.map(|value| value.timestamp_millis());
-        assert!(
-            store
-                .finish(id, "delivery-1".to_owned(), job, next)
-                .await
-        );
+        assert!(store.finish(id, "delivery-1".to_owned(), job, next).await);
         let reloaded = store.get(id).await.expect("reload");
         assert!(reloaded.pending_delivery.is_none());
     }

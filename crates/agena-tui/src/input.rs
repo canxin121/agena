@@ -44,20 +44,14 @@ impl Default for ComposerKeyBindings {
                 KeyChord::new(KeyCode::Enter, KeyModifiers::SHIFT),
                 KeyChord::new(KeyCode::Char('j'), KeyModifiers::CONTROL),
             ],
-                        edit_queue: vec![KeyChord::new(KeyCode::Char('p'), KeyModifiers::CONTROL)],
+            edit_queue: vec![KeyChord::new(KeyCode::Char('p'), KeyModifiers::CONTROL)],
             cancel_pending: vec![KeyChord::new(KeyCode::Char('x'), KeyModifiers::CONTROL)],
             clear_input: vec![KeyChord::new(KeyCode::Char('c'), KeyModifiers::CONTROL)],
             focus_items: vec![KeyChord::new(KeyCode::Char('g'), KeyModifiers::CONTROL)],
             insert_content: vec![KeyChord::new(KeyCode::Char('a'), KeyModifiers::CONTROL)],
-            attach_file: vec![
-                KeyChord::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
-            ],
-            external_editor: vec![
-                KeyChord::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
-            ],
-            attach_clipboard_image: vec![
-                KeyChord::new(KeyCode::Char('t'), KeyModifiers::CONTROL),
-            ],
+            attach_file: vec![KeyChord::new(KeyCode::Char('o'), KeyModifiers::CONTROL)],
+            external_editor: vec![KeyChord::new(KeyCode::Char('e'), KeyModifiers::CONTROL)],
+            attach_clipboard_image: vec![KeyChord::new(KeyCode::Char('t'), KeyModifiers::CONTROL)],
             open_pending_user_input: vec![KeyChord::new(KeyCode::Char('r'), KeyModifiers::CONTROL)],
             open_pending_permission: vec![KeyChord::new(KeyCode::Char('l'), KeyModifiers::CONTROL)],
         }
@@ -208,7 +202,6 @@ mod tests {
             Some(ComposerAction::ClearInput)
         );
     }
-
 
     #[test]
     fn ctrl_p_edits_the_pending_message() {

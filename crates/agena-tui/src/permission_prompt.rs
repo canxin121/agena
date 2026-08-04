@@ -361,9 +361,7 @@ fn content_lines(content: &[PermissionPromptLine]) -> Vec<Line<'static>> {
                 PermissionPromptLineTone::Muted => {
                     Style::default().fg(agena_tui_components::theme::muted_color())
                 }
-                PermissionPromptLineTone::Strong => {
-                    Style::default().add_modifier(Modifier::BOLD)
-                }
+                PermissionPromptLineTone::Strong => Style::default().add_modifier(Modifier::BOLD),
             },
         )));
     }
@@ -385,7 +383,10 @@ fn choice_lines(
         sanitize_display_text(i18n.text(heading).as_str()),
         Style::default().add_modifier(Modifier::BOLD),
     ))];
-    for (index, label) in choice_labels(i18n, page, auto_approve).into_iter().enumerate() {
+    for (index, label) in choice_labels(i18n, page, auto_approve)
+        .into_iter()
+        .enumerate()
+    {
         let selected = index == presentation.selected();
         let style = if selected {
             agena_tui_components::theme::selection_style()

@@ -3133,32 +3133,34 @@ mod live_transcript_tests {
         // Seed the snapshot with an Operation Activity.
         let op = agena_domain::ActivityNode {
             id: activity_id,
-            owner: ActivityOwner::AssistantReply { reply_id: response_id },
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
             actor: agena_domain::ActivityActor::Tool,
             state: agena_domain::ActivityState::InProgress,
             position: agena_domain::ContentPosition { index: 0 },
             revision_seq: 1,
             lifecycle: agena_domain::ActivityLifecycle::default(),
-            payload: agena_domain::ActivityPayload::Operation(
-                agena_domain::OperationActivity {
-                    call_id: agena_domain::ToolCallId::new("call-1"),
-                    invocation: agena_domain::ToolInvocation::new(
-                        "shell",
-                        agena_domain::StructuredObject::default(),
-                    ),
-                    title: "Run process".to_owned(),
-                    summary: String::new(),
-                    data: serde_json::json!({"tool": "shell", "action": "run"}),
-                    markdown: String::new(),
-                    authorization: Default::default(),
-                    error: None,
-                },
-            ),
+            payload: agena_domain::ActivityPayload::Operation(agena_domain::OperationActivity {
+                call_id: agena_domain::ToolCallId::new("call-1"),
+                invocation: agena_domain::ToolInvocation::new(
+                    "shell",
+                    agena_domain::StructuredObject::default(),
+                ),
+                title: "Run process".to_owned(),
+                summary: String::new(),
+                data: serde_json::json!({"tool": "shell", "action": "run"}),
+                markdown: String::new(),
+                authorization: Default::default(),
+                error: None,
+            }),
             provenance: Default::default(),
         };
-        transcript.snapshot.turns[0].reply.content.0.push(
-            ContentNode::activity(op.clone()),
-        );
+        transcript.snapshot.turns[0]
+            .reply
+            .content
+            .0
+            .push(ContentNode::activity(op.clone()));
 
         let detail_delta = |delta: &str, seq: i64| {
             event(

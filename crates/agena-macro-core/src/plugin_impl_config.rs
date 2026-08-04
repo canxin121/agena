@@ -81,7 +81,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                             ident,
                             "plugin-level `commands = ...` was removed; define commands with method-level #[command(...)]",
                         ));
-                    }                    "tags" => {
+                    }
+                    "tags" => {
                         return Err(syn::Error::new_spanned(
                             ident,
                             "plugin-level `tags(...)` is not supported; declare plugin metadata tags with `tags(ToolTag::...)` on the plugin attribute list",
@@ -107,7 +108,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                 let Some(ident) = list.path.get_ident() else {
                     return Err(syn::Error::new_spanned(list.path, "expected identifier"));
                 };
-                match ident.to_string().as_str() {                    "tags" => {
+                match ident.to_string().as_str() {
+                    "tags" => {
                         plugin_tags.extend(parse_expr_list(list.tokens)?);
                     }
                     other => {

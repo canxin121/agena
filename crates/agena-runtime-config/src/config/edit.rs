@@ -818,7 +818,13 @@ mod tests {
         )
         .expect("atomic delete patch must validate");
         assert!(patched.changed);
-        assert!(!patched.current.as_object().unwrap().contains_key("opencode"));
+        assert!(
+            !patched
+                .current
+                .as_object()
+                .unwrap()
+                .contains_key("opencode")
+        );
         assert!(patched.current.get("default").is_none());
         assert!(patched.current.get("default_selection").is_none());
         assert!(patched.current.get("chatgpt").is_some());

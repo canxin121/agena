@@ -195,7 +195,9 @@ mod permission_overlay_presentation_tests {
         // The primary action is rendered twice only in Details (one-line summary
         // + per-field expansion); overview carries just the one-line summary.
         assert_eq!(
-            overview.matches("https://api.example.test/v1/private?scope=write").count(),
+            overview
+                .matches("https://api.example.test/v1/private?scope=write")
+                .count(),
             1,
             "overview must not duplicate the endpoint across multiple fields"
         );

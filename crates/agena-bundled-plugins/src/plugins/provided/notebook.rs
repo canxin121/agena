@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 
 use agena_macros::ToolInput;
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    PathRequest, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

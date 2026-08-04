@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     ActivityId, AssistantReplyId, ExecutionId, FileChangeRecord, PermissionReply,
     PermissionRequest, ProcessSummary, PromptCompactionActivity, ReasoningPart, RunId,
-    SearchResultItem, SubtaskStatus, TextSegmentId, TodoItem, ToolCallId, ToolInvocation,
-    TurnId, UserInputReply, UserInputRequest,
+    SearchResultItem, SubtaskStatus, TextSegmentId, TodoItem, ToolCallId, ToolInvocation, TurnId,
+    UserInputReply, UserInputRequest,
 };
 
 /// The only two kinds of content that can appear in a turn input or assistant reply.

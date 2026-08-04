@@ -621,14 +621,14 @@ mod tests {
                         reason: "tool is eligible for automatic approval".to_owned(),
                     },
                     contract: agena_domain::ToolPermissionContract {
-                            input_paths: vec![agena_domain::InputPathSpec {
-                                jsonpath: "$.path".to_owned(),
-                                kind: agena_domain::PathKind::Write,
-                                fallback: None,
-                                optional: false,
-                            }],
-                            ..agena_domain::ToolPermissionContract::default()
-                        },
+                        input_paths: vec![agena_domain::InputPathSpec {
+                            jsonpath: "$.path".to_owned(),
+                            kind: agena_domain::PathKind::Write,
+                            fallback: None,
+                            optional: false,
+                        }],
+                        ..agena_domain::ToolPermissionContract::default()
+                    },
                 }],
             )
             .await
@@ -640,7 +640,7 @@ mod tests {
         ));
     }
 
-        #[tokio::test]
+    #[tokio::test]
     async fn path_granted_tool_ask_is_allowed_when_every_path_check_allows() {
         let manager = test_manager_with_permission(
             ToolPermissionPolicy::allow_all(),
@@ -769,8 +769,9 @@ mod tests {
                             qualifier: None,
                         },
                         decision: PermissionDecision::Deny {
-                            reason: "bash command matches deny pattern and is unconditionally blocked"
-                                .to_owned(),
+                            reason:
+                                "bash command matches deny pattern and is unconditionally blocked"
+                                    .to_owned(),
                         },
                         contract: agena_domain::ToolPermissionContract {
                             shell: true,
@@ -796,7 +797,7 @@ mod tests {
         ));
     }
 
-        #[tokio::test]
+    #[tokio::test]
     async fn path_granted_override_never_applies_to_arbitrary_execution_tools() {
         let manager = test_manager_with_permission(
             ToolPermissionPolicy::allow_all(),
@@ -2666,12 +2667,10 @@ mod tests {
             .expect("reap stale leases");
 
         // The stale lease row is gone.
-        let lease_row = agena_runtime_session_core::db::leases::lease(
-            &manager.store.db,
-            session_id,
-        )
-        .await
-        .expect("read lease after reap");
+        let lease_row =
+            agena_runtime_session_core::db::leases::lease(&manager.store.db, session_id)
+                .await
+                .expect("read lease after reap");
         assert!(lease_row.is_none(), "stale lease must be reclaimed");
 
         // The interrupted execution was terminalized: the assistant reply is failed.
@@ -2683,14 +2682,24 @@ mod tests {
             .turns
             .iter()
             .any(|turn| turn.reply.status == AssistantReplyStatus::Failed);
-        assert!(terminal_reply, "interrupted reply must be terminalized as failed");
+        assert!(
+            terminal_reply,
+            "interrupted reply must be terminalized as failed"
+        );
 
         // The session is usable again: a fresh execution can register.
         let registry = Arc::clone(&manager.execution_registry);
         let registered = registry
-            .register(session_id, agena_domain::TurnId::new(), agena_domain::AssistantReplyId::new())
+            .register(
+                session_id,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
             .await;
-        assert!(registered.is_ok(), "session must be usable after lease reclamation");
+        assert!(
+            registered.is_ok(),
+            "session must be usable after lease reclamation"
+        );
         // Clean up the lease this registration acquired.
         if let Ok((control, _rx)) = &registered {
             registry.unregister_if_matches(session_id, control).await;
@@ -3092,7 +3101,7 @@ mod tests {
             .db
             .query_one(Statement::from_sql_and_values(
                 manager.store.db.get_database_backend(),
-                                "SELECT payload_json FROM agena_content_nodes WHERE node_id = ?",
+                "SELECT payload_json FROM agena_content_nodes WHERE node_id = ?",
                 [operation_activity_id.to_string().into()],
             ))
             .await

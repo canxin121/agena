@@ -29,10 +29,7 @@ impl SqliteSequenceAllocator {
 /// Allocate the next value of a named sequence. `next_val` stores the next
 /// value to hand out, so the upsert bumps it by one and returns the previous
 /// value.
-async fn allocate_sequence(
-    db: &DatabaseConnection,
-    name: &str,
-) -> Result<i64, EventStoreError> {
+async fn allocate_sequence(db: &DatabaseConnection, name: &str) -> Result<i64, EventStoreError> {
     let row = db
         .query_one(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
@@ -45,9 +42,10 @@ async fn allocate_sequence(
         ))
         .await
         .map_err(backend_error)?;
-    let row = row.ok_or_else(|| EventStoreError::Backend("sequence allocation returned no row".to_owned()))?;
-    row.try_get::<i64>("", "allocated")
-        .map_err(backend_error)
+    let row = row.ok_or_else(|| {
+        EventStoreError::Backend("sequence allocation returned no row".to_owned())
+    })?;
+    row.try_get::<i64>("", "allocated").map_err(backend_error)
 }
 
 /// Allocate a block of `count` consecutive values from a named sequence.
@@ -70,13 +68,19 @@ async fn allocate_sequence_block(
         ))
         .await
         .map_err(backend_error)?;
-    let row = row.ok_or_else(|| EventStoreError::Backend("sequence block allocation returned no row".to_owned()))?;
+    let row = row.ok_or_else(|| {
+        EventStoreError::Backend("sequence block allocation returned no row".to_owned())
+    })?;
     row.try_get::<i64>("", "first_minus_one")
         .map_err(backend_error)
 }
 
 /// Raise a named sequence floor to at least `target` (idempotent).
-async fn seed_sequence(db: &DatabaseConnection, name: &str, target: i64) -> Result<(), EventStoreError> {
+async fn seed_sequence(
+    db: &DatabaseConnection,
+    name: &str,
+    target: i64,
+) -> Result<(), EventStoreError> {
     db.execute(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         format!(
@@ -120,9 +124,10 @@ async fn allocate_session_sequence(
         ))
         .await
         .map_err(backend_error)?;
-    let row = row.ok_or_else(|| EventStoreError::Backend("session sequence allocation returned no row".to_owned()))?;
-    row.try_get::<i64>("", "allocated")
-        .map_err(backend_error)
+    let row = row.ok_or_else(|| {
+        EventStoreError::Backend("session sequence allocation returned no row".to_owned())
+    })?;
+    row.try_get::<i64>("", "allocated").map_err(backend_error)
 }
 
 fn backend_error(error: impl std::fmt::Display) -> EventStoreError {

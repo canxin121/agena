@@ -26,7 +26,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{HostClient, InitContext, InitOutcome, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    HostClient, InitContext, InitOutcome, Result as SdkResult, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolInvokeOutput,
+};
 
 pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
 
@@ -1552,9 +1555,12 @@ impl SkillsPlugin {
         }
         if input.verbose && !catalog.diagnostics.is_empty() {
             lines.push("Discovery diagnostics:".to_string());
-            lines.extend(catalog.diagnostics.iter().map(|diagnostic| {
-                format!("- {}", diagnostic.failure.user.fallback)
-            }));
+            lines.extend(
+                catalog
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| format!("- {}", diagnostic.failure.user.fallback)),
+            );
         }
         let payload = serde_json::json!({
             "tools": entries.iter().map(|(name, tool)| serde_json::json!({
@@ -1777,9 +1783,13 @@ impl SkillsPlugin {
         )];
         if input.verbose && !refresh.catalog.diagnostics.is_empty() {
             lines.push("Discovery diagnostics:".to_string());
-            lines.extend(refresh.catalog.diagnostics.iter().map(|diagnostic| {
-                format!("- {}", diagnostic.failure.user.fallback)
-            }));
+            lines.extend(
+                refresh
+                    .catalog
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| format!("- {}", diagnostic.failure.user.fallback)),
+            );
         }
         Ok(ToolInvokeOutput::from_parts(
             "skills refresh",

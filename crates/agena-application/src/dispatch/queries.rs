@@ -175,9 +175,7 @@ pub async fn dispatch_query(
                 .operation_detail(session_id, activity_id)
                 .await
                 .map_err(|error| {
-                    ApplicationError::internal(format!(
-                        "operation detail query failed: {error}"
-                    ))
+                    ApplicationError::internal(format!("operation detail query failed: {error}"))
                 })?;
             let resource = detail
                 .map(|detail| OperationDetailResource {

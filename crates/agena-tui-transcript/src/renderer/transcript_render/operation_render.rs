@@ -88,14 +88,7 @@ pub(crate) fn render_tool_execution(
         if expanded {
             push_expanded_markdown(out, "      ", human_markdown, width);
         } else {
-            push_collapsible_text(
-                out,
-                "      ",
-                human_markdown,
-                Style::default(),
-                width,
-                i18n,
-            );
+            push_collapsible_text(out, "      ", human_markdown, Style::default(), width, i18n);
         }
     } else if should_render_tool_model_output(tool, failure_text) {
         push_section_heading(

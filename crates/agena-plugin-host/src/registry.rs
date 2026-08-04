@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::sdk::manifest::UiTextDisplayMode;
 use crate::sdk::{PluginKey, ToolDefinition, ToolDescriptionMode, ToolKey, ToolTag};
 
-
 pub fn validate_tool_definition(
     plugin_key: &PluginKey,
     definition: &ToolDefinition,
@@ -316,8 +315,6 @@ impl PluginToolRegistry {
         self.by_key.get(&key)
     }
 }
-
-
 
 impl Default for PluginToolRegistry {
     fn default() -> Self {

@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use agena_memory_index::{MemoryIndex, MemorySearchDocument};
-use agena_plugin_host::sdk::{PluginCommandOutput, PluginUiAction, Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    PluginCommandOutput, PluginUiAction, Result as SdkResult, ToolInvokeOutput,
+};
 use agena_plugin_host::{
     ChatMessage, ChatMessagesTransformInput, ChatMessagesTransformPatch, PluginError,
 };

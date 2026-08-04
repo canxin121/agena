@@ -12,6 +12,7 @@
 
 use std::sync::{Arc, RwLock};
 
+use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     HostClient, HostStatuslineContributeRequest, HostStatuslineRemoveRequest,
 };
@@ -20,7 +21,6 @@ use agena_plugin_host::sdk::{
     Result as SdkResult, SessionEndInput, SessionStartInput, SessionStartPatch,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
-use agena_plugin_host::PluginError;
 
 pub(crate) const TERMINAL_PLUGIN_ID: &str = "agena.terminal";
 
@@ -196,13 +196,17 @@ impl TerminalPlugin {
             self.set_and_publish(TerminalActivity::Blocked, Some(TerminalNotify::Blocked))
                 .await;
         } else {
-            self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done)).await;
+            self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done))
+                .await;
         }
         Ok(())
     }
 
     #[hook(session.start)]
-    async fn session_start(&self, _input: SessionStartInput) -> SdkResult<Option<SessionStartPatch>> {
+    async fn session_start(
+        &self,
+        _input: SessionStartInput,
+    ) -> SdkResult<Option<SessionStartPatch>> {
         self.set_and_publish(TerminalActivity::Idle, None).await;
         Ok(None)
     }
@@ -226,7 +230,8 @@ impl TerminalPlugin {
 
     #[hook(agent.stop)]
     async fn agent_stop(&self, _input: AgentStopInput) -> SdkResult<Option<AgentStopPatch>> {
-        self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done)).await;
+        self.set_and_publish(TerminalActivity::Idle, Some(TerminalNotify::Done))
+            .await;
         Ok(None)
     }
 }
@@ -241,7 +246,10 @@ mod tests {
         let manifest = TerminalPlugin::new().manifest();
         assert_eq!(manifest.namespace, "agena");
         assert_eq!(manifest.name, "terminal");
-        assert!(manifest.tools.is_empty(), "terminal plugin must expose no tools");
+        assert!(
+            manifest.tools.is_empty(),
+            "terminal plugin must expose no tools"
+        );
     }
 
     #[test]

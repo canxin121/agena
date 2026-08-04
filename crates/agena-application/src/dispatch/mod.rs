@@ -36,9 +36,10 @@ use agena_api::{
     resource::{
         ModelCatalogResponse, ModelCatalogSourceKind, OperationDetailResource,
         RuntimeAutomationResource, RuntimeBackgroundTaskResource, RuntimeLspResource,
-        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
-        RuntimePluginUiResource, RuntimeSessionCacheResource, RuntimeSkillResource,
-        RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource, WorkspaceResource,
+        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+        RuntimeOperatorResource, RuntimePluginUiResource, RuntimeSessionCacheResource,
+        RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
+        WorkspaceResource,
     },
 };
 

@@ -1433,8 +1433,8 @@ fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
 
 #[cfg(test)]
 mod operation_part_tests {
-    use super::{OperationPart};
-    use agena_domain::{ToolInvocation, TimeRange};
+    use super::OperationPart;
+    use agena_domain::{TimeRange, ToolInvocation};
 
     fn operation() -> OperationPart {
         OperationPart::pending(

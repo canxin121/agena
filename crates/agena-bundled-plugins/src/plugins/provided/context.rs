@@ -4,7 +4,9 @@ use std::sync::{Arc, OnceLock};
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{HostClient, HostContextStatusRequest};
-use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
+};
 
 pub(crate) const CONTEXT_PLUGIN_ID: &str = "agena.context";
 

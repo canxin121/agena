@@ -250,14 +250,18 @@ impl WorkflowPlugin {
             return records;
         };
         let normalized = plugin.trim_end_matches('.');
-        records.into_iter().filter(|record| {
-            let id = record.plugin_id.as_str();
-            id == normalized
-                || id.strip_suffix(normalized).is_some_and(|prefix| prefix.ends_with('.'))
-                || id.rsplit('.').next() == Some(normalized)
-        }).collect()
+        records
+            .into_iter()
+            .filter(|record| {
+                let id = record.plugin_id.as_str();
+                id == normalized
+                    || id
+                        .strip_suffix(normalized)
+                        .is_some_and(|prefix| prefix.ends_with('.'))
+                    || id.rsplit('.').next() == Some(normalized)
+            })
+            .collect()
     }
-
 
     pub(in crate::plugins::provided::workflow) fn tool_tags_by_visible_name(
         visible: &HashSet<String>,
@@ -1507,7 +1511,10 @@ impl WorkflowPlugin {
 use super::{
     Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
     HashMap, HashSet, HostAskUserOption, HostAskUserQuestion, HostClient, HostGetSessionRequest,
-    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility, OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
+    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
+    HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
+    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,

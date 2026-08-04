@@ -85,14 +85,18 @@ fn scrub_segment(segment: &str) -> String {
     // Control characters (newlines, tabs, ANSI) are rendered as a space.
     out = out
         .chars()
-        .map(|character| if character.is_control() { ' ' } else { character })
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
         .collect();
 
     let lower = out.to_ascii_lowercase();
 
-    if lower.contains("authorization:")
-        || lower.contains("bearer ")
-        || lower.contains("x-api-key")
+    if lower.contains("authorization:") || lower.contains("bearer ") || lower.contains("x-api-key")
     {
         return String::new();
     }
@@ -181,10 +185,7 @@ fn remove_paths(text: &str) -> String {
             .unwrap_or(tail.len());
         rest = &tail[path_end..];
     }
-    rebuilt
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
+    rebuilt.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Picks the most informative root-cause segment from a chain.
@@ -266,7 +267,10 @@ pub fn user_message_with_context(diagnostic: &str, max_chars: usize) -> String {
     // Attach the outermost action segment when it is safe and distinct from
     // the root, so the message reads "failed to save: <cause>" rather than a
     // bare cause.
-    let head = segments.first().map(|s| scrub_segment(s)).unwrap_or_default();
+    let head = segments
+        .first()
+        .map(|s| scrub_segment(s))
+        .unwrap_or_default();
     let head = head.trim().to_owned();
     if !head.is_empty() && head != root && !is_noise_segment(&head) {
         truncate(format!("{head}: {root}"), max_chars)
@@ -289,7 +293,13 @@ pub fn scrubbed_preserve(message: &str, max_chars: usize) -> String {
     // Control characters become spaces.
     out = out
         .chars()
-        .map(|character| if character.is_control() { ' ' } else { character })
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
         .collect();
     let lower = out.to_ascii_lowercase();
     if is_prompt_directive(&out) {
@@ -398,4 +408,3 @@ mod tests {
         assert!(msg.chars().count() <= 241);
     }
 }
-

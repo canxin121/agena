@@ -25,16 +25,13 @@ fn window_title_operational(app: &App) -> bool {
     if app.launch.tui_config.terminal_title == TerminalIntegrationMode::Enabled {
         return true;
     }
-    app.launch
-        .terminal_context
-        .as_ref()
-        .is_some_and(|context| {
-            context.capabilities.window_title.is_operational()
-                || matches!(
-                    context.capabilities.window_title.support,
-                    agena_tui::terminal_capabilities::Support::Unknown
-                )
-        })
+    app.launch.terminal_context.as_ref().is_some_and(|context| {
+        context.capabilities.window_title.is_operational()
+            || matches!(
+                context.capabilities.window_title.support,
+                agena_tui::terminal_capabilities::Support::Unknown
+            )
+    })
 }
 
 /// Whether the terminal currently supports attention notifications. The
@@ -49,12 +46,7 @@ fn notifications_operational(app: &App) -> bool {
     app.launch
         .terminal_context
         .as_ref()
-        .is_some_and(|context| {
-            context
-                .capabilities
-                .terminal_notifications
-                .is_operational()
-        })
+        .is_some_and(|context| context.capabilities.terminal_notifications.is_operational())
 }
 
 /// The activity projected to the terminal title, honoring the `agena.terminal`
@@ -143,7 +135,10 @@ pub(crate) fn title_frames_if_changed(app: &App) -> Option<Vec<Vec<u8>>> {
 }
 
 /// Emits the title frames for the current state, if any changed.
-pub(crate) fn sync_terminal_title(app: &mut App, terminal: &mut TerminalRuntime) -> crate::Result<()> {
+pub(crate) fn sync_terminal_title(
+    app: &mut App,
+    terminal: &mut TerminalRuntime,
+) -> crate::Result<()> {
     let Some(frames) = title_frames_if_changed(app) else {
         return Ok(());
     };
@@ -168,10 +163,7 @@ pub(crate) fn drain_terminal_notification(
     terminal: &mut TerminalRuntime,
 ) -> crate::Result<Option<NotificationMethod>> {
     let local = app.terminal_integration.take_notification();
-    let plugin_notify = local
-        .is_none()
-        .then(|| take_plugin_notify(app))
-        .flatten();
+    let plugin_notify = local.is_none().then(|| take_plugin_notify(app)).flatten();
     let Some(method) = local.or(plugin_notify) else {
         return Ok(None);
     };

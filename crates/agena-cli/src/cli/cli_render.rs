@@ -705,7 +705,16 @@ impl AgenaCli {
             let provider_count = config
                 .get("providers")
                 .and_then(serde_json::Value::as_object)
-                .map_or(0, |providers| providers.len());
+                .map_or(0, |providers| {
+                    // The effective document mirrors the raw file shape and
+                    // carries the reserved `default` / `default_selection`
+                    // route keys alongside the provider entries; only count
+                    // actual providers.
+                    providers
+                        .keys()
+                        .filter(|key| key.as_str() != "default" && key.as_str() != "default_selection")
+                        .count()
+                });
             let plugin_count = config
                 .get("plugins")
                 .and_then(|plugins| plugins.get("list"))

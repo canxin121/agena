@@ -182,7 +182,16 @@ impl ModelRuntime for OpenAiResponsesAdapter {
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
-        StreamResumePolicy::ReplaySafePrefix
+        // Replay-safe prefix resume assumes the provider returns a byte-identical
+        // event prefix on retry, which only holds for deterministic endpoints.
+        // Third-party OpenAI-compatible gateways (e.g. cpa) can stream different
+        // chunk boundaries on retry, so replay there only causes
+        // "replay prefix diverged" aborts. Restrict replay to the official API.
+        if self.is_official_openai_endpoint() {
+            StreamResumePolicy::ReplaySafePrefix
+        } else {
+            StreamResumePolicy::Disabled
+        }
     }
 
     fn supports_prompt_continuation(&self, model: &ModelId) -> bool {
@@ -852,7 +861,14 @@ impl ModelRuntime for OpenAiChatCompletionsAdapter {
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
-        StreamResumePolicy::ReplaySafePrefix
+        // See the OpenAiResponsesAdapter note: replay-safe prefix resume only
+        // holds for the deterministic official endpoint, not third-party
+        // OpenAI-compatible gateways.
+        if self.is_official_openai_endpoint() {
+            StreamResumePolicy::ReplaySafePrefix
+        } else {
+            StreamResumePolicy::Disabled
+        }
     }
 
     fn supports_prompt_continuation(&self, _model: &ModelId) -> bool {
@@ -942,7 +958,14 @@ impl ModelRuntime for OpenAiRealtimeAdapter {
     }
 
     fn stream_resume_policy(&self) -> StreamResumePolicy {
-        StreamResumePolicy::ReplaySafePrefix
+        // See the OpenAiResponsesAdapter note: replay-safe prefix resume only
+        // holds for the deterministic official endpoint, not third-party
+        // OpenAI-compatible gateways.
+        if self.is_official_openai_endpoint() {
+            StreamResumePolicy::ReplaySafePrefix
+        } else {
+            StreamResumePolicy::Disabled
+        }
     }
 
     fn supports_prompt_continuation(&self, _model: &ModelId) -> bool {

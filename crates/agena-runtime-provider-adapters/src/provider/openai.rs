@@ -529,6 +529,45 @@ mod tests {
         .transport
     }
 
+    fn responses_adapter(base_url: &str) -> OpenAiResponsesAdapter {
+        OpenAiResponsesAdapter::new_managed_with_options(
+            "resume-test",
+            reqwest::Client::new(),
+            ManagedCredential::static_value("test key", "secret"),
+            base_url,
+            "test-model",
+            OpenAiResponsesAdapterOptions {
+                capability_family: CapabilityFamily::OpenAi,
+                ..OpenAiResponsesAdapterOptions::default()
+            },
+        )
+    }
+
+    #[test]
+    fn replay_resume_is_limited_to_the_official_openai_endpoint() {
+        // Third-party OpenAI-compatible gateways do not guarantee a
+        // byte-identical event prefix on retry; replay-safe resume there only
+        // produces "replay prefix diverged" aborts. Only the official endpoint
+        // opts into ReplaySafePrefix.
+        let official = responses_adapter("https://api.openai.com/v1");
+        assert_eq!(
+            ModelRuntime::stream_resume_policy(&official),
+            agena_provider::StreamResumePolicy::ReplaySafePrefix
+        );
+
+        let third_party = responses_adapter("https://api.cxits.cn");
+        assert_eq!(
+            ModelRuntime::stream_resume_policy(&third_party),
+            agena_provider::StreamResumePolicy::Disabled
+        );
+
+        let custom = responses_adapter("https://llm.example.test/v1");
+        assert_eq!(
+            ModelRuntime::stream_resume_policy(&custom),
+            agena_provider::StreamResumePolicy::Disabled
+        );
+    }
+
     #[test]
     fn xai_chat_uses_the_documented_affinity_header_and_usage_extension() {
         let transport = chat_transport("jiuuij", "https://api.x.ai/v1");

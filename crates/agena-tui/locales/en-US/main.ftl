@@ -1830,6 +1830,7 @@ terminal-diagnostics-protocol-background = Background query
 terminal-diagnostics-protocol-native-clipboard = Native clipboard
 terminal-diagnostics-protocol-osc52-write = OSC 52 write
 terminal-diagnostics-protocol-osc52-read = OSC 52 read
+terminal-diagnostics-protocol-progress = OSC 9;4 progress
 terminal-diagnostics-provider-kitty-clipboard = Kitty clipboard
 terminal-diagnostics-provider-kitty-transfer = Kitty transfer
 terminal-diagnostics-provider-iterm-transfer = iTerm2 transfer

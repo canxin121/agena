@@ -234,6 +234,25 @@ pub mod profile {
             _ => ProfileSupport::Available,
         }
     }
+    /// OSC 9;4 (ConEmu) native progress reporting. The terminal renders an
+    /// indeterminate/pulsing or determinate progress indicator in its tab,
+    /// titlebar, or taskbar chrome. Unlike window titles, the sequence is not
+    /// consumed locally by a multiplexer and an unsupported endpoint may
+    /// interpret `OSC 9;4;*` as an OSC 9 notification, so only families with
+    /// verified progress support are enabled; everything else stays
+    /// conservative (`Unsupported`).
+    pub const fn progress(f: TerminalFamily) -> ProfileSupport {
+        match f {
+            TerminalFamily::Iterm2
+            | TerminalFamily::WindowsTerminal
+            | TerminalFamily::WezTerm
+            | TerminalFamily::Ghostty
+            | TerminalFamily::VsCode
+            | TerminalFamily::Konsole
+            | TerminalFamily::Warp => ProfileSupport::Available,
+            _ => ProfileSupport::Unsupported,
+        }
+    }
     /// BEL is the universal VT attention signal and therefore the base
     /// notification method for every interactive family.
     pub const fn notifications_bel(f: TerminalFamily) -> bool {

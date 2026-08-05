@@ -303,6 +303,9 @@ pub(super) struct TerminalIntegrationState {
     pub(super) pending_notifications:
         Vec<agena_tui_platform::terminal::integration::NotificationMethod>,
     title_due: bool,
+    /// Last OSC 9;4 progress state emitted; `None` before the first emission
+    /// or while the terminal does not support progress.
+    last_progress: Option<agena_tui_platform::terminal::integration::ProgressState>,
     /// Content of the `agena.terminal.notify` segment already fired. The
     /// plugin keeps the segment present across frames; this set ensures each
     /// lifecycle intent fires exactly once.
@@ -358,6 +361,21 @@ impl TerminalIntegrationState {
             self.consumed_notify.clear();
         }
         true
+    }
+
+    /// Returns the last emitted progress state.
+    pub(super) fn last_progress(
+        &self,
+    ) -> Option<agena_tui_platform::terminal::integration::ProgressState> {
+        self.last_progress
+    }
+
+    /// Records that `state` has been emitted to the terminal chrome.
+    pub(super) fn note_progress_emitted(
+        &mut self,
+        state: agena_tui_platform::terminal::integration::ProgressState,
+    ) {
+        self.last_progress = Some(state);
     }
 }
 

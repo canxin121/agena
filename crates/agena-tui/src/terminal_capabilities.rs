@@ -217,6 +217,10 @@ pub struct TerminalCapabilities {
     pub synchronized_output: Capability,
     pub window_title: Capability,
     pub terminal_notifications: Capability,
+    /// OSC 9;4 (ConEmu) native progress reporting. The terminal renders a
+    /// native indeterminate/determinate progress indicator in tab/taskbar
+    /// chrome while the session is active.
+    pub terminal_progress: Capability,
 }
 
 /// A presentation diagnostic derived from terminal evidence.
@@ -272,6 +276,7 @@ mod tests {
             synchronized_output: capability,
             window_title: capability,
             terminal_notifications: capability,
+            terminal_progress: capability,
         }
     }
 

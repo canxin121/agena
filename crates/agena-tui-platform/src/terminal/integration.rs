@@ -128,6 +128,43 @@ pub fn notification_frames(method: NotificationMethod, text: &str) -> Vec<Vec<u8
     }
 }
 
+/// The OSC 9;4 progress-bar state projected from session activity.
+///
+/// The ConEmu numbering is shared by iTerm2, Windows Terminal, WezTerm,
+/// Ghostty, VS Code/xterm.js, Konsole and Warp. State 3 is indeterminate:
+/// the terminal animates a pulsing/indeterminate indicator itself, so a
+/// single frame is enough to signal "working" without a client-side loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgressState {
+    /// State 0 - remove/hide the progress indicator.
+    Clear,
+    /// State 3 - indeterminate (pulsing/back-and-forth animation).
+    Working,
+    /// State 4 - paused/warning: awaiting permission or user input.
+    Awaiting,
+    /// State 2 - error: the run ended blocked.
+    Blocked,
+}
+
+impl ProgressState {
+    const fn osc_state(self) -> u8 {
+        match self {
+            Self::Clear => 0,
+            Self::Working => 3,
+            Self::Awaiting => 4,
+            Self::Blocked => 2,
+        }
+    }
+}
+
+/// Builds the OSC 9;4 frame that reports `state` to the terminal chrome.
+/// Unlike titles, this sequence is only safe when the endpoint is verified
+/// to support progress; unsupported terminals may interpret `OSC 9;4;*` as
+/// an OSC 9 notification.
+pub fn progress_frames(state: ProgressState) -> Vec<Vec<u8>> {
+    vec![format!("\x1b]9;4;{}\x07", state.osc_state()).into_bytes()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +275,26 @@ mod tests {
                 b"\x1b]9;done\x07".to_vec(),
                 b"\x1b]1337;RequestAttention=yes\x07".to_vec(),
             ]
+        );
+    }
+
+    #[test]
+    fn progress_frames_use_the_conemu_state_numbering() {
+        assert_eq!(
+            progress_frames(ProgressState::Clear),
+            vec![b"\x1b]9;4;0\x07".to_vec()]
+        );
+        assert_eq!(
+            progress_frames(ProgressState::Working),
+            vec![b"\x1b]9;4;3\x07".to_vec()]
+        );
+        assert_eq!(
+            progress_frames(ProgressState::Awaiting),
+            vec![b"\x1b]9;4;4\x07".to_vec()]
+        );
+        assert_eq!(
+            progress_frames(ProgressState::Blocked),
+            vec![b"\x1b]9;4;2\x07".to_vec()]
         );
     }
 }

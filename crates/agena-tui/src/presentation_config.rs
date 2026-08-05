@@ -30,6 +30,10 @@ pub struct TuiConfig {
     /// Whether terminal-native attention notifications are raised for
     /// permission requests, user-input requests, errors, and completion.
     pub terminal_notifications: TerminalIntegrationMode,
+    /// Whether the terminal renders an OSC 9;4 native progress indicator
+    /// (indeterminate while running, paused while awaiting, error when
+    /// blocked) instead of relying on the title suffix alone.
+    pub terminal_progress: TerminalIntegrationMode,
 }
 
 /// User-selectable mode for a terminal-integration feature. `Auto` follows the
@@ -92,6 +96,7 @@ impl Default for TuiConfig {
             transcript: TuiTranscriptConfig::default(),
             terminal_title: TerminalIntegrationMode::default(),
             terminal_notifications: TerminalIntegrationMode::default(),
+            terminal_progress: TerminalIntegrationMode::default(),
         }
     }
 }

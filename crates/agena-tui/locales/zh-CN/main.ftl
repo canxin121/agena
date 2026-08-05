@@ -1830,6 +1830,7 @@ terminal-diagnostics-protocol-background = 背景色查询
 terminal-diagnostics-protocol-native-clipboard = 原生剪贴板
 terminal-diagnostics-protocol-osc52-write = OSC 52 写入
 terminal-diagnostics-protocol-osc52-read = OSC 52 读取
+terminal-diagnostics-protocol-progress = OSC 9;4 进度条
 terminal-diagnostics-provider-kitty-clipboard = Kitty 剪贴板
 terminal-diagnostics-provider-kitty-transfer = Kitty 传输
 terminal-diagnostics-provider-iterm-transfer = iTerm2 传输

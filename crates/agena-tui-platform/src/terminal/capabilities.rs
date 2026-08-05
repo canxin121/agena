@@ -235,6 +235,13 @@ impl TerminalContext {
             }
             None => Capability::profiled(profile),
         };
+        let progress_override =
+            overrides::boolean(environment, "AGENA_TUI_PROGRESS", &mut override_diagnostics);
+        let terminal_progress = match progress_override {
+            Some(true) => Capability::forced(user),
+            Some(false) => Capability::unsupported(user),
+            None => profile_capability(profiles::progress(identity.family)),
+        };
 
         let capabilities = TerminalCapabilities {
             alternate_screen: base_screen,
@@ -257,6 +264,7 @@ impl TerminalContext {
             synchronized_output,
             window_title,
             terminal_notifications,
+            terminal_progress,
         };
         let diagnostics = build_diagnostics(
             &identity,
@@ -337,7 +345,7 @@ impl TerminalContext {
             },
         );
         format!(
-            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | color={color}/generation:{} | keyboard={} | mouse={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | title={} | notifications={} | warnings={}",
+            "{} | confidence={} | layers={layers} (order unknown) | remote={} | multiplexer={} | color={color}/generation:{} | keyboard={} | mouse={} | native-clipboard={} | osc52={}/read:{} | rich-clipboard={} | file-transfer={} | title={} | notifications={} | progress={} | warnings={}",
             self.identity.display_name(),
             self.identity.confidence.label(),
             self.is_remote(),
@@ -352,6 +360,7 @@ impl TerminalContext {
             file_transfer_label(&self.capabilities),
             self.capabilities.window_title.diagnostic_label(),
             self.capabilities.terminal_notifications.diagnostic_label(),
+            self.capabilities.terminal_progress.diagnostic_label(),
             self.diagnostics.len(),
         )
     }
@@ -757,5 +766,49 @@ mod tests {
         let summary = context.diagnostic_summary();
         assert!(summary.contains("title="));
         assert!(summary.contains("notifications="));
+        assert!(summary.contains("progress="));
+    }
+
+    #[test]
+    fn progress_is_operational_only_for_verified_families() {
+        for pairs in [
+            &[("TERM_PROGRAM", "iTerm.app")][..],
+            &[("TERM_PROGRAM", "WezTerm")][..],
+            &[("TERM_PROGRAM", "ghostty")][..],
+            &[("WT_SESSION", "abc")][..],
+            &[("TERM_PROGRAM", "vscode")][..],
+            &[("KONSOLE_VERSION", "23.08.0")][..],
+            &[("TERM_PROGRAM", "WarpTerminal")][..],
+        ] {
+            let context = detect(pairs);
+            assert!(
+                context.capabilities.terminal_progress.is_operational(),
+                "{} should support OSC 9;4 progress",
+                context.identity.family.label()
+            );
+        }
+        let kitty = detect(&[("TERM", "xterm-kitty"), ("KITTY_WINDOW_ID", "1")]);
+        assert!(!kitty.capabilities.terminal_progress.is_operational());
+        let dumb = detect(&[("TERM", "dumb")]);
+        assert!(!dumb.capabilities.terminal_progress.is_operational());
+    }
+
+    #[test]
+    fn progress_override_forces_or_blocks() {
+        let blocked = detect(&[("TERM_PROGRAM", "iTerm.app"), ("AGENA_TUI_PROGRESS", "off")]);
+        assert_eq!(
+            blocked.capabilities.terminal_progress.support,
+            Support::Unsupported
+        );
+        let forced = detect(&[
+            ("TERM", "xterm-kitty"),
+            ("KITTY_WINDOW_ID", "1"),
+            ("AGENA_TUI_PROGRESS", "on"),
+        ]);
+        assert!(forced.capabilities.terminal_progress.is_operational());
+        assert_eq!(
+            forced.capabilities.terminal_progress.source,
+            CapabilitySource::UserOverride
+        );
     }
 }

@@ -232,6 +232,7 @@ impl App {
             })?;
             terminal.set_text_input_active(self.has_active_text_input());
             crate::sync_terminal_title(self, terminal)?;
+            crate::sync_terminal_progress(self, terminal)?;
             crate::drain_terminal_notification(self, terminal)?;
 
             tokio::select! {

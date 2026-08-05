@@ -9,7 +9,8 @@
 
 use crate::{App, SessionActivity, TerminalRuntime};
 use agena_tui_platform::terminal::integration::{
-    NotificationMethod, notification_frames, notification_method, title_frames,
+    NotificationMethod, ProgressState, notification_frames, notification_method, progress_frames,
+    title_frames,
 };
 
 use agena_tui::presentation_config::TerminalIntegrationMode;
@@ -102,10 +103,17 @@ fn current_title_text(app: &App) -> String {
         SessionActivity::AwaitingUserInput => Some(app.i18n.text("terminal-title-user-input")),
         SessionActivity::Blocked => Some(app.i18n.text("terminal-title-blocked")),
     };
+    // Terminals without a native OSC 9;4 progress indicator rely on the
+    // title alone to show activity, so the state text leads the title where
+    // it cannot be truncated away. Terminals with native progress keep the
+    // state as a trailing suffix because the indicator is the primary cue.
+    let progress_native = progress_operational(app);
     match (session_title, state) {
-        (Some(title), Some(state)) => format!("{title} · {state}"),
+        (Some(title), Some(state)) if progress_native => format!("{title} · {state}"),
+        (Some(title), Some(state)) => format!("{state} · {title}"),
         (Some(title), None) => title,
-        (None, Some(state)) => format!("{} · {state}", workspace),
+        (None, Some(state)) if progress_native => format!("{} · {state}", workspace),
+        (None, Some(state)) => format!("{state} · {workspace}"),
         (None, None) => workspace,
     }
 }
@@ -149,6 +157,67 @@ pub(crate) fn sync_terminal_title(
     terminal.write_protocol_frames(&owned_frames)?;
     let title = current_title_text(app);
     app.terminal_integration.note_title_emitted(title);
+    Ok(())
+}
+
+/// Whether the terminal currently supports OSC 9;4 native progress
+/// reporting. The user-facing mode overrides the capability evidence; like
+/// notifications, the sequence is not emitted for unsupported endpoints.
+fn progress_operational(app: &App) -> bool {
+    if app.launch.tui_config.terminal_progress == TerminalIntegrationMode::Disabled {
+        return false;
+    }
+    if app.launch.tui_config.terminal_progress == TerminalIntegrationMode::Enabled {
+        return true;
+    }
+    app.launch
+        .terminal_context
+        .as_ref()
+        .is_some_and(|context| context.capabilities.terminal_progress.is_operational())
+}
+
+/// The OSC 9;4 progress state for the current activity. `Idle` clears the
+/// indicator; interactive waits map to the paused/warning state and a
+/// blocked run to the error state.
+fn current_progress_state(app: &App) -> ProgressState {
+    match effective_terminal_activity(app) {
+        SessionActivity::Idle => ProgressState::Clear,
+        SessionActivity::Running => ProgressState::Working,
+        SessionActivity::AwaitingPermission | SessionActivity::AwaitingUserInput => {
+            ProgressState::Awaiting
+        }
+        SessionActivity::Blocked => ProgressState::Blocked,
+    }
+}
+
+/// Computes the OSC 9;4 progress frames for the current state, or `None`
+/// when nothing changed since the last emission.
+pub(crate) fn progress_frames_if_changed(app: &App) -> Option<Vec<Vec<u8>>> {
+    if !progress_operational(app) {
+        return None;
+    }
+    let state = current_progress_state(app);
+    if app.terminal_integration.last_progress() == Some(state) {
+        return None;
+    }
+    Some(progress_frames(state))
+}
+
+/// Emits the OSC 9;4 progress frames for the current state, if changed.
+pub(crate) fn sync_terminal_progress(
+    app: &mut App,
+    terminal: &mut TerminalRuntime,
+) -> crate::Result<()> {
+    let Some(frames) = progress_frames_if_changed(app) else {
+        return Ok(());
+    };
+    let owned_frames = frames
+        .iter()
+        .map(|frame| frame.as_slice())
+        .collect::<Vec<_>>();
+    terminal.write_protocol_frames(&owned_frames)?;
+    let state = current_progress_state(app);
+    app.terminal_integration.note_progress_emitted(state);
     Ok(())
 }
 

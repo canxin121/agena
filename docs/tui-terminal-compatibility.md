@@ -10,18 +10,18 @@ depth, so Agena never presents them as a verified transport topology.
 
 | Family | Identity evidence | Agena behavior |
 |---|---|---|
-| iTerm2 | `TERM_PROGRAM`, `LC_TERMINAL`, `ITERM_SESSION_ID` | Native `it2ul`/`it2dl` attachment transfer when the shell-integration utilities are installed |
+| iTerm2 | `TERM_PROGRAM`, `LC_TERMINAL`, `ITERM_SESSION_ID` | Native `it2ul`/`it2dl` attachment transfer when the shell-integration utilities are installed; OSC 9;4 native progress |
 | Kitty | `KITTY_WINDOW_ID`, `KITTY_PID`, `xterm-kitty` | Kitty keyboard mode, OSC 52, remote image clipboard reads, graphics capability evidence, and `kitten transfer` uploads/downloads |
-| WezTerm | `TERM_PROGRAM`, `WEZTERM_PANE` | OSC 52; Kitty keyboard mode remains off unless explicitly enabled because WezTerm makes it configurable |
-| Ghostty | `TERM_PROGRAM`, `GHOSTTY_RESOURCES_DIR`, `xterm-ghostty` | Kitty keyboard mode, OSC 52 read/write evidence, graphics capability evidence and terminfo diagnostics |
-| Windows Terminal | `WT_SESSION` | ConPTY-safe VT defaults, native clipboard, OSC 52 profile and WSL topology detection |
-| VS Code | `TERM_PROGRAM=vscode` | xterm.js-oriented profile, theme environment support and Remote SSH diagnostics |
+| WezTerm | `TERM_PROGRAM`, `WEZTERM_PANE` | OSC 52; Kitty keyboard mode remains off unless explicitly enabled because WezTerm makes it configurable; OSC 9;4 native progress |
+| Ghostty | `TERM_PROGRAM`, `GHOSTTY_RESOURCES_DIR`, `xterm-ghostty` | Kitty keyboard mode, OSC 52 read/write evidence, graphics capability evidence, terminfo diagnostics and OSC 9;4 native progress |
+| Windows Terminal | `WT_SESSION` | ConPTY-safe VT defaults, native clipboard, OSC 52 profile, WSL topology detection and OSC 9;4 native progress |
+| VS Code | `TERM_PROGRAM=vscode` | xterm.js-oriented profile, theme environment support, Remote SSH diagnostics and OSC 9;4 native progress |
 | Apple Terminal | `TERM_PROGRAM=Apple_Terminal` | Conservative legacy keyboard behavior and native clipboard |
 | Alacritty | `TERM_PROGRAM`, `ALACRITTY_SOCKET` | Standard VT, bracketed paste, focus and OSC 52 profile |
 | VTE family | `VTE_VERSION` | GNOME Terminal/Ptyxis/Tilix-compatible VT and OSC 52 profile |
-| Konsole | `KONSOLE_VERSION`, `KONSOLE_DBUS_SERVICE` | KDE terminal VT and OSC 52 profile |
+| Konsole | `KONSOLE_VERSION`, `KONSOLE_DBUS_SERVICE` | KDE terminal VT, OSC 52 profile and OSC 9;4 native progress |
 | foot | `TERM=foot` or `foot-extra` | Kitty keyboard mode, synchronized-output evidence and OSC 52 |
-| Warp | `TERM_PROGRAM=WarpTerminal` | Standard VT and OSC 52 profile |
+| Warp | `TERM_PROGRAM=WarpTerminal` | Standard VT, OSC 52 profile and OSC 9;4 native progress |
 | JetBrains | `TERMINAL_EMULATOR` | Conservative embedded-terminal profile |
 | Rio / Contour | `TERM_PROGRAM` | Standard VT and OSC 52 profiles |
 | xterm-compatible / Linux console / dumb | `$TERM` | `xterm-*` is compatibility evidence rather than product identity; unsupported enhanced modes are not enabled |
@@ -197,15 +197,19 @@ hidden by containers, SSH configuration or multiplexers:
 | `AGENA_TUI_HELPER_TIMEOUT_SECS` | `15..3600` | Timeout for interactive terminal helpers; defaults to 300 seconds |
 | `AGENA_TUI_WINDOW_TITLE` | boolean | Enable or disable the session-name window/tab title |
 | `AGENA_TUI_NOTIFICATIONS` | boolean | Enable or disable native terminal attention notifications |
+| `AGENA_TUI_PROGRESS` | boolean | Enable or disable native OSC 9;4 progress reporting |
 
 ## Window title and notifications
 
 Agena sets the terminal window/tab title to the active session name plus a
-compact activity suffix (`工作中 · awaiting approval · awaiting input ·
-blocked`) and raises a terminal-native attention notification for lifecycle
-events (run completed, run blocked), permission requests and user-input
-requests. Both behaviors are off by default only on terminals that cannot
-render them (`dumb`, the Linux console).
+compact activity state (`工作中 · awaiting approval · awaiting input ·
+blocked`). On terminals with native OSC 9;4 progress the state stays a
+suffix (`session · 工作中`); on every other terminal the state leads the
+title (`工作中 · session`) so it cannot be truncated away by the tab
+bar. Agena also raises a terminal-native attention notification for
+lifecycle events (run completed, run blocked), permission requests and
+user-input requests. Both title and notifications are off by default only
+on terminals that cannot render them (`dumb`, the Linux console).
 
 The window title uses OSC 2 (window title) everywhere, and additionally OSC 0
 (window + icon title) for iTerm2 and Apple Terminal. Terminal-native
@@ -228,6 +232,26 @@ activity through the plugin statusline channel. The plugin is hooks-only and
 exposes no tools to the model. Permission and user-input waits are not
 observable through a plugin hook today, so those notifications are raised by
 the TUI layer where the interactive prompt is opened.
+
+## Progress reporting
+
+Terminals with a native progress surface render an OSC 9;4 (ConEmu) progress
+indicator in their tab header, titlebar, or taskbar. Agena emits a single
+indeterminate frame (`ESC ] 9 ; 4 ; 3 BEL`) while a run is active, so the
+terminal animates a pulsing/back-and-forth indicator itself; interactive waits
+use the paused/warning state (`4`), a blocked run uses the error state (`2`),
+and idle clears the indicator (`0`).
+
+| Family | Progress method |
+|---|---|
+| iTerm2, Windows Terminal, WezTerm, Ghostty, VS Code, Konsole, Warp | OSC 9;4 native progress |
+| everything else | disabled (no native progress surface) |
+
+Unlike window titles, the sequence is not consumed locally by a multiplexer,
+and an unsupported endpoint may interpret `OSC 9;4;*` as an OSC 9
+notification. Progress is therefore emitted only for the verified families
+above or when `AGENA_TUI_PROGRESS=1` forces it; the window-title activity
+suffix remains the universal fallback.
 
 Do not force a protocol merely because the outer terminal supports it. Every
 hop between Agena and that terminal must preserve the protocol and its replies.

@@ -692,6 +692,10 @@ impl App {
                             &text("terminal-diagnostics-protocol-osc52-read"),
                             capabilities.clipboard_read_osc52,
                         ),
+                        capability(
+                            &text("terminal-diagnostics-protocol-progress"),
+                            capabilities.terminal_progress,
+                        ),
                     ],
                 },
                 HelpSection {
@@ -1169,6 +1173,7 @@ mod tests {
             "terminal-diagnostics-protocol-native-clipboard",
             "terminal-diagnostics-protocol-osc52-write",
             "terminal-diagnostics-protocol-osc52-read",
+            "terminal-diagnostics-protocol-progress",
             "terminal-diagnostics-provider-kitty-clipboard",
             "terminal-diagnostics-provider-kitty-transfer",
             "terminal-diagnostics-provider-iterm-transfer",

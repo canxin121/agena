@@ -378,6 +378,24 @@ fn activity_entry_part<'a>(activity: &'a ActivityNode) -> TranscriptEntryPart<'a
     }
 }
 
+/// Whether a compact tool summary is an approval/authorization-phase sentence
+/// rather than a real tool result.
+///
+/// The runtime writes "Awaiting approval · <reason>" onto an Operation while it
+/// blocks on permission, then records the user's decision ("Permission allowed
+/// once", "Permission denied always", …) as the Operation summary when the
+/// reply is persisted. Both are transcript prose about the permission gate, not
+/// tool output, and must never be rendered as a fake "Output" result.
+pub(crate) fn is_authorization_phase_summary(summary: &str) -> bool {
+    let normalized = summary.trim().to_ascii_lowercase();
+    normalized.starts_with("awaiting approval")
+        || normalized.starts_with("awaiting permission")
+        || normalized.starts_with("awaiting user approval")
+        || normalized.starts_with("permission allowed")
+        || normalized.starts_with("permission denied")
+        || normalized.starts_with("permission auto-approved")
+}
+
 pub(crate) fn activity_presentation(
     payload: &ActivityPayload,
 ) -> (String, String, String, Option<agena_failure::UserProblem>) {
@@ -435,7 +453,15 @@ pub(crate) fn activity_presentation(
         ActivityPayload::Operation(operation) => (
             "operation".to_owned(),
             operation_activity_title(operation),
-            operation.summary.clone(),
+            // An approval/authorization-phase summary is permission transcript
+            // prose, never a tool result. Blank it so it cannot surface as the
+            // collapsed header or the Output fallback projection; the approval
+            // decision stays visible in the Permissions section.
+            if is_authorization_phase_summary(operation.summary.as_str()) {
+                String::new()
+            } else {
+                operation.summary.clone()
+            },
             operation.error.as_ref().map(|error| error.problem.clone()),
         ),
         ActivityPayload::Interaction(interaction) => match interaction {
@@ -876,6 +902,168 @@ mod tests {
             .expect("expanded Permissions section");
         assert!(permissions_node.toggleable);
         assert!(permissions_node.expanded);
+    }
+
+    #[test]
+    fn permission_decision_summary_is_never_rendered_as_tool_output() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let request_id = "permission-shell-run".to_owned();
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Tool,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new("call-shell-run"),
+                invocation: ToolInvocation::new(
+                    "shell.run",
+                    StructuredObject::try_from(serde_json::json!({
+                        "command": "ls"
+                    }))
+                    .expect("structured shell.run input"),
+                ),
+                title: "Run shell.run".to_owned(),
+                // The runtime records the approval decision as the Operation
+                // summary when the tool produced no result (replies.rs). This
+                // is permission transcript prose, never tool output.
+                summary: "Permission allowed once".to_owned(),
+                data: serde_json::Value::Null,
+                markdown: String::new(),
+                authorization: OperationAuthorization {
+                    permissions: vec![OperationPermission {
+                        request: PermissionRequest {
+                            request_id: request_id.clone(),
+                            session_id: Some(7),
+                            action: PermissionAction::Tool {
+                                tool_name: "shell.run".to_owned(),
+                                qualifier: None,
+                            },
+                            related_actions: Vec::new(),
+                            requested_actions: Vec::new(),
+                            reason: "shell.run requires approval".to_owned(),
+                            explanation: String::new(),
+                            source: Some("static_policy".to_owned()),
+                            scope: None,
+                            operator: None,
+                            trace: Vec::new(),
+                            created_at: Utc::now(),
+                        },
+                        reply: Some(PermissionReply {
+                            request_id,
+                            kind: PermissionReplyKind::AllowOnce,
+                            reason: None,
+                            scope: None,
+                        }),
+                        replied_at_ms: Some(2),
+                    }],
+                },
+                error: None,
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let collapsed_text = collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(collapsed_text.contains("Run shell.run"), "{collapsed_text}");
+        // The approval sentence is not tool output: it must never surface as
+        // the collapsed header summary either.
+        assert!(
+            !collapsed_text.contains("Permission allowed once"),
+            "{collapsed_text}"
+        );
+
+        let expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            expanded_text.contains("Run shell.run"),
+            "{expanded_text}"
+        );
+        assert!(
+            expanded_text.contains("▸ Permissions · 1 permission"),
+            "{expanded_text}"
+        );
+        assert!(
+            expanded_text.contains("▸ Input · 1 field"),
+            "{expanded_text}"
+        );
+        // The approval sentence must never be wrapped in an "Output" section.
+        assert!(
+            !expanded_text.contains("Output"),
+            "{expanded_text}"
+        );
+        assert!(
+            !expanded_text.contains("Permission allowed once"),
+            "{expanded_text}"
+        );
+        let node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("shell.run Activity node");
+        assert!(!node.copy_text.contains("Output"), "{}", node.copy_text);
+        assert!(
+            !node.copy_text.contains("Permission allowed once"),
+            "{}",
+            node.copy_text
+        );
+        // The approval decision remains visible in the Permissions section.
+        let permissions_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Permissions,
+        };
+        let permissions_node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == permissions_key)
+            .expect("collapsed Permissions section");
+        assert!(
+            permissions_node.copy_text.contains("Allowed once · shell.run"),
+            "{}",
+            permissions_node.copy_text
+        );
     }
 
     #[test]

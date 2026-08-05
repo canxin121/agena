@@ -350,7 +350,14 @@ fn canonical_activity_details(
             // Operations render the actual output/sections instead. It is
             // only a fallback result when the producer supplied no detailed
             // result at all; failures are rendered exclusively from `error`.
-            if operation.error.is_none() && !has_result_presentation && !summary.trim().is_empty() {
+            // An approval/authorization-phase summary ("Awaiting approval",
+            // "Permission allowed once", …) is transcript prose about the
+            // permission gate and must not masquerade as tool output.
+            if operation.error.is_none()
+                && !has_result_presentation
+                && !summary.trim().is_empty()
+                && !crate::snapshot::is_authorization_phase_summary(summary)
+            {
                 details.push(CanonicalActivityDetail::identified_section(
                     TranscriptActivitySection::Result,
                     "Output",

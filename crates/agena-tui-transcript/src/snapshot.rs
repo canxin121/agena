@@ -113,7 +113,7 @@ fn assistant_reply_document_entry(
     document: &ContentDocument,
     failure: Option<agena_failure::UserProblem>,
 ) -> TranscriptEntry<'_> {
-    let mut parts = assistant_reply_document_parts(document);
+    let mut parts = assistant_reply_document_parts(document, state);
     // A reply-level failure is now persisted as a durable Error Activity in
     // the reply content (like a failed tool call), so it renders through the
     // shared canonical Activity path. Only fall back to the legacy
@@ -143,7 +143,10 @@ fn assistant_reply_document_entry(
     }
 }
 
-fn assistant_reply_document_parts(document: &ContentDocument) -> Vec<TranscriptEntryPart<'_>> {
+fn assistant_reply_document_parts(
+    document: &ContentDocument,
+    state: MessageStatus,
+) -> Vec<TranscriptEntryPart<'_>> {
     let nodes = document.nodes();
     // One reply can span many assistant messages: an opening paragraph, tool
     // calls, interstitial text, and a closing summary. Only the final body
@@ -151,12 +154,25 @@ fn assistant_reply_document_parts(document: &ContentDocument) -> Vec<TranscriptE
     // earlier body segment is an intermediate step and projects as a
     // collapsible TextSegment activity so a long tool run reads as a stack of
     // blocks with a single visible reply at the end.
-    let final_text_index = nodes.iter().rposition(|node| match node {
-        ContentNode::Text { .. } => true,
-        ContentNode::Activity { activity } => {
-            matches!(activity.payload, ActivityPayload::TextSegment(_))
-        }
-    });
+    //
+    // "Final" is only knowable once the reply is done. Promoting whatever
+    // body segment happens to be last while the reply is still streaming
+    // would demote it back to an Activity the moment the document grows
+    // (later text, or a tool call proving more model turns will follow) —
+    // the jarring "plain text first, Activity later" flip. So:
+    // * Completed replies promote exactly the last body segment to inline.
+    // * In-progress replies that already issued a tool call keep every body
+    //   segment as a collapsible TextSegment Activity: the tool call proves
+    //   the reply continues, so no body segment is final yet.
+    // * In-progress replies that have not issued a tool call keep the live
+    //   body segment inline so a plain question/answer still streams inline.
+    let final_text_index = if matches!(state, MessageStatus::Completed) {
+        nodes.iter().rposition(is_body_text_node)
+    } else if nodes.iter().any(is_tool_call_node) {
+        None
+    } else {
+        nodes.iter().rposition(is_body_text_node)
+    };
     nodes
         .iter()
         .enumerate()
@@ -217,6 +233,23 @@ fn assistant_reply_document_parts(document: &ContentDocument) -> Vec<TranscriptE
             ContentNode::Activity { activity } => activity_entry_part(activity),
         })
         .collect()
+}
+
+fn is_body_text_node(node: &ContentNode) -> bool {
+    match node {
+        ContentNode::Text { .. } => true,
+        ContentNode::Activity { activity } => {
+            matches!(activity.payload, ActivityPayload::TextSegment(_))
+        }
+    }
+}
+
+fn is_tool_call_node(node: &ContentNode) -> bool {
+    matches!(
+        node,
+        ContentNode::Activity { activity }
+            if matches!(activity.payload, ActivityPayload::Operation(_))
+    )
 }
 
 const fn assistant_reply_state_requires_outcome(state: MessageStatus) -> bool {
@@ -2638,5 +2671,106 @@ It has two lines.";
         // visible inline without any label.
         assert!(text.contains("正文"), "{text}");
         assert!(text.contains("That is the answer."), "{text}");
+    }
+
+    #[test]
+    fn in_progress_reply_after_tool_call_keeps_every_body_segment_collapsible() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let first_text_id = agena_domain::TextSegmentId::new();
+        let operation_id = agena_domain::ActivityId::new();
+        let document = ContentDocument::new(vec![
+            ContentNode::text_at(first_text_id, "Let me inspect the file.", 0, 1),
+            ContentNode::activity(ActivityNode {
+                id: operation_id,
+                owner: ActivityOwner::AssistantReply {
+                    reply_id: response_id,
+                },
+                actor: ActivityActor::Tool,
+                state: ActivityState::Completed,
+                position: ContentPosition { index: 1 },
+                revision_seq: 2,
+                lifecycle: ActivityLifecycle::default(),
+                payload: ActivityPayload::Operation(OperationActivity {
+                    call_id: ToolCallId::new("call-fs-read"),
+                    invocation: ToolInvocation::new("fs.read", StructuredObject::default()),
+                    title: "fs.read".to_owned(),
+                    summary: String::new(),
+                    data: serde_json::Value::Null,
+                    markdown: String::new(),
+                    authorization: Default::default(),
+                    error: None,
+                }),
+                provenance: ActivityProvenance::default(),
+            }),
+        ]);
+        // While the reply is still running after a tool call, the opening
+        // body segment is a working note, not the answer: it must project as
+        // a collapsible TextSegment activity and never as inline text, so it
+        // does not flip from plain text to an Activity when the reply grows.
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::InProgress,
+            1,
+            &document,
+            None,
+        );
+        assert_eq!(entry.parts.len(), 2);
+        assert!(matches!(
+            &entry.parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment))
+                if segment.text == "Let me inspect the file."
+        ));
+        assert!(matches!(
+            &entry.parts[1].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
+                if matches!(payload, ActivityPayload::Operation(_))
+        ));
+
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("正文"), "{text}");
+        assert!(text.contains("fs.read"), "{text}");
+    }
+
+    #[test]
+    fn in_progress_reply_without_tool_call_keeps_live_text_inline() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let first_text_id = agena_domain::TextSegmentId::new();
+        let document = ContentDocument::new(vec![ContentNode::text_at(
+            first_text_id,
+            "live answer",
+            0,
+            1,
+        )]);
+        // A plain question/answer still streams inline: with no tool call in
+        // the document, the current body segment is the (candidate) final
+        // text and must not collapse into an Activity while streaming.
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::InProgress,
+            1,
+            &document,
+            None,
+        );
+        assert!(matches!(
+            entry.parts.as_slice(),
+            [TranscriptEntryPart {
+                content: TranscriptPartContent::Text(text),
+                ..
+            }] if text.text == "live answer"
+        ));
     }
 }

@@ -112,7 +112,40 @@ pub async fn dispatch_query(
             loaded_at: chrono::Utc::now(),
             database_connected: true,
         })),
-        Query::Runtime => Ok(QueryResult::Runtime(runtime_status_response(state).await)),
+                Query::Runtime => Ok(QueryResult::Runtime(runtime_status_response(state).await)),
+        Query::ListActivities(params) => {
+            let service = state.runtime_activities()?;
+            let filter = activity_filter_from_params(&params);
+            let activities = service.list_activities(&filter);
+            Ok(QueryResult::Activities(
+                activities
+                    .iter()
+                    .map(agena_api::resource::BackgroundActivityResource::from)
+                    .collect(),
+            ))
+        }
+        Query::GetActivity(GetActivityParams { activity_id }) => {
+            let service = state.runtime_activities()?;
+            let activity = service
+                .get_activity(&activity_id)
+                .map_err(activity_control_error)?;
+            Ok(QueryResult::Activity(
+                agena_api::resource::BackgroundActivityResource::from(&activity),
+            ))
+        }
+        Query::ActivityLogs(ActivityLogsParams {
+            activity_id,
+            since_seq,
+            limit,
+            wait_ms,
+        }) => {
+            let service = state.runtime_activities()?;
+            let read = service
+                .activity_logs(&activity_id, since_seq, limit, wait_ms)
+                .await
+                .map_err(activity_control_error)?;
+            Ok(QueryResult::ActivityLogs(read.into()))
+        }
         Query::ListProviders => Ok(QueryResult::Providers(
             crate::provider_queries::list_providers_response(state),
         )),
@@ -213,11 +246,43 @@ pub async fn dispatch_query(
     }
 }
 use super::{
-    Application, ApplicationError, CursorPaginationQuery, GetOperationDetailParams,
-    GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
-    ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
+    ActivityLogsParams, Application, ApplicationError, CursorPaginationQuery,
+    GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams,
+    GetWorkspaceParams, ListActivitiesParams, ListEventsParams, ListPermissionRulesParams,
+    ListProviderAdapterModelsParams, ListProviderModelsParams,
     ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-    OperationDetailResource, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
+        OperationDetailResource, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
     SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
     runtime_status_response,
 };
+
+fn activity_filter_from_params(params: &ListActivitiesParams) -> agena_domain::BackgroundActivityFilter {
+    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
+    let parse_kinds = |value: &Option<String>| -> Vec<BackgroundActivityKind> {
+        value.as_deref().map_or_else(Vec::new, |csv| {
+            csv.split(',')
+                .filter_map(|raw| raw.trim().parse::<BackgroundActivityKind>().ok())
+                .collect()
+        })
+    };
+    let parse_statuses = |value: &Option<String>| -> Vec<BackgroundActivityStatus> {
+        value.as_deref().map_or_else(Vec::new, |csv| {
+            csv.split(',')
+                .filter_map(|raw| raw.trim().parse::<BackgroundActivityStatus>().ok())
+                .collect()
+        })
+    };
+    agena_domain::BackgroundActivityFilter {
+        kinds: parse_kinds(&params.kinds),
+        statuses: parse_statuses(&params.statuses),
+        session_id: params.session_id,
+        active_only: params.active_only,
+    }
+}
+
+fn activity_control_error(error: agena_runtime::ActivityControlError) -> ApplicationError {
+    ApplicationError::bad_request_with_diagnostic(
+        "The background activity operation failed.",
+        error.to_string(),
+    )
+}

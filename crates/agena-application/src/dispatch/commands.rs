@@ -350,7 +350,7 @@ pub async fn dispatch_command(
                 .application()?;
             Ok(CommandResult::PermissionRule(rule.into_wire()))
         }
-        Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
+                Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
             state
                 .service()
                 .delete_permission_rule(rule_id)
@@ -358,15 +358,45 @@ pub async fn dispatch_command(
                 .application()?;
             Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
         }
+        Command::StopActivity(StopActivityParams { activity_id }) => {
+            let service = state.runtime_activities()?;
+            let activity = service
+                .stop_activity(&activity_id)
+                .await
+                .map_err(activity_command_error)?;
+            Ok(CommandResult::Activity(
+                agena_api::resource::BackgroundActivityResource::from(&activity),
+            ))
+        }
+        Command::DismissActivity(DismissActivityParams { activity_id }) => {
+            let service = state.runtime_activities()?;
+            let activity = service
+                .dismiss_activity(&activity_id)
+                .map_err(activity_command_error)?;
+            Ok(CommandResult::ActivityDeleted { id: activity.id })
+        }
+        Command::ClearFinishedActivities => {
+            let service = state.runtime_activities()?;
+            Ok(CommandResult::ActivitiesCleared {
+                count: service.clear_finished(),
+            })
+        }
     }
 }
 use super::{
     Application, ApplicationError, CancelRunParams, Command, CommandResult, CompactSessionParams,
     ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
-    DeleteSessionParams, DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams,
-    ImportSessionParams, ListSessionTreeParams, PermissionRuleWriteRequest,
+    DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams,
+    ForkSessionParams, ImportSessionParams, ListSessionTreeParams, PermissionRuleWriteRequest,
     ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-    ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, SubmitMessageParams,
-    UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
-    UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
+    ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, StopActivityParams,
+    SubmitMessageParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
 };
+
+fn activity_command_error(error: agena_runtime::ActivityControlError) -> ApplicationError {
+    ApplicationError::bad_request_with_diagnostic(
+        "The background activity operation failed.",
+        error.to_string(),
+    )
+}

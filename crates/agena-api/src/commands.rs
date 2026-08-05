@@ -8,8 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::resource::{
-    PermissionMode, PermissionReply, RunOptions, SessionExecutionResource, SessionResource,
-    UserInputReply, WorkspaceResource,
+    BackgroundActivityResource, PermissionMode, PermissionReply, RunOptions,
+    SessionExecutionResource, SessionResource, UserInputReply, WorkspaceResource,
 };
 use agena_domain::{ComposerDocument, ExecutionId};
 
@@ -45,11 +45,16 @@ pub enum Command {
     ReplyPermission(ReplyPermissionParams),
     ReplyUserInput(ReplyUserInputParams),
 
-    // ── permission rules ──
+        // ── permission rules ──
     UpsertPermissionRule(UpsertPermissionRuleParams),
     ReplacePermissionRule(ReplacePermissionRuleParams),
     RevokePermissionRule(RevokePermissionRuleParams),
     DeletePermissionRule(DeletePermissionRuleParams),
+
+    // ── background activities ──
+    StopActivity(StopActivityParams),
+    DismissActivity(DismissActivityParams),
+    ClearFinishedActivities,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,8 +69,11 @@ pub enum CommandResult {
     SessionExport { jsonl: String },
     Execution(SessionExecutionResource),
     Cancellation(agena_domain::CancellationResult),
-    PermissionRule(crate::resource::PermissionRuleResource),
+        PermissionRule(crate::resource::PermissionRuleResource),
     PermissionRuleDeleted { id: i64 },
+    Activity(BackgroundActivityResource),
+    ActivityDeleted { id: String },
+    ActivitiesCleared { count: usize },
     Ack,
 }
 
@@ -264,4 +272,16 @@ pub struct RevokePermissionRuleParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeletePermissionRuleParams {
     pub rule_id: i64,
+}
+
+// ─── background activities ────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StopActivityParams {
+    pub activity_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DismissActivityParams {
+    pub activity_id: String,
 }

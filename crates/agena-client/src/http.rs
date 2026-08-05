@@ -2,26 +2,28 @@
 //! into the v2 endpoints.
 
 use agena_api::{
-    commands::{
+        commands::{
         CancelRunParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
-        DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams, ImportSessionParams,
-        ListSessionTreeParams, ReplacePermissionRuleParams, ReplyPermissionParams,
-        ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
-        RewindSessionParams, SubmitMessageParams, UpdateSessionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
+        DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams, ForkSessionParams,
+        ImportSessionParams, ListSessionTreeParams, ReplacePermissionRuleParams,
+        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
+        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitMessageParams,
+        UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     notifications::Notification,
-    queries::{
-        GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-        ListEventsParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
-        ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
-        ListWorkspacesParams, PaginatedEvents, Query, QueryResult,
+        queries::{
+        ActivityLogsParams, GetActivityParams, GetOperationDetailParams,
+        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
+        ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
+        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
+        PaginatedEvents, Query, QueryResult,
     },
-    resource::{
-        HealthResponse, PermissionRuleResource, ProviderAdapterModelsRequest,
-        ProviderAdapterModelsResponse, RunOptions, SavedProviderAdapterModelsRequest,
-        SessionExecutionResource, SessionResource, WorkspaceResource,
+        resource::{
+        BackgroundActivityResource, HealthResponse, PermissionRuleResource,
+        ProviderAdapterModelsRequest, ProviderAdapterModelsResponse, RunOptions,
+        SavedProviderAdapterModelsRequest, SessionExecutionResource, SessionResource,
+        WorkspaceResource,
     },
 };
 use futures_util::StreamExt;
@@ -727,11 +729,38 @@ impl AgenaClient {
                     .await?,
                 ))
             }
-            Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
+                        Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
                 let _: PermissionRuleResource = self
                     .delete_json(&format!("/api/v1/permission-rules/{rule_id}"))
                     .await?;
                 Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
+            }
+            Command::StopActivity(StopActivityParams { activity_id }) => {
+                Ok(CommandResult::Activity(
+                    self.post_json(
+                        &format!("/api/v1/activities/{activity_id}/stop"),
+                        serde_json::json!({}),
+                    )
+                    .await?,
+                ))
+            }
+            Command::DismissActivity(DismissActivityParams { activity_id }) => {
+                let _: BackgroundActivityResource = self
+                    .post_json(
+                        &format!("/api/v1/activities/{activity_id}/dismiss"),
+                        serde_json::json!({}),
+                    )
+                    .await?;
+                Ok(CommandResult::ActivityDeleted { id: activity_id })
+            }
+            Command::ClearFinishedActivities => {
+                let count: usize = self
+                    .post_json(
+                        "/api/v1/activities/clear-finished",
+                        serde_json::json!({}),
+                    )
+                    .await?;
+                Ok(CommandResult::ActivitiesCleared { count })
             }
             _ => Err(ClientError::Protocol(
                 "unsupported command in generic HTTP client".to_string(),
@@ -887,10 +916,61 @@ impl AgenaClient {
                     self.parse_json(self.http.get(url).send().await?).await?,
                 ))
             }
-            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
+                        Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
                 Ok(QueryResult::PermissionRule(
                     self.get_json(&format!("/api/v1/permission-rules/{rule_id}"))
                         .await?,
+                ))
+            }
+            Query::ListActivities(params) => {
+                let mut url = self.endpoint("/api/v1/activities");
+                {
+                    let mut q = url.query_pairs_mut();
+                    if let Some(kinds) = params.kinds.filter(|kinds| !kinds.is_empty()) {
+                        q.append_pair("kinds", &kinds);
+                    }
+                    if let Some(statuses) = params.statuses.filter(|statuses| !statuses.is_empty()) {
+                        q.append_pair("statuses", &statuses);
+                    }
+                    if let Some(session_id) = params.session_id {
+                        q.append_pair("session_id", &session_id.to_string());
+                    }
+                    if params.active_only {
+                        q.append_pair("active_only", "true");
+                    }
+                }
+                Ok(QueryResult::Activities(
+                    self.parse_json(self.http.get(url).send().await?).await?,
+                ))
+            }
+            Query::GetActivity(GetActivityParams { activity_id }) => {
+                Ok(QueryResult::Activity(
+                    self.get_json(&format!("/api/v1/activities/{activity_id}"))
+                        .await?,
+                ))
+            }
+            Query::ActivityLogs(ActivityLogsParams {
+                activity_id,
+                since_seq,
+                limit,
+                wait_ms,
+            }) => {
+                let mut url =
+                    self.endpoint(&format!("/api/v1/activities/{activity_id}/logs"));
+                {
+                    let mut q = url.query_pairs_mut();
+                    if since_seq > 0 {
+                        q.append_pair("since_seq", &since_seq.to_string());
+                    }
+                    if let Some(limit) = limit {
+                        q.append_pair("limit", &limit.to_string());
+                    }
+                    if wait_ms > 0 {
+                        q.append_pair("wait_ms", &wait_ms.to_string());
+                    }
+                }
+                Ok(QueryResult::ActivityLogs(
+                    self.parse_json(self.http.get(url).send().await?).await?,
                 ))
             }
         }

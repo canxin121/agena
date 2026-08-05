@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::pagination::{PageInfo, PaginatedResponse};
 use crate::resource::{
-    HealthResponse, PermissionRuleResource, ProviderAdapterModelsResponse, ProviderModelsResponse,
+    BackgroundActivityLogResource, BackgroundActivityResource, HealthResponse,
+    PermissionRuleResource, ProviderAdapterModelsResponse, ProviderModelsResponse,
     ProviderSummaryResource, RuntimeStatusResponse, SessionResource, WorkspaceResource,
 };
 
@@ -28,8 +29,11 @@ pub enum Query {
     /// this on expansion; the runtime derives Markdown from compact data.
     GetOperationDetail(GetOperationDetailParams),
     ListEvents(ListEventsParams),
-    ListPermissionRules(ListPermissionRulesParams),
+        ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
+    ListActivities(ListActivitiesParams),
+    GetActivity(GetActivityParams),
+    ActivityLogs(ActivityLogsParams),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,8 +52,11 @@ pub enum QueryResult {
     SessionState(crate::resource::SessionExecutionResource),
     OperationDetail(crate::resource::OperationDetailResource),
     Events(PaginatedEvents),
-    PermissionRules(PaginatedResponse<PermissionRuleResource>),
+        PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
+    Activities(Vec<BackgroundActivityResource>),
+    Activity(BackgroundActivityResource),
+    ActivityLogs(BackgroundActivityLogResource),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,4 +231,39 @@ pub struct ListPermissionRulesParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetPermissionRuleParams {
     pub rule_id: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListActivitiesParams {
+    /// Comma-separated kind filters (`shell`, `task`, `runtime`, `browser`).
+    #[serde(default)]
+    pub kinds: Option<String>,
+    /// Comma-separated status filters (`running`, `succeeded`, `failed`, …).
+    #[serde(default)]
+    pub statuses: Option<String>,
+    /// Only include activities for this session (owns or parent).
+    #[serde(default)]
+    pub session_id: Option<i64>,
+    /// Only include active (pending/running) activities.
+    #[serde(default)]
+    pub active_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetActivityParams {
+    pub activity_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ActivityLogsParams {
+    pub activity_id: String,
+    /// Cursor: lines with `seq > since_seq` are returned.
+    #[serde(default)]
+    pub since_seq: u64,
+    /// Max lines to return (clamped server-side).
+    #[serde(default)]
+    pub limit: Option<u32>,
+    /// Block for fresh output up to this many ms when no new lines exist.
+    #[serde(default)]
+    pub wait_ms: u64,
 }

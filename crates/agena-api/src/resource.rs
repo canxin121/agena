@@ -7,8 +7,10 @@ use uuid::Uuid;
 
 use std::collections::BTreeMap;
 
+mod activity;
 mod auth;
 mod interaction;
+pub use activity::*;
 pub use auth::*;
 pub use interaction::*;
 

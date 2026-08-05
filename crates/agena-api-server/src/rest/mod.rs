@@ -58,6 +58,7 @@ pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerEr
     ServerError::from(error)
 }
 
+mod activities;
 mod auth;
 mod events;
 mod git;
@@ -77,6 +78,7 @@ pub use sessions::*;
 pub use settings::*;
 pub use workspaces::*;
 
+pub use activities::*;
 pub use auth::*;
 pub use git::*;
 pub use marketplace::*;

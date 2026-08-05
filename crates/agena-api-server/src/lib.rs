@@ -328,9 +328,27 @@ pub fn router(state: AppState) -> Router {
                     .put(rest::replace_permission_rule)
                     .delete(rest::delete_permission_rule),
             )
-            .route(
+                        .route(
                 "/api/v1/permission-rules/{rule_id}/revoke",
                 post(rest::revoke_permission_rule),
+            )
+            .route("/api/v1/activities", get(rest::list_activities))
+            .route("/api/v1/activities/clear-finished", post(rest::clear_finished_activities))
+            .route(
+                "/api/v1/activities/{activity_id}",
+                get(rest::get_activity),
+            )
+            .route(
+                "/api/v1/activities/{activity_id}/logs",
+                get(rest::get_activity_logs),
+            )
+            .route(
+                "/api/v1/activities/{activity_id}/stop",
+                post(rest::stop_activity),
+            )
+            .route(
+                "/api/v1/activities/{activity_id}/dismiss",
+                post(rest::dismiss_activity),
             )
             .route("/api/v1/events", get(rest::list_events))
             .route("/plugin-rpc/{plugin_id}", post(rest::plugin_rpc))

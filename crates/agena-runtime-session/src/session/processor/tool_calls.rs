@@ -182,10 +182,20 @@ impl SessionProcessor {
             self.ensure_pending_tool_call_part(run, assistant, run_buffer, &mut pending)
                 .await?;
 
-            let tool_name = pending.name.unwrap_or_else(|| "unknown".to_string());
+            // A tool call with no name fragment at all is a malformed provider
+            // stream, not a nameless-but-executable tool. Fail the run with a
+            // clear message instead of substituting a phantom "unknown" name
+            // that would surface as a confusing "unknown Tool API function".
+            let Some(tool_name) = pending.name.as_deref().map(str::trim).filter(|name| !name.is_empty())
+            else {
+                return Err(AppError::Provider(format!(
+                    "provider stream ended a tool call in session {} without a function name",
+                    run.session_id
+                )));
+            };
             let invocation = parse_tool_invocation_lossy(
                 run.session_id,
-                tool_name.as_str(),
+                tool_name,
                 pending.arguments_json.as_str(),
                 run.completion.tool_api_functions.as_slice(),
             )?;
@@ -217,7 +227,7 @@ impl SessionProcessor {
                 .as_ref()
                 .is_some_and(|call| call.function != agena_domain::ToolApiFunction::Call)
                 && let Some(identity) = tool_api_definition_identity(
-                    tool_name.as_str(),
+                    tool_name,
                     run.completion.tool_api_functions.as_slice(),
                 )
             {
@@ -230,7 +240,7 @@ impl SessionProcessor {
             // `append_tool_arguments`; we don't repeat it here.
             if let Some(history_call_id) = pending.history_call_id.as_ref() {
                 run_buffer
-                    .name_tool_call(history_call_id, tool_name.as_str())
+                    .name_tool_call(history_call_id, tool_name)
                     .map_err(|err| AppError::Internal(err.to_string()))?;
             }
 

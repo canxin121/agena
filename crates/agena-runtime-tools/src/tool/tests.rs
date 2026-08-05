@@ -743,3 +743,69 @@ fn compact_tool_payload_preserves_patch_changes_without_the_full_diff() {
             .is_some_and(|diff| diff.contains("full output persisted"))
     );
 }
+
+#[tokio::test]
+async fn gateway_tools_call_without_a_target_is_rejected_as_invalid_input() {
+    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+    let mut plugins_config = PluginsConfig::default();
+    plugins_config
+        .list
+        .insert("agena.tools".to_string(), ConfiguredPlugin::static_default());
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            "agena.tools".parse().expect("valid Tool API plugin key"),
+            ToolApiFixture,
+        )],
+        config: plugins_config,
+        workspace_root: workspace_root.clone(),
+        agena_version: "test".to_string(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build Tool API test plugin host");
+    let executor = ToolExecutor::new(
+        workspace_root,
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::new(PermissionMode::Ask),
+        ),
+        Arc::clone(&plugins),
+        None,
+        None,
+        None,
+        ToolPresentationConfig::default(),
+    );
+
+    // A `tools_call` that still names the gateway function itself (no `tool`
+    // target was ever resolved) must be rejected as invalid input — never
+    // dispatched as a fabricated execution-tool name.
+    for arguments in [
+        serde_json::json!({}),
+        serde_json::json!({"input": {}}),
+        serde_json::json!({"tool": ""}),
+    ] {
+        let invocation = ToolInvocation {
+            tool_api_call: Some(agena_domain::ToolApiCall {
+                function: agena_domain::ToolApiFunction::Call,
+                arguments: StructuredObject::try_from(arguments)
+                    .expect("tools_call provider envelope"),
+            }),
+            name: "tools_call".to_owned(),
+            plugin_name: None,
+            input: StructuredObject::default(),
+        };
+
+        let error = executor
+            .prepare_invocation(&invocation, 1, 1)
+            .expect_err("gateway without a target must fail before execution");
+        assert!(
+            matches!(error, ToolError::InvalidInput { .. }),
+            "expected invalid-input rejection, got: {error}"
+        );
+        assert_eq!(error.field_issues().len(), 1);
+        assert_eq!(error.field_issues()[0].field(), "tool");
+    }
+}

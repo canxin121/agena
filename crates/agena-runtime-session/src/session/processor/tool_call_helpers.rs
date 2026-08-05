@@ -103,12 +103,16 @@ pub(crate) fn tool_invocation_for_definition(
     };
     if function == ToolApiFunction::Call {
         let arguments = serde_json::Value::from(input.clone());
+        // A `tools_call` without a usable `tool` target keeps the gateway's
+        // own function name so the executor can reject it as an invalid call
+        // instead of fabricating a phantom execution-tool name. `prepare_invocation`
+        // turns this shape into `ToolError::InvalidInput` (missing `tool`).
         let target = arguments
             .get("tool")
             .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|target| !target.is_empty())
-            .unwrap_or("invalid.tools_call")
+            .unwrap_or_else(|| function.function_name())
             .to_owned();
         let target_input = arguments
             .get("input")
@@ -283,5 +287,32 @@ mod tests {
             call.arguments.get("tool").and_then(|value| value.as_text()),
             Some("fs.write")
         );
+    }
+
+    #[test]
+    fn tools_call_without_a_tool_target_keeps_the_gateway_name() {
+        let available = vec![tools_call()];
+        for arguments_json in [
+            "{}",
+            r#"{"input":{}}"#,
+            r#"{"tool":""}"#,
+            r#"{"tool":"   "}"#,
+            r#"{"tool":null,"input":{}}"#,
+        ] {
+            let invocation = parse_tool_invocation_lossy(
+                13,
+                "tools_call",
+                arguments_json,
+                &available,
+            )
+            .expect("tools_call args must parse");
+
+            assert_eq!(
+                invocation.name, "tools_call",
+                "missing `tool` must keep the gateway name, not fabricate a phantom tool: {arguments_json}"
+            );
+            let call = invocation.tool_api_call.expect("provider envelope");
+            assert_eq!(call.function, ToolApiFunction::Call);
+        }
     }
 }

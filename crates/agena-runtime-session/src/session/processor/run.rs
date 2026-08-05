@@ -295,7 +295,16 @@ impl SessionProcessor {
                     if let Some(name) = name {
                         pending.name = Some(name);
                     }
-                    pending.arguments_json = arguments_json.clone();
+                    // A degenerate snapshot (empty or `{}`) must never wipe
+                    // arguments already accumulated from deltas; an out-of-order
+                    // or empty Start/Finish snapshot would otherwise discard a
+                    // complete tool call. Mirror the accumulator's behavior,
+                    // which treats an empty snapshot as "no change".
+                    let snapshot_is_degenerate = arguments_json.trim().is_empty()
+                        || arguments_json.trim() == "{}";
+                    if !snapshot_is_degenerate {
+                        pending.arguments_json = arguments_json.clone();
+                    }
                     self.ensure_pending_tool_call_part(
                         &mut run,
                         &mut assistant,
@@ -303,7 +312,9 @@ impl SessionProcessor {
                         pending,
                     )
                     .await?;
-                    if let Some(history_call_id) = pending.history_call_id.as_ref() {
+                    if !snapshot_is_degenerate
+                        && let Some(history_call_id) = pending.history_call_id.as_ref()
+                    {
                         run_buffer
                             .replace_tool_arguments(history_call_id, arguments_json)
                             .map_err(|err| AppError::Internal(err.to_string()))?;
@@ -459,6 +470,26 @@ impl SessionProcessor {
             run_buffer
                 .discard_incomplete_tool_calls()
                 .map_err(|err| AppError::Internal(err.to_string()))?;
+            // Mirror `discard_incomplete_tool_calls` on the message parts:
+            // drop operation parts that never reached a terminal execution
+            // outcome. A pending tool-call placeholder (e.g. streamed in a
+            // name but aborted before execution) would otherwise persist as a
+            // ghost "Run unknown" activity. Text and reasoning parts are real
+            // content and are retained.
+            assistant.parts.retain(|part| {
+                if matches!(
+                    part.status,
+                    ExecutionStatus::Pending | ExecutionStatus::InProgress
+                ) {
+                    return !matches!(
+                        part.content,
+                        Some(crate::message::PartContent::Activity(
+                            crate::message::RuntimeActivity::Operation(_)
+                        ))
+                    );
+                }
+                true
+            });
         } else {
             if let Some(part_id) = active_text_part {
                 complete_part_status(&mut assistant, part_id)?;

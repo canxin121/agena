@@ -187,6 +187,37 @@ impl ToolStreamAccumulator {
             // creating a second call. Positional indices are intentionally not
             // used for this promotion because providers may reuse them.
             .or_else(|| provider_item.and_then(resolve_existing))
+            .or_else(|| {
+                // A `call_id`-only Finish/Start event (no item id) must not
+                // open a second accumulator key when the same logical call
+                // already has a live stream reachable through another candidate
+                // (for example a positional index that a prior item-based delta
+                // aliased). Adopt that live stream only when it carries no
+                // conflicting call id: distinct call ids must stay independent
+                // even when an adapter reuses a positional index.
+                let authoritative_id = authoritative.as_ref().and_then(|candidate| {
+                    candidate
+                        .as_ref()
+                        .split_once(':')
+                        .map(|(_, value)| value.to_owned())
+                });
+                candidates.iter().find_map(|candidate| {
+                    let existing = resolve_existing(candidate)?;
+                    let conflicts = self.pending.get(&existing).is_some_and(|state| {
+                        authoritative_id.as_deref().is_some_and(|id| {
+                            state
+                                .model_call_id
+                                .as_ref()
+                                .is_some_and(|existing_id| existing_id.as_ref() != id)
+                        })
+                    });
+                    if conflicts {
+                        None
+                    } else {
+                        Some(existing)
+                    }
+                })
+            })
             .or_else(|| authoritative.cloned())
             .or_else(|| {
                 candidates
@@ -306,6 +337,22 @@ mod tests {
         let mut input = input(kind, keys, call_id, arguments);
         input.provider_item_id = Some(item_id.parse().expect("non-empty item id"));
         input
+    }
+
+    fn update_stream_key(update: &ToolStreamUpdate) -> &str {
+        match update {
+            ToolStreamUpdate::Registered { stream_key, .. }
+            | ToolStreamUpdate::ArgumentsDelta { stream_key, .. }
+            | ToolStreamUpdate::ArgumentsSnapshot { stream_key, .. } => stream_key.as_str(),
+        }
+    }
+
+    fn update_id(update: &ToolStreamUpdate) -> Option<&str> {
+        match update {
+            ToolStreamUpdate::Registered { id, .. }
+            | ToolStreamUpdate::ArgumentsDelta { id, .. }
+            | ToolStreamUpdate::ArgumentsSnapshot { id, .. } => id.as_deref(),
+        }
     }
 
     #[test]
@@ -448,6 +495,124 @@ mod tests {
                 name: Some("tools_call".to_string()),
                 arguments_delta: "100}".to_string(),
             }]
+        );
+    }
+
+    #[test]
+    fn call_id_only_finish_joins_the_existing_item_stream() {
+        let mut accumulator = ToolStreamAccumulator::new();
+
+        // A `function_call_arguments.delta` event carries only the item id and
+        // lands on `item:fc_abc`. The later `done` event carries `call_id` but
+        // (on a compatible gateway) no item id; it must join the same live
+        // stream instead of opening a second key for one logical call.
+        let delta = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Delta,
+                    &["item:fc_abc", "idx:0"],
+                    "fc_abc",
+                    None,
+                    Some(r#"{"tool":"fs.grep","input":{"#),
+                ),
+            )
+            .expect("idless argument delta");
+        assert_eq!(
+            delta,
+            vec![ToolStreamUpdate::ArgumentsDelta {
+                stream_key: "item:fc_abc".to_string(),
+                id: None,
+                name: Some("tools_call".to_string()),
+                arguments_delta: r#"{"tool":"fs.grep","input":{"#.to_string(),
+            }]
+        );
+
+        // Done carries `call:call_01` and a complete arguments snapshot but no
+        // item id. It must resolve to the existing `item:fc_abc` stream instead
+        // of opening a second key. The delta is appended because the snapshot
+        // continues the already-accumulated arguments.
+        let finished = accumulator
+            .ingest(
+                "openai",
+                input(
+                    ToolStreamInputKind::Finish,
+                    &["call:call_01", "idx:0"],
+                    Some("call_01"),
+                    Some(r#"{"tool":"fs.grep","input":{"path":"x"}}"#),
+                ),
+            )
+            .expect("call-id-only done event");
+        let finished_key = update_stream_key(&finished[0]);
+        assert_eq!(
+            finished_key,
+            "item:fc_abc",
+            "call-id-only done must join the existing item stream"
+        );
+        let finished_id = update_id(&finished[0]);
+        assert_eq!(finished_id, Some("call_01"));
+
+        // No second key was opened: a further delta still lands on the item key.
+        let more = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Delta,
+                    &["item:fc_abc", "idx:0"],
+                    "fc_abc",
+                    None,
+                    Some(" }"),
+                ),
+            )
+            .expect("continuation delta");
+        assert_eq!(
+            update_stream_key(&more[0]),
+            "item:fc_abc",
+            "the stream must remain keyed by the item id after the done event"
+        );
+    }
+
+    #[test]
+    fn distinct_call_ids_stay_independent_when_a_call_id_only_finish_reuses_an_index() {
+        let mut accumulator = ToolStreamAccumulator::new();
+
+        // Two parallel calls share the same positional index. Their deltas are
+        // keyed by distinct call ids, so a `call_id`-only Finish for a second
+        // call must not be folded into the first call's live stream.
+        let first = accumulator
+            .ingest(
+                "openai",
+                input(
+                    ToolStreamInputKind::Delta,
+                    &["call:call_one", "idx:0"],
+                    Some("call_one"),
+                    Some(r#"{"tool":"fs.read","input":{"path":"a"}}"#),
+                ),
+            )
+            .expect("first call delta");
+        let first_key = update_stream_key(&first[0]);
+
+        let second = accumulator
+            .ingest(
+                "openai",
+                input(
+                    ToolStreamInputKind::Finish,
+                    &["call:call_two", "idx:0"],
+                    Some("call_two"),
+                    Some(r#"{"tool":"fs.grep","input":{"path":"b"}}"#),
+                ),
+            )
+            .expect("second call finish");
+        let second_key = update_stream_key(&second[0]);
+
+        assert_ne!(
+            first_key, second_key,
+            "a reused positional index must not merge distinct call ids"
+        );
+        assert_eq!(
+            second_key,
+            "call:call_two",
+            "the second call must keep its authoritative key"
         );
     }
 }

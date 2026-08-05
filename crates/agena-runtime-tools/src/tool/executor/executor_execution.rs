@@ -70,6 +70,22 @@ impl ToolExecutor {
         call_id: i64,
     ) -> Result<PreparedToolInvocation, ToolError> {
         self.ensure_not_cancelled()?;
+        // A `tools_call` gateway envelope that still names the gateway function
+        // itself means the model never supplied a `tool` target. Reject it as an
+        // invalid call (corrective feedback for the model) instead of dispatching
+        // a fabricated execution-tool name. See `tool_invocation_for_definition`.
+        if invocation
+            .tool_api_call
+            .as_ref()
+            .is_some_and(|call| call.function == ToolApiFunction::Call)
+            && invocation.name == ToolApiFunction::Call.function_name()
+        {
+            return Err(ToolError::invalid_field(
+                "tool",
+                agena_failure::FieldIssueKind::Required,
+                "tools_call requires a string `tool` field naming an execution tool",
+            ));
+        }
         let model_tool_name = invocation_name(invocation).to_owned();
         let definition = self.invocation_definition(invocation);
         let plugin_name = self.invocation_plugin_name_for(invocation);
@@ -461,7 +477,7 @@ impl ToolExecutor {
         )
     }
 }
-use agena_domain::{PluginInvocation, StructuredObject};
+use agena_domain::{PluginInvocation, StructuredObject, ToolApiFunction};
 
 use super::{
     PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation,

@@ -1131,11 +1131,3 @@ mod tests {
         assert_eq!(usage.reasoning_tokens, 60);
     }
 }
-
-#[derive(Debug, Default)]
-struct ToolCallState {
-    id: Option<String>,
-    name: Option<String>,
-    arguments: String,
-    announced: bool,
-}

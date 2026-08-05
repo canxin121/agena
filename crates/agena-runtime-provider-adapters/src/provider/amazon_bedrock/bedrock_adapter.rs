@@ -19,7 +19,7 @@ use super::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     CompletionToolCall, CompletionUsage, Credentials, EVENTSTREAM_CONTENT_TYPE, HashMap,
     JSON_CONTENT_TYPE, ModelId, ModelMetadata, Mutex, OpenAiCompatibleModelList, PROVIDER_ID,
-    ProviderError, ProviderId, Role, Sigv4Request, Stream, ToolCallState, Value,
+    ProviderError, ProviderId, Role, Sigv4Request, Stream, Value,
     bedrock_anthropic_metadata, bedrock_anthropic_thinking_parts, bedrock_wire_tool_name,
     json_value_to_string, map_bedrock_anthropic_usage, merge_bedrock_anthropic_usage,
     prefix_bedrock_model, prompt_cache, response_id_metadata, sse, strip_cross_region_prefix,
@@ -421,7 +421,10 @@ impl AmazonBedrockAdapter {
                 })
             })
             .collect::<Result<Vec<_>, ProviderError>>()?;
-        let finish_reason = CompletionFinishReason::from_provider(payload.stop_reason.as_deref());
+        let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
+            CompletionFinishReason::from_provider(payload.stop_reason.as_deref()),
+            !tool_calls.is_empty(),
+        );
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
             return Err(ProviderError::Provider(
@@ -503,6 +506,9 @@ impl AmazonBedrockAdapter {
         for part in projected {
             match part {
                 wire_message::WirePart::Text { text } => {
+                    blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
+                }
+                wire_message::WirePart::Reasoning { text } => {
                     blocks.push(BedrockAnthropicTextBlock::text(text.clone()));
                 }
                 wire_message::WirePart::Attachment { item } => {
@@ -984,6 +990,7 @@ impl AmazonBedrockAdapter {
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_usage: Option<BedrockAnthropicUsage> = None;
             let mut stream_has_content = false;
+            let mut stream_tool_call_seen = false;
             let mut response_id: Option<String> = None;
             let mut stream_model = initial_model.clone();
 
@@ -1082,6 +1089,7 @@ impl AmazonBedrockAdapter {
                         let state = pending_tool_calls.entry(index).or_default();
                         state.id = id;
                         state.name = name;
+                        stream_tool_call_seen = true;
 
                         let arguments_delta = content_block
                             .input
@@ -1235,8 +1243,9 @@ impl AmazonBedrockAdapter {
                 yield CompletionStreamEvent::Completed {
                     provider_id,
                     model: stream_model,
-                    finish_reason: CompletionFinishReason::from_provider(
-                        stream_finish_reason.as_deref(),
+                    finish_reason: CompletionFinishReason::normalize_with_tool_calls(
+                        CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                        stream_tool_call_seen,
                     ),
                     usage: stream_usage.map(map_bedrock_anthropic_usage),
                     provider_metadata,
@@ -1444,7 +1453,8 @@ impl AmazonBedrockAdapter {
         let model_name = ModelId::new(model);
 
         let stream = async_stream::try_stream! {
-            let mut pending_tool_calls: std::collections::BTreeMap<String, ToolCallState> = std::collections::BTreeMap::new();
+            let mut tool_stream = agena_provider::ToolStreamAccumulator::new();
+            let mut saw_tool_call = false;
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut done_seen = false;
@@ -1542,60 +1552,26 @@ impl AmazonBedrockAdapter {
                     .unwrap_or_default();
 
                 for raw_tool in tool_deltas {
+                    saw_tool_call = true;
                     let tool = utils::parse_json_value::<ChatToolCallWire>(
                         PROVIDER_ID,
                         "chat stream tool_call delta",
                         raw_tool,
                     )?;
-
-                    let id = utils::normalize_optional_text(tool.id.clone());
-                    let key = tool
-                        .index
-                        .map(|idx| format!("idx:{idx}"))
-                        .or_else(|| id.as_ref().map(|value| format!("id:{value}")))
-                        .ok_or_else(|| {
-                            ProviderError::Provider(
-                                "amazon-bedrock chat stream tool_call delta missing index/id"
-                                    .to_owned(),
-                            )
-                        })?;
-
-                    let state = pending_tool_calls.entry(key.clone()).or_default();
-                    if let Some(id) = id {
-                        state.id = Some(id);
-                    }
-                    let mut emitted_any = false;
-                    if let Some(function) = tool.function {
-                        if let Some(name) = utils::optional_non_empty(function.name) {
-                            state.name = Some(name);
-                        }
-                        if let Some(args) = function.arguments
-                            && !args.is_empty() {
-                                state.arguments.push_str(args.as_str());
-                                emitted_any = true;
-                                state.announced = true;
-                                yield CompletionStreamEvent::ToolCallDelta {
-                                    provider_id: provider_id.clone(),
-                                    model: model_name.clone(),
-                                    stream_key: key.clone(),
-                                    id: state.id.clone(),
-                                    name: state.name.clone(),
-                                    arguments_delta: args,
-                                };
-                            }
-                    }
-                    if !state.announced && !emitted_any && state.name.is_some() {
-                        // Register parameterless tool calls so the shared
-                        // aggregator does not silently drop them.
-                        state.announced = true;
-                        yield CompletionStreamEvent::ToolCallDelta {
-                            provider_id: provider_id.clone(),
-                            model: model_name.clone(),
-                            stream_key: key.clone(),
-                            id: state.id.clone(),
-                            name: state.name.clone(),
-                            arguments_delta: String::new(),
-                        };
+                    // Route through the shared accumulator so a call whose
+                    // index/id varies across chunks stays on one stream key,
+                    // instead of splitting into two tool calls (and losing
+                    // arguments). This mirrors the OpenAI chat adapter.
+                    let input = crate::provider::openai::chat_tool_stream_input(
+                        PROVIDER_ID,
+                        tool,
+                    )?;
+                    for update in tool_stream.ingest(PROVIDER_ID, input)? {
+                        yield crate::provider::openai::completion_event_from_tool_stream_update(
+                            &provider_id,
+                            &model_name,
+                            update,
+                        );
                     }
                 }
 
@@ -1630,23 +1606,12 @@ impl AmazonBedrockAdapter {
                 "bedrock chat completions [DONE]",
                 done_seen,
             )?;
-            for (stream_key, state) in &pending_tool_calls {
-                if !state.announced {
-                    Err(ProviderError::Provider(format!(
-                        "amazon-bedrock chat stream completed tool_call `{stream_key}` without function payload"
-                    )))?;
-                }
-                if state.name.is_none() {
-                    Err(ProviderError::Provider(format!(
-                        "amazon-bedrock chat stream completed tool_call `{stream_key}` without function.name"
-                    )))?;
-                }
-            }
             yield CompletionStreamEvent::Completed {
                 provider_id,
                 model: model_name.clone(),
-                finish_reason: CompletionFinishReason::from_provider(
-                    stream_finish_reason.as_deref(),
+                finish_reason: CompletionFinishReason::normalize_with_tool_calls(
+                    CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                    saw_tool_call,
                 ),
                 usage: stream_usage,
                 provider_metadata: utils::provider_metadata_with_chat_reasoning_state(

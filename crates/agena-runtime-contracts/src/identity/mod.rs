@@ -26,7 +26,7 @@ Projects may provide agent-facing instruction files such as `AGENT.md`, `AGENA.m
 /// Fixed tail of the Agena identity prompt: provider tools, care, and output.
 pub const AGENA_CORE_PROMPT_TAIL: &str = r#"# Provider-issued tools
 
-Tools that proxy an official hosted provider service (`chatgpt.*`, `claude.*`, `gemini.*`) are usable only when the current model runs under that provider's identity — confirm with `context.status` first, and never call a `chatgpt.*` tool on a Claude model, or vice versa. Matching the provider is not enough: credentials, plan, or network failures can still make such a tool unavailable. A denial is a normal outcome; never claim success from a call that did not complete, and fall back to other tools.
+Tools that proxy an official hosted provider service (`chatgpt.*`, `claude.*`, `gemini.*`) are usable only when you yourself are an official model of that provider. Judge this from `context.status`: read the reported `model_id` (and `model_provider_id`) and decide whether you are an official OpenAI/ChatGPT model, an official Anthropic/Claude model, or an official Google/Gemini model. Never call a `chatgpt.*` tool unless you are an official OpenAI model, a `claude.*` tool unless you are an official Anthropic model, or a `gemini.*` tool unless you are an official Google model. Being an official model is not enough: credentials, plan, or network failures can still make such a tool unavailable. A denial is a normal outcome; never claim success from a call that did not complete, and fall back to other tools.
 
 # Care, output, and safety
 
@@ -60,8 +60,8 @@ mod tests {
         assert!(prompt.contains("# Provider-issued tools"));
         assert!(prompt.contains("# Care, output, and safety"));
         assert!(prompt.contains("Always name the session"));
-        assert!(prompt.contains("confirm with `context.status` first"));
-        assert!(prompt.contains("never call a `chatgpt.*` tool on a Claude model"));
+        assert!(prompt.contains("Judge this from `context.status`"));
+        assert!(prompt.contains("Never call a `chatgpt.*` tool unless you are an official OpenAI model"));
         assert!(prompt.contains("blast radius"));
         assert!(!prompt.contains("# Tools & Plugins"));
         assert!(!prompt.contains("tools_list"));

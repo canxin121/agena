@@ -615,4 +615,128 @@ mod tests {
             "the second call must keep its authoritative key"
         );
     }
+
+    #[test]
+    fn two_parallel_responses_calls_with_distinct_indices_stay_separate() {
+        // Reproduce the cpa gateway's Responses event shape for two parallel
+        // tools_call invocations: each call has an output_item.added (with
+        // call_id + item_id), then item-based argument deltas, then a done
+        // (with call_id + item_id + full arguments). The two calls use
+        // distinct output indices. Each logical call must stay on one key and
+        // accumulate its own full arguments.
+        let mut accumulator = ToolStreamAccumulator::new();
+
+        // Call A: fs.grep (output_index 0)
+        let added_a = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Start,
+                    &["item:fc_1", "idx:0", "call:call_00"],
+                    "fc_1",
+                    Some("call_00"),
+                    None,
+                ),
+            )
+            .expect("call A added");
+        assert_eq!(update_stream_key(&added_a[0]), "call:call_00");
+
+        // Call B: shell.run (output_index 1)
+        let added_b = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Start,
+                    &["item:fc_2", "idx:1", "call:call_01"],
+                    "fc_2",
+                    Some("call_01"),
+                    None,
+                ),
+            )
+            .expect("call B added");
+        assert_eq!(update_stream_key(&added_b[0]), "call:call_01");
+
+        // Call A argument deltas (item-only, no call_id)
+        accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Delta,
+                    &["item:fc_1", "idx:0"],
+                    "fc_1",
+                    None,
+                    Some(r#"{"tool":"fs.grep","input":{"pattern":"fn "#),
+                ),
+            )
+            .expect("call A delta 1");
+        accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Delta,
+                    &["item:fc_1", "idx:0"],
+                    "fc_1",
+                    None,
+                    Some(r#"turn_id"}}"#),
+                ),
+            )
+            .expect("call A delta 2");
+
+        // Call B argument deltas (item-only, no call_id)
+        accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Delta,
+                    &["item:fc_2", "idx:1"],
+                    "fc_2",
+                    None,
+                    Some(r#"{"tool":"shell.run","input":{"command":"grep"}"#),
+                ),
+            )
+            .expect("call B delta 1");
+
+        // Call A done (call_id + a continuation that differs from the
+        // accumulated deltas so a delta is emitted on call A's key)
+        let done_a = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Finish,
+                    &["item:fc_1", "idx:0", "call:call_00"],
+                    "fc_1",
+                    Some("call_00"),
+                    Some(r#"{"tool":"fs.grep","input":{"pattern":"fn turn_id","extra":1}}"#),
+                ),
+            )
+            .expect("call A done");
+        assert!(
+            !done_a.is_empty()
+                && done_a
+                    .iter()
+                    .all(|update| update_stream_key(update) == "call:call_00"),
+            "call A done must stay on call A's key: {done_a:?}"
+        );
+
+        // Call B done (call_id + continuation)
+        let done_b = accumulator
+            .ingest(
+                "openai",
+                input_with_item(
+                    ToolStreamInputKind::Finish,
+                    &["item:fc_2", "idx:1", "call:call_01"],
+                    "fc_2",
+                    Some("call_01"),
+                    Some(r#"{"tool":"shell.run","input":{"command":"grep -r","extra":2}}"#),
+                ),
+            )
+            .expect("call B done");
+        assert!(
+            !done_b.is_empty()
+                && done_b
+                    .iter()
+                    .all(|update| update_stream_key(update) == "call:call_01"),
+            "call B done must stay on call B's key: {done_b:?}"
+        );
+    }
 }

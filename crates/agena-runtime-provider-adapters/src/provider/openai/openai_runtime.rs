@@ -661,6 +661,11 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             // Keep response-item order stable. A later event for the same item
             // replaces its snapshot in place instead of reordering it by ID.
             let mut reasoning_items = Vec::<(String, serde_json::Value)>::new();
+            // Chat-style `reasoning_content` models stream reasoning as
+            // `reasoning_summary_text.delta` / `reasoning_text.delta` events,
+            // not as a `reasoning` output item. Accumulate that text so it can
+            // be replayed as a reasoning item for the next request.
+            let mut streaming_reasoning_text = String::new();
 
             while let Some(event) = events.next().await {
                 let event = event?;
@@ -695,6 +700,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 }
 
                 if let Some(delta) = responses_reasoning_delta(&event) {
+                    streaming_reasoning_text.push_str(delta.as_str());
                     yield CompletionStreamEvent::ThinkingDelta {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
@@ -742,6 +748,28 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                         CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
                         stream_tool_call_seen,
                     );
+                    if !streaming_reasoning_text.trim().is_empty()
+                        && !reasoning_items.iter().any(|(_, item)| {
+                            item.get("content")
+                                .and_then(serde_json::Value::as_array)
+                                .is_some_and(|content| !content.is_empty())
+                        })
+                    {
+                        // Emit the streamed reasoning as a synthetic content
+                        // item so a `reasoning_content` model receives its
+                        // prior reasoning back on the next request.
+                        reasoning_items.push((
+                            "streaming_reasoning".to_owned(),
+                            serde_json::json!({
+                                "type": "reasoning",
+                                "summary": [],
+                                "content": [{
+                                    "type": "reasoning_text",
+                                    "text": streaming_reasoning_text,
+                                }],
+                            }),
+                        ));
+                    }
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),

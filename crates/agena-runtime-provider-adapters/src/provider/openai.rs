@@ -250,7 +250,7 @@ fn openai_reasoning_items_from_output(
                     })
                 })
                 .collect::<Vec<_>>();
-            let content = item
+            let mut content = item
                 .content
                 .iter()
                 .flatten()
@@ -263,6 +263,22 @@ fn openai_reasoning_items_from_output(
                     })
                 })
                 .collect::<Vec<_>>();
+            // A `reasoning_content` model (e.g. deepseek) returns reasoning as
+            // a `summary` (or streaming deltas) without a `content` array or
+            // `encrypted_content`. Fall back to the summary text so the item
+            // survives into the replay carrier and can be passed back.
+            if content.is_empty() && !summary.is_empty() {
+                content = summary
+                    .iter()
+                    .filter_map(|item| item.get("text").and_then(serde_json::Value::as_str))
+                    .map(|text| {
+                        serde_json::json!({
+                            "type": "reasoning_text",
+                            "text": text,
+                        })
+                    })
+                    .collect();
+            }
             // Preserve a reasoning item when it carries either encrypted
             // content (OpenAI-style) or plain text content (chat-style
             // `reasoning_content` models that must replay their reasoning).
@@ -309,11 +325,29 @@ fn openai_reasoning_item_from_event(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let content = item
+    let mut content = item
         .get("content")
         .and_then(serde_json::Value::as_array)
         .filter(|content| !content.is_empty())
         .cloned();
+    // Fall back to the summary text (chat-style `reasoning_content` models)
+    // when no explicit content array is present, so the reasoning survives
+    // into the replay carrier.
+    if content.as_ref().is_none_or(|content| content.is_empty()) {
+        let summary_text = summary
+            .iter()
+            .filter_map(|item| item.get("text").and_then(serde_json::Value::as_str))
+            .map(|text| {
+                serde_json::json!({
+                    "type": "reasoning_text",
+                    "text": text,
+                })
+            })
+            .collect::<Vec<_>>();
+        if !summary_text.is_empty() {
+            content = Some(summary_text);
+        }
+    }
     // Preserve a reasoning item when it carries either encrypted content or
     // plain text content (chat-style `reasoning_content` models that must
     // replay their reasoning back to the API).
@@ -807,6 +841,8 @@ mod tests {
 
     #[test]
     fn reasoning_items_without_content_or_encrypted_content_are_dropped() {
+        // Completely empty reasoning (no summary, no content, no encrypted
+        // content) must be dropped.
         let event = serde_json::json!({
             "type": "response.output_item.done",
             "item": {
@@ -831,6 +867,51 @@ mod tests {
         assert!(
             openai_reasoning_items_from_output(response.output.as_deref()).is_empty(),
             "an empty reasoning output item must be dropped"
+        );
+    }
+
+    #[test]
+    fn summary_only_reasoning_items_are_preserved_as_content_for_replay() {
+        // A `reasoning_content` model (deepseek) returns reasoning as a
+        // `summary` with no `content` array or `encrypted_content`. The item
+        // must survive into the replay carrier (as content) so it can be
+        // passed back to the API.
+        let event = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "rs_summary_1",
+                "type": "reasoning",
+                "summary": [
+                    { "type": "summary_text", "text": "reason " },
+                    { "type": "summary_text", "text": "step by step" }
+                ]
+            }
+        });
+        let (key, item) = openai_reasoning_item_from_event(&event).expect("summary reasoning item");
+        assert_eq!(key, "rs_summary_1");
+        assert_eq!(item["type"], "reasoning");
+        let content = item["content"].as_array().expect("content array");
+        let text = content
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .concat();
+        assert_eq!(text, "reason step by step");
+
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "output": [{
+                "id": "rs_summary_2",
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": "output reasoning" }]
+            }]
+        }))
+        .expect("deserialize Responses payload");
+        let items = openai_reasoning_items_from_output(response.output.as_deref());
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["content"][0]["text"],
+            "output reasoning",
+            "summary text must be replayed as reasoning content"
         );
     }
 

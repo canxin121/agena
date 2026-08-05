@@ -2621,6 +2621,112 @@ mod tests {
         );
     }
 
+    /// Lazy reconciliation: `get_session` must recover an interrupted run the
+    /// first time the session is opened, without any explicit
+    /// `reconcile_interrupted_executions` call (startup no longer scans the
+    /// whole workspace).
+    #[tokio::test]
+    async fn get_session_reconciles_interrupted_run_lazily() {
+        let manager = test_manager().await;
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "lazy interrupted tool batch".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create lazy interrupted session");
+        let session_id = session.id;
+        let (execution_id, turn_id, reply_id) =
+            seed_canonical_assistant_reply(&manager, session_id).await;
+        let run_id = RunId::new();
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve lazy interrupted tool ids");
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(OperationPart::pending(
+                702,
+                ToolInvocation::new("test.batch_barrier.slow", StructuredObject::default()),
+                "Wait for batch_barrier.slow",
+                TimeRange::default(),
+            ))],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: "reply-test-provider".to_owned(),
+                model_id: "reply-test-model".to_owned(),
+                ..MessageMetadata::default()
+            },
+        );
+        message.parts[0].operation_id = Some("lazy-interrupted-tool-operation".to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist lazy pending tool");
+        manager
+            .store
+            .append_lifecycle_events(
+                session_id,
+                vec![
+                    EventKind::RunStarted(RunStarted {
+                        execution_id,
+                        run_id,
+                        source: ExecutionSource::User,
+                        model_id: "reply-test-model".into(),
+                        provider_id: "reply-test-provider".into(),
+                        request_digest: None,
+                    }),
+                    EventKind::MessagePartCheckpointed(
+                        crate::event::MessagePartCheckpointedEvent {
+                            session_id,
+                            execution_id: Some(execution_id),
+                            run_id: Some(run_id),
+                            turn_id: Some(turn_id),
+                            reply_id: Some(reply_id),
+                            message_id: message.id,
+                            message_role: message.role,
+                            message_state: message.state,
+                            message_created_at: message.created_at,
+                            message_metadata: message.metadata.clone(),
+                            part: message.parts[0].clone(),
+                            ts_ms: Utc::now().timestamp_millis(),
+                        },
+                    ),
+                ],
+            )
+            .await
+            .expect("persist lazy hanging execution history");
+
+        // Opening the session triggers lazy reconciliation; do not call
+        // reconcile_interrupted_executions().
+        let recovered = manager
+            .get_session(session_id)
+            .await
+            .expect("open recovers session");
+        assert_eq!(
+            recovered.workflow_state(),
+            agena_domain::WorkflowState::Quiescent
+        );
+        assert!(recovered.pending_tools().is_empty());
+        let recovered_part = recovered
+            .messages
+            .iter()
+            .flat_map(|message| message.parts.iter())
+            .find(|part| part.operation_id.as_deref() == Some("lazy-interrupted-tool-operation"))
+            .expect("recovered lazy tool operation");
+        assert_eq!(recovered_part.status, ExecutionStatus::Failed);
+    }
+
     /// A crashed process leaves a stale execution lease behind. `reap_stale_leases`
     /// must reclaim it and terminalize the interrupted run so the session becomes
     /// usable again instead of permanently reporting "already running a response".

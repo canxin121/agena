@@ -904,7 +904,7 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("╭─ ● agena.interaction.notify"));
+        assert!(text.contains("╭─ ● Production ready"));
         assert!(text.contains("Deployment finished"));
         assert!(text.contains("╰─ success"));
     }
@@ -1079,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn folded_operation_headline_uses_the_execution_tool_name() {
+    fn folded_operation_headline_uses_the_composed_operation_title() {
         let input = agena_api::message_part::StructuredObjectResource {
             fields: vec![
                 agena_api::message_part::StructuredFieldResource {
@@ -1108,8 +1108,8 @@ mod tests {
                 input,
                 ..Default::default()
             },
-            // A producer-converted title must never become the headline: the
-            // direct execution-tool name wins.
+            // The composed operation title is the headline; the bare
+            // execution-tool name is not repeated.
             title: "Apply patch".to_owned(),
             summary: "1 file changed · +1 −1".to_owned(),
             ..Default::default()
@@ -1117,7 +1117,7 @@ mod tests {
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool, 80),
-            "● fs.apply_patch · 1 file changed · +1 −1"
+            "● Apply patch · 1 file changed · +1 −1"
         );
     }
 
@@ -1146,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn folded_tool_headline_shows_the_execution_tool_name_and_reports_result_count() {
+    fn folded_tool_headline_shows_the_composed_operation_title_and_reports_result_count() {
         let input = agena_api::message_part::StructuredObjectResource {
             fields: vec![
                 agena_api::message_part::StructuredFieldResource {
@@ -1189,8 +1189,7 @@ mod tests {
                 input,
                 ..Default::default()
             },
-            // The producer-converted title is never the headline; the direct
-            // execution-tool name wins.
+            // The composed operation title is the headline.
             title: "Grep TODO".to_owned(),
             summary: "36 matches in crates".to_owned(),
             details: agena_api::message_part::ToolOutputResource {
@@ -1209,7 +1208,7 @@ mod tests {
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Completed, &tool, 80),
-            "● fs.grep · 36 matches in crates"
+            "● Grep TODO · 36 matches in crates"
         );
     }
 
@@ -1252,7 +1251,7 @@ mod tests {
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Failed, &tool, 80),
-            "× agena.fs.read · permission denied by workspace policy"
+            "× Read secrets.env · permission denied by workspace policy"
         );
     }
 
@@ -1271,7 +1270,7 @@ mod tests {
 
         assert_eq!(
             tool_execution_compact_summary(PartExecutionStatusResource::Pending, &tool, 80),
-            "○ agena.lsp.servers · Awaiting approval"
+            "○ Language servers · Awaiting approval"
         );
     }
 

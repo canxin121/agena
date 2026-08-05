@@ -2803,7 +2803,7 @@ impl SessionManager {
         let completion_title = {
             let execution_title = summary.title.trim();
             if !execution_title.is_empty() && !is_authorization_phase_title(execution_title) {
-                execution_title.to_string()
+                agena_tool::compose_tool_title(resolved.invocation.name.as_str(), execution_title)
             } else {
                 terminal_operation_title(&resolved.invocation)
             }

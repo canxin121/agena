@@ -446,6 +446,12 @@ pub struct SessionManager {
     execution: ArcSwap<SessionManagerState>,
     execution_registry: Arc<ExecutionRegistry>,
     reply_session_locks: Arc<Mutex<HashMap<i64, Arc<Mutex<()>>>>>,
+    /// Sessions whose interrupted-run reconciliation has already run in this
+    /// process. `get_session` reconciles a session once (plus its subagent
+    /// children) so the per-session event scan is not repeated on every
+    /// refresh; after that, per-run cleanup and per-load projection catch-up
+    /// keep the session current.
+    reconciled_sessions: Arc<Mutex<HashSet<i64>>>,
     host_user_input_waiters: Arc<Mutex<HashMap<String, PendingHostUserInput>>>,
     host_user_input_sequences: Arc<StdMutex<HashMap<HostUserInputSequenceKey, usize>>>,
 }
@@ -1196,6 +1202,7 @@ impl SessionManager {
             execution: ArcSwap::from(self.execution.load_full()),
             execution_registry: Arc::clone(&self.execution_registry),
             reply_session_locks: Arc::clone(&self.reply_session_locks),
+            reconciled_sessions: Arc::clone(&self.reconciled_sessions),
             host_user_input_waiters: Arc::clone(&self.host_user_input_waiters),
             host_user_input_sequences: Arc::clone(&self.host_user_input_sequences),
         }
@@ -1280,6 +1287,7 @@ impl SessionManager {
                 owner_id.clone(),
             )),
             reply_session_locks: Arc::new(Mutex::new(HashMap::new())),
+            reconciled_sessions: Arc::new(Mutex::new(HashSet::new())),
             host_user_input_waiters: Arc::new(Mutex::new(HashMap::new())),
             host_user_input_sequences: Arc::new(StdMutex::new(HashMap::new())),
         }

@@ -6,16 +6,28 @@ pub(crate) fn tool_execution_title(name: Option<&str>) -> String {
     name.unwrap_or("unknown").trim().to_owned()
 }
 
+/// Compose the call-start Operation title once the full invocation (including
+/// streamed arguments) is available: "fs.read · README.md". The invocation's
+/// most informative string argument supplies the summary so a running Activity
+/// reads as a real call rather than a bare tool name.
+pub(crate) fn tool_execution_title_for_invocation(invocation: &ToolInvocation) -> String {
+    let input = serde_json::Value::from(invocation.input.clone());
+    let summary = agena_tool::invocation_call_summary(&input);
+    agena_tool::compose_tool_title(invocation.name.as_str(), summary)
+}
+
 pub(crate) fn provider_native_tool_execution_title(
     title: &str,
     tool_name: &str,
-    _input: &StructuredObject,
+    input: &StructuredObject,
 ) -> String {
     let trimmed = title.trim();
     if !trimmed.is_empty() {
-        trimmed.to_owned()
+        agena_tool::compose_tool_title(tool_name, trimmed)
     } else {
-        tool_name.trim().to_owned()
+        let input = serde_json::Value::from(input.clone());
+        let summary = agena_tool::invocation_call_summary(&input);
+        agena_tool::compose_tool_title(tool_name, summary)
     }
 }
 

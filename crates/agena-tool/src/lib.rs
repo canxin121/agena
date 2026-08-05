@@ -45,6 +45,67 @@ pub fn normalize_tool_summary(summary: impl AsRef<str>) -> String {
     normalize_tool_presentation_line(summary, TOOL_SUMMARY_MAX_DISPLAY_WIDTH)
 }
 
+/// Compose the durable Operation title from the execution-tool name and the
+/// concise, call-specific summary produced for this invocation
+/// ("fs.read · Read README.md", "tools.search · Search tools · filesystem").
+/// The bare tool name is returned when no summary is available, and the
+/// composed value is bounded by the title contract.
+pub fn compose_tool_title(tool_name: impl AsRef<str>, summary: impl AsRef<str>) -> String {
+    let tool_name = tool_name.as_ref().trim();
+    let summary = summary.as_ref().trim();
+    if summary.is_empty() || summary == tool_name {
+        return normalize_tool_title(tool_name);
+    }
+    if tool_name.is_empty() {
+        return normalize_tool_title(summary);
+    }
+    normalize_tool_title(format!("{tool_name} · {summary}"))
+}
+
+/// Pick the single most informative string argument of a tool invocation to
+/// use as a call-start title summary ("README.md", "cargo test", "filesystem").
+/// Returns an empty string when the input carries no obvious subject so the
+/// caller can fall back to the bare tool name.
+pub fn invocation_call_summary(input: &serde_json::Value) -> String {
+    const PREFERRED_KEYS: &[&str] = &[
+        "tool",
+        "command",
+        "description",
+        "file_path",
+        "path",
+        "pattern",
+        "query",
+        "url",
+        "title",
+        "expression",
+        "notebook_path",
+        "process_id",
+        "task_id",
+        "function",
+        "model",
+        "id",
+        "name",
+    ];
+    for key in PREFERRED_KEYS {
+        if let Some(value) = input.get(*key).and_then(serde_json::Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_owned();
+            }
+        }
+    }
+    // Provider-native envelopes nest the real target under `input`.
+    if let Some(inner) = input.get("input").and_then(serde_json::Value::as_object) {
+        if let Some(value) = inner.get("tool").and_then(serde_json::Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_owned();
+            }
+        }
+    }
+    String::new()
+}
+
 fn normalize_tool_presentation_line(value: impl AsRef<str>, max_width: usize) -> String {
     let normalized = value
         .as_ref()
@@ -74,10 +135,51 @@ fn normalize_tool_presentation_line(value: impl AsRef<str>, max_width: usize) ->
 #[cfg(test)]
 mod tool_title_tests {
     use super::{
-        TOOL_SUMMARY_MAX_DISPLAY_WIDTH, TOOL_TITLE_MAX_DISPLAY_WIDTH, normalize_tool_summary,
-        normalize_tool_title,
+        TOOL_SUMMARY_MAX_DISPLAY_WIDTH, TOOL_TITLE_MAX_DISPLAY_WIDTH, compose_tool_title,
+        invocation_call_summary, normalize_tool_summary, normalize_tool_title,
     };
     use unicode_width::UnicodeWidthStr;
+
+    #[test]
+    fn composed_titles_join_the_tool_name_and_call_summary() {
+        assert_eq!(
+            compose_tool_title("fs.read", "Read README.md"),
+            "fs.read · Read README.md"
+        );
+        assert_eq!(
+            compose_tool_title("tools.search", "Search tools · filesystem"),
+            "tools.search · Search tools · filesystem"
+        );
+    }
+
+    #[test]
+    fn composed_titles_fall_back_to_the_bare_tool_name() {
+        assert_eq!(compose_tool_title("shell.run", ""), "shell.run");
+        assert_eq!(compose_tool_title("shell.run", "   "), "shell.run");
+        assert_eq!(compose_tool_title("fs.read", "fs.read"), "fs.read");
+        assert_eq!(compose_tool_title("", ""), "");
+    }
+
+    #[test]
+    fn invocation_call_summary_prefers_the_most_informative_argument() {
+        assert_eq!(
+            invocation_call_summary(&serde_json::json!({"path": "README.md"})),
+            "README.md"
+        );
+        assert_eq!(
+            invocation_call_summary(&serde_json::json!({"command": "cargo test", "timeout_ms": 5})),
+            "cargo test"
+        );
+        assert_eq!(
+            invocation_call_summary(&serde_json::json!({"query": "filesystem"})),
+            "filesystem"
+        );
+        assert_eq!(
+            invocation_call_summary(&serde_json::json!({"tool": "fs.write", "input": {"path": "notes.txt"}})),
+            "fs.write"
+        );
+        assert_eq!(invocation_call_summary(&serde_json::json!({})), "");
+    }
 
     #[test]
     fn normal_titles_are_preserved_and_whitespace_is_collapsed() {

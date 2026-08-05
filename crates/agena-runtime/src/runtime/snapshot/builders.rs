@@ -127,31 +127,12 @@ pub(super) async fn resume_session_state(
             .map_err(|err| {
                 crate::AppError::Internal(format!("resume event sequence failed: {err}"))
             })?;
-        // Reclaim leases left behind by crashed processes before reconciling
-        // interrupted runs. `reconcile_interrupted_executions` skips sessions
-        // with a live lease, so without this a stale lease from a crashed
-        // process would keep its session permanently marked "already running".
-        //
-        // Both passes scan every session's history and can take tens of
-        // seconds on large databases, so run them in the background and let
-        // the UI open immediately. They are idempotent maintenance, and
-        // `register` atomically steals a stale lease on demand, so deferring
-        // them cannot block a new run.
-        let manager = Arc::clone(manager);
-        tokio::spawn(async move {
-            if let Err(error) = manager.reap_stale_leases().await {
-                tracing::error!(
-                    error = %error,
-                    "background session lease reclamation failed"
-                );
-            }
-            if let Err(error) = manager.reconcile_interrupted_executions().await {
-                tracing::error!(
-                    error = %error,
-                    "background interrupted-execution reconciliation failed"
-                );
-            }
-        });
+        // Interrupted-run reconciliation is intentionally NOT run here: it
+        // scans every session's history and would delay startup on large
+        // databases. `SessionManager` reconciles a session lazily when it is
+        // opened (`get_session`), which is the only session the user can
+        // observe; stale execution leases are stolen atomically on demand by
+        // `register`, so deferring reconciliation cannot block a new run.
     }
     Ok(())
 }

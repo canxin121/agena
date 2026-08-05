@@ -268,11 +268,19 @@ fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
 }
 
 /// Human-readable, persisted Operation title. This becomes the `name` header
-/// in `agena_model_message_parts`, so collapsed transcript queries need not load
-/// the operation payload merely to explain the action. The header is the direct
-/// execution-tool name, never a producer-converted display title.
+/// in `agena_model_message_parts`, so collapsed transcript queries need not
+/// load the operation payload merely to explain the action. The header is the
+/// composed tool title the runtime produced ("fs.read · Read README.md",
+/// "tools.list · List tools · 2/133"); fall back to the direct execution-tool
+/// name when no title was generated yet (very early streaming or a malformed
+/// call).
 fn operation_header_title(operation: &super::OperationPart) -> String {
-    operation.invocation.name.clone()
+    let title = operation.title.trim();
+    if title.is_empty() {
+        operation.invocation.name.clone()
+    } else {
+        title.to_owned()
+    }
 }
 fn truncate_summary(value: &str) -> Option<String> {
     let trimmed = value.trim();
@@ -342,9 +350,10 @@ mod tests {
             PartContent::operation(operation),
         );
 
-        // The header is the direct execution-tool name, never the
-        // producer-converted completion title.
-        assert_eq!(part.name.as_deref(), Some("fs.read"));
+        // The header is the persisted operation title (the composed tool
+        // title), falling back to the invocation name only when no title was
+        // generated.
+        assert_eq!(part.name.as_deref(), Some("Read README.md"));
         assert_eq!(part.summary.as_deref(), Some("42 lines"));
         assert!(part.has_detail);
     }
@@ -383,9 +392,9 @@ mod tests {
             PartContent::operation(operation),
         );
 
-        // Discovery headers use the gateway tool name, not the converted
-        // page-title prose.
-        assert_eq!(part.name.as_deref(), Some("tools_list"));
+        // Discovery headers use the composed page-title prose, not the bare
+        // gateway tool name.
+        assert_eq!(part.name.as_deref(), Some("List tools · 20/133"));
         assert!(part.has_detail);
     }
 }

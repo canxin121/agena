@@ -6,3 +6,11 @@
 # every developer machine and in CI.
 [env]
 RUST_MIN_STACK = "16777216"
+
+# macOS ld64 warns when __eh_frame exceeds 16MB, the compact-unwind encoder
+# limit. Unoptimized dev binaries contain enough functions to exceed that
+# (33MB in a debug build of the agena TUI). Disabling the compact unwind table
+# removes the warning; unwinding then falls back to __eh_frame directly, which
+# is functionally identical for Rust panics and only marginally slower.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-no_compact_unwind"]

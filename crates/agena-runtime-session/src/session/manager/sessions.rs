@@ -10,66 +10,102 @@ use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
 
 impl SessionManager {
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
-        let state = self.execution_state();
         for session_id in self.workspace_session_ids().await? {
-            // Skip sessions with a live execution lease: another process is
-            // actively running them, so their RunStarted entries are not
-            // interrupted and must not be aborted.
-            if self.store.active_lease_owner(session_id).await.is_some() {
-                continue;
-            }
-            self.store
-                .reconcile_interrupted_lifecycles(session_id)
-                .await?;
-            let mut session = self
-                .store
-                .load_session(session_id, state.cache_policy())
-                .await?;
-            if session.is_subagent()
-                && session.runtime.subtask.status == agena_domain::SubtaskStatus::Running
-                && !self.execution_registry.is_active(session_id).await
-            {
-                session.runtime.subtask.status = agena_domain::SubtaskStatus::Interrupted;
-                session.runtime.subtask.finished_at_ms =
-                    Some(chrono::Utc::now().timestamp_millis());
-                session.runtime.subtask.failure = Some(interrupted_subtask_failure());
-                let interrupted_at_ms = session.runtime.subtask.finished_at_ms;
-                let lifecycle_event = session.parent_id.zip(session.task_id.clone()).map(
-                    |(parent_session_id, task_id)| {
-                        crate::event::EventKind::SubtaskStatusChanged(
-                            agena_domain::SubtaskStatusChangedEvent {
-                                session_id,
-                                parent_session_id,
-                                task_id,
-                                access: session.runtime.execution.access,
-                                status: agena_domain::SubtaskStatus::Interrupted,
-                                resumed: false,
-                                started_at_ms: session.runtime.subtask.started_at_ms,
-                                finished_at_ms: interrupted_at_ms,
-                                failure: session.runtime.subtask.failure.as_ref().map(Into::into),
-                                ts_ms: interrupted_at_ms
-                                    .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
-                            },
-                        )
-                    },
-                );
-                let subtask = session.runtime.subtask.clone();
-                session = self
-                    .store
-                    .update_subtask_state(session, subtask, state.cache_policy())
-                    .await?;
-                self.persist_session_changes(
-                    session,
-                    Vec::new(),
-                    lifecycle_event.into_iter().collect(),
-                    None,
-                    state.clone(),
-                )
-                .await?;
-            }
+            self.reconcile_interrupted_session(session_id).await?;
         }
         Ok(())
     }
+
+    /// Reconcile one session's interrupted lifecycles and subagent subtask
+    /// state without scanning unrelated sessions. Skips sessions with a live
+    /// execution lease: another process is actively running them, so their
+    /// RunStarted entries are not interrupted and must not be aborted.
+    async fn reconcile_interrupted_session(&self, session_id: i64) -> Result<(), AppError> {
+        let state = self.execution_state();
+        if self.store.active_lease_owner(session_id).await.is_some() {
+            return Ok(());
+        }
+        self.store
+            .reconcile_interrupted_lifecycles(session_id)
+            .await?;
+        let mut session = self
+            .store
+            .load_session(session_id, state.cache_policy())
+            .await?;
+        if session.is_subagent()
+            && session.runtime.subtask.status == agena_domain::SubtaskStatus::Running
+            && !self.execution_registry.is_active(session_id).await
+        {
+            session.runtime.subtask.status = agena_domain::SubtaskStatus::Interrupted;
+            session.runtime.subtask.finished_at_ms =
+                Some(chrono::Utc::now().timestamp_millis());
+            session.runtime.subtask.failure = Some(interrupted_subtask_failure());
+            let interrupted_at_ms = session.runtime.subtask.finished_at_ms;
+            let lifecycle_event = session.parent_id.zip(session.task_id.clone()).map(
+                |(parent_session_id, task_id)| {
+                    crate::event::EventKind::SubtaskStatusChanged(
+                        agena_domain::SubtaskStatusChangedEvent {
+                            session_id,
+                            parent_session_id,
+                            task_id,
+                            access: session.runtime.execution.access,
+                            status: agena_domain::SubtaskStatus::Interrupted,
+                            resumed: false,
+                            started_at_ms: session.runtime.subtask.started_at_ms,
+                            finished_at_ms: interrupted_at_ms,
+                            failure: session.runtime.subtask.failure.as_ref().map(Into::into),
+                            ts_ms: interrupted_at_ms
+                                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
+                        },
+                    )
+                },
+            );
+            let subtask = session.runtime.subtask.clone();
+            session = self
+                .store
+                .update_subtask_state(session, subtask, state.cache_policy())
+                .await?;
+            self.persist_session_changes(
+                session,
+                Vec::new(),
+                lifecycle_event.into_iter().collect(),
+                None,
+                state.clone(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Lazy interrupted-run reconciliation for the session the user is about
+    /// to open, plus its subagent children (whose state is displayed under the
+    /// parent in the session tree). Runs at most once per session per process,
+    /// replacing the startup full-workspace scan that delayed `tui` on large
+    /// databases. Stale execution leases are still stolen atomically on demand
+    /// by `register`, and per-run/per-load cleanup keeps sessions current
+    /// after the first open.
+    async fn reconcile_session_on_open(&self, session_id: i64) -> Result<(), AppError> {
+        {
+            let mut reconciled = self.reconciled_sessions.lock().await;
+            if !reconciled.insert(session_id) {
+                return Ok(());
+            }
+        }
+        // A live cross-process lease means another process is actively running
+        // this session; leave it alone.
+        if self.store.active_lease_owner(session_id).await.is_some() {
+            return Ok(());
+        }
+        if !self.store.session_exists(session_id).await? {
+            return Ok(());
+        }
+        self.reconcile_interrupted_session(session_id).await?;
+        for child_id in self.store.list_child_session_ids(session_id).await? {
+            self.reconcile_interrupted_session(child_id).await?;
+        }
+        Ok(())
+    }
+
     /// Reclaim stale execution leases (from crashed processes) and reconcile
     /// the interrupted runs of the reclaimed sessions. Called periodically by
     /// a maintenance loop so a running process can recover another process's
@@ -206,6 +242,10 @@ impl SessionManager {
 
     pub async fn get_session(&self, session_id: i64) -> Result<Session, AppError> {
         let state = self.execution_state();
+        // Reconcile interrupted runs lazily on first open so the transcript
+        // shows aborted (not stuck in-progress) replies without scanning
+        // unrelated sessions at startup.
+        self.reconcile_session_on_open(session_id).await?;
         let mut session = self
             .store
             .load_session(session_id, state.cache_policy())

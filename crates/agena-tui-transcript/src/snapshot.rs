@@ -608,10 +608,16 @@ fn bounded_presentation_summary(text: &str) -> String {
 }
 
 fn operation_activity_title(operation: &agena_domain::OperationActivity) -> String {
-    // The activity headline is the direct execution-tool name. Producer
-    // converted titles ("Process run …", "Read README.md") are display
-    // noise; the invocation name is the stable tool identity.
-    operation.invocation.name.clone()
+    // The activity headline is the composed tool title the runtime produced:
+    // "fs.read · Read README.md", "tools.list · List tools · 2/133". Fall
+    // back to the direct execution-tool name only when no title was generated
+    // yet (very early streaming or a malformed call).
+    let title = operation.title.trim();
+    if title.is_empty() {
+        operation.invocation.name.clone()
+    } else {
+        title.to_owned()
+    }
 }
 fn timestamp(value: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(value).unwrap_or(DateTime::UNIX_EPOCH)
@@ -1228,19 +1234,19 @@ mod tests {
             .expect("tools_list Activity node");
         assert!(node.toggleable);
         assert!(!node.expanded);
-        // The collapsed headline is the direct tool name; the producer
-        // converted title ("List tools · 2/133") is never rendered.
+        // The collapsed headline is the composed operation title; the bare
+        // execution-tool name is not repeated.
         assert!(
             collapsed
                 .lines
                 .iter()
-                .any(|line| line.text.contains("tools_list"))
+                .any(|line| line.text.contains("List tools · 2/133"))
         );
         assert!(
             collapsed
                 .lines
                 .iter()
-                .all(|line| !line.text.contains("List tools"))
+                .all(|line| !line.text.contains("tools_list"))
         );
         assert!(
             collapsed
@@ -1884,10 +1890,10 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        // The collapsed headline is the direct tool name; the converted
-        // "Search repository" title is never rendered.
-        assert!(collapsed_text.contains("repo.search"));
-        assert!(!collapsed_text.contains("Search repository"));
+        // The collapsed headline is the composed operation title; the bare
+        // execution-tool name is not repeated.
+        assert!(collapsed_text.contains("Search repository"));
+        assert!(!collapsed_text.contains("repo.search"));
         assert!(collapsed_text.contains("2 matches"));
         assert!(!collapsed_text.contains("src/activity.rs"));
 
@@ -1925,7 +1931,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_activity_headlines_show_tool_name_and_spend_remaining_width_on_summary() {
+    fn canonical_activity_headlines_show_composed_title_and_spend_remaining_width_on_summary() {
         let response_id = agena_domain::AssistantReplyId::new();
         let operation_document = |invocation_name: &str, summary: &str| {
             ContentDocument::new(vec![ContentNode::activity(ActivityNode {
@@ -1941,8 +1947,8 @@ mod tests {
                 payload: ActivityPayload::Operation(OperationActivity {
                     call_id: ToolCallId::new("call-title"),
                     invocation: ToolInvocation::new(invocation_name, StructuredObject::default()),
-                    // A producer-converted title must never surface: the
-                    // headline shows the execution-tool name instead.
+                    // The composed operation title is the headline; it spends
+                    // the remaining width on the summary.
                     title: "Process run Create a tiny test PNG with pure python".to_owned(),
                     summary: summary.to_owned(),
                     data: serde_json::Value::Null,
@@ -1974,16 +1980,15 @@ mod tests {
         let ordinary_headline = ordinary_rendered
             .lines
             .iter()
-            .find(|line| line.text.contains("shell.run"))
+            .find(|line| line.text.contains("Process run"))
             .expect("ordinary Operation headline");
-        assert!(ordinary_headline.text.contains("shell.run"));
-        assert!(!ordinary_headline.text.contains("Process run"));
+        assert!(ordinary_headline.text.contains("Process run"));
+        assert!(!ordinary_headline.text.contains("shell.run"));
         assert!(ordinary_headline.text.contains("PNG result details"));
         assert!(ordinary_headline.text.ends_with('…'));
         assert!(unicode_width::UnicodeWidthStr::width(ordinary_headline.text.as_str()) <= 80);
 
-        let long_name = format!("{}.{}", "very-long-tool-name".repeat(8), "subcommand");
-        let long_document = operation_document(long_name.as_str(), "complete");
+        let long_document = operation_document("shell.run", &"complete ".repeat(60));
         let long = assistant_reply_document_entry(
             response_id,
             MessageStatus::Completed,
@@ -2003,14 +2008,14 @@ mod tests {
         let long_headline = long_rendered
             .lines
             .iter()
-            .find(|line| line.text.contains("very-long-tool-name"))
+            .find(|line| line.text.contains("Process run"))
             .expect("long Operation headline");
         assert!(long_headline.text.ends_with('…'));
         assert!(unicode_width::UnicodeWidthStr::width(long_headline.text.as_str()) <= 120);
     }
 
     #[test]
-    fn operation_activity_titles_use_the_execution_tool_name() {
+    fn operation_activity_titles_use_the_composed_operation_title() {
         let operation = |name: &str, input: serde_json::Value, title: &str| {
             let provider_arguments =
                 StructuredObject::try_from(input).expect("structured tool input");
@@ -2051,7 +2056,8 @@ mod tests {
             OperationActivity {
                 call_id: ToolCallId::new(format!("call-{name}")),
                 invocation,
-                // The producer-converted title is ignored by the headline.
+                // A non-empty composed title is the headline; an empty title
+                // falls back to the invocation name.
                 title: title.to_owned(),
                 summary: String::new(),
                 data: serde_json::Value::Null,
@@ -2067,7 +2073,7 @@ mod tests {
                 serde_json::json!({}),
                 "List tools"
             )),
-            "tools_list"
+            "List tools"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2075,7 +2081,7 @@ mod tests {
                 serde_json::json!({"offset": 20}),
                 "List tools · 20/133"
             )),
-            "tools_list"
+            "List tools · 20/133"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2083,7 +2089,7 @@ mod tests {
                 serde_json::json!({"query": "filesystem"}),
                 "Search tools · filesystem",
             )),
-            "tools_search"
+            "Search tools · filesystem"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2091,7 +2097,7 @@ mod tests {
                 serde_json::json!({"query": "filesystem"}),
                 "Search tools · filesystem · 5/12",
             )),
-            "tools_search"
+            "Search tools · filesystem · 5/12"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2099,8 +2105,9 @@ mod tests {
                 serde_json::json!({"tool": "fs.read"}),
                 "Inspect fs.read",
             )),
-            "tools_help"
+            "Inspect fs.read"
         );
+        // An empty title falls back to the direct execution-tool name.
         assert_eq!(
             operation_activity_title(&operation(
                 "tools_call",
@@ -2115,7 +2122,7 @@ mod tests {
                 serde_json::json!({"tool": "fs.read", "input": {"path": "README.md"}}),
                 "Read README.md",
             )),
-            "fs.read"
+            "Read README.md"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2123,7 +2130,7 @@ mod tests {
                 serde_json::json!({}),
                 "Repository status",
             )),
-            "agena.repo.status"
+            "Repository status"
         );
     }
 

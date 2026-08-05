@@ -3,7 +3,7 @@ use super::{
     PendingProviderNativeToolCall, PendingToolCall, RunBuffer, SessionProcessor, SessionRunRequest,
     StructuredObject, TimeRange, ToolCallId, ToolInvocation, Utc, parse_tool_invocation_lossy,
     placeholder_tool_invocation, provider_native_tool_execution_title,
-    tool_api_definition_identity, tool_execution_title,
+    tool_api_definition_identity, tool_execution_title, tool_execution_title_for_invocation,
 };
 
 impl SessionProcessor {
@@ -220,7 +220,7 @@ impl SessionProcessor {
             let mut operation = OperationPart::pending(
                 call_id,
                 invocation.clone(),
-                tool_execution_title(Some(invocation.name.as_str())),
+                tool_execution_title_for_invocation(&invocation),
                 TimeRange {
                     start_ms: pending.started_at_ms.unwrap_or_default(),
                     end_ms: None,

@@ -313,6 +313,45 @@ impl SessionStore {
         Ok(summaries.into_iter().map(|summary| summary.id).collect())
     }
 
+    /// Cheap existence check so lazy reconciliation can skip session ids that
+    /// do not exist (e.g. a stale id passed to `get_session`) instead of
+    /// surfacing a spurious `session not found` from the reconcile path.
+    pub(crate) async fn session_exists(&self, session_id: i64) -> Result<bool, AppError> {
+        self.session_summary_repository
+            .get(session_id)
+            .await
+            .map(|summary| summary.is_some())
+            .map_err(|error| AppError::Internal(error.to_string()))
+    }
+
+    /// Direct subagent children of `parent_id` (sessions whose subtask state
+    /// is displayed under the parent in the session tree). Used by lazy
+    /// reconciliation when a parent session is opened.
+    pub(crate) async fn list_child_session_ids(
+        &self,
+        parent_id: i64,
+    ) -> Result<Vec<i64>, AppError> {
+        let Some(workspace_id) = self.lookup_workspace_id().await? else {
+            return Ok(Vec::new());
+        };
+        let summaries = self
+            .session_summary_repository
+            .list(agena_storage::SessionSummaryListQuery {
+                workspace_id: Some(workspace_id),
+                roots_only: false,
+                parent_id: Some(parent_id),
+                search: None,
+                before_updated_at_ms: None,
+                before_id: None,
+                offset: 0,
+                limit: u64::MAX,
+                include_subagents: true,
+            })
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        Ok(summaries.into_iter().map(|summary| summary.id).collect())
+    }
+
     pub(crate) async fn find_subagent_by_task_id(
         &self,
         parent_session_id: i64,

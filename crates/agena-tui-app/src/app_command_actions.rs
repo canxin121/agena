@@ -64,6 +64,7 @@ impl App {
                 self.flash_success(self.current_runtime_status_summary());
             }
             CommandId::Usage => self.open_usage_dashboard(),
+            CommandId::Activities => self.open_activities_panel(),
             CommandId::Btw => self.handle_btw_command(args),
         }
     }
@@ -334,6 +335,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::SkillStudio
             | CommandId::Image
             | CommandId::Usage
+            | CommandId::Activities
     )
 }
 use crate::{

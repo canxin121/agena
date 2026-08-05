@@ -8,7 +8,10 @@ impl App {
         }
         match &self.current_route {
             Route::Main => self.focus == Focus::Composer,
-            Route::Usage(_) | Route::SettingsStudio(_) | Route::ClientVersionsStudio(_) => false,
+            Route::Usage(_)
+            | Route::Activities(_)
+            | Route::SettingsStudio(_)
+            | Route::ClientVersionsStudio(_) => false,
             Route::PermissionStudio(dialog) => dialog.editor.is_some(),
             Route::PermissionRuleStudio(dialog) => dialog.editor.is_some(),
             Route::SessionSearch(_)
@@ -35,7 +38,10 @@ impl App {
             let mut handled_route = false;
             match &mut self.current_route {
                 Route::Main => {}
-                Route::Usage(_) | Route::SettingsStudio(_) | Route::ClientVersionsStudio(_) => {
+                Route::Usage(_)
+                | Route::Activities(_)
+                | Route::SettingsStudio(_)
+                | Route::ClientVersionsStudio(_) => {
                     handled_route = true;
                 }
                 Route::PermissionStudio(dialog) => {

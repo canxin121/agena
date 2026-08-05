@@ -461,6 +461,9 @@ pub struct App {
     pub(super) last_ctrl_c_at: Option<Instant>,
     pub(super) double_esc_window: Duration,
     pub(super) terminal_integration: TerminalIntegrationState,
+    /// Most recent active background-activity count for the footer pill,
+    /// refreshed on a slow cadence while the main route is visible.
+    pub(super) background_activity_summary: Option<(usize, Instant)>,
 }
 
 impl Drop for App {
@@ -474,6 +477,29 @@ impl Drop for App {
 
 #[derive(Debug, Clone)]
 pub(super) enum AppMessage {
+    BackgroundActivitySummaryLoaded {
+        count: usize,
+    },
+    ActivitiesLoaded {
+        request_id: u64,
+        result: UiResult<Vec<agena_tui::activities::ActivitiesRow>>,
+    },
+    ActivitiesLogLoaded {
+        activity_id: String,
+        request_id: u64,
+        result: UiResult<agena_tui::activities::ActivitiesLogTail>,
+    },
+    ActivitiesStopped {
+        activity_id: String,
+        result: UiResult<bool>,
+    },
+    ActivitiesDismissed {
+        activity_id: String,
+        result: UiResult<bool>,
+    },
+    ActivitiesCleared {
+        result: UiResult<bool>,
+    },
     UsageStatsLoaded {
         request_id: u64,
         result: UiResult<UsageStats>,
@@ -776,6 +802,7 @@ pub(super) enum Overlay {
 pub(super) enum Route {
     Main,
     Usage(UsageDashboardState),
+    Activities(ActivitiesState),
     SettingsStudio(SettingsStudioOverlay),
     ClientVersionsStudio(SettingsStudioOverlay),
     PermissionStudio(PermissionStudioOverlay),
@@ -816,6 +843,31 @@ impl UsageDashboardState {
             loading: false,
             request_id: 0,
             error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ActivitiesState {
+    pub(super) presentation: agena_tui::activities::ActivitiesPresentation,
+    pub(super) rows: Vec<agena_tui::activities::ActivitiesRow>,
+    pub(super) log_tail: Option<agena_tui::activities::ActivitiesLogTail>,
+    pub(super) loading: bool,
+    pub(super) error: Option<String>,
+    pub(super) request_id: u64,
+    pub(super) log_request_id: u64,
+}
+
+impl ActivitiesState {
+    pub(super) fn new() -> Self {
+        Self {
+            presentation: agena_tui::activities::ActivitiesPresentation::default(),
+            rows: Vec::new(),
+            log_tail: None,
+            loading: false,
+            error: None,
+            request_id: 0,
+            log_request_id: 0,
         }
     }
 }

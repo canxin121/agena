@@ -37,6 +37,7 @@ pub enum CommandId {
     Diagnostics,
     Status,
     Usage,
+    Activities,
     Btw,
 }
 
@@ -348,6 +349,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-usage-summary",
     },
     CommandSpec {
+        id: CommandId::Activities,
+        name: "activities",
+        aliases: &["background", "tasks"],
+        arguments: "",
+        summary_key: "command-activities-summary",
+    },
+    CommandSpec {
         id: CommandId::Btw,
         name: "btw",
         aliases: &["aside", "side"],
@@ -515,7 +523,15 @@ mod tests {
     #[test]
     fn interactive_surface_commands_have_no_cli_arguments() {
         for name in [
-            "sessions", "rename", "timeline", "settings", "attach", "skill", "image", "usage",
+            "sessions",
+            "rename",
+            "timeline",
+            "settings",
+            "attach",
+            "skill",
+            "image",
+            "usage",
+            "activities",
         ] {
             let spec = find_command(name).expect("registered interactive command");
             assert!(

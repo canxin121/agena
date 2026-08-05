@@ -204,6 +204,7 @@ impl TranscriptState {
                 false
             }
             agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
+            agena_runtime::RuntimePresentationEventKind::ActivityChanged { .. } => true,
         };
 
         if !refresh_needed {

@@ -6,6 +6,7 @@
 //! so this directory is the discovery point for all Agena TUI input policy.
 
 mod core;
+mod activities;
 mod plugin;
 mod studio;
 mod usage;
@@ -85,9 +86,10 @@ pub enum KeyContext {
     Timeline,
     Confirm,
     PermissionPrompt,
-    UserInputQuestion,
+        UserInputQuestion,
     UserInputReview,
     Usage,
+    Activities,
     SettingsStudio,
     PermissionStudio,
     PermissionRuleStudio,
@@ -203,12 +205,18 @@ pub enum KeyAction {
     ProviderAddModel,
     ProviderSaveAdapter,
     ProviderSave,
-    UsageCyclePeriod,
+        UsageCyclePeriod,
     UsageCycleView,
     UsageCycleProvider,
     UsageCycleModel,
     UsageToggleSubagents,
     UsageCycleSort,
+    ActivitiesToggleFinished,
+    ActivitiesCycleKind,
+    ActivitiesCycleStatus,
+    ActivitiesStop,
+    ActivitiesDismiss,
+    ActivitiesClearFinished,
     ModelCatalogSearch,
     PluginCycleTransport,
     PluginCycleConfig,
@@ -244,7 +252,8 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::PermissionPrompt
         | KeyContext::UserInputQuestion
         | KeyContext::UserInputReview => core::resolve(context, key),
-        KeyContext::Usage => usage::resolve(key),
+                KeyContext::Usage => usage::resolve(key),
+        KeyContext::Activities => activities::resolve(key),
         KeyContext::SettingsStudio
         | KeyContext::PermissionStudio
         | KeyContext::PermissionRuleStudio

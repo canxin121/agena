@@ -609,7 +609,13 @@ impl App {
     }
 
     pub(crate) fn composer_status_parts(&self) -> Vec<String> {
-        let mut parts = self.current_session_status_parts();
+        let mut parts = Vec::new();
+        if let Some((count, _)) = self.background_activity_summary
+            && count > 0
+        {
+            parts.push(format!("● {count} background"));
+        }
+        parts.extend(self.current_session_status_parts());
         if self.transcript.state_loading {
             parts.push(ui_text::t(&self.i18n, "transcript-header-loading"));
         }

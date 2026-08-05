@@ -90,6 +90,7 @@ impl App {
             Route::Usage(dialog) => {
                 self.render_usage_dashboard(frame, area, dialog, SurfaceMode::Route)
             }
+            Route::Activities(dialog) => self.render_activities_panel(frame, area, dialog),
             Route::SettingsStudio(dialog) => {
                 self.render_settings_studio_overlay(frame, area, dialog, SurfaceMode::Route);
             }

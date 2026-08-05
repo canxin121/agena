@@ -298,6 +298,7 @@ fn message_has_visible_prompt_payload(message: &Message) -> bool {
 fn prompt_part_has_visible_payload(part: &crate::provider::ProjectedSessionPart) -> bool {
     match part {
         crate::provider::ProjectedSessionPart::Text { text } => !text.trim().is_empty(),
+        crate::provider::ProjectedSessionPart::Reasoning { text } => !text.trim().is_empty(),
         crate::provider::ProjectedSessionPart::Attachment { .. } => true,
         crate::provider::ProjectedSessionPart::ToolCall { .. } => true,
         crate::provider::ProjectedSessionPart::ToolResult { output_json, .. } => {
@@ -404,6 +405,12 @@ fn messages_to_provider_transcript(messages: &[Message]) -> ProviderTranscript {
                             had_any = true;
                             if !text.is_empty() {
                                 content_blocks.push(TranscriptBlock::Text { text });
+                            }
+                        }
+                        ProjectedSessionPart::Reasoning { text } => {
+                            had_any = true;
+                            if !text.is_empty() {
+                                content_blocks.push(TranscriptBlock::Reasoning { text });
                             }
                         }
                         ProjectedSessionPart::Attachment { item } => {

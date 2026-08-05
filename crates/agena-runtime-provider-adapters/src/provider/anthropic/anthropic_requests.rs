@@ -60,6 +60,9 @@ impl AnthropicAdapter {
                 wire_message::WirePart::Text { text } => {
                     blocks.push(AnthropicTextBlock::text(text.clone()));
                 }
+                wire_message::WirePart::Reasoning { text } => {
+                    blocks.push(AnthropicTextBlock::text(text.clone()));
+                }
                 wire_message::WirePart::Attachment { item } => {
                     blocks.extend(Self::attachment_blocks(item));
                 }

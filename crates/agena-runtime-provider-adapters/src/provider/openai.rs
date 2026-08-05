@@ -48,6 +48,12 @@ use self::openai_provider_native_tools::*;
 use self::openai_response_types::*;
 use self::openai_wire::*;
 
+// Re-export the tool-stream helpers so sibling adapters (e.g. amazon-bedrock's
+// chat-compat path) can route tool deltas through the shared accumulator.
+pub(crate) use self::openai_wire::{
+    chat_tool_stream_input, completion_event_from_tool_stream_update,
+};
+
 const CHATGPT_CODEX_ORIGINATOR: &str = crate::RUNTIME_CODEX_ORIGINATOR;
 const DEFAULT_COPILOT_BASE_URL: &str = "https://api.githubcopilot.com";
 const RESPONSES_ADAPTER_KIND: &str = "openai_responses";
@@ -230,7 +236,8 @@ fn openai_reasoning_items_from_output(
             let encrypted_content = item
                 .encrypted_content
                 .as_deref()
-                .filter(|content| !content.is_empty())?;
+                .filter(|content| !content.is_empty())
+                .map(ToOwned::to_owned);
             let summary = item
                 .summary
                 .iter()
@@ -256,11 +263,20 @@ fn openai_reasoning_items_from_output(
                     })
                 })
                 .collect::<Vec<_>>();
+            // Preserve a reasoning item when it carries either encrypted
+            // content (OpenAI-style) or plain text content (chat-style
+            // `reasoning_content` models that must replay their reasoning).
+            if encrypted_content.is_none() && content.is_empty() {
+                return None;
+            }
             let mut normalized = serde_json::json!({
                 "type": "reasoning",
                 "summary": summary,
-                "encrypted_content": encrypted_content,
             });
+            if let Some(encrypted_content) = encrypted_content {
+                normalized["encrypted_content"] =
+                    serde_json::Value::String(encrypted_content);
+            }
             if !content.is_empty() {
                 normalized["content"] = serde_json::Value::Array(content);
             }
@@ -286,7 +302,8 @@ fn openai_reasoning_item_from_event(
     let encrypted_content = item
         .get("encrypted_content")
         .and_then(serde_json::Value::as_str)
-        .filter(|content| !content.is_empty())?;
+        .filter(|content| !content.is_empty())
+        .map(ToOwned::to_owned);
     let summary = item
         .get("summary")
         .and_then(serde_json::Value::as_array)
@@ -297,11 +314,19 @@ fn openai_reasoning_item_from_event(
         .and_then(serde_json::Value::as_array)
         .filter(|content| !content.is_empty())
         .cloned();
+    // Preserve a reasoning item when it carries either encrypted content or
+    // plain text content (chat-style `reasoning_content` models that must
+    // replay their reasoning back to the API).
+    if encrypted_content.is_none() && content.as_ref().is_none_or(|content| content.is_empty()) {
+        return None;
+    }
     let mut normalized = serde_json::json!({
         "type": "reasoning",
         "summary": summary,
-        "encrypted_content": encrypted_content,
     });
+    if let Some(encrypted_content) = encrypted_content {
+        normalized["encrypted_content"] = serde_json::Value::String(encrypted_content);
+    }
     if let Some(content) = content {
         normalized["content"] = serde_json::Value::Array(content);
     }
@@ -412,6 +437,14 @@ mod tests {
         chat_wire::{ChatFunctionCallWire, ChatToolCallWire},
         utils,
     };
+
+    fn update_stream_key(update: &ToolStreamUpdate) -> &str {
+        match update {
+            ToolStreamUpdate::Registered { stream_key, .. }
+            | ToolStreamUpdate::ArgumentsDelta { stream_key, .. }
+            | ToolStreamUpdate::ArgumentsSnapshot { stream_key, .. } => stream_key.as_str(),
+        }
+    }
 
     async fn read_http_request_body(stream: &mut tokio::net::TcpStream) -> serde_json::Value {
         use tokio::io::AsyncReadExt as _;
@@ -594,6 +627,80 @@ mod tests {
     }
 
     #[test]
+    fn responses_call_id_only_done_joins_the_existing_item_stream() {
+        // A compatible gateway can emit `function_call_arguments.delta` events
+        // carrying only the item id, then a `function_call_arguments.done`
+        // carrying `call_id` but no item id. The done must join the same live
+        // stream as the item-based deltas instead of opening a second key,
+        // which previously split one logical call into two and discarded its
+        // arguments.
+        let events = [
+            serde_json::json!({
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "tools_call",
+                    "arguments": ""
+                }
+            }),
+            serde_json::json!({
+                "type": "response.function_call_arguments.delta",
+                "output_index": 0,
+                "item_id": "fc_1",
+                "delta": "{\"tool\":\"fs.grep\",\"input\":{\"pattern\":"
+            }),
+            // NOTE: no item_id on the done event — only call_id.
+            serde_json::json!({
+                "type": "response.function_call_arguments.done",
+                "output_index": 0,
+                "call_id": "call_1",
+                "arguments": "{\"tool\":\"fs.grep\",\"input\":{\"pattern\":\"halt\"}}"
+            }),
+        ];
+        let mut accumulator = ToolStreamAccumulator::new();
+        let mut updates = Vec::new();
+
+        for event in events {
+            let event = utils::responses_tool_event("openai", &event)
+                .expect("valid Responses event")
+                .expect("tool event");
+            let input = responses_tool_stream_input("openai", event).expect("stream input");
+            updates.extend(
+                accumulator
+                    .ingest("openai", input)
+                    .expect("accumulate tool event"),
+            );
+        }
+
+        // Every update must land on the same single stream key.
+        assert!(!updates.is_empty());
+        let first_key = update_stream_key(&updates[0]).to_owned();
+        for update in &updates {
+            assert_eq!(
+                update_stream_key(update),
+                first_key.as_str(),
+                "a call-id-only done must not split the item-based stream"
+            );
+        }
+        // The accumulated arguments must be the complete snapshot.
+        let final_arguments = updates.iter().fold(String::new(), |mut acc, update| {
+            if let ToolStreamUpdate::ArgumentsDelta { arguments_delta, .. } = update {
+                acc.push_str(arguments_delta);
+            }
+            acc
+        });
+        assert!(
+            final_arguments.contains("fs.grep")
+                && final_arguments.contains("halt")
+                && final_arguments.contains("pattern"),
+            "the full arguments must be retained on the single stream: {final_arguments}"
+        );
+    }
+
+    #[test]
     fn responses_nonstream_function_call_requires_call_id() {
         let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
             "output": [{
@@ -660,6 +767,71 @@ mod tests {
         assert_eq!(item["type"], "reasoning");
         assert_eq!(item["content"][0]["text"], "private reasoning");
         assert_eq!(item["encrypted_content"], "encrypted-state");
+    }
+
+    #[test]
+    fn content_only_reasoning_items_are_preserved_for_replay() {
+        // A chat-style `reasoning_content` model (e.g. deepseek-v4-flash)
+        // returns reasoning as plain-text `content` without OpenAI's
+        // `encrypted_content`. Those items must survive into the replay
+        // carrier so the provider can require them back.
+        let event = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "rs_content_1",
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": "think" }],
+                "content": [{ "type": "reasoning_text", "text": "reasoned text" }]
+            }
+        });
+        let (key, item) = openai_reasoning_item_from_event(&event).expect("reasoning item");
+        assert_eq!(key, "rs_content_1");
+        assert_eq!(item["type"], "reasoning");
+        assert_eq!(item["content"][0]["text"], "reasoned text");
+        assert!(item.get("encrypted_content").is_none());
+
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "output": [{
+                "id": "rs_content_2",
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": "think" }],
+                "content": [{ "type": "reasoning_text", "text": "output reasoning" }]
+            }]
+        }))
+        .expect("deserialize Responses payload");
+        let items = openai_reasoning_items_from_output(response.output.as_deref());
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["content"][0]["text"], "output reasoning");
+        assert!(items[0].get("encrypted_content").is_none());
+    }
+
+    #[test]
+    fn reasoning_items_without_content_or_encrypted_content_are_dropped() {
+        let event = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "id": "rs_empty_1",
+                "type": "reasoning",
+                "summary": []
+            }
+        });
+        assert!(
+            openai_reasoning_item_from_event(&event).is_none(),
+            "a reasoning item with neither content nor encrypted_content must be dropped"
+        );
+
+        let response: OpenAiResponsesResponse = serde_json::from_value(serde_json::json!({
+            "output": [{
+                "id": "rs_empty_2",
+                "type": "reasoning",
+                "summary": []
+            }]
+        }))
+        .expect("deserialize Responses payload");
+        assert!(
+            openai_reasoning_items_from_output(response.output.as_deref()).is_empty(),
+            "an empty reasoning output item must be dropped"
+        );
     }
 
     #[test]

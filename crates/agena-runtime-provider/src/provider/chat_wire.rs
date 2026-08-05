@@ -415,6 +415,92 @@ mod tests {
         assert_eq!(target.reasoning_text.as_deref(), Some("thinking"));
         assert_eq!(target.reasoning_opaque.as_deref(), Some("opaque-state"));
     }
+
+    #[test]
+    fn reasoning_content_replays_the_persisted_reasoning_text() {
+        // Regression: reasoning parts used to be dropped on projection, so
+        // `assistant_reasoning_text` was always empty and a `reasoning_content`
+        // model received `"reasoning_content": ""`. Now the reasoning survives
+        // projection into `CompletionInputPart::Reasoning` and is replayed.
+        let mut source = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::reasoning_summary("think step by step"),
+                PartContent::text("visible answer"),
+            ],
+        );
+        source.provider_state = Some(MessageProviderState {
+            assistant_reasoning_field: Some(
+                agena_domain::AssistantReasoningField::ReasoningContent,
+            ),
+            ..MessageProviderState::default()
+        });
+        let source = crate::provider::project_completion_input(&source);
+
+        let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
+            &agena_provider::CompletionRequest {
+                model: agena_domain::ModelId::new("test-model"),
+                system: None,
+                messages: vec![source.clone()],
+                tool_api_functions: Vec::new(),
+                provider_native_tools: Default::default(),
+                disable_tools: false,
+                temperature: None,
+                max_output_tokens: None,
+                prompt_cache_key: None,
+                previous_response_id: None,
+                prompt_window_generation: None,
+                provider_compaction: None,
+                stop_sequences: Vec::new(),
+                top_p: None,
+                top_k: None,
+                seed: None,
+                thinking: None,
+                verbosity: None,
+                response_format: None,
+                responses_api_metadata: None,
+                request_override: Default::default(),
+            },
+            Some("reasoning_content"),
+        );
+        let assistant = messages
+            .iter()
+            .find(|message| message.role == "assistant")
+            .expect("assistant message");
+        assert_eq!(
+            assistant
+                .reasoning_content
+                .as_ref()
+                .and_then(|value| value.as_str()),
+            Some("think step by step"),
+            "reasoning_content must carry the persisted reasoning text, not an empty string"
+        );
+    }
+
+    #[test]
+    fn empty_reasoning_content_is_omitted_not_sent_as_an_empty_string() {
+        let mut chat_message = ChatMessage::assistant(Some("answer".into()), None);
+        super::apply_assistant_reasoning_field(
+            &mut chat_message,
+            Some("reasoning_content"),
+            "",
+        );
+        assert_eq!(
+            chat_message.reasoning_content, None,
+            "empty reasoning must omit the field rather than send \"reasoning_content\": \"\""
+        );
+
+        let mut chat_message = ChatMessage::assistant(Some("answer".into()), None);
+        super::apply_assistant_reasoning_field(
+            &mut chat_message,
+            Some("reasoning_content"),
+            "real reasoning",
+        );
+        assert_eq!(
+            chat_message.reasoning_content,
+            Some(serde_json::Value::String("real reasoning".to_owned()))
+        );
+    }
 }
 
 pub fn extract_reasoning_text_from_delta_or_message(value: &ChatDeltaOrMessage) -> Option<String> {
@@ -777,7 +863,13 @@ fn apply_assistant_reasoning_field(
 ) {
     match field {
         Some("reasoning_content") => {
-            message.reasoning_content = Some(Value::String(reasoning_text.to_owned()));
+            // Never send an empty `reasoning_content` to a provider that
+            // requires prior reasoning be passed back: `""` can be rejected
+            // just like a missing field, and omitting it lets providers that
+            // tolerate a missing field proceed.
+            if !reasoning_text.trim().is_empty() {
+                message.reasoning_content = Some(Value::String(reasoning_text.to_owned()));
+            }
         }
         Some("reasoning_details") => {
             let details = if reasoning_text.trim().is_empty() {
@@ -827,6 +919,10 @@ fn assistant_content_and_tool_calls(
     for part in parts {
         match part {
             wire_message::WirePart::Text { text } => text_chunks.push(text.clone()),
+            wire_message::WirePart::Reasoning { .. } => {
+                // Reasoning is replayed through the dedicated reasoning field
+                // (see `assistant_reasoning_text`), never as visible content.
+            }
             wire_message::WirePart::ToolCall {
                 id,
                 function,

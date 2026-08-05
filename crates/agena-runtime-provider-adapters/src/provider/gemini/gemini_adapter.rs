@@ -424,6 +424,7 @@ impl GeminiAdapter {
     ) -> GeminiPart {
         let mut part = match part {
             wire_message::WirePart::Text { text } => GeminiPart::text(text.clone()),
+            wire_message::WirePart::Reasoning { text } => GeminiPart::text(text.clone()),
             wire_message::WirePart::Attachment { item } => Self::attachment_part(item),
             wire_message::WirePart::ToolCall {
                 id,

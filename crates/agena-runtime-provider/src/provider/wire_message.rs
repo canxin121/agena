@@ -32,6 +32,12 @@ pub enum WirePart {
     Text {
         text: String,
     },
+    /// Assistant reasoning preserved for replay. Kept distinct from [`Self::Text`]
+    /// so providers that require a dedicated `reasoning_content` field can
+    /// reconstruct it, instead of silently dropping the reasoning on projection.
+    Reasoning {
+        text: String,
+    },
     Attachment {
         item: AttachmentItem,
     },
@@ -55,6 +61,7 @@ impl WirePart {
     pub fn as_text_lossy(&self) -> String {
         match self {
             Self::Text { text } => text.clone(),
+            Self::Reasoning { text } => text.clone(),
             Self::Attachment { item } => hint_text(item),
             Self::ToolCall { id, function, .. } => {
                 format!("[tool_call:{}:{id}]", function.function_name())
@@ -166,8 +173,13 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                         });
                     }
                 }
-                RuntimeActivity::Reasoning(_)
-                | RuntimeActivity::Interaction(_)
+                RuntimeActivity::Reasoning(reasoning) => {
+                    let text = reasoning.preferred_text();
+                    if !text.is_empty() {
+                        parts.push(WirePart::Reasoning { text });
+                    }
+                }
+                RuntimeActivity::Interaction(_)
                 | RuntimeActivity::Error(_) => {}
             },
         }
@@ -179,7 +191,7 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
 fn wire_part_from_completion_input(part: CompletionInputPart) -> WirePart {
     match part {
         CompletionInputPart::Text { text } => WirePart::Text { text },
-        CompletionInputPart::Reasoning { text } => WirePart::Text { text },
+        CompletionInputPart::Reasoning { text } => WirePart::Reasoning { text },
         CompletionInputPart::Attachment { attachment } => WirePart::Attachment {
             item: attachment_item_from_completion_input(attachment),
         },
@@ -261,6 +273,7 @@ pub fn project_completion_input(message: &Message) -> CompletionInputMessage {
 fn completion_input_part_from_wire(part: WirePart) -> CompletionInputPart {
     match part {
         WirePart::Text { text } => CompletionInputPart::Text { text },
+        WirePart::Reasoning { text } => CompletionInputPart::Reasoning { text },
         WirePart::Attachment { item } => CompletionInputPart::Attachment {
             attachment: completion_input_attachment(item),
         },
@@ -531,6 +544,9 @@ pub fn parts_to_openai_content_array(parts: &[WirePart]) -> serde_json::Value {
         .iter()
         .map(|part| match part {
             WirePart::Text { text } => {
+                serde_json::json!({ "type": "text", "text": text })
+            }
+            WirePart::Reasoning { text } => {
                 serde_json::json!({ "type": "text", "text": text })
             }
             WirePart::Attachment { item } => attachment_to_openai_content_value(item),
@@ -1111,5 +1127,34 @@ mod tests {
                 .to_string()
                 .contains("must store its exact protocol handler name")
         );
+    }
+
+    #[test]
+    fn reasoning_parts_survive_projection_for_replay() {
+        // A persisted assistant reasoning part must project into a dedicated
+        // Reasoning wire part (and CompletionInputPart::Reasoning) so providers
+        // that require `reasoning_content` replay can reconstruct it, instead
+        // of the reasoning being silently dropped on projection.
+        let message = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::reasoning_summary("think step by step"),
+                PartContent::text("visible answer"),
+            ],
+        );
+
+        let wire_parts = project_persisted(&message);
+        assert_eq!(wire_parts.len(), 2);
+        assert!(matches!(
+            &wire_parts[0],
+            WirePart::Reasoning { text } if text == "think step by step"
+        ));
+
+        let input = project_completion_input(&message);
+        assert!(matches!(
+            &input.parts[0],
+            agena_provider::CompletionInputPart::Reasoning { text }
+                if text == "think step by step"
+        ));
     }
 }

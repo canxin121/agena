@@ -368,6 +368,16 @@ impl OpenAiTransport {
             }
             Role::Assistant => {
                 {
+                    // Models that declare `assistant_reasoning_field =
+                    // "reasoning_content"` must replay their prior reasoning to
+                    // the API. Their reasoning items carry plain-text `content`
+                    // (chat-style) instead of OpenAI's `encrypted_content`, so
+                    // replay either carrier for those models. Other models keep
+                    // the encrypted-content-only replay.
+                    let replay_content_reasoning = message
+                        .provider_state
+                        .assistant_reasoning_field
+                        == Some(agena_domain::AssistantReasoningField::ReasoningContent);
                     input.extend(
                         message
                             .provider_state
@@ -376,10 +386,19 @@ impl OpenAiTransport {
                             .filter(|item| {
                                 item.get("type").and_then(serde_json::Value::as_str)
                                     == Some("reasoning")
-                                    && item
-                                        .get("encrypted_content")
-                                        .and_then(serde_json::Value::as_str)
-                                        .is_some_and(|content| !content.is_empty())
+                                    && if replay_content_reasoning {
+                                        item.get("encrypted_content")
+                                            .and_then(serde_json::Value::as_str)
+                                            .is_some_and(|content| !content.is_empty())
+                                            || item
+                                                .get("content")
+                                                .and_then(serde_json::Value::as_array)
+                                                .is_some_and(|content| !content.is_empty())
+                                    } else {
+                                        item.get("encrypted_content")
+                                            .and_then(serde_json::Value::as_str)
+                                            .is_some_and(|content| !content.is_empty())
+                                    }
                             })
                             .cloned()
                             .map(OpenAiResponsesInputItem::Reasoning),
@@ -396,6 +415,11 @@ impl OpenAiTransport {
                             wire_message::WirePart::Text { text } => {
                                 Self::flush_responses_function_output(input, &mut pending_output);
                                 text_chunks.push(text);
+                            }
+                            wire_message::WirePart::Reasoning { .. } => {
+                                // Reasoning is replayed through the dedicated
+                                // `Reasoning` input item (see the openai_reasoning_items
+                                // replay above), never as visible output text.
                             }
                             wire_message::WirePart::Attachment { item } => {
                                 if let Some((_, _, extra_parts)) = pending_output.as_mut() {
@@ -476,6 +500,9 @@ impl OpenAiTransport {
             .iter()
             .map(|part| match part {
                 wire_message::WirePart::Text { text } => {
+                    OpenAiInputContent::InputText { text: text.clone() }
+                }
+                wire_message::WirePart::Reasoning { text } => {
                     OpenAiInputContent::InputText { text: text.clone() }
                 }
                 wire_message::WirePart::Attachment { item } => {
@@ -854,6 +881,62 @@ mod tool_api_history_tests {
                 .all(|item| item.get("type").and_then(serde_json::Value::as_str)
                     != Some("function_call")),
             "a dotted internal name must not become a provider function"
+        );
+    }
+
+    #[test]
+    fn content_only_reasoning_replays_when_the_model_declares_reasoning_content() {
+        let invocation = ToolInvocation::new(
+            "fs.read",
+            StructuredObject::try_from(serde_json::json!({ "path": "a.txt" }))
+                .expect("structured input"),
+        );
+        let mut assistant = Message::prompt_parts(
+            Role::Assistant,
+            vec![PartContent::operation(OperationPart::completed(
+                0,
+                invocation,
+                agena_runtime_contracts::message::OperationCompletion::new(
+                    "Read",
+                    "Read file",
+                    "contents".to_owned(),
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                ),
+                TimeRange::default(),
+            ))],
+        );
+        assistant.parts[0].operation_id = Some("call_read".to_owned());
+        assistant.provider_state = Some(MessageProviderState {
+            assistant_reasoning_field: Some(
+                agena_domain::AssistantReasoningField::ReasoningContent,
+            ),
+            openai_reasoning_items: vec![serde_json::json!({
+                "type": "reasoning",
+                "summary": [{ "type": "summary_text", "text": "think" }],
+                "content": [{ "type": "reasoning_text", "text": "reasoned text" }]
+            })],
+            ..MessageProviderState::default()
+        });
+
+        let mut input = Vec::new();
+        let assistant = crate::provider::project_completion_input(&assistant);
+        OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
+        validate_responses_input(input.as_slice()).expect("provider-safe replay input");
+
+        let value = serde_json::to_value(&input).expect("serialize replay input");
+        let items = value.as_array().expect("responses input array");
+        let reasoning = items
+            .iter()
+            .find(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning"))
+            .expect("content-based reasoning must be replayed");
+        assert_eq!(
+            reasoning
+                .pointer("/content/0/text")
+                .and_then(serde_json::Value::as_str),
+            Some("reasoned text"),
+            "the reasoning content must survive replay for reasoning_content models"
         );
     }
 }

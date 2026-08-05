@@ -165,13 +165,20 @@ pub(super) fn validate_responses_input(
                 validate_responses_message(index, message)?;
             }
             OpenAiResponsesInputItem::Reasoning(item) => {
-                if item
+                // Reasoning items may carry either OpenAI's `encrypted_content`
+                // or plain-text `content` (chat-style `reasoning_content`
+                // models that must replay their reasoning). Accept either.
+                let has_encrypted_content = item
                     .get("encrypted_content")
                     .and_then(serde_json::Value::as_str)
-                    .is_none_or(str::is_empty)
-                {
+                    .is_some_and(|content| !content.is_empty());
+                let has_content = item
+                    .get("content")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|content| !content.is_empty());
+                if !has_encrypted_content && !has_content {
                     return Err(ProviderError::Internal(format!(
-                        "OpenAI Responses reasoning item at input[{index}] has no encrypted_content"
+                        "OpenAI Responses reasoning item at input[{index}] has neither encrypted_content nor content"
                     )));
                 }
             }
@@ -345,7 +352,7 @@ pub(super) fn openai_chat_tool_name(name: &str) -> String {
 /// while an index remains an alias for providers that omit either field on
 /// some chunks.  Keeping both candidates prevents a compatible gateway from
 /// turning a single call into several operations when it changes the index.
-pub(super) fn chat_tool_stream_input(
+pub(crate) fn chat_tool_stream_input(
     provider_id: &str,
     tool: chat_wire::ChatToolCallWire,
 ) -> Result<ToolStreamInput, ProviderError> {
@@ -453,7 +460,7 @@ pub(super) fn responses_tool_stream_input(
     })
 }
 
-pub(super) fn completion_event_from_tool_stream_update(
+pub(crate) fn completion_event_from_tool_stream_update(
     provider_id: &ProviderId,
     model: &ModelId,
     update: ToolStreamUpdate,

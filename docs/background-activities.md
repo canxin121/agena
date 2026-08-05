@@ -12,7 +12,7 @@ Agena built-in tools create many kinds of long-running background work:
 | `web.browser_*` | managed browser sessions | plugin-internal `browser_clients` map |
 | `cron.*` | scheduled jobs | scheduler |
 
-The backend, TUI, and web have **no unified way to list, inspect, follow, or
+The backend, TUI, and web now share one way to **list, inspect, follow, and
 stop** this background work. This document describes the unified model, the
 backend service, and the TUI/web surfaces.
 
@@ -26,43 +26,61 @@ backend service, and the TUI/web surfaces.
 - `BackgroundActivity` — id, kind, status, title, description, command,
   workdir, session ids, timestamps, exit code, message, failure, log cursor
   (`last_seq`, `has_more`, `dropped_lines`), `cancellable`, `dismissible`
+- `BackgroundActivityLogLine` / `BackgroundActivityLogRead` — unified log
+  cursor protocol with `since_seq` tails
 - `BackgroundActivityChangedEvent` — one event per mutation with a `reason`
   (`started` / `updated` / `finished` / `dismissed`)
 - `BackgroundActivityFilter` — kind/status/session scoping used by queries
 
 ### 2. Backend service (`agena-runtime`)
 
-`ActivityRegistry` — single in-memory store with bounded history.
+`ActivityRegistry` — single in-memory store with bounded history (256 records,
+active rows kept when trimming).
 
 - Sources push into it:
   - shell monitors via a new `MonitorListener` hook on `MonitorRegistry`
-  - delegated tasks via bus `SubtaskStatusChangedEvent`
+  - delegated tasks via bus `SubtaskStatusChangedEvent` (bridged to `task_…`)
   - runtime tasks via a new listener on `RuntimeBackgroundTaskRegistry`
   - plugins can publish rich `PluginEvent(kind_label="activity")` payloads
 - Every mutation publishes `background_activity_changed` on the runtime event
-  bus (persistent), which is projected into SSE/WS and the presentation stream.
-- `RuntimeActivityService` exposes `list / get / logs / stop / dismiss`.
+  bus (persistent), which is projected into SSE/WS and the presentation stream
+  (`RuntimePresentationEventKind::ActivityChanged`).
+- `RuntimeActivityService` exposes `list / get / logs / stop / dismiss /
+  clear_finished`; log reads and stop/dismiss delegate to per-kind adapters
+  (monitor read/stop, subtask logs/cancel, runtime task cancel).
 
 ### 3. API (`agena-api` + `agena-application` + `agena-api-server`)
 
 - Queries: `list_activities`, `get_activity`, `activity_logs`
-- Commands: `stop_activity`, `dismiss_activity`
+- Commands: `stop_activity`, `dismiss_activity`, `clear_finished_activities`
 - REST:
-  - `GET  /api/v1/activities`
-  - `GET  /api/v1/activities/{id}`
-  - `GET  /api/v1/activities/{id}/logs?since_seq=&limit=&wait_ms=`
-  - `POST /api/v1/activities/{id}/stop`
-  - `DELETE /api/v1/activities/{id}`
+  - `GET    /api/v1/activities` (kind/status/session/active filters)
+  - `GET    /api/v1/activities/{id}`
+  - `GET    /api/v1/activities/{id}/logs?since_seq=&limit=&wait_ms=`
+  - `POST   /api/v1/activities/{id}/stop`
+  - `POST   /api/v1/activities/{id}/dismiss`
+  - `POST   /api/v1/activities/clear-finished` (returns count)
+- Wire resources `BackgroundActivityResource` / `BackgroundActivityLogResource`
+  live in `agena-api` and convert from the domain model there.
 
 ### 4. TUI
 
-- `/activities` command + key binding opens the Background Activities panel.
-- Panel: grouped list (running first), status colors, kind icons, live duration;
-  select → log tail; `s` stop, `d` dismiss, `x` clear finished, `r` refresh.
-- Footer indicator shows a compact running-task pill (like Claude Code / Gemini).
+- `/activities` command (aliases `/background`, `/tasks`) + palette entry opens
+  the Background Activities panel.
+- Panel (`agena-tui::activities` + `agena-tui-app` adapter):
+  - grouped list (Active first), status colors, kind icons, live duration
+  - filters: `f` toggle finished, `k` cycle kind, `t` cycle status
+  - `↵` toggles the detail pane with live log tail
+  - `s` stop, `d` dismiss, `x` clear finished, `r` refresh, `q`/`Esc` close
+- Backend adapters (`agena-tui-backend::backend_activities`) call the
+  application dispatch surface in-process.
 
 ### 5. Web
 
-- `/activities` page + sidebar entry.
-- List with live status badges, filter by kind/status, detail drawer with live
-  log tail, stop/dismiss actions; updates arrive via the existing SSE bus.
+- `/activities` route + sidebar entry + command palette (`/activities`,
+  `/background`, `/tasks`).
+- `ActivitiesPage.vue`: live list with status badges, kind icons, duration,
+  kind/status/active filters, expandable rows with log tail, stop/dismiss
+  actions, clear-finished, 4s auto-refresh while mounted.
+- API functions/types in `agenaApi.ts`; updates can also arrive through the
+  existing SSE bus (`background_activity_changed`).

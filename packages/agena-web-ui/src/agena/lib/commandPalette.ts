@@ -373,7 +373,7 @@ function buildNavigationCommands(router: Router): CommandItem[] {
         })
       },
     },
-    {
+        {
       id: 'nav.usage',
       title: 'Open Usage',
       description: 'Inspect token, cost, provider, model, and session usage analytics.',
@@ -388,6 +388,21 @@ function buildNavigationCommands(router: Router): CommandItem[] {
         const plan = parseUsageCommandArgs(context?.args || [])
         if (plan.kind === 'error') return { notice: plan.message }
         await router.push({ path: '/usage', query: plan.query })
+      },
+    },
+    {
+      id: 'nav.activities',
+      title: 'Open Background Activities',
+      description: 'List, inspect, stop, and dismiss background shell processes, tasks, and runtime work.',
+      category: 'Navigation',
+      source: 'navigation',
+      slash: '/activities',
+      slashAliases: ['/background', '/tasks'],
+      aliases: ['background', 'tasks', 'processes'],
+      usage: '/activities',
+      sourceLabel: sourceLabel('navigation'),
+      run: async () => {
+        await router.push({ path: '/activities' })
       },
     },
   ]

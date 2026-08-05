@@ -274,8 +274,11 @@ watch(
           <RouterLink to="/workspace" class="nav-link" :class="{ active: route.path.startsWith('/workspace') }">
             Workspace
           </RouterLink>
-          <RouterLink to="/usage" class="nav-link" :class="{ active: route.path.startsWith('/usage') }">
+                    <RouterLink to="/usage" class="nav-link" :class="{ active: route.path.startsWith('/usage') }">
             Usage
+          </RouterLink>
+          <RouterLink to="/activities" class="nav-link" :class="{ active: route.path.startsWith('/activities') }">
+            Activities
           </RouterLink>
           <RouterLink
             v-for="item in sectionNavItems"

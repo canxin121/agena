@@ -30,6 +30,11 @@ export function permissionRiskHint(action: Record<string, unknown>): string {
   return 'permission request'
 }
 
+export function permissionRiskLabel(action: Record<string, unknown>): string {
+  return permissionRiskHint(action)
+}
+
+
 export function permissionActionView(action: Record<string, unknown>): PermissionActionView {
   const kind = readString(action.kind)
   if (kind === 'tool') {

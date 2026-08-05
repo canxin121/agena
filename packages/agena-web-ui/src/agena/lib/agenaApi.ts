@@ -470,6 +470,48 @@ export type UsageStats = {
   by_session: SessionUsageBreakdown[]
 }
 
+export type BackgroundActivityResource = {
+  id: string
+  kind: string
+  status: string
+  title: string
+  description: string
+  command?: string | null
+  workdir?: string | null
+  session_id?: number | null
+  parent_session_id?: number | null
+  created_at_ms: number
+  started_at_ms: number
+  finished_at_ms?: number | null
+  exit_code?: number | null
+  message?: string | null
+  failure?: unknown | null
+  last_seq: number
+  has_more: boolean
+  dropped_lines: number
+  cancellable: boolean
+  dismissible: boolean
+}
+
+export type BackgroundActivityLogLineResource = {
+  seq: number
+  stream: string
+  ts_ms: number
+  text: string
+}
+
+export type BackgroundActivityLogResource = {
+  activity_id: string
+  status: string
+  lines: BackgroundActivityLogLineResource[]
+  last_seq: number
+  has_more: boolean
+  dropped_lines: number
+  exit_code?: number | null
+  completion_reason?: string | null
+}
+
+
 export type ProviderSummary = {
   provider_id: string
   defaults: {
@@ -1258,6 +1300,54 @@ export async function fetchUsageStats(
   const suffix = params.toString()
   return await apiJson<UsageStats>(`/api/v1/usage${suffix ? `?${suffix}` : ''}`)
 }
+
+export async function fetchActivities(input: {
+  kinds?: string[]
+  statuses?: string[]
+  sessionId?: number | null
+  activeOnly?: boolean
+} = {}): Promise<BackgroundActivityResource[]> {
+  const params = new URLSearchParams()
+  if (input.kinds?.length) params.set('kinds', input.kinds.join(','))
+  if (input.statuses?.length) params.set('statuses', input.statuses.join(','))
+  if (input.sessionId != null) params.set('session_id', String(input.sessionId))
+  if (input.activeOnly) params.set('active_only', 'true')
+  const suffix = params.toString()
+  return await apiJson<BackgroundActivityResource[]>(`/api/v1/activities${suffix ? `?${suffix}` : ''}`)
+}
+
+export async function fetchActivityLogs(
+  activityId: string,
+  input: { sinceSeq?: number; limit?: number; waitMs?: number } = {},
+): Promise<BackgroundActivityLogResource> {
+  const params = new URLSearchParams()
+  if (input.sinceSeq) params.set('since_seq', String(input.sinceSeq))
+  if (input.limit != null) params.set('limit', String(input.limit))
+  if (input.waitMs) params.set('wait_ms', String(input.waitMs))
+  const suffix = params.toString()
+  return await apiJson<BackgroundActivityLogResource>(
+    `/api/v1/activities/${encodeURIComponent(activityId)}/logs${suffix ? `?${suffix}` : ''}`,
+  )
+}
+
+export async function stopActivity(activityId: string): Promise<BackgroundActivityResource> {
+  return await apiJson<BackgroundActivityResource>(
+    `/api/v1/activities/${encodeURIComponent(activityId)}/stop`,
+    { method: 'POST' },
+  )
+}
+
+export async function dismissActivity(activityId: string): Promise<BackgroundActivityResource> {
+  return await apiJson<BackgroundActivityResource>(
+    `/api/v1/activities/${encodeURIComponent(activityId)}/dismiss`,
+    { method: 'POST' },
+  )
+}
+
+export async function clearFinishedActivities(): Promise<number> {
+  return await apiJson<number>('/api/v1/activities/clear-finished', { method: 'POST' })
+}
+
 
 export async function reloadRuntime(): Promise<RuntimeBackgroundTaskStartResponse> {
   return await apiJson<RuntimeBackgroundTaskStartResponse>('/api/v1/runtime/reload', {

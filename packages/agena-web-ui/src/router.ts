@@ -25,9 +25,13 @@ const routes: RouteRecordRaw[] = [
     path: '/workspace',
     component: () => import('./agena/pages/WorkspacePage.vue'),
   },
-  {
+    {
     path: '/usage',
     component: () => import('./agena/pages/UsagePage.vue'),
+  },
+  {
+    path: '/activities',
+    component: () => import('./agena/pages/ActivitiesPage.vue'),
   },
   {
     path: sectionBasePaths.runtime,

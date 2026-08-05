@@ -297,7 +297,10 @@ impl ModelRuntime for AnthropicAdapter {
                 })
             })
             .collect::<Result<Vec<_>, ProviderError>>()?;
-        let finish_reason = CompletionFinishReason::from_provider(response.stop_reason.as_deref());
+        let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
+            CompletionFinishReason::from_provider(response.stop_reason.as_deref()),
+            !tool_calls.is_empty(),
+        );
 
         // Forced structured output arrives as a tool_use block; surface its
         // input as the completion text so callers parse clean JSON.
@@ -470,6 +473,7 @@ impl ModelRuntime for AnthropicAdapter {
             let mut stream_finish_reason: Option<String> = None;
             let mut stream_usage: Option<AnthropicUsage> = None;
             let mut stream_has_content = false;
+            let mut stream_tool_call_seen = false;
 
             while let Some(event) = events.next().await {
                 let event = event?;
@@ -539,6 +543,7 @@ impl ModelRuntime for AnthropicAdapter {
                         let state = pending_tool_calls.entry(index).or_default();
                         state.id = id;
                         state.name = name;
+                        stream_tool_call_seen = true;
 
                         let arguments_delta = content_block
                             .input
@@ -693,8 +698,9 @@ impl ModelRuntime for AnthropicAdapter {
                 yield CompletionStreamEvent::Completed {
                     provider_id: provider_id.clone(),
                     model: model_name.clone(),
-                    finish_reason: CompletionFinishReason::from_provider(
-                        stream_finish_reason.as_deref(),
+                    finish_reason: CompletionFinishReason::normalize_with_tool_calls(
+                        CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                        stream_tool_call_seen,
                     ),
                     usage: stream_usage.map(map_anthropic_usage),
                     provider_metadata: (!thinking_blocks.is_empty()).then(|| {

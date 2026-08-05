@@ -1106,6 +1106,23 @@ impl CompletionFinishReason {
             _ => Self::Other(raw.to_owned()),
         })
     }
+
+    /// Normalize a provider terminal finish reason so downstream code can use
+    /// one consistent signal: "did the model request tools this turn?".
+    /// Providers commonly report `stop` (or omit the reason entirely) on
+    /// tool-calling turns; when at least one tool call is present this is
+    /// normalized to `ToolCalls`. Length/content-filter/other abnormal reasons
+    /// are preserved verbatim so truncation and refusals are never masked by
+    /// the tool-call normalization.
+    pub fn normalize_with_tool_calls(
+        finish_reason: Option<Self>,
+        saw_tool_call: bool,
+    ) -> Option<Self> {
+        if saw_tool_call && matches!(finish_reason, None | Some(Self::Stop)) {
+            return Some(Self::ToolCalls);
+        }
+        finish_reason
+    }
 }
 
 /// A provider-returned function call, independent from local execution tools.
@@ -2351,5 +2368,89 @@ impl ProviderNativeToolKind {
                 ProviderNativeToolRoute::Disabled | ProviderNativeToolRoute::ProviderConnector
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod completion_finish_reason_tests {
+    use super::CompletionFinishReason;
+
+    #[test]
+    fn normalize_with_tool_calls_promotes_stop_and_missing_to_tool_calls() {
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(None, true),
+            Some(CompletionFinishReason::ToolCalls)
+        );
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(
+                Some(CompletionFinishReason::Stop),
+                true,
+            ),
+            Some(CompletionFinishReason::ToolCalls)
+        );
+    }
+
+    #[test]
+    fn normalize_with_tool_calls_preserves_abnormal_reasons_with_tools() {
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(
+                Some(CompletionFinishReason::Length),
+                true,
+            ),
+            Some(CompletionFinishReason::Length)
+        );
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(
+                Some(CompletionFinishReason::ContentFilter),
+                true,
+            ),
+            Some(CompletionFinishReason::ContentFilter)
+        );
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(
+                Some(CompletionFinishReason::Other("max_output_tokens".to_owned())),
+                true,
+            ),
+            Some(CompletionFinishReason::Other("max_output_tokens".to_owned()))
+        );
+    }
+
+    #[test]
+    fn normalize_with_tool_calls_is_identity_without_tools() {
+        assert_eq!(CompletionFinishReason::normalize_with_tool_calls(None, false), None);
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(Some(CompletionFinishReason::Stop), false),
+            Some(CompletionFinishReason::Stop)
+        );
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(
+                Some(CompletionFinishReason::ToolCalls),
+                false,
+            ),
+            Some(CompletionFinishReason::ToolCalls)
+        );
+    }
+
+    #[test]
+    fn from_provider_normalizes_common_wire_reasons() {
+        let cases = [
+            ("stop", Some(CompletionFinishReason::Stop)),
+            ("end_turn", Some(CompletionFinishReason::Stop)),
+            ("message_stop", Some(CompletionFinishReason::Stop)),
+            ("completed", Some(CompletionFinishReason::Stop)),
+            ("length", Some(CompletionFinishReason::Length)),
+            ("max_tokens", Some(CompletionFinishReason::Length)),
+            ("max_output_tokens", Some(CompletionFinishReason::Length)),
+            ("tool_calls", Some(CompletionFinishReason::ToolCalls)),
+            ("tool_use", Some(CompletionFinishReason::ToolCalls)),
+            ("function_call", Some(CompletionFinishReason::ToolCalls)),
+            ("content_filter", Some(CompletionFinishReason::ContentFilter)),
+            ("MAX_TOKENS", Some(CompletionFinishReason::Length)),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(CompletionFinishReason::from_provider(Some(raw)), expected, "raw={raw}");
+        }
+        assert_eq!(CompletionFinishReason::from_provider(None::<&str>), None);
+        assert_eq!(CompletionFinishReason::from_provider(Some("")), None);
     }
 }

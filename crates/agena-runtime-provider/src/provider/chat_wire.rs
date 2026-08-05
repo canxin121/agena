@@ -502,6 +502,7 @@ fn parse_completion_response_with_tool_parser(
         provider_id,
         response_message.and_then(|m| m.tool_calls.as_ref()),
     )?;
+    let finish_reason = CompletionFinishReason::normalize_with_tool_calls(finish_reason, !tool_calls.is_empty());
 
     if text.is_empty()
         && reasoning_text.is_none()

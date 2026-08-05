@@ -268,7 +268,6 @@ struct SessionManagerState {
 /// This prevents the session loop API from growing a sequence of unrelated
 /// arguments as new lifecycle concerns are introduced.
 struct StableRunContext {
-    allow_goal_continuation: bool,
     base_run_source: ExecutionSource,
     active_model_turn_id: Option<i64>,
     state: Arc<SessionManagerState>,

@@ -3594,6 +3594,10 @@ mod tests {
     struct EndTurnFalseProvider {
         default_model: ModelId,
         calls: Arc<std::sync::atomic::AtomicUsize>,
+        /// When true, every streamed turn reports `end_turn=false` instead of
+        /// only the first. Used to verify the follow-up budget bounds a
+        /// misbehaving provider that never signals the end of its turn.
+        always_false: bool,
     }
 
     #[async_trait::async_trait]
@@ -3663,7 +3667,7 @@ mod tests {
             agena_runtime_provider::ProviderError,
         > {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (text, end_turn) = if call == 0 {
+            let (text, end_turn) = if self.always_false || call == 0 {
                 ("first turn, not done".to_owned(), Some(false))
             } else {
                 ("done".to_owned(), None)
@@ -3686,8 +3690,9 @@ mod tests {
         }
     }
 
-    async fn test_manager_with_end_turn_false_provider()
-    -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+    async fn test_manager_with_end_turn_false_provider(
+        always_false: bool,
+    ) -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let plugins = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![],
@@ -3718,6 +3723,7 @@ mod tests {
         providers.register(EndTurnFalseProvider {
             default_model: ModelId::new("end-turn-false-model"),
             calls: Arc::clone(&calls),
+            always_false,
         });
         let processor = SessionProcessor::new(
             Arc::new(providers),
@@ -3742,7 +3748,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn end_turn_false_keeps_loop_alive_without_tool_call() {
-        let (manager, calls) = test_manager_with_end_turn_false_provider().await;
+        let (manager, calls) = test_manager_with_end_turn_false_provider(false).await;
         let session = manager
             .create_session(SessionCreateRequest {
                 title: "end turn false provider".to_owned(),
@@ -3784,6 +3790,62 @@ mod tests {
             calls.load(std::sync::atomic::Ordering::SeqCst),
             2,
             "an explicit end_turn=false must request another model turn even without a tool call"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn end_turn_false_budget_is_bounded() {
+        // A provider that signals `end_turn=false` on every turn must not loop
+        // forever: one initial turn plus the bounded follow-up continuation
+        // budget (FOLLOW_UP_CONTINUATION_LIMIT = 4).
+        let (manager, calls) = test_manager_with_end_turn_false_provider(true).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "end turn false budget provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create end-turn budget session");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("end-turn-false-provider", "end-turn-false-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1 + 4,
+            "end_turn=false continuation must be bounded by its per-run budget (1 main + 4 follow-ups)"
         );
         let finished = manager
             .get_session(session.id)
@@ -3877,7 +3939,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn continue_session_goal_continuation_drives_plain_text_turns() {
+    async fn continue_session_runs_one_more_plain_text_turn() {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let plugins = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![],
@@ -3994,12 +4056,13 @@ mod tests {
         .expect("continue run did not finish");
 
         let total = calls.load(std::sync::atomic::Ordering::SeqCst);
-        // One user submission, then the continue run: one main model turn
-        // plus GOAL_CONTINUATION_LIMIT extra continuation turns.
+        // One user submission, then the continue run runs exactly one more
+        // model turn. Plain text without tool calls or an unfinished signal
+        // stops after that turn — no goal-continuation fan-out.
         assert_eq!(
             total,
-            1 + 1 + 8,
-            "continue must drive one main turn plus GOAL_CONTINUATION_LIMIT extra plain-text turns (got {total})"
+            1 + 1,
+            "continue must run exactly one more plain-text turn (got {total})"
         );
     }
 
@@ -4016,6 +4079,9 @@ mod tests {
         /// When true, the first turn reports `Length` (output limit) instead
         /// of `Stop`.
         truncate_first: bool,
+        /// When true, every turn reports `Length` (output limit). Used to
+        /// verify the truncation continuation budget bounds a degenerate model.
+        always_truncate: bool,
     }
 
     #[async_trait::async_trait]
@@ -4045,7 +4111,12 @@ mod tests {
             _request: CompletionRequest,
         ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (text, finish_reason) = if self.truncate_first && call == 0 {
+            let (text, finish_reason) = if self.always_truncate {
+                (
+                    "partial output".to_owned(),
+                    agena_provider::CompletionFinishReason::Length,
+                )
+            } else if self.truncate_first && call == 0 {
                 (
                     "partial output".to_owned(),
                     agena_provider::CompletionFinishReason::Length,
@@ -4090,7 +4161,12 @@ mod tests {
             agena_runtime_provider::ProviderError,
         > {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (text, finish_reason) = if self.truncate_first && call == 0 {
+            let (text, finish_reason) = if self.always_truncate {
+                (
+                    "partial output".to_owned(),
+                    agena_provider::CompletionFinishReason::Length,
+                )
+            } else if self.truncate_first && call == 0 {
                 (
                     "partial output".to_owned(),
                     agena_provider::CompletionFinishReason::Length,
@@ -4127,6 +4203,7 @@ mod tests {
     async fn test_manager_with_unfinished_plain_text_provider(
         dangling_turns: usize,
         truncate_first: bool,
+        always_truncate: bool,
     ) -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let plugins = PluginHost::new(PluginHostBuildConfig {
@@ -4160,6 +4237,7 @@ mod tests {
             calls: Arc::clone(&calls),
             dangling_turns,
             truncate_first,
+            always_truncate,
         });
         let processor = SessionProcessor::new(
             Arc::new(providers),
@@ -4210,8 +4288,8 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn plain_text_trailing_colon_keeps_loop_alive_without_tool_call() {
-        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(2, false).await;
+    async fn plain_text_turn_without_tool_call_stops_after_one_turn() {
+        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(2, false, false).await;
         let session = manager
             .create_session(SessionCreateRequest {
                 title: "trailing colon provider".to_owned(),
@@ -4229,8 +4307,8 @@ mod tests {
         .expect("session run did not finish");
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
-            3,
-            "plain-text turns ending on a colon must keep the loop alive until a complete turn"
+            1,
+            "a plain-text turn without tool calls stops after one turn even when it ends on a colon"
         );
         let finished = manager
             .get_session(session.id)
@@ -4242,7 +4320,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn truncated_plain_text_forces_continuation() {
-        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(0, true).await;
+        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(0, true, false).await;
         let session = manager
             .create_session(SessionCreateRequest {
                 title: "truncated provider".to_owned(),
@@ -4272,14 +4350,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unfinished_continuation_budget_is_bounded() {
-        // A degenerate model that never completes must not loop forever: one
-        // initial turn plus the bounded unfinished-continuation budget.
+    async fn truncation_continuation_budget_is_bounded() {
+        // A degenerate model that always truncates must not loop forever: one
+        // initial turn plus the bounded truncation-continuation budget.
         let (manager, calls) =
-            test_manager_with_unfinished_plain_text_provider(usize::MAX, false).await;
+            test_manager_with_unfinished_plain_text_provider(0, false, true).await;
         let session = manager
             .create_session(SessionCreateRequest {
-                title: "unfinished budget provider".to_owned(),
+                title: "truncation budget provider".to_owned(),
                 parent_session_id: None,
             })
             .await
@@ -4295,7 +4373,7 @@ mod tests {
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             1 + 4,
-            "unfinished continuation must be bounded by its per-run budget (1 main + 4 continuations)"
+            "truncation continuation must be bounded by its per-run budget (1 main + 4 continuations)"
         );
         let finished = manager
             .get_session(session.id)
@@ -4519,7 +4597,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn agentic_dangling_text_continues_after_tool_work() {
+    async fn agentic_tool_run_stops_on_plain_text_turn() {
         let (manager, calls) = test_manager_with_agentic_dangling_provider().await;
         let session = manager
             .create_session(SessionCreateRequest {
@@ -4558,8 +4636,8 @@ mod tests {
         .expect("session run did not finish");
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
-            3,
-            "a tool-calling run whose next turn dangles on a colon must not stop mid-task"
+            2,
+            "a tool-calling run stops on the next plain-text turn even when it ends on a colon"
         );
         let finished = manager
             .get_session(session.id)

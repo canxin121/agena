@@ -1,6 +1,6 @@
 use super::{
-    CompletionFinishReason, CompletionStreamEvent, ModelId, ProviderError, ProviderId,
-    StructuredObject, ToolInvocation, ToolOutput, protocol_ids, utils,
+    CompletionStreamEvent, ModelId, ProviderError, ProviderId, StructuredObject, ToolInvocation,
+    ToolOutput, protocol_ids, utils,
 };
 use agena_provider::{
     ProviderNativeToolArtifact, ProviderNativeToolOutputBlock, ProviderNativeToolSearchResult,
@@ -800,16 +800,6 @@ pub(super) fn web_search_action_detail(action: Option<&serde_json::Value>) -> St
         }
         _ => String::new(),
     }
-}
-
-pub(super) fn responses_finish_reason_with_tool_calls(
-    finish_reason: Option<CompletionFinishReason>,
-    saw_tool_call: bool,
-) -> Option<CompletionFinishReason> {
-    if saw_tool_call && matches!(finish_reason, None | Some(CompletionFinishReason::Stop)) {
-        return Some(CompletionFinishReason::ToolCalls);
-    }
-    finish_reason
 }
 
 pub(super) fn responses_output_call_id(call_id: Option<&str>) -> Option<String> {

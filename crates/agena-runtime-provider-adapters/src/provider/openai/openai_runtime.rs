@@ -15,8 +15,8 @@ use super::{
     RequestHeaderContext, Stream, ToolStreamAccumulator, async_trait,
     completion_event_from_tool_stream_update, openai_reasoning_item_from_event,
     openai_reasoning_items_from_output, openai_responses_metadata,
-    responses_finish_reason_with_tool_calls, responses_provider_native_tool_event,
-    responses_reasoning_delta, responses_tool_stream_input, sse, utils,
+    responses_provider_native_tool_event, responses_reasoning_delta, responses_tool_stream_input,
+    sse, utils,
 };
 impl OpenAiTransport {
     pub(super) fn runtime_model_capabilities(&self, model: &ModelId) -> ModelCapabilities {
@@ -475,7 +475,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         let text = OpenAiTransport::extract_text(&response);
         let tool_calls = OpenAiTransport::parse_responses_tool_calls(response.output.as_ref())?;
         let finish_reason =
-            responses_finish_reason_with_tool_calls(finish_reason, !tool_calls.is_empty());
+            CompletionFinishReason::normalize_with_tool_calls(finish_reason, !tool_calls.is_empty());
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
             return self.complete_by_aggregating_stream(request).await;
@@ -738,7 +738,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 }
 
                 if utils::responses_is_completed(&event) {
-                    let finish_reason = responses_finish_reason_with_tool_calls(
+                    let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
                         CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
                         stream_tool_call_seen,
                     );

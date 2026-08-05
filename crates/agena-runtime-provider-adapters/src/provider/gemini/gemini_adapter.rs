@@ -786,11 +786,10 @@ impl GeminiAdapter {
                         yield CompletionStreamEvent::Completed {
                             provider_id: provider_id.clone(),
                             model: model_name.clone(),
-                            finish_reason: Some(if tool_call_seen {
-                                CompletionFinishReason::ToolCalls
-                            } else {
-                                CompletionFinishReason::Stop
-                            }),
+                            finish_reason: CompletionFinishReason::normalize_with_tool_calls(
+                                Some(CompletionFinishReason::Stop),
+                                tool_call_seen,
+                            ),
                             usage: fallback_usage.clone(),
                             provider_metadata: fallback_provider_metadata.clone(),
                             end_turn: None,
@@ -835,11 +834,10 @@ impl GeminiAdapter {
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
                         model: model_name.clone(),
-                        finish_reason: Some(if tool_call_seen {
-                            CompletionFinishReason::ToolCalls
-                        } else {
-                            CompletionFinishReason::Stop
-                        }),
+                        finish_reason: CompletionFinishReason::normalize_with_tool_calls(
+                            Some(CompletionFinishReason::Stop),
+                            tool_call_seen,
+                        ),
                         usage: fallback_usage,
                         provider_metadata: fallback_provider_metadata,
                         end_turn: None,

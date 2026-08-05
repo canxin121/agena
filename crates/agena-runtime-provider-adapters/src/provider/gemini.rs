@@ -238,8 +238,9 @@ impl ModelRuntime for GeminiAdapter {
             .map(gemini_candidate_function_calls)
             .transpose()?
             .unwrap_or_default();
-        let finish_reason = CompletionFinishReason::from_provider(
-            candidate.and_then(|c| c.finish_reason.as_deref()),
+        let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
+            CompletionFinishReason::from_provider(candidate.and_then(|c| c.finish_reason.as_deref())),
+            !tool_calls.is_empty(),
         );
         let usage = payload.usage_metadata.map(gemini_usage_to_completion);
 
@@ -423,12 +424,10 @@ impl ModelRuntime for GeminiAdapter {
                             provider_metadata,
                         } => {
                             completed_emitted = true;
-                            let resolved_finish_reason = CompletionFinishReason::from_provider(
-                                Some(finish_reason.as_str()),
-                            )
-                            .or_else(|| {
-                                tool_call_seen.then_some(CompletionFinishReason::ToolCalls)
-                            });
+                            let resolved_finish_reason = CompletionFinishReason::normalize_with_tool_calls(
+                                CompletionFinishReason::from_provider(Some(finish_reason.as_str())),
+                                tool_call_seen,
+                            );
                             yield CompletionStreamEvent::Completed {
                                 provider_id: provider_id.clone(),
                                 model: model_name.clone(),

@@ -111,7 +111,10 @@ impl OllamaAdapter {
         let message = response.message.unwrap_or_default();
         let text = message.content.unwrap_or_default();
         let tool_calls = parse_tool_calls(self.id.as_str(), message.tool_calls)?;
-        let finish_reason = CompletionFinishReason::from_provider(response.done_reason.as_deref());
+        let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
+            CompletionFinishReason::from_provider(response.done_reason.as_deref()),
+            !tool_calls.is_empty(),
+        );
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() && !response.done {
             return Err(ProviderError::Provider(format!(
@@ -259,6 +262,7 @@ impl ModelRuntime for OllamaAdapter {
             let mut finish_reason: Option<String> = None;
             let mut usage: Option<CompletionUsage> = None;
             let mut emitted_content = false;
+            let mut stream_tool_call_seen = false;
             let mut completed = false;
 
             while let Some(event) = events.next().await {
@@ -293,6 +297,7 @@ impl ModelRuntime for OllamaAdapter {
 
                     for (index, tool_call) in parse_stream_tool_calls(provider_label.as_str(), message.tool_calls)? {
                         emitted_content = true;
+                        stream_tool_call_seen = true;
                         yield CompletionStreamEvent::ToolCallDelta {
                             provider_id: provider_id.clone(),
                             model: model_name.clone(),
@@ -308,7 +313,10 @@ impl ModelRuntime for OllamaAdapter {
                     yield CompletionStreamEvent::Completed {
                         provider_id: provider_id.clone(),
                         model: ModelId::new(chunk_model.unwrap_or_else(|| model_name.to_string())),
-                        finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
+                        finish_reason: CompletionFinishReason::normalize_with_tool_calls(
+                            CompletionFinishReason::from_provider(finish_reason.as_deref()),
+                            stream_tool_call_seen,
+                        ),
                         usage: usage.clone(),
                         provider_metadata: None,
                         end_turn: None,
@@ -322,7 +330,10 @@ impl ModelRuntime for OllamaAdapter {
                 yield CompletionStreamEvent::Completed {
                     provider_id,
                     model: model_name,
-                    finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
+                    finish_reason: CompletionFinishReason::normalize_with_tool_calls(
+                        CompletionFinishReason::from_provider(finish_reason.as_deref()),
+                        stream_tool_call_seen,
+                    ),
                     usage,
                     provider_metadata: None,
                     end_turn: None,

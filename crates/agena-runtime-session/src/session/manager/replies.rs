@@ -564,7 +564,6 @@ impl SessionManager {
                 session,
                 &options,
                 StableRunContext {
-                    allow_goal_continuation: false,
                     base_run_source: run_source,
                     active_model_turn_id: continuation_model_turn_id,
                     state,
@@ -660,7 +659,6 @@ impl SessionManager {
                 session,
                 &options,
                 StableRunContext {
-                    allow_goal_continuation: false,
                     base_run_source: ExecutionSource::PermissionReply,
                     active_model_turn_id: continuation_model_turn_id,
                     state,

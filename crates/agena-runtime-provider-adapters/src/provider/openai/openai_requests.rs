@@ -15,9 +15,8 @@ use super::{
     OpenAiResponsesToolPlan, OpenAiTransport, ProviderError, ProviderId, ProviderNativeToolKind,
     REALTIME_ADAPTER_KIND, RequestHeaderContext, Stream, ToolStreamAccumulator,
     chat_tool_stream_input, chat_wire, completion_event_from_tool_stream_update, prompt_cache,
-    response_id_metadata, responses_finish_reason_with_tool_calls,
-    responses_provider_native_tool_event, responses_tool_stream_input, responses_wire_tool_name,
-    sse, utils,
+    response_id_metadata, responses_provider_native_tool_event, responses_tool_stream_input,
+    responses_wire_tool_name, sse, utils,
 };
 
 impl OpenAiTransport {
@@ -301,6 +300,7 @@ impl OpenAiTransport {
             // Responses-path accumulator so id and index are aliases rather
             // than separate model-visible operations.
             let mut tool_stream = ToolStreamAccumulator::new();
+            let mut stream_tool_call_seen = false;
             let mut stream_usage: Option<CompletionUsage> = None;
             let mut stream_finish_reason: Option<String> = None;
             let mut assistant_reasoning_field_seen: Option<&'static str> = None;
@@ -398,6 +398,7 @@ impl OpenAiTransport {
                     .unwrap_or_default();
 
                 for raw_tool in tool_deltas {
+                    stream_tool_call_seen = true;
                     let tool = utils::parse_json_value::<chat_wire::ChatToolCallWire>(
                         provider_name.as_str(),
                         "chat stream tool_call delta",
@@ -444,12 +445,14 @@ impl OpenAiTransport {
                     done_seen,
                 )?;
             }
+            let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
+                CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
+                stream_tool_call_seen,
+            );
             yield CompletionStreamEvent::Completed {
                 provider_id: provider_id.clone(),
                 model: model_name.clone(),
-                finish_reason: CompletionFinishReason::from_provider(
-                    stream_finish_reason.as_deref(),
-                ),
+                finish_reason,
                 usage: stream_usage,
                 provider_metadata: utils::provider_metadata_with_chat_reasoning_state(
                     None,
@@ -694,7 +697,7 @@ impl OpenAiTransport {
                 }
 
                 if utils::responses_is_completed(&event) {
-                    let finish_reason = responses_finish_reason_with_tool_calls(
+                    let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
                         CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
                         stream_tool_call_seen,
                     );

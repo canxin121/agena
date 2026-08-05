@@ -23,6 +23,7 @@ agena-runtime-plugins = { workspace = true }
 agena-runtime-provider = { workspace = true }
 agena-runtime-tools = { workspace = true }
 agena-scheduler = { workspace = true }
+agena-skills = { workspace = true }
 agena-storage = { workspace = true }
 agena-storage-sqlite = { workspace = true }
 agena-tool = { workspace = true }

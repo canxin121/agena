@@ -453,6 +453,7 @@ impl WorkflowPlugin {
                 },
                 description: input.description.clone(),
                 prompt: input.prompt.clone(),
+                skills: input.skills.clone(),
                 task_id: input.task_id.clone(),
                 selection: input
                     .selection

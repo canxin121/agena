@@ -1396,8 +1396,8 @@ mod openai_protocol_adapter_tests {
         assert!(error.to_string().contains("unknown field `api_mode`"));
     }
 
-    #[test]
-    fn prompt_envelope_tool_mode_is_accepted() {
+        #[test]
+    fn prompt_envelope_tool_mode_is_rejected() {
         let config = config_with_adapter("openai_chat_completions", "").replace(
             r#""gpt-test": {}"#,
             r#""gpt-test": {
@@ -1409,12 +1409,12 @@ mod openai_protocol_adapter_tests {
             config.as_str(),
             &ProcessEnvironment,
         )
-        .expect("prompt-envelope mode should resolve for a message-only model");
+        .expect_err("prompt-envelope mode was removed and must be rejected");
     }
 
     #[test]
     fn provider_native_tools_are_rejected_for_every_mode() {
-        for mode in ["provider_protocol", "prompt_envelope", "disabled"] {
+        for mode in ["provider_protocol", "disabled"] {
             let config = config_with_adapter("openai_chat_completions", "").replace(
                 r#""gpt-test": {}"#,
                 format!(
@@ -1445,7 +1445,7 @@ mod openai_protocol_adapter_tests {
 
     #[test]
     fn direct_tool_policy_is_rejected_for_every_mode() {
-        for mode in ["provider_protocol", "prompt_envelope", "disabled"] {
+        for mode in ["provider_protocol", "disabled"] {
             let config = config_with_adapter("openai_chat_completions", "").replace(
                 r#""gpt-test": {}"#,
                 format!(

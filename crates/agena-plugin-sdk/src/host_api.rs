@@ -477,6 +477,11 @@ pub struct RunSubtaskRequest {
     pub access: RunSubtaskAccess,
     pub description: String,
     pub prompt: String,
+    /// Optional Skill names or aliases attached to the child session's first
+    /// user message as Skill references. The child applies their instructions
+    /// as task guidance. Unknown names or aliases are rejected before start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

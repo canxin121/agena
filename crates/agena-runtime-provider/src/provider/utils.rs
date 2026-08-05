@@ -676,6 +676,7 @@ where
                 finish_reason,
                 usage,
                 provider_metadata,
+                end_turn: _,
             } => {
                 completed = Some((pid, model, finish_reason, usage, provider_metadata));
             }
@@ -894,6 +895,18 @@ pub fn responses_tool_event(
     }
 
     Ok(None)
+}
+
+/// OpenAI Responses `response.completed` may carry an optional `end_turn`
+/// boolean on the response envelope. When the model explicitly signals the
+/// turn is not complete (`end_turn=false`), the session layer can continue
+/// driving the model without waiting for a tool call. A missing field, a
+/// non-boolean value, or a gateway that omits the field all yield `None`.
+pub fn responses_end_turn(event: &serde_json::Value) -> Option<bool> {
+    event
+        .get("response")
+        .and_then(|r| r.get("end_turn"))
+        .and_then(|v| v.as_bool())
 }
 
 pub fn responses_finish_reason(event: &serde_json::Value) -> Option<String> {

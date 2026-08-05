@@ -1240,6 +1240,7 @@ impl AmazonBedrockAdapter {
                     ),
                     usage: stream_usage.map(map_bedrock_anthropic_usage),
                     provider_metadata,
+                    end_turn: None,
                 };
             }
         };
@@ -1654,6 +1655,7 @@ impl AmazonBedrockAdapter {
                     reasoning_details_seen,
                     copilot_reasoning_opaque,
                 ),
+                end_turn: None,
             };
         };
 

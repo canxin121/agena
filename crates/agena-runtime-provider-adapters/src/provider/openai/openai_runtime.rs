@@ -751,6 +751,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                             response_id.clone(),
                             reasoning_items.iter().map(|(_, item)| item.clone()),
                         ),
+                        end_turn: utils::responses_end_turn(&event),
                     };
                     completed_emitted = true;
                     break;

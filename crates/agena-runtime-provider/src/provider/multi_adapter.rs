@@ -11,17 +11,14 @@ use std::{
 
 use async_trait::async_trait;
 use futures_core::Stream;
-use futures_util::{
-    StreamExt,
-    stream::{self, BoxStream},
-};
+use futures_util::{StreamExt, stream::BoxStream};
 
 use crate::ProviderError;
 
 use super::core::{
     impl_model_runtime_base_via_adapter_methods, remap_stream_event_provider_and_model,
 };
-use super::{CompletionResponse, ModelRuntime, prompt_tool_transport, tool_mode};
+use super::{CompletionResponse, ModelRuntime, tool_mode};
 use agena_provider::CompletionRequest;
 use agena_provider::ProviderNativeToolsConfig;
 use agena_provider::{
@@ -426,12 +423,6 @@ impl ModelRuntime for MultiAdapterProvider {
                 let base = adapter.prompt_cache_shape(target_model);
                 let mut shape = base.unwrap_or_else(|| PromptCacheShape::new(self.id.as_str()));
                 shape.insert_string("agena.tools.mode", agena_tool_mode.as_str());
-                if agena_tool_mode.is_prompt_envelope() {
-                    shape.insert_string(
-                        "agena.tools.prompt_envelope.version",
-                        prompt_tool_transport::PROTOCOL_VERSION,
-                    );
-                }
                 Some(shape)
             },
         )
@@ -635,14 +626,6 @@ impl ModelRuntime for MultiAdapterProvider {
             &provider_native_tools,
             &mut request,
         );
-        let transport_context = if agena_tool_mode.is_prompt_envelope() {
-            Some(prompt_tool_transport::transport_context(&request)?)
-        } else {
-            None
-        };
-        if let Some(context) = transport_context.as_ref() {
-            prompt_tool_transport::prepare_request(&mut request, context)?;
-        }
         request.model = target_model;
         let mut response = adapter.complete(request).await?;
         if agena_tool_mode.is_disabled() {
@@ -651,22 +634,6 @@ impl ModelRuntime for MultiAdapterProvider {
                 &visible_model,
                 &response,
             )?;
-        }
-        if let Some(context) = transport_context.as_ref()
-            && let Some(reason) = prompt_tool_transport::protocol_error_reason(
-                response.text.as_str(),
-                !response.tool_calls.is_empty(),
-                context,
-            )
-        {
-            return Err(prompt_tool_protocol_error(
-                self.id.as_str(),
-                &visible_model,
-                reason.as_str(),
-            ));
-        }
-        if let Some(context) = transport_context.as_ref() {
-            prompt_tool_transport::rewrite_response(&mut response, context);
         }
         response.provider_id = ProviderId::new(self.id.clone());
         response.model = visible_model;
@@ -703,9 +670,6 @@ impl ModelRuntime for MultiAdapterProvider {
             &provider_native_tools,
             &mut request,
         );
-        if agena_tool_mode.is_prompt_envelope() {
-            prompt_tool_transport::prepare_compaction_request(&mut request)?;
-        }
         request.model = target_model;
         adapter.compact_conversation(request).await
     }
@@ -743,89 +707,9 @@ impl ModelRuntime for MultiAdapterProvider {
             &provider_native_tools,
             &mut request,
         );
-        let transport_context = if agena_tool_mode.is_prompt_envelope() {
-            Some(prompt_tool_transport::transport_context(&request)?)
-        } else {
-            None
-        };
-        if let Some(context) = transport_context.as_ref() {
-            prompt_tool_transport::prepare_request(&mut request, context)?;
-        }
         request.model = target_model;
         let provider_id = self.id.clone();
         let stream = adapter.complete_stream(request.clone()).await?;
-        if let Some(transport_context) = transport_context {
-            let checked = async_stream::stream! {
-                    let mut inner_stream = stream;
-                    let mut buffered = Vec::new();
-                    let mut response_text = String::new();
-                    let mut has_client_tool_call = false;
-                    let mut has_provider_native_tool_activity = false;
-                    let mut stream_failed = false;
-
-                    while let Some(item) = inner_stream.next().await {
-                        match &item {
-                            Ok(CompletionStreamEvent::TextDelta { delta, .. }) => {
-                                response_text.push_str(delta);
-                            }
-                            Ok(
-                                CompletionStreamEvent::ToolCallDelta { .. }
-                                | CompletionStreamEvent::ToolCallSnapshot { .. },
-                            ) => {
-                                has_client_tool_call = true;
-                            }
-                            Ok(
-                                CompletionStreamEvent::ProviderNativeToolCallStarted { .. }
-                                | CompletionStreamEvent::ProviderNativeToolCallCompleted { .. },
-                            ) => {
-                                has_provider_native_tool_activity = true;
-                            }
-                            Err(_) => stream_failed = true,
-                            _ => {}
-                        }
-                        buffered.push(item);
-                    }
-
-                    let protocol_error = (!stream_failed)
-                        .then(|| {
-                            if has_provider_native_tool_activity {
-                                return Some(
-                                    "the backend used a provider-native tool, but prompt-envelope mode permits only the declared Agena client-function envelope"
-                                        .to_owned(),
-                                );
-                            }
-                            prompt_tool_transport::protocol_error_reason(
-                                response_text.as_str(),
-                                has_client_tool_call,
-                                &transport_context,
-                            )
-                        })
-                        .flatten();
-                    if let Some(reason) = protocol_error {
-                        yield Err(prompt_tool_protocol_error(
-                            provider_id.as_str(),
-                            &visible_model,
-                            reason.as_str(),
-                        ));
-                    } else {
-                        let source = Box::pin(stream::iter(buffered));
-                        let mut rewritten =
-                            prompt_tool_transport::rewrite_stream(source, &transport_context);
-                        while let Some(item) = rewritten.next().await {
-                            let provider_id = ProviderId::new(provider_id.clone());
-                            let visible_model = visible_model.clone();
-                            yield item.map(|event| {
-                                remap_stream_event_provider_and_model(
-                                    &provider_id,
-                                    &visible_model,
-                                    event,
-                                )
-                            });
-                        }
-                    }
-            };
-            return Ok(Box::pin(checked));
-        }
         let stream = if agena_tool_mode.is_disabled() {
             tool_mode::guard_disabled_stream(stream, provider_id.clone(), visible_model.clone())
         } else {
@@ -865,12 +749,6 @@ fn merge_image_options(
     configured
 }
 
-fn prompt_tool_protocol_error(provider_id: &str, model: &ModelId, reason: &str) -> ProviderError {
-    ProviderError::Provider(format!(
-        "provider `{provider_id}` model `{model}` returned an invalid Agena prompt-envelope tool response: {reason}"
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -882,17 +760,9 @@ mod tests {
     use agena_domain::Role;
     use agena_plugin_host::{PluginKey, registry::RegisteredTool, sdk::ToolDefinition};
     use agena_provider::ProviderNativeToolRoute;
-    use agena_provider::{
-        CapabilitySelectionPatch, CapabilitySelectionPatchBody, CompletionFinishReason,
-        CompletionToolCall, ModelCapabilityFeature,
-    };
+    use agena_provider::{CompletionFinishReason, CompletionToolCall};
     use agena_runtime_contracts::message::Message;
     use agena_runtime_tools::tool::ToolApiBinding;
-
-    struct InvalidPromptEnvelopeAdapter {
-        model: ModelId,
-        calls: AtomicUsize,
-    }
 
     struct ProviderNativePromptAdapter {
         model: ModelId,
@@ -1015,38 +885,6 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl ModelRuntime for InvalidPromptEnvelopeAdapter {
-        fn id(&self) -> &str {
-            "invalid_prompt_adapter"
-        }
-
-        fn default_model(&self) -> &ModelId {
-            &self.model
-        }
-
-        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
-            Ok(Vec::new())
-        }
-
-        async fn complete(
-            &self,
-            request: CompletionRequest,
-        ) -> Result<CompletionResponse, ProviderError> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(CompletionResponse {
-                provider_id: ProviderId::new(self.id()),
-                model: request.model,
-                text: "<agena_tool_calls>not-json</agena_tool_calls>".to_owned(),
-                reasoning_text: None,
-                finish_reason: Some(CompletionFinishReason::Stop),
-                tool_calls: Vec::new(),
-                usage: None,
-                provider_metadata: None,
-            })
-        }
-    }
-
-    #[async_trait::async_trait]
     impl ModelRuntime for ProviderNativePromptAdapter {
         fn id(&self) -> &str {
             "provider_native_prompt_adapter"
@@ -1092,7 +930,7 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let provider_id = ProviderId::new(self.id());
             let model = request.model;
-            Ok(Box::pin(stream::iter(vec![
+            Ok(Box::pin(futures_util::stream::iter(vec![
                 Ok(CompletionStreamEvent::ProviderNativeToolCallStarted {
                     provider_id: provider_id.clone(),
                     model: model.clone(),
@@ -1111,6 +949,7 @@ mod tests {
                     finish_reason: Some(CompletionFinishReason::Stop),
                     usage: None,
                     provider_metadata: None,
+                    end_turn: None,
                 }),
             ])))
         }
@@ -1169,28 +1008,6 @@ mod tests {
         }
     }
 
-    fn provider_for_adapter(adapter: Arc<dyn ModelRuntime>) -> MultiAdapterProvider {
-        let adapters = BTreeMap::from([("adapter".to_owned(), adapter)]);
-        let routes = BTreeMap::from([(
-            ("adapter".to_owned(), "model".to_owned()),
-            ProviderModelRoute {
-                enabled: true,
-                native_compaction: true,
-                agena_tool_mode: AgenaToolMode::PromptEnvelope,
-                provider_native_tools: Default::default(),
-                definition: Default::default(),
-            },
-        )]);
-        MultiAdapterProvider::new(
-            "provider",
-            "adapter",
-            "model",
-            adapters,
-            routes,
-            BTreeSet::new(),
-        )
-    }
-
     fn provider_for_adapter_with_mode(
         adapter: Arc<dyn ModelRuntime>,
         mode: AgenaToolMode,
@@ -1212,48 +1029,6 @@ mod tests {
                 agena_tool_mode: mode,
                 provider_native_tools,
                 definition: Default::default(),
-            },
-        )]);
-        MultiAdapterProvider::new(
-            "provider",
-            "adapter",
-            "model",
-            adapters,
-            routes,
-            BTreeSet::new(),
-        )
-    }
-
-    fn provider() -> (MultiAdapterProvider, Arc<InvalidPromptEnvelopeAdapter>) {
-        let adapter = Arc::new(InvalidPromptEnvelopeAdapter {
-            model: ModelId::new("model"),
-            calls: AtomicUsize::new(0),
-        });
-        (
-            provider_for_adapter(adapter.clone() as Arc<dyn ModelRuntime>),
-            adapter,
-        )
-    }
-
-    fn provider_with_tool_calling_marked_unsupported(
-        adapter: Arc<dyn ModelRuntime>,
-    ) -> MultiAdapterProvider {
-        let mut definition = ConfiguredModelDefinition::default();
-        definition.capabilities.features = Some(CapabilitySelectionPatch::Patch(
-            CapabilitySelectionPatchBody {
-                supported: Vec::new(),
-                unsupported: vec![ModelCapabilityFeature::ToolCalling],
-            },
-        ));
-        let adapters = BTreeMap::from([("adapter".to_owned(), adapter)]);
-        let routes = BTreeMap::from([(
-            ("adapter".to_owned(), "model".to_owned()),
-            ProviderModelRoute {
-                enabled: true,
-                native_compaction: true,
-                agena_tool_mode: AgenaToolMode::ProviderProtocol,
-                provider_native_tools: Default::default(),
-                definition,
             },
         )]);
         MultiAdapterProvider::new(
@@ -1323,40 +1098,6 @@ mod tests {
             assert_eq!(listed.len(), 1);
             assert_eq!(listed[0].native_compaction, enabled);
         }
-    }
-
-    #[tokio::test]
-    async fn non_streaming_invalid_prompt_protocol_fails_without_retry() {
-        let (provider, adapter) = provider();
-
-        let error = provider
-            .complete(request())
-            .await
-            .expect_err("invalid prompt protocol must fail");
-
-        assert!(error.to_string().contains("invalid Agena prompt-envelope"));
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn configured_provider_protocol_never_falls_back_from_model_capabilities() {
-        let adapter = Arc::new(InvalidPromptEnvelopeAdapter {
-            model: ModelId::new("model"),
-            calls: AtomicUsize::new(0),
-        });
-        let provider =
-            provider_with_tool_calling_marked_unsupported(adapter.clone() as Arc<dyn ModelRuntime>);
-
-        let response = provider
-            .complete(request())
-            .await
-            .expect("configured provider protocol must remain authoritative");
-
-        assert_eq!(
-            response.text,
-            "<agena_tool_calls>not-json</agena_tool_calls>"
-        );
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -1513,12 +1254,7 @@ mod tests {
             request: Mutex::new(None),
             compact_calls: AtomicUsize::new(0),
         });
-        let shapes = [
-            AgenaToolMode::ProviderProtocol,
-            AgenaToolMode::PromptEnvelope,
-            AgenaToolMode::Disabled,
-        ]
-        .map(|mode| {
+        let shapes = [AgenaToolMode::ProviderProtocol, AgenaToolMode::Disabled].map(|mode| {
             provider_for_adapter_with_mode(adapter.clone() as Arc<dyn ModelRuntime>, mode)
                 .prompt_cache_shape(&ModelId::new("model"))
                 .expect("tool mode must be part of the cache shape")
@@ -1530,15 +1266,9 @@ mod tests {
         );
         assert_eq!(
             shapes[1].fields.get("agena.tools.mode").map(String::as_str),
-            Some("prompt_envelope")
-        );
-        assert_eq!(
-            shapes[2].fields.get("agena.tools.mode").map(String::as_str),
             Some("disabled")
         );
         assert_ne!(shapes[0].fingerprint(), shapes[1].fingerprint());
-        assert_ne!(shapes[1].fingerprint(), shapes[2].fingerprint());
-        assert_ne!(shapes[0].fingerprint(), shapes[2].fingerprint());
     }
 
     #[tokio::test]
@@ -1586,46 +1316,5 @@ mod tests {
                 .to_string()
                 .contains("disabled Agena tools mode")
         );
-    }
-
-    #[tokio::test]
-    async fn streaming_invalid_prompt_protocol_fails_without_retry_or_text_leak() {
-        let (provider, adapter) = provider();
-        let events = provider
-            .complete_stream(request())
-            .await
-            .expect("construct checked stream")
-            .collect::<Vec<_>>()
-            .await;
-
-        assert_eq!(events.len(), 1);
-        let error = events[0]
-            .as_ref()
-            .expect_err("invalid prompt protocol must fail");
-        assert!(error.to_string().contains("invalid Agena prompt-envelope"));
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn streaming_prompt_transport_rejects_backend_native_tools() {
-        let adapter = Arc::new(ProviderNativePromptAdapter {
-            model: ModelId::new("model"),
-            calls: AtomicUsize::new(0),
-        });
-        let provider = provider_for_adapter(adapter.clone() as Arc<dyn ModelRuntime>);
-
-        let events = provider
-            .complete_stream(request())
-            .await
-            .expect("construct checked stream")
-            .collect::<Vec<_>>()
-            .await;
-
-        assert_eq!(events.len(), 1);
-        let error = events[0]
-            .as_ref()
-            .expect_err("provider-native activity must fail closed");
-        assert!(error.to_string().contains("prompt-envelope"));
-        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
     }
 }

@@ -12,6 +12,55 @@ use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
+use agena_runtime_contracts::message::{SkillReference, SkillReferencePart};
+use std::path::Path;
+
+/// Resolve requested Skill names/aliases into immutable Skill references
+/// for a delegated subtask. The catalog is rebuilt on demand from bundled
+/// and filesystem-discovered Skills, so a later catalog change never
+/// silently alters the snapshot attached to a child session.
+fn resolve_subtask_skill_references(
+    workspace_root: &Path,
+    requested: &[String],
+) -> Result<Vec<SkillReference>, AppError> {
+    let mut catalog = std::collections::BTreeMap::new();
+    for skill in agena_skills::bundled::all() {
+        catalog.insert(skill.frontmatter.name.clone(), skill);
+    }
+    let roots = agena_skills::discovery::default_roots(Some(workspace_root));
+    let discovered = agena_skills::discovery::scan(&roots).map_err(|error| {
+        AppError::Internal(format!("failed to scan skills for subtask: {error}"))
+    })?;
+    for skill in discovered {
+        catalog.insert(skill.frontmatter.name.clone(), skill);
+    }
+
+    requested
+            .iter()
+            .map(|name| {
+                let trimmed = name.trim();
+                let skill = catalog.values().find(|skill| skill.matches(trimmed)).ok_or_else(
+                    || {
+                        AppError::Config(format!(
+                            "unknown skill '{name}' for subtask; use `agena.skills.list` to see available skills"
+                        ))
+                    },
+                )?;
+                Ok(SkillReference {
+                    name: skill.frontmatter.name.clone(),
+                    description: skill.frontmatter.description.clone(),
+                    instructions: skill.body.clone(),
+                    content_hash: skill.content_hash(),
+                    source: skill
+                        .source_path
+                        .as_ref()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_else(|| "bundled".to_string()),
+                    aliases: skill.frontmatter.aliases.clone(),
+                })
+            })
+                        .collect()
+}
 
 impl SessionManager {
     async fn require_subtask_session(
@@ -395,6 +444,17 @@ impl SessionManager {
                 "subtask prompt must not be empty".to_string(),
             ));
         }
+        let subtask_skill_references = match request
+            .skills
+            .as_deref()
+            .filter(|skills| !skills.is_empty())
+        {
+            Some(skills) => Some(resolve_subtask_skill_references(
+                state.tool_executor.workspace_root(),
+                skills,
+            )?),
+            None => None,
+        };
         if request.timeout_ms == Some(0) {
             return Err(AppError::Config(
                 "subtask timeout_ms must be greater than zero".to_string(),
@@ -541,14 +601,17 @@ impl SessionManager {
         let manager = self.background_handle();
         let run_options = options.clone();
         let prompt = delegated_prompt.to_string();
+        let skill_references = subtask_skill_references;
         let mut run = tokio::task::spawn(async move {
+            let mut parts = vec![PartContent::text(prompt)];
+            if let Some(skill_references) = skill_references {
+                parts.push(PartContent::skill_reference(SkillReferencePart {
+                    skills: skill_references,
+                }));
+            }
             manager
                 .submit_subtask_user_message(
-                    SessionUserMessageRequest::new(
-                        child_id,
-                        run_options,
-                        vec![PartContent::text(prompt)],
-                    ),
+                    SessionUserMessageRequest::new(child_id, run_options, parts),
                     usage_budget,
                 )
                 .await
@@ -705,7 +768,8 @@ pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
 
 #[cfg(test)]
 mod tests {
-    use super::non_recursive_subtask_capability_denials;
+    use super::{non_recursive_subtask_capability_denials, resolve_subtask_skill_references};
+    use agena_runtime_contracts::message::SkillReference;
 
     #[test]
     fn delegated_instances_cannot_recursively_run_tasks() {
@@ -721,5 +785,67 @@ mod tests {
         ] {
             assert!(names.contains(name));
         }
+    }
+
+    #[test]
+    fn subtask_skills_resolve_bundled_names_and_aliases() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let requested = vec!["verify".to_string(), "security-review".to_string()];
+        let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
+        assert_eq!(refs.len(), 2);
+        let names = refs.iter().map(|r| r.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(names, ["verify", "security_review"]);
+        for reference in &refs {
+            assert!(!reference.instructions.is_empty());
+            assert!(!reference.content_hash.is_empty());
+        }
+    }
+
+    #[test]
+    fn subtask_skills_discover_workspace_skills() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let skill_dir = root.path().join(".agena").join("skills").join("explore");
+        std::fs::create_dir_all(&skill_dir).expect("create skill dir");
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: explore\ndescription: Explore a codebase\n---\nInvestigate the workspace.\n",
+        )
+        .expect("write skill");
+
+        let requested = vec!["explore".to_string()];
+        let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].name, "explore");
+        assert!(refs[0].instructions.contains("Investigate the workspace"));
+        assert_eq!(
+            refs[0].source,
+            skill_dir.join("SKILL.md").display().to_string()
+        );
+    }
+
+    #[test]
+    fn subtask_skills_reject_unknown_names() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let requested = vec!["no-such-skill".to_string()];
+        let error = resolve_subtask_skill_references(root.path(), &requested).expect_err("reject");
+        assert!(error.to_string().contains("unknown skill 'no-such-skill'"));
+    }
+
+    #[test]
+    fn skill_reference_snapshot_carries_stable_identity() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let requested = vec!["verify".to_string()];
+        let refs = resolve_subtask_skill_references(root.path(), &requested).expect("resolve");
+        let first = &refs[0];
+        let expected: SkillReference = serde_json::from_value(serde_json::json!({
+            "name": first.name,
+            "description": first.description,
+            "instructions": first.instructions,
+            "content_hash": first.content_hash,
+            "source": first.source,
+            "aliases": first.aliases,
+        }))
+        .expect("serializable snapshot");
+        assert_eq!(&expected, first);
     }
 }

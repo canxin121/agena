@@ -9,7 +9,6 @@ use super::*;
 #[serde(rename_all = "snake_case")]
 pub enum AgenaToolMode {
     ProviderProtocol,
-    PromptEnvelope,
     #[default]
     Disabled,
 }
@@ -18,17 +17,12 @@ impl AgenaToolMode {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::ProviderProtocol => "provider_protocol",
-            Self::PromptEnvelope => "prompt_envelope",
             Self::Disabled => "disabled",
         }
     }
 
     pub const fn is_provider_protocol(&self) -> bool {
         matches!(self, Self::ProviderProtocol)
-    }
-
-    pub const fn is_prompt_envelope(&self) -> bool {
-        matches!(self, Self::PromptEnvelope)
     }
 
     pub const fn is_disabled(&self) -> bool {
@@ -1607,6 +1601,12 @@ pub enum CompletionStreamEvent {
         usage: Option<CompletionUsage>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<serde_json::Value>,
+        /// OpenAI Responses `response.end_turn`: the model's own statement
+        /// that its turn is (or is not) finished. `Some(false)` means the
+        /// model explicitly asked to keep working — the agent loop should
+        /// request another model turn even when no tool call was emitted.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_turn: Option<bool>,
     },
     /// A retryable provider failure observed while streaming this completion.
     /// The provider layer schedules a retry internally; this event is a live

@@ -296,16 +296,60 @@ fn validate_returned_tool_api_function(
     )))
 }
 
+/// Parse Tool API arguments with the same tolerance the session processor
+/// applies when it materializes a call. Providers (notably deepseek through
+/// an OpenAI-compatible gateway) frequently emit arguments with a stray
+/// invalid escape such as `\d`; the strict serde parse rejects the whole
+/// call and sends it back to the model for protocol repair, which interrupts
+/// the agent loop and, after repeated failures, ends the run early. Repairing
+/// the most common defect (escaping a backslash that precedes a character
+/// JSON strings do not allow) keeps the call flowing into normal tool
+/// execution, where a genuinely malformed input fails as an ordinary tool
+/// result instead of aborting the run.
+fn parse_tool_api_arguments_tolerant(arguments_json: &str) -> Option<serde_json::Value> {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments_json) {
+        return Some(value);
+    }
+
+    let mut repaired = String::with_capacity(arguments_json.len());
+    let mut chars = arguments_json.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            repaired.push(ch);
+            continue;
+        }
+        match chars.peek() {
+            Some(&next) if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') => {
+                repaired.push(ch);
+                repaired.push(next);
+                chars.next();
+            }
+            _ => {
+                // Invalid escape: keep the backslash literal so the string
+                // value is preserved instead of dropping the argument.
+                repaired.push('\\');
+                repaired.push('\\');
+            }
+        }
+    }
+
+    serde_json::from_str::<serde_json::Value>(&repaired).ok()
+}
+
 fn validate_tool_api_arguments(
     provider_id: &str,
     name: &str,
     arguments_json: &str,
 ) -> Result<(), ProviderError> {
-    let arguments: serde_json::Value = serde_json::from_str(arguments_json).map_err(|error| {
-        ProviderError::Provider(format!(
-            "provider `{provider_id}` returned invalid JSON arguments for Tool API function `{name}`: {error}"
-        ))
-    })?;
+    let Some(arguments) = parse_tool_api_arguments_tolerant(arguments_json) else {
+        let detail = serde_json::from_str::<serde_json::Value>(arguments_json)
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "unparseable arguments".to_owned());
+        return Err(ProviderError::Provider(format!(
+            "provider `{provider_id}` returned invalid JSON arguments for Tool API function `{name}`: {detail}"
+        )));
+    };
     let arguments = arguments.as_object().ok_or_else(|| {
         ProviderError::Provider(format!(
             "provider `{provider_id}` returned non-object arguments for Tool API function `{name}`"
@@ -1130,9 +1174,10 @@ mod tool_api_function_validation_tests {
     };
 
     use super::{
-        RejectedToolApiCall, StreamToolApiCallState, stream_tool_api_calls,
-        validate_provider_native_tool_definition_boundary, validate_returned_tool_api_function,
-        validate_stream_tool_api_event, validate_tool_api_arguments,
+        RejectedToolApiCall, StreamToolApiCallState, parse_tool_api_arguments_tolerant,
+        stream_tool_api_calls, validate_provider_native_tool_definition_boundary,
+        validate_returned_tool_api_function, validate_stream_tool_api_event,
+        validate_tool_api_arguments,
     };
     use crate::provider::{CompletionResponse, ModelRuntime};
     use agena_domain::Role;
@@ -1306,6 +1351,7 @@ mod tool_api_function_validation_tests {
                     finish_reason: response.finish_reason,
                     usage: response.usage,
                     provider_metadata: None,
+                    end_turn: None,
                 }),
             ];
             Ok(Box::pin(stream::iter(events)))
@@ -1577,6 +1623,7 @@ mod tool_api_function_validation_tests {
             finish_reason: Some(CompletionFinishReason::ToolCalls),
             usage: None,
             provider_metadata: None,
+            end_turn: None,
         };
         validate_stream_tool_api_event("repair-test", &completed, &declared, &mut calls)
             .expect_err("execution-tool name is rejected only after its full input is retained");
@@ -1749,5 +1796,25 @@ mod tool_api_function_validation_tests {
         assert!(repair_text.contains(r#""name":"fs.read""#));
         assert!(requests[1].previous_response_id.is_none());
         assert_eq!(requests[1].temperature, Some(0.0));
+    }
+    #[test]
+    fn tolerant_parse_accepts_valid_arguments() {
+        let json = r#"{"tool":"fs.read"}"#;
+        let parsed = parse_tool_api_arguments_tolerant(json).expect("valid arguments parse");
+        assert_eq!(parsed["tool"], "fs.read");
+    }
+
+    #[test]
+    fn tolerant_parse_repairs_invalid_escape_arguments() {
+        let json = r#"{"tool":"fs.read","input":{"path":"C:\temp\new"}}"#;
+        let parsed = parse_tool_api_arguments_tolerant(json).expect("invalid escape repaired");
+        let input = parsed["input"].as_object().expect("input object");
+        assert_eq!(input["path"].as_str(), Some("C:\temp\new"));
+    }
+
+    #[test]
+    fn tolerant_parse_rejects_truly_malformed_arguments() {
+        let json = "{\"tool\":";
+        assert!(parse_tool_api_arguments_tolerant(json).is_none());
     }
 }

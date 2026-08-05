@@ -6,7 +6,6 @@ mod cataloged_models;
 pub mod chat_wire;
 pub mod core;
 mod multi_adapter;
-mod prompt_tool_transport;
 mod registry;
 mod tool_mode;
 pub mod utils;

@@ -899,7 +899,7 @@ mod tests {
             "display_name": "Old",
             "native_compaction": false,
             "agena_tools": {
-                "mode": "prompt_envelope",
+                "mode": "disabled",
                 "provider_native": { "hosted": { "web_search": true } }
             }
         });

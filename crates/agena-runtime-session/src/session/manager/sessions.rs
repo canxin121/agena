@@ -335,14 +335,7 @@ impl SessionManager {
         let request_system = options
             .as_ref()
             .and_then(|options| options.system.clone())
-            .or_else(|| {
-                Some(crate::identity::system_prompt(
-                    session.is_subagent(),
-                    session.runtime.execution.access,
-                    state.tool_executor.workspace_root(),
-                    agena_tool_mode,
-                ))
-            });
+            .or_else(|| Some(crate::identity::system_prompt()));
         let metadata = options
             .as_ref()
             .and_then(|options| state.processor.model_metadata(&options.model).ok())

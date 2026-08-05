@@ -95,18 +95,7 @@ impl SessionManager {
         mut options: SessionRunOptions,
     ) -> Result<SessionRunOptions, AppError> {
         self.apply_selection_modes_to_run_options(session, &mut options)?;
-        let tool_mode = self
-            .execution_state()
-            .processor
-            .provider_registry()
-            .agena_tool_mode(&options.model)
-            .unwrap_or_default();
-        let agena_prompt = crate::identity::system_prompt(
-            session.is_subagent(),
-            session.runtime.execution.access,
-            self.execution_state().tool_executor.workspace_root(),
-            tool_mode,
-        );
+        let agena_prompt = crate::identity::system_prompt();
         options.system =
             super::merge_system_prompts(Some(agena_prompt.as_str()), options.system.as_deref());
         if options.temperature.is_none() {

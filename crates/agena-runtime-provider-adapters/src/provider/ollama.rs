@@ -311,6 +311,7 @@ impl ModelRuntime for OllamaAdapter {
                         finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
                         usage: usage.clone(),
                         provider_metadata: None,
+                        end_turn: None,
                     };
                     completed = true;
                     break;
@@ -324,6 +325,7 @@ impl ModelRuntime for OllamaAdapter {
                     finish_reason: CompletionFinishReason::from_provider(finish_reason.as_deref()),
                     usage,
                     provider_metadata: None,
+                    end_turn: None,
                 };
             }
         };

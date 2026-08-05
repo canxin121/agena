@@ -438,6 +438,7 @@ impl ModelRuntime for GeminiAdapter {
                                     fallback_provider_metadata.clone(),
                                     provider_metadata,
                                 ),
+                                end_turn: None,
                             };
                             done = true;
                             break;
@@ -459,6 +460,7 @@ impl ModelRuntime for GeminiAdapter {
                     finish_reason: tool_call_seen.then_some(CompletionFinishReason::ToolCalls),
                     usage: fallback_usage,
                     provider_metadata: fallback_provider_metadata,
+                    end_turn: None,
                 };
             }
         };

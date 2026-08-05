@@ -26,6 +26,30 @@ use tracing::Instrument;
 
 use super::super::StableRunContext;
 
+/// Outcome of one provider model turn as observed by the stable-run loop.
+#[derive(Debug, Clone, Copy)]
+pub(in crate::session::manager) struct ModelTurnOutcome {
+    /// True when the provider terminal event carried an explicit
+    /// `end_turn=false` signal.
+    pub follow_up_requested: bool,
+    /// Normalized terminal finish reason for the model turn.
+    pub finish_reason: FinishReason,
+}
+
+/// Why a plain-text model turn looked unfinished and the stable-run loop
+/// requested one more turn instead of stopping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnfinishedTurnSignal {
+    None,
+    /// Provider hit the output-token limit (`max_tokens`); the reply was
+    /// almost certainly cut off mid-sentence.
+    Truncated,
+    /// The assistant text ends on a dangling connector (`：`/`:` or, when the
+    /// run has already executed tools, `,`/`;`/`…`/`—`/`→`), which agents use
+    /// to state a next step without emitting the tool call for it.
+    DanglingContinuation,
+}
+
 /// True for tools whose operation is scoped to concrete paths (filesystem
 /// read/write tools such as `fs.write` / `fs.apply_patch`). Arbitrary
 /// execution tools (shell/process) are never path-scoped even when they
@@ -38,6 +62,53 @@ use super::super::StableRunContext;
 fn is_path_scoped_tool(contract: &agena_domain::ToolPermissionContract) -> bool {
     let path_scoped = !contract.input_paths.is_empty() || !contract.path_access.is_empty();
     path_scoped && !contract.shell
+}
+
+/// Signals that a plain-text model turn was cut short and the stable-run
+/// loop should request another turn instead of stopping.
+fn unfinished_turn_signal(
+    last_assistant_text: &str,
+    finish_reason: FinishReason,
+    saw_tool_call_this_run: bool,
+) -> UnfinishedTurnSignal {
+    if finish_reason == FinishReason::MaxTokens {
+        return UnfinishedTurnSignal::Truncated;
+    }
+    let trimmed = last_assistant_text.trim();
+    if trimmed.is_empty() {
+        return UnfinishedTurnSignal::None;
+    }
+    // A strong dangling connector is how agents state a next step without
+    // emitting the tool call for it; a complete reply almost never ends on a
+    // colon.
+    if trimmed.ends_with('：') || trimmed.ends_with(':') {
+        return UnfinishedTurnSignal::DanglingContinuation;
+    }
+    // Weaker connectors are only trusted when the run has already executed
+    // tools — the model was mid-task rather than mid-explanation.
+    if saw_tool_call_this_run
+        && ["，", ",", "、", "；", ";", "…", "...", "—", "–", "→", "=>"]
+            .iter()
+            .any(|suffix| trimmed.ends_with(suffix))
+    {
+        return UnfinishedTurnSignal::DanglingContinuation;
+    }
+    UnfinishedTurnSignal::None
+}
+
+/// The system message injected when an unfinished plain-text turn is
+/// detected. Kept terse and imperative so the model resumes work instead of
+/// summarizing.
+fn continuation_prompt_for_signal(signal: UnfinishedTurnSignal) -> String {
+    match signal {
+        UnfinishedTurnSignal::Truncated => {
+            "Your previous response was cut off by the output limit. Continue directly from where it stopped; do not repeat what was already written.".to_owned()
+        }
+        UnfinishedTurnSignal::DanglingContinuation => {
+            "Continue. Do not summarize, apologize, or recap; resume the work you were doing and take the next concrete step.".to_owned()
+        }
+        UnfinishedTurnSignal::None => "Continue.".to_owned(),
+    }
 }
 
 /// One member of a provider-emitted tool batch after preflight.
@@ -181,9 +252,29 @@ impl SessionManager {
             mut steer_rx,
             usage_budget,
         } = context;
-        let _ = allow_goal_continuation;
+        // Goal continuation is a bounded, opt-in driver for "continue"
+        // executions: when the run started from a continue action and the
+        // model produces plain text without tool calls, keep requesting
+        // model turns a few more times instead of stopping immediately.
+        // This mirrors the explicit `end_turn=false` protocol signal below
+        // but does not depend on the gateway honoring that field.
+        const GOAL_CONTINUATION_LIMIT: usize = 8;
+        let mut goal_continuation_remaining = if allow_goal_continuation {
+            GOAL_CONTINUATION_LIMIT
+        } else {
+            0
+        };
         let mut reactive_compaction_attempted = false;
         let mut force_model_retry = false;
+        // Bounded safety net for plain-text turns that look unfinished (see
+        // `unfinished_turn_signal`). Each firing consumes budget; a chatty or
+        // degenerate model cannot loop forever. Goal continuation above is a
+        // separate, opt-in driver that fires unconditionally for continue
+        // runs.
+        const UNFINISHED_CONTINUATION_LIMIT: usize = 4;
+        let mut unfinished_continuation_remaining = UNFINISHED_CONTINUATION_LIMIT;
+        let mut saw_tool_call_this_run = false;
+        let mut last_finish_reason = FinishReason::Stop;
         // Provider continuation is an execution-local decision. It is never
         // reconstructed from "some tool part is terminal" after a restart.
         // This flag becomes true only at command entry, after the entire
@@ -276,6 +367,10 @@ impl SessionManager {
 
             let pending_tools = session.pending_tools();
             if !pending_tools.is_empty() {
+                // The model requested tools this run: we are mid-task, not
+                // mid-conversation. This arms the dangling-connector half of
+                // the unfinished-turn safety net below.
+                saw_tool_call_this_run = true;
                 control
                     .transition(ExecutionPhase::ExecutingTools)
                     .await
@@ -307,7 +402,7 @@ impl SessionManager {
                 let stop_input = agena_plugin_host::AgentStopInput {
                     session_id: session.id,
                     stop_hook_active: false,
-                    last_assistant_message: last_assistant_text,
+                    last_assistant_message: last_assistant_text.clone(),
                 };
                 match state
                     .tool_executor
@@ -317,48 +412,18 @@ impl SessionManager {
                 {
                     Ok(patch) if patch.continue_with_message.is_some() => {
                         let follow_up = patch.continue_with_message.unwrap_or_default();
-                        let ids = self.store.reserve_message_ids(1).await?;
-                        let follow_up_turn_id = ids.message_id;
-                        let user_message = build_message(
-                            ids,
-                            Role::User,
-                            ExecutionStatus::Completed,
-                            vec![PartContent::text(follow_up)],
-                            MessageMetadata {
-                                source: MessageSource::System,
-                                idempotency_key: None,
-                                model_turn_id: Some(follow_up_turn_id),
-                                parent_message_id: session
-                                    .last_conversation_message()
-                                    .map(|m| m.id),
-                                generated_by_call_id: None,
-                                externally_initiated_tool: false,
-                                model_provider_id: current_options.model.provider_id.to_string(),
-                                model_adapter_id: current_options
-                                    .model
-                                    .adapter_id
-                                    .as_ref()
-                                    .map(ToString::to_string),
-                                model_id: current_options.model.model_id.to_string(),
-                                model_thinking_mode: current_options.thinking_mode.clone(),
-                                model_speed_mode: current_options.speed_mode.clone(),
-                            },
-                        );
-                        session.messages.push(user_message.clone());
-                        let checkpoint = MessageCheckpoint::all(&user_message);
                         session = self
-                            .persist_session_changes(
+                            .inject_continuation_message(
                                 session,
-                                vec![checkpoint],
-                                Vec::new(),
-                                None,
+                                &current_options,
+                                follow_up,
                                 state.clone(),
                             )
                             .await?;
                         model_requested = true;
                         continue;
                     }
-                    Ok(_) => return Ok(session),
+                    Ok(_) => {}
                     Err(err) => {
                         if control.cancel.is_cancelled() {
                             return Err(AppError::Cancelled);
@@ -370,6 +435,44 @@ impl SessionManager {
                         return Ok(session);
                     }
                 }
+
+                // Unfinished-turn safety net. The agent.stop hook declined to
+                // continue; before declaring the run complete, check whether
+                // the last plain-text turn looks cut short. This is the
+                // fallback that keeps agentic runs alive when the gateway
+                // omits `end_turn=false` — exactly the failure mode seen in
+                // real sessions, where the model narrates "now look at X:"
+                // without emitting a tool call and the run stops mid-task.
+                if unfinished_continuation_remaining > 0 {
+                    let signal = unfinished_turn_signal(
+                        last_assistant_text.as_deref().unwrap_or_default(),
+                        last_finish_reason,
+                        saw_tool_call_this_run,
+                    );
+                    if !matches!(signal, UnfinishedTurnSignal::None) {
+                        unfinished_continuation_remaining -= 1;
+                        let continuation_text = continuation_prompt_for_signal(signal);
+                        tracing::info!(
+                            target: "agena::session::run_until_stable",
+                            session_id = session.id,
+                            signal = ?signal,
+                            remaining = unfinished_continuation_remaining,
+                            "plain-text model turn looks unfinished; requesting one more turn"
+                        );
+                        session = self
+                            .inject_continuation_message(
+                                session,
+                                &current_options,
+                                continuation_text,
+                                state.clone(),
+                            )
+                            .await?;
+                        model_requested = true;
+                        continue;
+                    }
+                }
+
+                return Ok(session);
             }
             // Reaching this point consumes the one-shot retry authorization.
             // It must not survive a successful model turn and trigger another
@@ -447,9 +550,24 @@ impl SessionManager {
             ))
             .await
             {
-                Ok(next_session) => {
+                Ok((next_session, outcome)) => {
                     session = next_session;
                     model_requested = false;
+                    last_finish_reason = outcome.finish_reason;
+                    if outcome.follow_up_requested {
+                        // Provider explicitly signaled `end_turn=false`: the
+                        // model asked for another turn even though it did not
+                        // request tools. Honor the protocol signal the way
+                        // Codex's `needs_follow_up` path does.
+                        model_requested = true;
+                    } else if goal_continuation_remaining > 0 && session.pending_tools().is_empty()
+                    {
+                        // Continue-driven run whose model turn produced plain
+                        // text without tool calls: keep driving it for a
+                        // bounded number of turns instead of stopping.
+                        goal_continuation_remaining -= 1;
+                        model_requested = true;
+                    }
                     if active_model_turn_id.is_none() {
                         active_model_turn_id = session
                             .messages
@@ -518,6 +636,44 @@ impl SessionManager {
         }
     }
 
+    /// Inject a system-originated user message that asks the model to keep
+    /// working. Used by agent.stop continuation patches and by the
+    /// unfinished-turn safety net; the message is persisted so a process
+    /// restart can resume from the same state.
+    async fn inject_continuation_message(
+        &self,
+        mut session: Session,
+        options: &SessionRunOptions,
+        text: String,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let ids = self.store.reserve_message_ids(1).await?;
+        let follow_up_turn_id = ids.message_id;
+        let user_message = build_message(
+            ids,
+            Role::User,
+            ExecutionStatus::Completed,
+            vec![PartContent::text(text)],
+            MessageMetadata {
+                source: MessageSource::System,
+                idempotency_key: None,
+                model_turn_id: Some(follow_up_turn_id),
+                parent_message_id: session.last_conversation_message().map(|m| m.id),
+                generated_by_call_id: None,
+                externally_initiated_tool: false,
+                model_provider_id: options.model.provider_id.to_string(),
+                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
+                model_id: options.model.model_id.to_string(),
+                model_thinking_mode: options.thinking_mode.clone(),
+                model_speed_mode: options.speed_mode.clone(),
+            },
+        );
+        session.messages.push(user_message.clone());
+        let checkpoint = MessageCheckpoint::all(&user_message);
+        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
+            .await
+    }
+
     pub(in crate::session::manager) async fn run_model_turn(
         &self,
         mut session: Session,
@@ -526,7 +682,7 @@ impl SessionManager {
         model_turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
-    ) -> Result<Session, AppError> {
+    ) -> Result<(Session, ModelTurnOutcome), AppError> {
         let run_span = tracing::info_span!(
             "session.run",
             session_id = session.id,
@@ -871,7 +1027,13 @@ impl SessionManager {
                     })??;
 
                     match termination {
-                        SessionRunTermination::Completed => Ok(persisted_session),
+                        SessionRunTermination::Completed => Ok((
+                            persisted_session,
+                            ModelTurnOutcome {
+                                follow_up_requested: result.follow_up_requested,
+                                finish_reason: result.finish_reason,
+                            },
+                        )),
                         SessionRunTermination::Cancelled => Err(AppError::Cancelled),
                         SessionRunTermination::Failed(error) => Err(error),
                     }
@@ -2721,5 +2883,103 @@ impl SessionManager {
             state,
         ))
         .await
+    }
+}
+
+#[cfg(test)]
+mod unfinished_turn_signal_tests {
+    use super::{UnfinishedTurnSignal, continuation_prompt_for_signal, unfinished_turn_signal};
+    use agena_domain::FinishReason;
+
+    fn signal(
+        text: &str,
+        finish_reason: FinishReason,
+        saw_tool_call: bool,
+    ) -> UnfinishedTurnSignal {
+        unfinished_turn_signal(text, finish_reason, saw_tool_call)
+    }
+
+    #[test]
+    fn max_tokens_is_always_truncated() {
+        assert_eq!(
+            signal("looks complete.", FinishReason::MaxTokens, false),
+            UnfinishedTurnSignal::Truncated
+        );
+        assert_eq!(
+            signal("partial", FinishReason::MaxTokens, true),
+            UnfinishedTurnSignal::Truncated
+        );
+    }
+
+    #[test]
+    fn empty_text_never_loops() {
+        assert_eq!(
+            signal("", FinishReason::Stop, true),
+            UnfinishedTurnSignal::None
+        );
+        assert_eq!(
+            signal("   \n ", FinishReason::Stop, false),
+            UnfinishedTurnSignal::None
+        );
+    }
+
+    #[test]
+    fn trailing_colon_is_a_strong_dangling_signal_even_without_tools() {
+        assert_eq!(
+            signal(
+                "现在看 provider_for_adapter_with_mode 和 1390-1420 区域：",
+                FinishReason::Stop,
+                false
+            ),
+            UnfinishedTurnSignal::DanglingContinuation
+        );
+        assert_eq!(
+            signal("let me look at the file:", FinishReason::Stop, false),
+            UnfinishedTurnSignal::DanglingContinuation
+        );
+    }
+
+    #[test]
+    fn complete_sentence_never_loops() {
+        for text in [
+            "完成。",
+            "Done.",
+            "好的，我总结一下：第一点… 第二点。",
+            "这是代码：\n```rust\nfn main() {}\n```",
+            "结果如下：\n- item one\n- item two",
+            "你好，有什么可以帮你？",
+        ] {
+            assert_eq!(
+                signal(text, FinishReason::Stop, false),
+                UnfinishedTurnSignal::None,
+                "expected no signal for {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn weak_connector_requires_tool_work() {
+        for text in ["接着", "然后，", "下一步，", "…"] {
+            let weak_text = format!("{text}，");
+            assert_eq!(
+                signal(&weak_text, FinishReason::Stop, false),
+                UnfinishedTurnSignal::None,
+                "weak connector without tool work must not continue: {weak_text:?}"
+            );
+            assert_eq!(
+                signal(&weak_text, FinishReason::Stop, true),
+                UnfinishedTurnSignal::DanglingContinuation,
+                "weak connector after tool work must continue: {weak_text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn continuation_prompts_are_non_empty_and_distinct() {
+        let truncated = continuation_prompt_for_signal(UnfinishedTurnSignal::Truncated);
+        let dangling = continuation_prompt_for_signal(UnfinishedTurnSignal::DanglingContinuation);
+        assert!(!truncated.is_empty());
+        assert!(!dangling.is_empty());
+        assert_ne!(truncated, dangling);
     }
 }

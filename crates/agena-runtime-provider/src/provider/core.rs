@@ -405,6 +405,7 @@ pub trait ModelRuntime: Send + Sync {
             finish_reason: response.finish_reason,
             usage: response.usage,
             provider_metadata: response.provider_metadata,
+            end_turn: None,
         }));
         Ok(Box::pin(stream::iter(events)))
     }
@@ -581,6 +582,7 @@ pub fn remap_stream_event_provider_id(
             finish_reason,
             usage,
             provider_metadata,
+            end_turn,
             ..
         } => CompletionStreamEvent::Completed {
             provider_id: provider_id.clone(),
@@ -588,6 +590,7 @@ pub fn remap_stream_event_provider_id(
             finish_reason,
             usage,
             provider_metadata,
+            end_turn,
         },
         CompletionStreamEvent::ProviderRetry {
             model,
@@ -699,6 +702,7 @@ pub fn remap_stream_event_provider_and_model(
             finish_reason,
             usage,
             provider_metadata,
+            end_turn,
             ..
         } => CompletionStreamEvent::Completed {
             provider_id: provider_id.clone(),
@@ -706,6 +710,7 @@ pub fn remap_stream_event_provider_and_model(
             finish_reason,
             usage,
             provider_metadata,
+            end_turn,
         },
         CompletionStreamEvent::ProviderRetry {
             message,

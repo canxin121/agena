@@ -303,11 +303,6 @@ impl App {
                     ui_text::t(&self.i18n, "agena-tool-mode-provider-protocol-detail"),
                 ),
                 choice_item_with_value(
-                    ui_text::t(&self.i18n, "agena-tool-mode-prompt-envelope-label"),
-                    "prompt_envelope",
-                    ui_text::t(&self.i18n, "agena-tool-mode-prompt-envelope-detail"),
-                ),
-                choice_item_with_value(
                     ui_text::t(&self.i18n, "agena-tool-mode-disabled-label"),
                     "disabled",
                     ui_text::t(&self.i18n, "agena-tool-mode-disabled-detail"),

@@ -457,6 +457,7 @@ impl OpenAiTransport {
                     reasoning_details_seen,
                     copilot_reasoning_opaque,
                 ),
+                end_turn: None,
             };
         };
 
@@ -703,6 +704,7 @@ impl OpenAiTransport {
                         finish_reason,
                         usage: stream_usage.clone(),
                         provider_metadata: response_id_metadata(response_id.clone()),
+                        end_turn: utils::responses_end_turn(&event),
                     };
                     completed_emitted = true;
                     break;

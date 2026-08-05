@@ -793,6 +793,7 @@ impl GeminiAdapter {
                             }),
                             usage: fallback_usage.clone(),
                             provider_metadata: fallback_provider_metadata.clone(),
+                            end_turn: None,
                         };
                         break;
                     }
@@ -841,6 +842,7 @@ impl GeminiAdapter {
                         }),
                         usage: fallback_usage,
                         provider_metadata: fallback_provider_metadata,
+                        end_turn: None,
                     };
                 } else {
                     Err(ProviderError::Provider(

@@ -46,7 +46,7 @@ pub enum EventKind {
     ToolPolicyDenied(ToolPolicyDeniedEvent),
     ToolUserDeclined(ToolUserDeclinedEvent),
 
-        // --- append-only history ---
+    // --- append-only history ---
     RunStarted(RunStarted),
     RunCompleted(RunCompleted),
     RunAborted(RunAborted),
@@ -57,7 +57,6 @@ pub enum EventKind {
 
     // --- unified background-activity lifecycle ---
     BackgroundActivityChanged(BackgroundActivityChangedEvent),
-
 
     // --- plugin-injected synthetic events ---
     /// Free-form payload published by a plugin via `host/event.publish`.
@@ -97,7 +96,7 @@ impl EventKind {
             Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
             Self::ToolPolicyDenied(_) => "tool_policy_denied",
             Self::ToolUserDeclined(_) => "tool_user_declined",
-                        Self::RunStarted(_) => "run_started",
+            Self::RunStarted(_) => "run_started",
             Self::RunCompleted(_) => "run_completed",
             Self::RunAborted(_) => "run_aborted",
             Self::UserMessageAppended(_) => "user_message_appended",
@@ -134,7 +133,7 @@ impl EventKind {
     /// ancestor projection. They must not reduce the child event into the
     /// ancestor transcript.
     pub fn invalidates_ancestor_projection(&self) -> bool {
-                matches!(
+        matches!(
             self,
             Self::PermissionRequested(_)
                 | Self::PermissionReplied(_)
@@ -186,7 +185,7 @@ pub const HISTORY_KINDS: &[&str] = &[
     "run_aborted",
     "user_message_appended",
     "assistant_message_finished",
-        "tool_call_issued",
+    "tool_call_issued",
     "tool_call_completed",
     "background_activity_changed",
     "plugin_event",
@@ -219,7 +218,7 @@ pub const ALL_KINDS: &[&str] = &[
     "run_aborted",
     "user_message_appended",
     "assistant_message_finished",
-        "tool_call_issued",
+    "tool_call_issued",
     "tool_call_completed",
     "background_activity_changed",
     "plugin_event",

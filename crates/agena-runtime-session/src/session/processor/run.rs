@@ -185,6 +185,7 @@ impl SessionProcessor {
         let mut saw_tool_call = false;
         let mut saw_provider_native_tool_call = false;
         let mut saw_provider_retry = false;
+        let mut follow_up_requested = false;
 
         let cancel = run.cancel.clone();
         loop {
@@ -378,6 +379,7 @@ impl SessionProcessor {
                     finish_reason,
                     usage: usage_value,
                     provider_metadata: completed_provider_metadata,
+                    end_turn,
                     ..
                 }) => {
                     usage = usage_value;
@@ -385,6 +387,7 @@ impl SessionProcessor {
                         finish_reason_enum = map_finish_reason(reason);
                     }
                     provider_metadata = completed_provider_metadata;
+                    follow_up_requested = end_turn == Some(false);
                 }
                 Ok(CompletionStreamEvent::ThinkingDelta { delta, .. }) => {
                     reasoning_text.push_str(delta.as_str());
@@ -541,6 +544,8 @@ impl SessionProcessor {
                 },
                 history_items,
                 run_id,
+                follow_up_requested: false,
+                finish_reason: FinishReason::Stop,
             });
         }
 
@@ -589,6 +594,8 @@ impl SessionProcessor {
             termination: SessionRunTermination::Completed,
             history_items,
             run_id,
+            follow_up_requested,
+            finish_reason: finish_reason_enum,
         })
     }
 

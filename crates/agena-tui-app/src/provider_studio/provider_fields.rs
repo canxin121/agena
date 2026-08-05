@@ -463,7 +463,6 @@ pub(crate) fn provider_model_config_field_value(
         ProviderModelConfigField::NativeCompaction => draft.native_compaction.to_string(),
         ProviderModelConfigField::AgenaToolMode => match draft.agena_tool_mode {
             AgenaToolMode::ProviderProtocol => "provider_protocol".to_owned(),
-            AgenaToolMode::PromptEnvelope => "prompt_envelope".to_owned(),
             AgenaToolMode::Disabled => "disabled".to_owned(),
         },
         ProviderModelConfigField::DisplayName => draft.display_name.clone(),
@@ -531,7 +530,6 @@ pub(crate) fn provider_model_config_field_display(
     } else if field == ProviderModelConfigField::AgenaToolMode {
         let key = match draft.agena_tool_mode {
             AgenaToolMode::ProviderProtocol => "agena-tool-mode-provider-protocol-label",
-            AgenaToolMode::PromptEnvelope => "agena-tool-mode-prompt-envelope-label",
             AgenaToolMode::Disabled => "agena-tool-mode-disabled-label",
         };
         ui_text::t(i18n, key)
@@ -571,7 +569,6 @@ pub(crate) fn commit_provider_model_config_field(
         ProviderModelConfigField::AgenaToolMode => {
             draft.agena_tool_mode = match value.trim() {
                 "provider_protocol" => AgenaToolMode::ProviderProtocol,
-                "prompt_envelope" => AgenaToolMode::PromptEnvelope,
                 "disabled" => AgenaToolMode::Disabled,
                 other => return Err(format!("unsupported Agena tool mode `{other}`")),
             };
@@ -675,7 +672,7 @@ mod tests {
             enabled: true,
             native_compaction: false,
             agena_tools: AgenaToolsConfig {
-                mode: AgenaToolMode::PromptEnvelope,
+                mode: AgenaToolMode::Disabled,
                 provider_native: Default::default(),
             },
             definition: definition.clone(),
@@ -699,7 +696,7 @@ mod tests {
             saved.definition.knowledge_cutoff,
             definition.knowledge_cutoff
         );
-        assert_eq!(saved.agena_tools.mode, AgenaToolMode::PromptEnvelope);
+        assert_eq!(saved.agena_tools.mode, AgenaToolMode::Disabled);
         assert!(!saved.native_compaction);
     }
 
@@ -707,7 +704,6 @@ mod tests {
     fn all_agena_tool_modes_are_selectable_and_persisted() {
         for (token, expected) in [
             ("provider_protocol", AgenaToolMode::ProviderProtocol),
-            ("prompt_envelope", AgenaToolMode::PromptEnvelope),
             ("disabled", AgenaToolMode::Disabled),
         ] {
             let mut draft = provider_model_config_draft_from_overlay(

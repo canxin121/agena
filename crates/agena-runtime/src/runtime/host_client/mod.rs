@@ -534,6 +534,7 @@ impl HostClient for RuntimeHostClient {
                                 agena_domain::ExecutionAccess::ReadOnly
                             }
                         },
+                        skills: req.skills,
                         task_id: req.task_id,
                         requested_model_selection: agena_domain::ModelSelectionConfig {
                             provider: selection.provider,

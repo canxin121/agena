@@ -700,6 +700,7 @@ impl ModelRuntime for AnthropicAdapter {
                     provider_metadata: (!thinking_blocks.is_empty()).then(|| {
                         serde_json::json!({ "anthropic_thinking_blocks": thinking_blocks })
                     }),
+                    end_turn: None,
                 };
             }
         };

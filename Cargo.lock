@@ -931,6 +931,7 @@ dependencies = [
  "agena-runtime-session-core",
  "agena-runtime-tools",
  "agena-scheduler",
+ "agena-skills",
  "agena-storage",
  "agena-storage-sqlite",
  "agena-tool",

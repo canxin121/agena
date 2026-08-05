@@ -73,6 +73,13 @@ pub(crate) struct SessionRunResult {
     /// The run id used by `history_items` — the manager wraps this with
     /// `RunStarted` / `RunCompleted` / `RunAborted` boundary events.
     pub run_id: RunId,
+    /// True when the provider terminal event carried an explicit
+    /// `end_turn=false` signal: the model asked for another turn even though
+    /// it did not request any tool call.
+    pub follow_up_requested: bool,
+    /// Normalized terminal finish reason for the model turn. Defaults to
+    /// `Stop` when the provider stream did not report a terminal reason.
+    pub finish_reason: FinishReason,
 }
 
 #[derive(Debug)]

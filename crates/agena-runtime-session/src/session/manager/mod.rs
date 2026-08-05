@@ -131,6 +131,9 @@ pub struct SessionSubtaskRequest {
     pub description: String,
     pub prompt: String,
     pub access: agena_domain::ExecutionAccess,
+    /// Optional Skill names or aliases to resolve and attach to the child
+    /// session's first user message as immutable Skill references.
+    pub skills: Option<Vec<String>>,
     pub task_id: Option<String>,
     pub requested_model_selection: agena_domain::ModelSelectionConfig,
     pub timeout_ms: Option<u64>,

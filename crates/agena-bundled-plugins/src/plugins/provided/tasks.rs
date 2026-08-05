@@ -191,7 +191,8 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, execute),
-        summary = "Create or resume a delegated subagent task.",
+        summary = "Create or resume a delegated subagent task. Attach Skill names in `skills` so the child session applies them as task guidance.",
+        help = "Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
         task,
         subtask,
         display = detailed,
@@ -203,7 +204,8 @@ impl TasksPlugin {
 
     #[tool(
         tags(subtask, mutate),
-        summary = "Create a delegated subagent task in the background.",
+        summary = "Create a delegated subagent task in the background. Attach Skill names in `skills` so the child session applies them as task guidance.",
+        help = "Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
         task,
         subtask,
         display = detailed,
@@ -271,6 +273,7 @@ impl TasksPlugin {
             access: run_subtask_access(input.access),
             description: input.description.clone(),
             prompt: input.prompt.clone(),
+            skills: input.skills.clone(),
             task_id: Some(task_id.clone()),
             selection,
             timeout_ms: input.timeout_ms,
@@ -550,6 +553,9 @@ impl TasksPlugin {
                 access: run_subtask_access(state.access),
                 description: state.description.clone(),
                 prompt: input.prompt.clone(),
+                // Resuming an existing subtask keeps the Skill references
+                // already attached to its first user message; do not re-inject.
+                skills: None,
                 task_id: Some(state.task_id.clone()),
                 selection: state.selection.clone(),
                 timeout_ms: input.timeout_ms.or(state.timeout_ms),
@@ -1006,6 +1012,7 @@ mod tests {
         assert!(schema.pointer("/properties/access").is_some());
         assert!(schema.pointer("/properties/profile").is_none());
         assert!(schema.pointer("/properties/selection").is_some());
+        assert!(schema.pointer("/properties/skills").is_some());
         assert!(schema.pointer("/properties/subagent_type").is_none());
         assert!(schema.pointer("/properties/command").is_none());
         assert_eq!(
@@ -1041,10 +1048,11 @@ mod tests {
 
     #[test]
     fn task_input_rejects_zero_timeout_and_unknown_legacy_fields() {
-        let valid = serde_json::json!({
+                let valid = serde_json::json!({
             "description": "verify",
             "prompt": "run the checks",
             "access": "read_only",
+            "skills": ["verify", "security-review"],
             "timeout_ms": 1
         });
         assert!(TaskToolInput::parse_input(valid).is_ok());

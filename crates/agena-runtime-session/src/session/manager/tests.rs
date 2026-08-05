@@ -24,6 +24,7 @@ mod tests {
     use crate::session::history::{
         AssistantMessageFinished, RunCompleted, RunStarted, TranscriptContent, UserMessageAppended,
     };
+    use crate::session_execution_service::SessionExecutionCommandService;
     use crate::{
         authorization::ExecutionPrincipal,
         event::EventKind,
@@ -45,9 +46,9 @@ mod tests {
     use agena_provider::CompletionRequest;
     use agena_provider::CompletionResponse;
     use agena_runtime::{
-        SessionCreateRequest, SessionExecutionReplyRequest, SessionPermissionReplyRequest,
-        SessionPluginCommandRequest, SessionPluginCommandService, SessionRewindRequest,
-        SessionRunOptions, SessionToolExecutionService,
+        SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
+        SessionPermissionReplyRequest, SessionPluginCommandRequest, SessionPluginCommandService,
+        SessionRewindRequest, SessionRunOptions, SessionToolExecutionService,
     };
     use agena_tool::ToolPermissionCheck;
 
@@ -3154,5 +3155,1417 @@ mod tests {
         assert!(completed.pending_interactive_requests().is_empty());
         assert!(completed.next_pending_tool().is_none());
         assert!(completed.has_finished_operation("reply-lock-operation"));
+    }
+
+    // A provider that returns exactly one tool-call turn followed by a plain
+    // text turn. Lets an end-to-end test observe whether the session loop
+    // keeps requesting the model after a tool call finishes.
+    #[derive(Clone)]
+    struct StreamingNoIdToolProvider {
+        default_model: ModelId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for StreamingNoIdToolProvider {
+        fn id(&self) -> &str {
+            "streaming-no-id-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        fn agena_tool_mode_for_adapter(
+            &self,
+            _adapter_id: Option<&agena_domain::AdapterId>,
+            _model: &ModelId,
+        ) -> agena_provider::AgenaToolMode {
+            agena_provider::AgenaToolMode::ProviderProtocol
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                Ok(CompletionResponse {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    text: "let me run the tool".to_owned(),
+                    reasoning_text: None,
+                    finish_reason: Some(agena_provider::CompletionFinishReason::ToolCalls),
+                    tool_calls: vec![agena_provider::CompletionToolCall::Function {
+                        id: "call_1".to_owned(),
+                        name: "test.approved_success.run".to_owned(),
+                        arguments_json: "{}".to_owned(),
+                    }],
+                    usage: None,
+                    provider_metadata: None,
+                })
+            } else {
+                Ok(CompletionResponse {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    text: "done".to_owned(),
+                    reasoning_text: None,
+                    finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                })
+            }
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<
+                                agena_provider::CompletionStreamEvent,
+                                agena_runtime_provider::ProviderError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            agena_runtime_provider::ProviderError,
+        > {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(agena_provider::CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        stream_key: "idx:0".to_owned(),
+                        id: None,
+                        name: Some("test.approved_success.run".to_owned()),
+                        arguments_delta: "{}".to_owned(),
+                    }),
+                    Ok(agena_provider::CompletionStreamEvent::Completed {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        finish_reason: Some(agena_provider::CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ])))
+            } else {
+                Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(agena_provider::CompletionStreamEvent::TextDelta {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        delta: "done".to_owned(),
+                    }),
+                    Ok(agena_provider::CompletionStreamEvent::Completed {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ])))
+            }
+        }
+    }
+
+    struct TwoTurnToolProvider {
+        default_model: ModelId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for TwoTurnToolProvider {
+        fn id(&self) -> &str {
+            "two-turn-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                Ok(CompletionResponse {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    text: "let me run the tool".to_owned(),
+                    reasoning_text: None,
+                    finish_reason: Some(agena_provider::CompletionFinishReason::ToolCalls),
+                    tool_calls: vec![agena_provider::CompletionToolCall::Function {
+                        id: "call_1".to_owned(),
+                        name: "test.approved_success.run".to_owned(),
+                        arguments_json: "{}".to_owned(),
+                    }],
+                    usage: None,
+                    provider_metadata: None,
+                })
+            } else {
+                Ok(CompletionResponse {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    text: "done".to_owned(),
+                    reasoning_text: None,
+                    finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                })
+            }
+        }
+    }
+
+    async fn test_manager_with_two_turn_provider()
+    -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            "test.approved_success".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                "test.approved_success"
+                    .parse()
+                    .expect("valid test plugin key"),
+                ApprovedSuccessTool,
+            )],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(TwoTurnToolProvider {
+            default_model: ModelId::new("two-turn-model"),
+            calls: Arc::clone(&calls),
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        (manager, calls)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn model_tool_call_turn_continues_until_final_text() {
+        let (manager, calls) = test_manager_with_two_turn_provider().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "two turn provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create two-turn session");
+        manager
+            .update_session_selection(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("two-turn-provider", "two-turn-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+            )
+            .await
+            .expect("select two-turn model");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("two-turn-provider", "two-turn-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the loop must request the model again after the tool call finishes"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    async fn test_manager_with_streaming_no_id_provider()
+    -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            "test.approved_success".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                "test.approved_success"
+                    .parse()
+                    .expect("valid test plugin key"),
+                ApprovedSuccessTool,
+            )],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(StreamingNoIdToolProvider {
+            default_model: ModelId::new("streaming-no-id-model"),
+            calls: Arc::clone(&calls),
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        (manager, calls)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn streaming_tool_call_without_provider_id_still_continues() {
+        let (manager, calls) = test_manager_with_streaming_no_id_provider().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "streaming no id provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create streaming session");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("streaming-no-id-provider", "streaming-no-id-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "streaming tool call without provider id must still continue the loop"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    // A provider that streams plain text with an explicit `end_turn=false`
+    // signal on the first Completed event, then finishes with a normal
+    // `end_turn` absent on the second. Lets an end-to-end test verify that
+    // the session loop honors the protocol-level follow-up signal even when
+    // the model produces no tool call.
+    #[derive(Clone)]
+    struct EndTurnFalseProvider {
+        default_model: ModelId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for EndTurnFalseProvider {
+        fn id(&self) -> &str {
+            "end-turn-false-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        fn agena_tool_mode_for_adapter(
+            &self,
+            _adapter_id: Option<&agena_domain::AdapterId>,
+            _model: &ModelId,
+        ) -> agena_provider::AgenaToolMode {
+            agena_provider::AgenaToolMode::ProviderProtocol
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (text, end_turn) = if call == 0 {
+                ("first turn, not done".to_owned(), Some(false))
+            } else {
+                ("done".to_owned(), None)
+            };
+            Ok(CompletionResponse {
+                provider_id: agena_domain::ProviderId::new(self.id()),
+                model: self.default_model.clone(),
+                text,
+                reasoning_text: None,
+                finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+            .map(|response| {
+                // The non-streaming port has no end_turn field; this provider
+                // is exercised through complete_stream below.
+                let _ = end_turn;
+                response
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<
+                                agena_provider::CompletionStreamEvent,
+                                agena_runtime_provider::ProviderError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            agena_runtime_provider::ProviderError,
+        > {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (text, end_turn) = if call == 0 {
+                ("first turn, not done".to_owned(), Some(false))
+            } else {
+                ("done".to_owned(), None)
+            };
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(agena_provider::CompletionStreamEvent::TextDelta {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    delta: text,
+                }),
+                Ok(agena_provider::CompletionStreamEvent::Completed {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                    end_turn,
+                }),
+            ])))
+        }
+    }
+
+    async fn test_manager_with_end_turn_false_provider()
+    -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![],
+            config: PluginsConfig::default(),
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(EndTurnFalseProvider {
+            default_model: ModelId::new("end-turn-false-model"),
+            calls: Arc::clone(&calls),
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        (manager, calls)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn end_turn_false_keeps_loop_alive_without_tool_call() {
+        let (manager, calls) = test_manager_with_end_turn_false_provider().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "end turn false provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create end-turn session");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("end-turn-false-provider", "end-turn-false-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "an explicit end_turn=false must request another model turn even without a tool call"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    // A provider that always streams plain text with no tool call and no
+    // explicit end_turn. A normal user submission stops after one turn; a
+    // continue-driven run exercises the bounded goal-continuation driver.
+    #[derive(Clone)]
+    struct PlainTextProvider {
+        default_model: ModelId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for PlainTextProvider {
+        fn id(&self) -> &str {
+            "plain-text-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        fn agena_tool_mode_for_adapter(
+            &self,
+            _adapter_id: Option<&agena_domain::AdapterId>,
+            _model: &ModelId,
+        ) -> agena_provider::AgenaToolMode {
+            agena_provider::AgenaToolMode::ProviderProtocol
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            let _ = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(CompletionResponse {
+                provider_id: agena_domain::ProviderId::new(self.id()),
+                model: self.default_model.clone(),
+                text: "plain".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<
+                                agena_provider::CompletionStreamEvent,
+                                agena_runtime_provider::ProviderError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            agena_runtime_provider::ProviderError,
+        > {
+            let _ = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(agena_provider::CompletionStreamEvent::TextDelta {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    delta: "plain".to_owned(),
+                }),
+                Ok(agena_provider::CompletionStreamEvent::Completed {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                    end_turn: None,
+                }),
+            ])))
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn continue_session_goal_continuation_drives_plain_text_turns() {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![],
+            config: PluginsConfig::default(),
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(PlainTextProvider {
+            default_model: ModelId::new("plain-text-model"),
+            calls: Arc::clone(&calls),
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "plain text provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create plain session");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("plain-text-provider", "plain-text-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a plain-text user submission without end_turn must stop after one turn"
+        );
+
+        manager
+            .continue_session(SessionExecutionRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("plain-text-provider", "plain-text-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+            ))
+            .await
+            .expect("continue session");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("continue run did not finish");
+
+        let total = calls.load(std::sync::atomic::Ordering::SeqCst);
+        // One user submission, then the continue run: one main model turn
+        // plus GOAL_CONTINUATION_LIMIT extra continuation turns.
+        assert_eq!(
+            total,
+            1 + 1 + 8,
+            "continue must drive one main turn plus GOAL_CONTINUATION_LIMIT extra plain-text turns (got {total})"
+        );
+    }
+
+    // A provider that emits a scripted sequence of plain-text turns ending
+    // with dangling connectors (or an output-limit truncation) before a final
+    // complete turn. Lets end-to-end tests observe whether the stable-run
+    // loop keeps requesting the model for unfinished turns.
+    #[derive(Clone)]
+    struct UnfinishedPlainTextProvider {
+        default_model: ModelId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        /// Number of turns that end with a dangling connector (colon).
+        dangling_turns: usize,
+        /// When true, the first turn reports `Length` (output limit) instead
+        /// of `Stop`.
+        truncate_first: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for UnfinishedPlainTextProvider {
+        fn id(&self) -> &str {
+            "unfinished-plain-text-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        fn agena_tool_mode_for_adapter(
+            &self,
+            _adapter_id: Option<&agena_domain::AdapterId>,
+            _model: &ModelId,
+        ) -> agena_provider::AgenaToolMode {
+            agena_provider::AgenaToolMode::ProviderProtocol
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (text, finish_reason) = if self.truncate_first && call == 0 {
+                (
+                    "partial output".to_owned(),
+                    agena_provider::CompletionFinishReason::Length,
+                )
+            } else if call < self.dangling_turns {
+                (
+                    "先查看 provider_for_adapter_with_mode 和 1390-1420 区域：".to_owned(),
+                    agena_provider::CompletionFinishReason::Stop,
+                )
+            } else {
+                (
+                    "完成。".to_owned(),
+                    agena_provider::CompletionFinishReason::Stop,
+                )
+            };
+            Ok(CompletionResponse {
+                provider_id: agena_domain::ProviderId::new(self.id()),
+                model: self.default_model.clone(),
+                text,
+                reasoning_text: None,
+                finish_reason: Some(finish_reason),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<
+                                agena_provider::CompletionStreamEvent,
+                                agena_runtime_provider::ProviderError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            agena_runtime_provider::ProviderError,
+        > {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (text, finish_reason) = if self.truncate_first && call == 0 {
+                (
+                    "partial output".to_owned(),
+                    agena_provider::CompletionFinishReason::Length,
+                )
+            } else if call < self.dangling_turns {
+                (
+                    "先查看 provider_for_adapter_with_mode 和 1390-1420 区域：".to_owned(),
+                    agena_provider::CompletionFinishReason::Stop,
+                )
+            } else {
+                (
+                    "完成。".to_owned(),
+                    agena_provider::CompletionFinishReason::Stop,
+                )
+            };
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(agena_provider::CompletionStreamEvent::TextDelta {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    delta: text,
+                }),
+                Ok(agena_provider::CompletionStreamEvent::Completed {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    finish_reason: Some(finish_reason),
+                    usage: None,
+                    provider_metadata: None,
+                    end_turn: None,
+                }),
+            ])))
+        }
+    }
+
+    async fn test_manager_with_unfinished_plain_text_provider(
+        dangling_turns: usize,
+        truncate_first: bool,
+    ) -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![],
+            config: PluginsConfig::default(),
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(UnfinishedPlainTextProvider {
+            default_model: ModelId::new("unfinished-plain-text-model"),
+            calls: Arc::clone(&calls),
+            dangling_turns,
+            truncate_first,
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        (manager, calls)
+    }
+
+    async fn submit_plain_text_user_message(manager: &SessionManager, session_id: i64) {
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session_id,
+                SessionRunOptions {
+                    model: ModelRef::new(
+                        "unfinished-plain-text-provider",
+                        "unfinished-plain-text-model",
+                    ),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plain_text_trailing_colon_keeps_loop_alive_without_tool_call() {
+        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(2, false).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "trailing colon provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create trailing-colon session");
+        submit_plain_text_user_message(&manager, session.id).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "plain-text turns ending on a colon must keep the loop alive until a complete turn"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn truncated_plain_text_forces_continuation() {
+        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(0, true).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "truncated provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create truncated session");
+        submit_plain_text_user_message(&manager, session.id).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "an output-limit truncated turn must request another model turn"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn unfinished_continuation_budget_is_bounded() {
+        // A degenerate model that never completes must not loop forever: one
+        // initial turn plus the bounded unfinished-continuation budget.
+        let (manager, calls) =
+            test_manager_with_unfinished_plain_text_provider(usize::MAX, false).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "unfinished budget provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create budget session");
+        submit_plain_text_user_message(&manager, session.id).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1 + 4,
+            "unfinished continuation must be bounded by its per-run budget (1 main + 4 continuations)"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    // A provider that reproduces the real-world failure mode: a tool-calling
+    // turn, then a plain-text turn that ends on a dangling colon while the
+    // task is still mid-work, then a final complete turn. The stable-run
+    // loop must keep requesting the model through the dangling turn instead
+    // of stopping mid-task.
+    #[derive(Clone)]
+    struct AgenticDanglingProvider {
+        default_model: ModelId,
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for AgenticDanglingProvider {
+        fn id(&self) -> &str {
+            "agentic-dangling-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        fn agena_tool_mode_for_adapter(
+            &self,
+            _adapter_id: Option<&agena_domain::AdapterId>,
+            _model: &ModelId,
+        ) -> agena_provider::AgenaToolMode {
+            agena_provider::AgenaToolMode::ProviderProtocol
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if call == 0 {
+                Ok(CompletionResponse {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    text: "let me run the tool".to_owned(),
+                    reasoning_text: None,
+                    finish_reason: Some(agena_provider::CompletionFinishReason::ToolCalls),
+                    tool_calls: vec![agena_provider::CompletionToolCall::Function {
+                        id: "call_1".to_owned(),
+                        name: "test.approved_success.run".to_owned(),
+                        arguments_json: "{}".to_owned(),
+                    }],
+                    usage: None,
+                    provider_metadata: None,
+                })
+            } else if call == 1 {
+                Ok(CompletionResponse {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    text: "现在看 provider_for_adapter_with_mode 和 1390-1420 区域：".to_owned(),
+                    reasoning_text: None,
+                    finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                })
+            } else {
+                Ok(CompletionResponse {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    text: "完成。".to_owned(),
+                    reasoning_text: None,
+                    finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                    provider_metadata: None,
+                })
+            }
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<
+                                agena_provider::CompletionStreamEvent,
+                                agena_runtime_provider::ProviderError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            agena_runtime_provider::ProviderError,
+        > {
+            let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match call {
+                0 => Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(agena_provider::CompletionStreamEvent::ToolCallDelta {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        stream_key: "idx:0".to_owned(),
+                        id: None,
+                        name: Some("test.approved_success.run".to_owned()),
+                        arguments_delta: "{}".to_owned(),
+                    }),
+                    Ok(agena_provider::CompletionStreamEvent::Completed {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        finish_reason: Some(agena_provider::CompletionFinishReason::ToolCalls),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ]))),
+                1 => Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(agena_provider::CompletionStreamEvent::TextDelta {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        delta: "现在看 provider_for_adapter_with_mode 和 1390-1420 区域："
+                            .to_owned(),
+                    }),
+                    Ok(agena_provider::CompletionStreamEvent::Completed {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ]))),
+                _ => Ok(Box::pin(futures_util::stream::iter(vec![
+                    Ok(agena_provider::CompletionStreamEvent::TextDelta {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        delta: "完成。".to_owned(),
+                    }),
+                    Ok(agena_provider::CompletionStreamEvent::Completed {
+                        provider_id: agena_domain::ProviderId::new(self.id()),
+                        model: self.default_model.clone(),
+                        finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ]))),
+            }
+        }
+    }
+
+    async fn test_manager_with_agentic_dangling_provider()
+    -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            "test.approved_success".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                "test.approved_success"
+                    .parse()
+                    .expect("valid test plugin key"),
+                ApprovedSuccessTool,
+            )],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(AgenticDanglingProvider {
+            default_model: ModelId::new("agentic-dangling-model"),
+            calls: Arc::clone(&calls),
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        (manager, calls)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agentic_dangling_text_continues_after_tool_work() {
+        let (manager, calls) = test_manager_with_agentic_dangling_provider().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "agentic dangling provider".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create agentic dangling session");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "remove the prompt envelope".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("agentic-dangling-provider", "agentic-dangling-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "a tool-calling run whose next turn dangles on a colon must not stop mid-task"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
     }
 }

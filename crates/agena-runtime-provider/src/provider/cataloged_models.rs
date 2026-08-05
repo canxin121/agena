@@ -394,7 +394,7 @@ mod tests {
             _model: &ModelId,
         ) -> AgenaToolMode {
             if adapter_id.is_some() {
-                AgenaToolMode::PromptEnvelope
+                AgenaToolMode::Disabled
             } else {
                 AgenaToolMode::ProviderProtocol
             }
@@ -442,7 +442,7 @@ mod tests {
         );
         assert_eq!(
             provider.agena_tool_mode_for_adapter(Some(&AdapterId::new("adapter")), &model),
-            AgenaToolMode::PromptEnvelope
+            AgenaToolMode::Disabled
         );
         assert!(provider.native_compaction_enabled(&model));
         assert!(

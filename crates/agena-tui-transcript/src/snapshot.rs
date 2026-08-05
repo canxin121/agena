@@ -13,7 +13,7 @@ use agena_api::{
 use agena_domain::{
     ActivityNode, ActivityPayload, ActivityState, AssistantReplyStatus, ComposerDocument,
     ComposerNode, ContentDocument, ContentNode, MaintenanceActivity, ResourceKind,
-    ResourceReference, TranscriptSnapshot,
+    ResourceReference, TextSegmentActivity, TranscriptSnapshot,
 };
 use chrono::{DateTime, Utc};
 
@@ -144,18 +144,76 @@ fn assistant_reply_document_entry(
 }
 
 fn assistant_reply_document_parts(document: &ContentDocument) -> Vec<TranscriptEntryPart<'_>> {
-    document
-        .nodes()
+    let nodes = document.nodes();
+    // One reply can span many assistant messages: an opening paragraph, tool
+    // calls, interstitial text, and a closing summary. Only the final body
+    // segment is the actual answer and renders inline as plain text; every
+    // earlier body segment is an intermediate step and projects as a
+    // collapsible TextSegment activity so a long tool run reads as a stack of
+    // blocks with a single visible reply at the end.
+    let final_text_index = nodes.iter().rposition(|node| match node {
+        ContentNode::Text { .. } => true,
+        ContentNode::Activity { activity } => {
+            matches!(activity.payload, ActivityPayload::TextSegment(_))
+        }
+    });
+    nodes
         .iter()
-        .map(|node| match node {
-            ContentNode::Text { segment } => TranscriptEntryPart {
-                id: TranscriptContentId::Text(segment.id),
-                status: PartExecutionStatusResource::Completed,
-                content: TranscriptPartContent::Text(MessageTextPartResource {
-                    text: segment.text.clone(),
-                    synthetic: false,
-                }),
-            },
+        .enumerate()
+        .map(|(index, node)| match node {
+            ContentNode::Text { segment } => {
+                let id = TranscriptContentId::Text(segment.id);
+                if Some(index) == final_text_index {
+                    TranscriptEntryPart {
+                        id,
+                        status: PartExecutionStatusResource::Completed,
+                        content: TranscriptPartContent::Text(MessageTextPartResource {
+                            text: segment.text.clone(),
+                            synthetic: false,
+                        }),
+                    }
+                } else {
+                    // Intermediate body segments project as collapsible
+                    // TextSegment activities: the owned render-model variant
+                    // carries the synthesized payload without borrowing a
+                    // function-local value.
+                    TranscriptEntryPart {
+                        id,
+                        status: PartExecutionStatusResource::Completed,
+                        content: TranscriptPartContent::Activity(
+                            TranscriptActivityContent::TextSegment(Box::new(
+                                TextSegmentActivity {
+                                    text: segment.text.clone(),
+                                },
+                            )),
+                        ),
+                    }
+                }
+            }
+            ContentNode::Activity { activity }
+                if matches!(activity.payload, ActivityPayload::TextSegment(_)) =>
+            {
+                // A legacy persisted TextSegment that happens to be the final
+                // body renders as plain text (the answer); older intermediates
+                // keep their canonical Activity projection.
+                let id = TranscriptContentId::Activity(activity.id);
+                if Some(index) == final_text_index {
+                    let text = match &activity.payload {
+                        ActivityPayload::TextSegment(segment) => segment.text.clone(),
+                        _ => String::new(),
+                    };
+                    TranscriptEntryPart {
+                        id,
+                        status: PartExecutionStatusResource::Completed,
+                        content: TranscriptPartContent::Text(MessageTextPartResource {
+                            text,
+                            synthetic: false,
+                        }),
+                    }
+                } else {
+                    activity_entry_part(activity)
+                }
+            }
             ContentNode::Activity { activity } => activity_entry_part(activity),
         })
         .collect()
@@ -2228,21 +2286,26 @@ mod tests {
         let activity_id = agena_domain::ActivityId::new();
         let body = "Second paragraph after the tool call.
 It has two lines.";
-        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
-            id: activity_id,
-            owner: ActivityOwner::AssistantReply {
-                reply_id: response_id,
-            },
-            actor: ActivityActor::Assistant,
-            state: ActivityState::Completed,
-            position: ContentPosition { index: 0 },
-            revision_seq: 1,
-            lifecycle: ActivityLifecycle::default(),
-            payload: ActivityPayload::TextSegment(agena_domain::TextSegmentActivity {
-                text: body.to_owned(),
+        let document = ContentDocument::new(vec![
+            ContentNode::activity(ActivityNode {
+                id: activity_id,
+                owner: ActivityOwner::AssistantReply {
+                    reply_id: response_id,
+                },
+                actor: ActivityActor::Assistant,
+                state: ActivityState::Completed,
+                position: ContentPosition { index: 0 },
+                revision_seq: 1,
+                lifecycle: ActivityLifecycle::default(),
+                payload: ActivityPayload::TextSegment(agena_domain::TextSegmentActivity {
+                    text: body.to_owned(),
+                }),
+                provenance: ActivityProvenance::default(),
             }),
-            provenance: ActivityProvenance::default(),
-        })]);
+            // A final body segment after the interstitial text renders inline
+            // as plain text, never as a collapsed Activity.
+            ContentNode::text_at(agena_domain::TextSegmentId::new(), "final answer", 1, 2),
+        ]);
         let entry = assistant_reply_document_entry(
             response_id,
             MessageStatus::Completed,
@@ -2250,6 +2313,16 @@ It has two lines.";
             &document,
             None,
         );
+        assert_eq!(entry.parts.len(), 2);
+        assert!(matches!(
+            &entry.parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
+                if matches!(payload, ActivityPayload::TextSegment(_))
+        ));
+        assert!(matches!(
+            &entry.parts[1].content,
+            TranscriptPartContent::Text(text) if text.text == "final answer"
+        ));
         let defaults = crate::TranscriptDetailDefaults {
             activity_expanded: false,
         };
@@ -2257,6 +2330,38 @@ It has two lines.";
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
         };
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &Default::default(),
+        );
+        let collapsed_lines = collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        // Interstitial segments default to collapsed: the headline shows the
+        // label with a preview and the body stays folded, while the final
+        // answer is visible inline.
+        assert!(
+            collapsed_lines.iter().any(|line| line.contains("正文")),
+            "{collapsed_lines:?}"
+        );
+        assert!(
+            collapsed_lines
+                .iter()
+                .any(|line| line.contains("final answer")),
+            "{collapsed_lines:?}"
+        );
+        let collapsed_node = collapsed
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("collapsed TextSegment Activity node");
+        assert!(collapsed_node.toggleable);
+        assert!(!collapsed_node.expanded);
         let rendered = crate::render_entry_detailed(
             &entry,
             120,
@@ -2293,5 +2398,57 @@ It has two lines.";
             body_styles.iter().all(|fg| *fg != muted),
             "text segment body must not be muted: {body_styles:?}"
         );
+    }
+
+    #[test]
+    fn interstitial_plain_text_projects_as_owned_text_segment_activity() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let first_text_id = agena_domain::TextSegmentId::new();
+        let second_text_id = agena_domain::TextSegmentId::new();
+        let document = ContentDocument::new(vec![
+            ContentNode::text_at(first_text_id, "Let me inspect the file.", 0, 1),
+            ContentNode::text_at(second_text_id, "That is the answer.", 1, 2),
+        ]);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
+        assert_eq!(entry.parts.len(), 2);
+        // The opening body segment is not the answer: it projects as an
+        // owned TextSegment activity (collapsible), never as inline text.
+        assert!(matches!(
+            &entry.parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment))
+                if segment.text == "Let me inspect the file."
+        ));
+        // The final body segment is the answer and stays inline plain text.
+        assert!(matches!(
+            &entry.parts[1].content,
+            TranscriptPartContent::Text(text) if text.text == "That is the answer."
+        ));
+
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("
+");
+        // Collapsed headline shows the interstitial label; the answer is
+        // visible inline without any label.
+        assert!(text.contains("正文"), "{text}");
+        assert!(text.contains("That is the answer."), "{text}");
     }
 }

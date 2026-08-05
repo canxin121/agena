@@ -7,7 +7,9 @@ use agena_api::{
     },
     resource::{MessageResource, MessageRole, MessageStatus},
 };
-use agena_domain::{ActivityId, ActivityPayload, AssistantReplyId, TextSegmentId, TurnId};
+use agena_domain::{
+    ActivityId, ActivityPayload, AssistantReplyId, TextSegmentActivity, TextSegmentId, TurnId,
+};
 use agena_tui_components::ThemePalette;
 use chrono::{DateTime, Utc};
 use ratatui::{
@@ -73,6 +75,12 @@ pub enum TranscriptPartContent<'a> {
 #[derive(Debug, Clone)]
 pub enum TranscriptActivityContent<'a> {
     Canonical(&'a ActivityPayload),
+    /// Projected interstitial reply body text. The snapshot projection turns
+    /// every non-final body segment into a collapsible TextSegment activity
+    /// without persisting an ActivityNode, so the payload is owned here (it
+    /// cannot borrow from a synthetic, function-local payload). Renderers
+    /// treat it exactly like `Canonical` of a persisted TextSegment.
+    TextSegment(Box<TextSegmentActivity>),
     Reasoning(MessageReasoningPartResource),
     Attachment(MessageAttachmentPartResource),
     SkillReference(MessageSkillReferencePartResource),

@@ -172,6 +172,12 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
             Some(crate::snapshot::activity_presentation(payload).1)
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment)) => {
+            Some(crate::snapshot::activity_presentation(
+                &agena_domain::ActivityPayload::TextSegment(segment.as_ref().clone()),
+            )
+            .1)
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let summary = reasoning.preferred_text();
             first_non_empty_preview_line(summary.as_str())

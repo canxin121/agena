@@ -981,6 +981,9 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
                 !matches!(payload, agena_domain::ActivityPayload::Operation(_)),
             ))
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment)) => {
+            Some(segment.text.clone())
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             Some(reasoning.preferred_text())
         }
@@ -1340,6 +1343,19 @@ pub(crate) fn render_part_node(
                 message, part, payload, None, out, width, i18n, defaults, expansions,
             )
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment)) => {
+            render_activity_canonical(
+                message,
+                part,
+                &agena_domain::ActivityPayload::TextSegment(segment.as_ref().clone()),
+                None,
+                out,
+                width,
+                i18n,
+                defaults,
+                expansions,
+            )
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
@@ -1650,10 +1666,20 @@ fn render_activity_canonical(
         entry_id: message.id,
         content_id: part.id,
     };
+    // Interstitial body segments are the working notes of a reply: they stay
+    // collapsed until the user opens them, regardless of the global activity
+    // default, so a multi-step tool run reads as a stack of blocks with one
+    // visible answer at the end.
+    let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
+    let default_expanded = if is_text_segment {
+        false
+    } else {
+        defaults.activity_expanded
+    };
     let expanded = expansions
         .get(&key)
         .copied()
-        .unwrap_or(defaults.activity_expanded);
+        .unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);
     let title = title_override.unwrap_or(canonical_title.as_str());
     let error_text = error.as_ref().map(|e| e.user.fallback.clone());
@@ -1674,9 +1700,6 @@ fn render_activity_canonical(
     let mut children = Vec::new();
     let mut detail_index = 0_usize;
     let is_operation = matches!(payload, agena_domain::ActivityPayload::Operation(_));
-    // Interstitial body segments render with the normal message text color
-    // (like regular reply text), unlike thinking's muted trail.
-    let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
     let render_summary = expanded && !is_operation && error.is_none() && !summary.trim().is_empty();
     if render_summary {
         let summary_start = out.len();

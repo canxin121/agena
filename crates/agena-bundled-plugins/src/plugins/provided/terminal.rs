@@ -32,6 +32,15 @@ pub(crate) const ACTIVITY_SEGMENT_ID: &str = "agena.terminal.activity";
 /// TUI can consume it on the next frame and clear it.
 pub(crate) const NOTIFY_SEGMENT_ID: &str = "agena.terminal.notify";
 
+/// Statusline priority for the notification-intent segment. This must stay
+/// strictly above `ACTIVITY_SEGMENT_PRIORITY` so the notify intent outranks
+/// the activity state in the plugin UI catalog. `i32::MAX + 1` cannot be
+/// represented: it overflow-panics in debug builds and wraps to `i32::MIN`
+/// in release, demoting the notify segment to the bottom of the catalog.
+pub(crate) const NOTIFY_SEGMENT_PRIORITY: i32 = i32::MAX;
+/// Statusline priority for the activity segment, one below the notify intent.
+pub(crate) const ACTIVITY_SEGMENT_PRIORITY: i32 = i32::MAX - 1;
+
 /// A lifecycle event that should raise terminal attention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -127,7 +136,7 @@ impl TerminalPlugin {
                 .ui_statusline_contribute(HostStatuslineContributeRequest {
                     segment_id: NOTIFY_SEGMENT_ID.to_owned(),
                     content: notify,
-                    priority: i32::MAX + 1,
+                    priority: NOTIFY_SEGMENT_PRIORITY,
                     color: None,
                 })
                 .await;
@@ -136,7 +145,7 @@ impl TerminalPlugin {
             .ui_statusline_contribute(HostStatuslineContributeRequest {
                 segment_id: ACTIVITY_SEGMENT_ID.to_owned(),
                 content: activity,
-                priority: i32::MAX,
+                priority: ACTIVITY_SEGMENT_PRIORITY,
                 color: None,
             })
             .await;
@@ -249,6 +258,16 @@ mod tests {
         assert!(
             manifest.tools.is_empty(),
             "terminal plugin must expose no tools"
+        );
+    }
+
+    #[test]
+    fn statusline_priorities_keep_notify_above_activity_without_overflow() {
+        assert_eq!(NOTIFY_SEGMENT_PRIORITY, i32::MAX);
+        assert_eq!(ACTIVITY_SEGMENT_PRIORITY, i32::MAX - 1);
+        assert!(
+            NOTIFY_SEGMENT_PRIORITY > ACTIVITY_SEGMENT_PRIORITY,
+            "notify must outrank activity"
         );
     }
 

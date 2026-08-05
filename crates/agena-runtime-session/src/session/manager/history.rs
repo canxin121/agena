@@ -312,7 +312,7 @@ fn project_runtime_timeline_event(
         EventKind::RunAborted(_) => "timeline-type-run-aborted",
         EventKind::UserMessageAppended(_) => "timeline-type-user-message-appended",
         EventKind::AssistantMessageFinished(_) => "timeline-type-assistant-message-completed",
-                EventKind::ToolCallIssued(_) => "timeline-type-tool-call-issued",
+        EventKind::ToolCallIssued(_) => "timeline-type-tool-call-issued",
         EventKind::ToolCallCompleted(_) => "timeline-type-tool-call-completed",
         EventKind::BackgroundActivityChanged(_) => "timeline-type-background-activity-changed",
         EventKind::PluginEvent(_) | EventKind::PluginToolRegistryChanged(_) => {
@@ -494,13 +494,13 @@ fn project_runtime_presentation_event(
                 )),
             )
         }
-                EventKind::ProviderRetryResolved(_) => None,
-        EventKind::BackgroundActivityChanged(event) => {
-            Some(agena_runtime::RuntimePresentationEventKind::ActivityChanged {
+        EventKind::ProviderRetryResolved(_) => None,
+        EventKind::BackgroundActivityChanged(event) => Some(
+            agena_runtime::RuntimePresentationEventKind::ActivityChanged {
                 activity: Box::new(event.activity.clone()),
                 reason: event.reason,
-            })
-        }
+            },
+        ),
         _ => None,
     };
     Ok(kind.map(|kind| agena_runtime::RuntimePresentationEvent {

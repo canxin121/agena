@@ -228,9 +228,8 @@ pub(crate) async fn run_plan_cases(
                 "objective": "Exercise dsv4f Tool API plan",
                 "title": "DSV4F plan",
                 "steps": [{
-                    "id": "probe-step",
                     "title": "Probe step",
-                    "checks": [{"id": "probe-check", "text": "Check Tool API"}]
+                    "checks": [{"text": "Check Tool API"}]
                 }],
                 "autorun": false
             }),
@@ -250,14 +249,14 @@ pub(crate) async fn run_plan_cases(
             true,
         )
         .await?;
-    assert_contains(&get, "probe-step")?;
+    assert_contains(&get, "Probe step")?;
     report.pass("plan.get");
     let update = harness
         .run_execution_tool(
             session,
             "plan.update",
             "plan.update",
-            json!({"step_id": "probe-step", "check_id": "probe-check", "status": "completed"}),
+            json!({"step": 1, "check": 1, "status": "completed"}),
             PendingReply::None,
             true,
         )

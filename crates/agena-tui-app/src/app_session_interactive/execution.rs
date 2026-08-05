@@ -69,11 +69,13 @@ impl App {
     }
 
     /// Primary submit action (Ctrl+Enter by default). When the AI is
-    /// idle, submits the message immediately. When the AI is mid-run, attempts to
-    /// `steer_input` (Phase 3) — i.e. inject the message into the live
-    /// run so the model sees it on its next step. If the backend rejects
-    /// the steer (e.g. the run is in a non-steerable phase), we fall
-    /// back to enqueueing the message so it isn't lost.
+    /// idle, submits the message immediately. When the AI is mid-run,
+    /// interrupts the active run and delivers the message as the next
+    /// user turn (interrupt-and-send), so the assistant's reply renders
+    /// below the new message instead of being appended to the message
+    /// above. When the session is busy with an interactive request
+    /// (permission / user input) the run is not cancelled; the message
+    /// is parked in the queue like bare Enter.
     pub(crate) fn submit_or_steer(&mut self) {
         let draft = self.take_composer_draft();
         if draft.is_empty() {
@@ -103,15 +105,37 @@ impl App {
             self.submit_composer();
             return;
         };
-        let document = match self.build_submission_document(&draft) {
-            Ok(document) => document,
-            Err(error) => {
-                self.restore_composer_draft(draft);
-                self.flash_error(error);
-                return;
-            }
-        };
-        self.request_steer_input(session_id, document, draft);
+        // Only an actively generating run is interrupted. Interactive
+        // phases (permission / user-input / blocked) must not be cancelled
+        // because that would discard the pending request.
+        let has_active_execution = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.active_execution.as_ref())
+            .is_some();
+        if self.session_activity(session_id).is_running() && has_active_execution {
+            self.request_cancel_run(session_id);
+            let replaced = self.queue.set(draft);
+            self.flash_info(ui_text::t(
+                &self.i18n,
+                if replaced {
+                    "flash-message-replaced"
+                } else {
+                    "flash-message-interrupting"
+                },
+            ));
+            return;
+        }
+        let replaced = self.queue.set(draft);
+        self.flash_info(ui_text::t(
+            &self.i18n,
+            if replaced {
+                "flash-message-replaced"
+            } else {
+                "flash-message-queued"
+            },
+        ));
     }
 
     /// Secondary submit action (bare Enter by default). When the AI is idle,

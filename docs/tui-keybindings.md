@@ -198,12 +198,12 @@ Transcript 还提供只读界面的 text object，便于精确选取模型输出
 
 ## Composer INSERT 模式
 
-### 发送、Steer 和排队
+### 发送、中断和排队
 
 | 按键 | 行为 |
 |---|---|
 | `Enter` | 空闲时发送；运行中时加入本地待发送队列 |
-| `Ctrl+Enter` | 空闲时发送；运行中时尝试 steer，失败后排队 |
+| `Ctrl+Enter` | 空闲时发送；运行中时中断当前运行并作为下一条用户消息发送（interrupt-and-send） |
 | `Shift+Enter` / `Alt+Enter` / `Ctrl+J` | 插入换行 |
 | `Esc` | 离开 Composer，返回 Transcript 当前的浏览或导航状态 |
 

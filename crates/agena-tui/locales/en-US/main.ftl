@@ -1557,6 +1557,7 @@ flash-speed-mode-required = speed mode name is required
 flash-parent-session-missing = current session has no parent
 flash-command-usage = usage: {$usage}
 flash-command-does-not-support-attachments = slash commands do not support staged attachments
+flash-message-interrupting = interrupting the active run - the message will be sent next
 flash-message-queued = message pending — will send when the current run finishes
 flash-message-replaced = a message is already pending — replaced it
 flash-steer-sent = steered into the active run

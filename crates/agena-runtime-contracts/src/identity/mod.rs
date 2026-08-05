@@ -61,7 +61,10 @@ mod tests {
         assert!(prompt.contains("# Care, output, and safety"));
         assert!(prompt.contains("Always name the session"));
         assert!(prompt.contains("Judge this from `context.status`"));
-        assert!(prompt.contains("Never call a `chatgpt.*` tool unless you are an official OpenAI model"));
+        assert!(
+            prompt
+                .contains("Never call a `chatgpt.*` tool unless you are an official OpenAI model")
+        );
         assert!(prompt.contains("blast radius"));
         assert!(!prompt.contains("# Tools & Plugins"));
         assert!(!prompt.contains("tools_list"));

@@ -104,6 +104,7 @@ flash-copied-assistant-message = ultimo mensaje del asistente copiado al portapa
 flash-no-visible-transcript = no hay texto visible para copiar
 flash-copied-visible-transcript = vista visible copiada al portapapeles
 flash-clipboard-copy-failed = fallo al copiar al portapapeles: {$error}
+flash-message-interrupting = interrumpiendo la ejecucion activa - el mensaje se enviara a continuacion
 
 message-role-user = usuario
 message-role-assistant = asistente

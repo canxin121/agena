@@ -53,7 +53,8 @@ pub(super) fn run_abort_reason(error: &AppError) -> RunAbortReason {
         AppError::Provider(_)
         | AppError::ProviderClassified { .. }
         | AppError::HttpStatus { .. }
-        | AppError::Http(_) => RunAbortReason::ProviderError,
+        | AppError::Http(_)
+        | AppError::EmptyResponse => RunAbortReason::ProviderError,
         _ => RunAbortReason::Internal,
     }
 }

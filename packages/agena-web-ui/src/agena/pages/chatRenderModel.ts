@@ -32,6 +32,14 @@ function readFiniteNumber(value: unknown): number | null {
 
 function activityTitle(activity: TranscriptActivity): string {
   const payload = activity.payload
+  // Tool operations identify by the actual execution-tool name. The persisted
+  // producer title (e.g. "Process run …") is a converted description, not the
+  // tool name, so it must never win over the invocation identity.
+  if (payload.activity_type === 'operation') {
+    const invocation = asRecord(payload.invocation)
+    const toolName = readString(invocation ? invocation.name : null)
+    if (toolName) return toolName
+  }
   return (
     readString(payload.title) ||
     readString(payload.name) ||

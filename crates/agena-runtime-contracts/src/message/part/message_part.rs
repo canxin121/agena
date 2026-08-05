@@ -269,16 +269,9 @@ fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
 
 /// Human-readable, persisted Operation title. This becomes the `name` header
 /// in `agena_model_message_parts`, so collapsed transcript queries need not load
-/// the operation payload merely to explain the action.
+/// the operation payload merely to explain the action. The header is the direct
+/// execution-tool name, never a producer-converted display title.
 fn operation_header_title(operation: &super::OperationPart) -> String {
-    let title = operation.title.trim();
-    if !title.is_empty() {
-        return title.to_owned();
-    }
-    let display_title = operation.result.display.title.trim();
-    if !display_title.is_empty() {
-        return display_title.to_owned();
-    }
     operation.invocation.name.clone()
 }
 fn truncate_summary(value: &str) -> Option<String> {
@@ -349,7 +342,9 @@ mod tests {
             PartContent::operation(operation),
         );
 
-        assert_eq!(part.name.as_deref(), Some("Read README.md"));
+        // The header is the direct execution-tool name, never the
+        // producer-converted completion title.
+        assert_eq!(part.name.as_deref(), Some("fs.read"));
         assert_eq!(part.summary.as_deref(), Some("42 lines"));
         assert!(part.has_detail);
     }
@@ -388,7 +383,9 @@ mod tests {
             PartContent::operation(operation),
         );
 
-        assert_eq!(part.name.as_deref(), Some("List tools · 20/133"));
+        // Discovery headers use the gateway tool name, not the converted
+        // page-title prose.
+        assert_eq!(part.name.as_deref(), Some("tools_list"));
         assert!(part.has_detail);
     }
 }

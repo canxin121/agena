@@ -104,6 +104,7 @@ flash-copied-assistant-message = Letzte Assistant-Nachricht in die Zwischenablag
 flash-no-visible-transcript = Kein sichtbarer Text zum Kopieren
 flash-copied-visible-transcript = Sichtbarer Bereich in die Zwischenablage kopiert
 flash-clipboard-copy-failed = Zwischenablage-Kopie fehlgeschlagen: {$error}
+flash-message-interrupting = unterbreche die aktive Ausfuehrung - die Nachricht wird als Naechstes gesendet
 
 message-role-user = benutzer
 message-role-assistant = assistent

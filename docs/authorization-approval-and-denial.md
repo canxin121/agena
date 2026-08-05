@@ -123,8 +123,10 @@ order and the first conclusive result wins:
 
 ```text
 auto decision
-  ├─ fast path       tag/command allowlist (read-only tools, no-op commands)
-  │                  and interaction tools that must always ask
+  ├─ fast path       contract-driven allowlist (read-only tools, no-op commands,
+  │                  workspace reads, managed project-state writes, system
+  │                  temp-directory reads/writes) and interaction tools that
+  │                  must always ask
   ├─ heuristics      deny dangerous shell/path/network patterns
   │                  (rm -rf /, curl|sh, chmod 777, base64 -d, mkfs, dd if=,
   │                  nc -e, sudo, writes into /etc, shutdown/reboot, ...)

@@ -289,6 +289,38 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         }
     }
 
+    /// If `session_id` is occupied by an execution whose cancel token has
+    /// already tripped, wait (bounded by `timeout`) for it to unregister so
+    /// the caller can register a replacement. An occupant that is NOT
+    /// cancelling fails immediately with `AlreadyActive`; the same error is
+    /// returned if the cancelling run has not released the session before
+    /// `timeout` elapses.
+    ///
+    /// This closes the interrupt-and-send race: the client submits the next
+    /// user turn as soon as cancellation is acknowledged, which can land
+    /// before the cancelled run has finished unwinding and unregistered.
+    pub async fn wait_until_cancelled_released(
+        &self,
+        session_id: i64,
+        timeout: Duration,
+    ) -> Result<(), ExecutionControlError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            {
+                let guard = self.inner.lock().await;
+                match guard.get(&session_id) {
+                    None => return Ok(()),
+                    Some(control) if control.cancel.is_cancelled() => {}
+                    Some(_) => return Err(ExecutionControlError::AlreadyActive(session_id)),
+                }
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(ExecutionControlError::AlreadyActive(session_id));
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     pub async fn cancel_current(&self, session_id: i64) -> Result<(), ExecutionControlError> {
         let control = self
             .inner
@@ -383,6 +415,7 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration;
 
     use agena_domain::{CancellationResult, ExecutionLifecycle, ExecutionPhase};
     use tokio::sync::mpsc;
@@ -499,5 +532,64 @@ mod tests {
         assert!(registry.is_active(11).await);
         registry.unregister_if_matches(11, &control).await;
         assert!(!registry.is_active(11).await);
+    }
+
+    #[tokio::test]
+    async fn wait_until_cancelled_released_returns_ok_without_an_execution() {
+        let registry = ExecutionRegistry::<()>::new();
+        registry
+            .wait_until_cancelled_released(99, Duration::from_secs(1))
+            .await
+            .expect("no execution is already released");
+    }
+
+    #[tokio::test]
+    async fn wait_until_cancelled_released_fails_while_execution_active() {
+        let registry = ExecutionRegistry::<()>::new();
+        let (control, _) = registry
+            .register(
+                7,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
+            .await
+            .expect("execution");
+        assert!(matches!(
+            registry
+                .wait_until_cancelled_released(7, Duration::from_millis(50))
+                .await,
+            Err(ExecutionControlError::AlreadyActive(7))
+        ));
+        registry.unregister_if_matches(7, &control).await;
+    }
+
+    #[tokio::test]
+    async fn wait_until_cancelled_released_waits_for_cancelling_execution_to_unregister() {
+        let registry = Arc::new(ExecutionRegistry::<()>::new());
+        let (control, _) = registry
+            .register(
+                9,
+                agena_domain::TurnId::new(),
+                agena_domain::AssistantReplyId::new(),
+            )
+            .await
+            .expect("execution");
+        registry.cancel_current(9).await.expect("cancel");
+        assert!(control.cancel.is_cancelled());
+
+        let worker_registry = Arc::clone(&registry);
+        let worker_control = Arc::clone(&control);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            worker_registry
+                .unregister_if_matches(9, &worker_control)
+                .await;
+        });
+
+        registry
+            .wait_until_cancelled_released(9, Duration::from_secs(2))
+            .await
+            .expect("released after cancellation unregisters");
+        assert!(!registry.is_active(9).await);
     }
 }

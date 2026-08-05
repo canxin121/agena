@@ -78,7 +78,7 @@ impl PlanPlugin {
     #[tool(
         tags(mutate, planning),
         summary = "Update the current plan.",
-        help = "Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
+        help = "Keep plan-level updates separate from step/check updates: do not send `phase` together with `step`, `check`, `status`, `wait_until_ms`, or `note`. Address steps and checks by 1-based index (`step`, `check`). To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
         planning,
         mutating,
         display = brief,

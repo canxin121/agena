@@ -33,7 +33,11 @@ pub(crate) enum WorkflowPlanStepStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanCheckpoint {
-    pub(crate) id: String,
+    /// Legacy identifier retained only so stored plans from older versions keep
+    /// deserializing. New plans omit it and steps/checks are addressed by their
+    /// 1-based index instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
     pub(crate) text: String,
     pub(crate) status: WorkflowPlanStepStatus,
 }
@@ -41,7 +45,11 @@ pub(crate) struct WorkflowPlanCheckpoint {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanStep {
-    pub(crate) id: String,
+    /// Legacy identifier retained only so stored plans from older versions keep
+    /// deserializing. New plans omit it and steps/checks are addressed by their
+    /// 1-based index instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<String>,
     pub(crate) title: String,
     pub(crate) description: String,
     pub(crate) executor: WorkflowPlanExecutor,
@@ -71,8 +79,6 @@ pub(crate) struct WorkflowPlan {
 #[serde(default, deny_unknown_fields)]
 #[schemars(description = "Plan check input. Each check item should use `text`.")]
 pub(crate) struct WorkflowPlanCheckpointInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) id: Option<String>,
     #[schemars(description = "Check text.")]
     pub(crate) text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -85,8 +91,6 @@ pub(crate) struct WorkflowPlanCheckpointInput {
     description = "Plan step input. Each step uses `title`; nested checks under `checks` use `text`."
 )]
 pub(crate) struct WorkflowPlanStepInput {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) id: Option<String>,
     #[schemars(description = "Human-readable step title.")]
     pub(crate) title: String,
     #[schemars(
@@ -151,10 +155,10 @@ pub(crate) struct PlanGetInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput, Default)]
-#[input(trim("summary", "step_id", "check_id", "note"))]
+#[input(trim("summary", "note"))]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
-    description = "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step_id` + `status` to update a step, or `step_id` + `check_id` + `status` to update a check. Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
+    description = "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
 )]
 pub(crate) struct PlanUpdateInput {
     #[schemars(
@@ -170,10 +174,14 @@ pub(crate) struct PlanUpdateInput {
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) summary: Option<String>,
+    #[schemars(description = "1-based index of the step to update (1 = first step).")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) step_id: Option<String>,
-    #[serde(default, rename = "check_id", skip_serializing_if = "Option::is_none")]
-    pub(crate) checkpoint_id: Option<String>,
+    pub(crate) step: Option<usize>,
+    #[schemars(
+        description = "1-based index of the check within the step to update (1 = first check). Requires `step`."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) check: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) status: Option<WorkflowPlanStepStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

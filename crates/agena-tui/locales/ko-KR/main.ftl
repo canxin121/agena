@@ -104,6 +104,7 @@ flash-copied-assistant-message = 마지막 assistant 메시지를 클립보드�
 flash-no-visible-transcript = 복사할 보이는 텍스트가 없습니다
 flash-copied-visible-transcript = 보이는 내용을 클립보드에 복사했습니다
 flash-clipboard-copy-failed = 클립보드 복사 실패: {$error}
+flash-message-interrupting = 실행 중인 작업을 중단합니다 - 메시지는 다음에 전송됩니다
 
 message-role-user = 사용자
 message-role-assistant = 어시스턴트

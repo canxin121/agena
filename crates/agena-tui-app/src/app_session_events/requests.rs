@@ -366,34 +366,6 @@ impl App {
         });
     }
 
-    /// Steer the active execution by injecting `parts` as a new user message
-    /// the model will see on its next step. If the backend reports the
-    /// run is no longer steerable, fall back to enqueueing the original
-    /// draft so it isn't lost.
-    pub(crate) fn request_steer_input(
-        &mut self,
-        session_id: i64,
-        document: agena_domain::ComposerDocument,
-        draft: ComposerDraft,
-    ) {
-        let pending_message_id = self.begin_pending_user_message(&draft);
-        let backend = self.backend.clone();
-        let tx = self.tx.clone();
-        tokio::spawn(async move {
-            let result = backend
-                .steer_input(session_id, document)
-                .await
-                .map_err(crate::UiFailure::from_backend);
-            let _ = tx.send(AppMessage::SteerSubmitted {
-                session_id,
-                pending_message_id,
-                draft,
-                result,
-            });
-        });
-        self.flash_info(ui_text::t(&self.i18n, "flash-steer-sent"));
-    }
-
     /// Ask the backend to cancel the active execution for `session_id`.
     /// Best-effort: even if the backend hasn't fully wired cancellation,
     /// clear the stale local execution marker immediately so the composer and

@@ -249,6 +249,8 @@ const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
 const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
 const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_autorun_signature";
+const PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY: &str = "autorun_continuations";
+const PLAN_AUTORUN_MAX_CONTINUATIONS: u32 = 5;
 const PLAN_STATUSLINE_SEGMENT_ID: &str = "plan";
 const PLAN_REVIEW_DECISION_APPROVE: &str = "Approve";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON: &str = "Approve with autorun on";
@@ -263,10 +265,10 @@ const PLAN_REVIEW_DECISION_CANCELLED: &str = "Cancel plan";
 #[derive(Debug)]
 enum PlanUpdateTarget {
     Plan,
-    Step(String),
+    Step(usize),
     Check {
-        step_id: String,
-        checkpoint_id: String,
+        step_index: usize,
+        check_index: usize,
     },
 }
 
@@ -391,15 +393,27 @@ impl WorkflowPlugin {
         {
             return Ok(None);
         }
-        let signature = Self::plan_auto_signature(&plan, step_index, step)?;
-        if self
+        let signature = Self::plan_auto_signature(&plan, step_index)?;
+        let mut continuations = self.load_autorun_continuations().await?;
+        let same_signature = self
             .load_autorun_signature()
             .await?
-            .is_some_and(|current| current == signature)
-        {
-            return Ok(None);
+            .is_some_and(|current| current == signature);
+        if same_signature {
+            if continuations >= PLAN_AUTORUN_MAX_CONTINUATIONS {
+                tracing::warn!(
+                    target: "agena::workflow",
+                    plan = %plan.title,
+                    step = step_index + 1,
+                    "plan autorun stopped after {continuations} consecutive continuations without plan progress; update the plan state to resume"
+                );
+                return Ok(None);
+            }
+        } else {
+            continuations = 0;
+            self.save_autorun_signature(signature.as_str()).await?;
         }
-        self.save_autorun_signature(signature.as_str()).await?;
+        self.save_autorun_continuations(continuations + 1).await?;
         Ok(Some(agena_plugin_host::AgentStopPatch {
             continue_with_message: Some(Self::autorun_prompt(&plan, step_index, step)),
             reason: Some("workflow plan autorun".to_string()),
@@ -467,8 +481,10 @@ mod tests {
 
     use super::workflow_runtime::discovery_text_output;
     use super::{
-        AvailableToolRecord, HostRegisteredToolDescriptor, ToolApiHelpInput, ToolDescriptor,
-        ToolDiscoveryConfig, WorkflowPlugin, compact_tool_summary, validate_tool_discovery_config,
+        AvailableToolRecord, HostRegisteredToolDescriptor, PlanUpdateInput, ToolApiHelpInput,
+        ToolDescriptor, ToolDiscoveryConfig, WorkflowPlan, WorkflowPlanCheckpoint,
+        WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
+        WorkflowPlugin, PlanUpdateTarget, compact_tool_summary, validate_tool_discovery_config,
     };
     use agena_plugin_host::sdk::{
         Plugin, PluginErrorKind, PluginKey, ToolDefinition, ToolKey, ToolTag,
@@ -759,5 +775,168 @@ mod tests {
             "{route}"
         );
         assert!(route.contains("\"target\":\"<target>\""), "{route}");
+    }
+
+    fn sample_plan() -> WorkflowPlan {
+        WorkflowPlan {
+            title: "Test plan".to_string(),
+            objective: "Objective".to_string(),
+            phase: WorkflowPlanPhase::Planning,
+            autorun: false,
+            document_markdown: String::new(),
+            steps: vec![
+                WorkflowPlanStep {
+                    id: None,
+                    title: "First step".to_string(),
+                    description: String::new(),
+                    executor: WorkflowPlanExecutor::Ai,
+                    status: WorkflowPlanStepStatus::Pending,
+                    wait_until_ms: None,
+                    note: String::new(),
+                    checkpoints: vec![
+                        WorkflowPlanCheckpoint {
+                            id: None,
+                            text: "Check A".to_string(),
+                            status: WorkflowPlanStepStatus::Pending,
+                        },
+                        WorkflowPlanCheckpoint {
+                            id: None,
+                            text: "Check B".to_string(),
+                            status: WorkflowPlanStepStatus::Pending,
+                        },
+                    ],
+                },
+                WorkflowPlanStep {
+                    id: None,
+                    title: "Second step".to_string(),
+                    description: String::new(),
+                    executor: WorkflowPlanExecutor::Human,
+                    status: WorkflowPlanStepStatus::Pending,
+                    wait_until_ms: None,
+                    note: String::new(),
+                    checkpoints: Vec::new(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn resolve_step_index_uses_1_based_indices() {
+        let plan = sample_plan();
+
+        assert_eq!(WorkflowPlugin::resolve_step_index(&plan, 1).unwrap(), 0);
+        assert_eq!(WorkflowPlugin::resolve_step_index(&plan, 2).unwrap(), 1);
+
+        let zero = WorkflowPlugin::resolve_step_index(&plan, 0)
+            .expect_err("step 0 must be rejected as not 1-based");
+        assert_eq!(
+            zero.diagnostic.message,
+            "plan step indices are 1-based; `step` must be at least 1"
+        );
+
+        let out_of_range = WorkflowPlugin::resolve_step_index(&plan, 3)
+            .expect_err("step 3 must be rejected for a 2-step plan");
+        assert_eq!(
+            out_of_range.diagnostic.message,
+            "unknown plan step 3; this plan has 2 step(s)"
+        );
+    }
+
+    #[test]
+    fn resolve_check_index_uses_1_based_indices() {
+        let plan = sample_plan();
+
+        assert_eq!(WorkflowPlugin::resolve_check_index(&plan.steps[0], 1).unwrap(), 0);
+        assert_eq!(WorkflowPlugin::resolve_check_index(&plan.steps[0], 2).unwrap(), 1);
+
+        let zero = WorkflowPlugin::resolve_check_index(&plan.steps[0], 0)
+            .expect_err("check 0 must be rejected as not 1-based");
+        assert_eq!(
+            zero.diagnostic.message,
+            "plan check indices are 1-based; `check` must be at least 1"
+        );
+
+        let out_of_range = WorkflowPlugin::resolve_check_index(&plan.steps[0], 3)
+            .expect_err("check 3 must be rejected for a 2-check step");
+        assert_eq!(
+            out_of_range.diagnostic.message,
+            "unknown check 3; this step has 2 check(s)"
+        );
+    }
+
+    #[test]
+    fn validate_plan_update_input_maps_plan_and_step_targets() {
+        let plan_update = PlanUpdateInput {
+            phase: Some(WorkflowPlanPhase::Active),
+            ..Default::default()
+        };
+        assert!(matches!(
+            WorkflowPlugin::validate_plan_update_input(&plan_update).unwrap(),
+            PlanUpdateTarget::Plan
+        ));
+
+        let step_update = PlanUpdateInput {
+            step: Some(2),
+            status: Some(WorkflowPlanStepStatus::InProgress),
+            ..Default::default()
+        };
+        assert!(matches!(
+            WorkflowPlugin::validate_plan_update_input(&step_update).unwrap(),
+            PlanUpdateTarget::Step(2)
+        ));
+
+        let check_update = PlanUpdateInput {
+            step: Some(1),
+            check: Some(2),
+            status: Some(WorkflowPlanStepStatus::Completed),
+            ..Default::default()
+        };
+        assert!(matches!(
+            WorkflowPlugin::validate_plan_update_input(&check_update).unwrap(),
+            PlanUpdateTarget::Check {
+                step_index: 1,
+                check_index: 2
+            }
+        ));
+    }
+
+    #[test]
+    fn validate_plan_update_input_rejects_invalid_combinations() {
+        let check_without_step = PlanUpdateInput {
+            check: Some(1),
+            status: Some(WorkflowPlanStepStatus::Completed),
+            ..Default::default()
+        };
+        let error = WorkflowPlugin::validate_plan_update_input(&check_without_step)
+            .expect_err("check without step must fail");
+        assert_eq!(
+            error.diagnostic.message,
+            "plan.update check updates require `step`"
+        );
+
+        let check_without_status = PlanUpdateInput {
+            step: Some(1),
+            check: Some(1),
+            ..Default::default()
+        };
+        let error = WorkflowPlugin::validate_plan_update_input(&check_without_status)
+            .expect_err("check without status must fail");
+        assert_eq!(
+            error.diagnostic.message,
+            "plan.update check updates require `status`"
+        );
+
+        let mixed_phase_and_step = PlanUpdateInput {
+            phase: Some(WorkflowPlanPhase::Completed),
+            step: Some(1),
+            status: Some(WorkflowPlanStepStatus::Completed),
+            ..Default::default()
+        };
+        let error = WorkflowPlugin::validate_plan_update_input(&mixed_phase_and_step)
+            .expect_err("mixing phase with step/check fields must fail");
+        assert_eq!(
+            error.diagnostic.message,
+            "plan.update must target either the plan itself or a step/check, not both"
+        );
     }
 }

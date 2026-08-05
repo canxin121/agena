@@ -300,8 +300,8 @@ impl SessionProcessor {
                     // or empty Start/Finish snapshot would otherwise discard a
                     // complete tool call. Mirror the accumulator's behavior,
                     // which treats an empty snapshot as "no change".
-                    let snapshot_is_degenerate = arguments_json.trim().is_empty()
-                        || arguments_json.trim() == "{}";
+                    let snapshot_is_degenerate =
+                        arguments_json.trim().is_empty() || arguments_json.trim() == "{}";
                     if !snapshot_is_degenerate {
                         pending.arguments_json = arguments_json.clone();
                     }
@@ -516,6 +516,21 @@ impl SessionProcessor {
 
             self.publish_live_part(&run, &assistant, part_id).await?;
             complete_part_status(&mut assistant, part_id)?;
+        }
+
+        // A successful stream that produced no visible text, no tool call,
+        // and no substantive reasoning is an empty response. Surface it as a
+        // failure with guidance instead of persisting a silent empty
+        // assistant message. Placeholder-only reasoning counts as empty: the
+        // reasoning-copy block above deliberately skips the placeholder, so
+        // the user would otherwise see nothing.
+        if provider_err.is_none()
+            && visible_text.trim().is_empty()
+            && !saw_tool_call
+            && !saw_provider_native_tool_call
+            && (reasoning_text.trim().is_empty() || reasoning_text.trim() == REASONING_PLACEHOLDER)
+        {
+            provider_err = Some(AppError::EmptyResponse);
         }
 
         if provider_err.is_none() {

@@ -447,6 +447,7 @@ impl WorkflowPlugin {
         })
         .await?;
         self.clear_autorun_signature().await?;
+        self.clear_autorun_continuations().await?;
         self.sync_plan_statusline(Some(plan)).await?;
         Ok(())
     }
@@ -461,6 +462,7 @@ impl WorkflowPlugin {
         })
         .await?;
         self.clear_autorun_signature().await?;
+        self.clear_autorun_continuations().await?;
         self.sync_plan_statusline(None).await?;
         Ok(())
     }
@@ -508,6 +510,58 @@ impl WorkflowPlugin {
             .await
     }
 
+    /// Number of consecutive autorun stop-hook continuations recorded for the
+    /// *current* plan state (same `plan_auto_signature`). Resets whenever the
+    /// plan changes; bounds the anti-loop guard in `agent_stop_hook`.
+    pub(in crate::plugins::provided::workflow) async fn load_autorun_continuations(
+        &self,
+    ) -> SdkResult<u32> {
+        let value = self
+            .host()?
+            .storage_get(HostStorageGetRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
+                key: PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY.to_string(),
+            })
+            .await?
+            .value;
+        match value {
+            None => Ok(0),
+            Some(value) => value.parse::<u32>().map_err(|err| {
+                PluginError::internal(format!("invalid stored autorun continuations: {err}"))
+            }),
+        }
+    }
+
+    pub(in crate::plugins::provided::workflow) async fn save_autorun_continuations(
+        &self,
+        count: u32,
+    ) -> SdkResult<()> {
+        self.host()?
+            .storage_set(HostStorageSetRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
+                key: PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY.to_string(),
+                value: count.to_string(),
+            })
+            .await
+    }
+
+    pub(in crate::plugins::provided::workflow) async fn clear_autorun_continuations(
+        &self,
+    ) -> SdkResult<()> {
+        self.host()?
+            .storage_delete(HostStorageDeleteRequest {
+                scope: HostStorageScope::Session,
+                visibility: HostStorageVisibility::Private,
+                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
+                key: PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY.to_string(),
+            })
+            .await
+    }
+
     pub(in crate::plugins::provided::workflow) async fn sync_plan_statusline(
         &self,
         plan: Option<&WorkflowPlan>,
@@ -537,8 +591,25 @@ impl WorkflowPlugin {
     pub(in crate::plugins::provided::workflow) fn plan_payload(
         plan: &WorkflowPlan,
     ) -> SdkResult<serde_json::Value> {
-        serde_json::to_value(serde_json::json!({ "plan": plan }))
+        serde_json::to_value(serde_json::json!({ "plan": Self::plan_without_legacy_ids(plan) }))
             .map_err(|err| PluginError::internal(err.to_string()))
+    }
+
+    /// Clone the plan with any legacy step/check identifiers stripped so tool
+    /// payloads never surface the old database-key style ids. New plans already
+    /// carry `None`, so this only affects plans persisted before the ids were
+    /// removed.
+    pub(in crate::plugins::provided::workflow) fn plan_without_legacy_ids(
+        plan: &WorkflowPlan,
+    ) -> WorkflowPlan {
+        let mut plan = plan.clone();
+        for step in &mut plan.steps {
+            step.id = None;
+            for checkpoint in &mut step.checkpoints {
+                checkpoint.id = None;
+            }
+        }
+        plan
     }
 
     pub(in crate::plugins::provided::workflow) fn validate_plan_objective(
@@ -596,24 +667,14 @@ impl WorkflowPlugin {
                         )));
                     }
                     Ok(WorkflowPlanCheckpoint {
-                        id: checkpoint
-                            .id
-                            .clone()
-                            .filter(|value| !value.trim().is_empty())
-                            .unwrap_or_else(|| {
-                                format!("step_{}_check_{}", step_index + 1, checkpoint_index + 1)
-                            }),
+                        id: None,
                         text: text.to_string(),
                         status: checkpoint.status.unwrap_or_default(),
                     })
                 })
                 .collect::<SdkResult<Vec<_>>>()?;
             steps.push(WorkflowPlanStep {
-                id: step
-                    .id
-                    .clone()
-                    .filter(|value| !value.trim().is_empty())
-                    .unwrap_or_else(|| format!("step_{}", step_index + 1)),
+                id: None,
                 title: resolved_title.to_string(),
                 description: description.to_string(),
                 executor: step.executor,
@@ -706,104 +767,63 @@ impl WorkflowPlugin {
         )
     }
 
-    pub(in crate::plugins::provided::workflow) fn normalize_identifier(value: &str) -> String {
-        value
-            .trim()
-            .chars()
-            .filter_map(|ch| {
-                if ch.is_ascii_alphanumeric() {
-                    Some(ch.to_ascii_lowercase())
-                } else if ch.is_whitespace() || matches!(ch, '_' | '-') {
-                    Some('_')
-                } else {
-                    None
-                }
-            })
-            .collect::<String>()
-            .trim_matches('_')
-            .to_string()
-    }
-
-    pub(in crate::plugins::provided::workflow) fn parse_1_based_index_hint(
-        value: &str,
-        prefixes: &[&str],
-    ) -> Option<usize> {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if let Ok(index) = trimmed.parse::<usize>() {
-            return index.checked_sub(1);
-        }
-        let normalized = Self::normalize_identifier(trimmed);
-        for prefix in prefixes {
-            for candidate in [
-                prefix.to_string(),
-                format!("{prefix}_"),
-                format!("{prefix}-"),
-            ] {
-                if let Some(rest) = normalized.strip_prefix(candidate.as_str())
-                    && let Ok(index) = rest.parse::<usize>()
-                {
-                    return index.checked_sub(1);
-                }
-            }
-        }
-        None
-    }
-
-    pub(in crate::plugins::provided::workflow) fn resolve_plan_step_index(
+    /// Resolve a 1-based `step` index to a 0-based index, validating the range.
+    pub(in crate::plugins::provided::workflow) fn resolve_step_index(
         plan: &WorkflowPlan,
-        step_id: &str,
-    ) -> Option<usize> {
-        let normalized_target = Self::normalize_identifier(step_id);
+        step: usize,
+    ) -> SdkResult<usize> {
+        if step == 0 {
+            return Err(PluginError::invalid_params(
+                "plan step indices are 1-based; `step` must be at least 1".to_string(),
+            ));
+        }
+        let index = step - 1;
+        if index >= plan.steps.len() {
+            return Err(PluginError::invalid_params(format!(
+                "unknown plan step {step}; this plan has {} step(s)",
+                plan.steps.len()
+            )));
+        }
+        Ok(index)
+    }
+
+    /// Resolve a 1-based `check` index within a step to a 0-based index,
+    /// validating the range.
+    pub(in crate::plugins::provided::workflow) fn resolve_check_index(
+        step: &WorkflowPlanStep,
+        check: usize,
+    ) -> SdkResult<usize> {
+        if check == 0 {
+            return Err(PluginError::invalid_params(
+                "plan check indices are 1-based; `check` must be at least 1".to_string(),
+            ));
+        }
+        let index = check - 1;
+        if index >= step.checkpoints.len() {
+            return Err(PluginError::invalid_params(format!(
+                "unknown check {check}; this step has {} check(s)",
+                step.checkpoints.len()
+            )));
+        }
+        Ok(index)
+    }
+
+    pub(in crate::plugins::provided::workflow) fn step_listing(plan: &WorkflowPlan) -> String {
         plan.steps
             .iter()
-            .position(|step| step.id == step_id)
-            .or_else(|| {
-                plan.steps.iter().position(|step| {
-                    let title = Self::normalize_identifier(step.title.as_str());
-                    let description = Self::normalize_identifier(step.description.as_str());
-                    !normalized_target.is_empty()
-                        && (title == normalized_target || description == normalized_target)
-                })
-            })
-            .or_else(|| Self::parse_1_based_index_hint(step_id, &["step", "s"]))
-            .filter(|index| *index < plan.steps.len())
+            .enumerate()
+            .map(|(index, step)| format!("{}: '{}'", index + 1, step.title))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
-    pub(in crate::plugins::provided::workflow) fn resolve_checkpoint_index(
-        step: &WorkflowPlanStep,
-        checkpoint_id: &str,
-    ) -> Option<usize> {
-        let normalized_target = Self::normalize_identifier(checkpoint_id);
+    pub(in crate::plugins::provided::workflow) fn check_listing(step: &WorkflowPlanStep) -> String {
         step.checkpoints
             .iter()
-            .position(|checkpoint| checkpoint.id == checkpoint_id)
-            .or_else(|| {
-                step.checkpoints.iter().position(|checkpoint| {
-                    let text = Self::normalize_identifier(checkpoint.text.as_str());
-                    !normalized_target.is_empty() && text == normalized_target
-                })
-            })
-            .or_else(|| {
-                Self::parse_1_based_index_hint(checkpoint_id, &["check", "checkpoint", "cp", "c"])
-            })
-            .filter(|index| *index < step.checkpoints.len())
-    }
-
-    pub(in crate::plugins::provided::workflow) fn plan_step_identifier_hint(
-        step: &WorkflowPlanStep,
-        index: usize,
-    ) -> String {
-        format!("step_id={} (step {})", step.id, index + 1)
-    }
-
-    pub(in crate::plugins::provided::workflow) fn checkpoint_identifier_hint(
-        checkpoint: &WorkflowPlanCheckpoint,
-        index: usize,
-    ) -> String {
-        format!("check_id={} (check {})", checkpoint.id, index + 1)
+            .enumerate()
+            .map(|(index, checkpoint)| format!("{}: '{}'", index + 1, checkpoint.text))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     pub(in crate::plugins::provided::workflow) fn plan_progress_counts(
@@ -953,12 +973,12 @@ impl WorkflowPlugin {
     }
 
     pub(in crate::plugins::provided::workflow) fn plan_current_text(plan: &WorkflowPlan) -> String {
-        match Self::next_actionable_step(plan) {
+        match Self::next_actionable_step(&plan) {
             Some((index, step)) => format!(
-                "Current step {}: '{}' [{}].\nGoal: {}\nStatus: {}.",
+                "Current step {}: '{}' (step {}).\nGoal: {}\nStatus: {}.",
                 index + 1,
                 step.title,
-                Self::plan_step_identifier_hint(step, index),
+                index + 1,
                 Self::step_goal(step),
                 Self::plan_step_status_label(step.status)
             ),
@@ -981,16 +1001,17 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
         view: PlanGetView,
     ) -> serde_json::Value {
-        match Self::next_actionable_step(plan) {
+        let plan = Self::plan_without_legacy_ids(plan);
+        match Self::next_actionable_step(&plan) {
             Some((index, step)) => serde_json::json!({
-                "plan": plan,
+                "plan": &plan,
                 "view": view,
                 "current_step": step,
                 "current_step_index": index,
                 "current_step_goal": Self::step_goal(step),
             }),
             None => serde_json::json!({
-                "plan": plan,
+                "plan": &plan,
                 "view": view,
                 "current_step": serde_json::Value::Null,
                 "current_step_goal": serde_json::Value::Null,
@@ -1116,31 +1137,17 @@ impl WorkflowPlugin {
         plan.document_markdown = format!("{}\n\n{summary_section}", plan.document_markdown.trim());
     }
 
-    pub(in crate::plugins::provided::workflow) fn normalized_optional_identifier(
-        value: Option<&str>,
-        field_name: &str,
-    ) -> SdkResult<Option<String>> {
-        match value.map(str::trim) {
-            Some("") => Err(PluginError::invalid_params(format!(
-                "{field_name} must not be empty when provided"
-            ))),
-            Some(value) => Ok(Some(value.to_string())),
-            None => Ok(None),
-        }
-    }
-
     pub(in crate::plugins::provided::workflow) fn validate_plan_update_input(
         input: &PlanUpdateInput,
     ) -> SdkResult<PlanUpdateTarget> {
         let phase_update_requested =
             input.phase.is_some() || input.autorun.is_some() || input.summary.is_some();
-        let step_id = Self::normalized_optional_identifier(input.step_id.as_deref(), "step_id")?;
-        let checkpoint_id =
-            Self::normalized_optional_identifier(input.checkpoint_id.as_deref(), "check_id")?;
+        let step = input.step;
+        let check = input.check;
 
         if phase_update_requested {
-            if step_id.is_some()
-                || checkpoint_id.is_some()
+            if step.is_some()
+                || check.is_some()
                 || input.status.is_some()
                 || input.wait_until_ms.is_some()
                 || input.note.is_some()
@@ -1163,18 +1170,18 @@ impl WorkflowPlugin {
             return Ok(PlanUpdateTarget::Plan);
         }
 
-        let Some(step_id) = step_id else {
-            if checkpoint_id.is_some() {
+        let Some(step) = step else {
+            if check.is_some() {
                 return Err(PluginError::invalid_params(
-                    "plan.update check updates require step_id".to_string(),
+                    "plan.update check updates require `step`".to_string(),
                 ));
             }
             return Err(PluginError::invalid_params(
-                "plan.update requires either `phase` / `autorun` or `step_id`".to_string(),
+                "plan.update requires either `phase` / `autorun` or `step`".to_string(),
             ));
         };
 
-        if let Some(checkpoint_id) = checkpoint_id {
+        if let Some(check) = check {
             if input.status.is_none() {
                 return Err(PluginError::invalid_params(
                     "plan.update check updates require `status`".to_string(),
@@ -1187,8 +1194,8 @@ impl WorkflowPlugin {
                 ));
             }
             return Ok(PlanUpdateTarget::Check {
-                step_id,
-                checkpoint_id,
+                step_index: step,
+                check_index: check,
             });
         }
 
@@ -1199,7 +1206,7 @@ impl WorkflowPlugin {
             ));
         }
 
-        Ok(PlanUpdateTarget::Step(step_id))
+        Ok(PlanUpdateTarget::Step(step))
     }
 
     pub(in crate::plugins::provided::workflow) fn plan_phase_requires_approval(
@@ -1265,11 +1272,10 @@ impl WorkflowPlugin {
     pub(in crate::plugins::provided::workflow) fn plan_auto_signature(
         plan: &WorkflowPlan,
         step_index: usize,
-        step: &WorkflowPlanStep,
     ) -> SdkResult<String> {
         let serialized =
             serde_json::to_string(plan).map_err(|err| PluginError::internal(err.to_string()))?;
-        Ok(format!("{serialized}:{step_index}:{}", step.id))
+        Ok(format!("{serialized}:{step_index}"))
     }
 
     pub(in crate::plugins::provided::workflow) fn review_decision(
@@ -1495,7 +1501,7 @@ impl WorkflowPlugin {
         let output_text =
             Self::plan_output_text(format!("Plan review decision: {decision}.").as_str(), &plan);
         let payload = serde_json::json!({
-            "plan": plan,
+            "plan": Self::plan_without_legacy_ids(&plan),
             "decision": decision,
         });
         Ok(ToolInvokeOutput::from_parts(
@@ -1519,8 +1525,9 @@ use super::{
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT,
-    PLAN_RUNTIME_AUTO_SIGNATURE_KEY, PLAN_RUNTIME_NAMESPACE, PLAN_STATUSLINE_SEGMENT_ID, Path,
-    PathBuf, PlanGetView, PlanUpdateInput, PlanUpdateTarget, PluginError, RwLock, SdkResult,
+    PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY, PLAN_RUNTIME_AUTO_SIGNATURE_KEY,
+    PLAN_RUNTIME_NAMESPACE, PLAN_STATUSLINE_SEGMENT_ID, Path, PathBuf, PlanGetView,
+    PlanUpdateInput, PlanUpdateTarget, PluginError, RwLock, SdkResult,
     SessionRenameToolInput, SessionToolResponse, ToolDescriptor, ToolInvokeOutput,
     ToolSearchDocument, ToolTagRecord, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
     WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,

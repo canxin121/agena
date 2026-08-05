@@ -138,12 +138,6 @@ impl App {
             AppMessage::SessionEventArrived { session_id, live } => {
                 self.handle_session_event_arrived(session_id, live)
             }
-            AppMessage::SteerSubmitted {
-                session_id,
-                pending_message_id,
-                draft,
-                result,
-            } => self.handle_steer_submitted(session_id, pending_message_id, draft, result),
             AppMessage::RunCancelled { session_id, result } => {
                 self.handle_turn_cancelled(session_id, result)
             }
@@ -419,52 +413,6 @@ impl App {
         self.submit_composer();
     }
 
-    pub(crate) fn handle_steer_submitted(
-        &mut self,
-        session_id: i64,
-        pending_message_id: u64,
-        draft: ComposerDraft,
-        result: UiResult<()>,
-    ) {
-        match result {
-            Ok(()) => {
-                self.transcript
-                    .confirm_pending_user_message(pending_message_id);
-                self.record_prompt_history_from_draft(&draft);
-                if self.transcript.session_id == Some(session_id) {
-                    self.request_refresh(session_id, true);
-                }
-            }
-            Err(error) => {
-                self.transcript
-                    .remove_pending_user_message(pending_message_id);
-                if steer_failed_because_run_ended(&error) {
-                    // Borrowed from codex's steer flow: a steer aimed at a
-                    // turn that is already gone (race between the local busy
-                    // check and the backend response) falls through to a
-                    // fresh user turn instead of being parked in the queue
-                    // where nothing would drain it.
-                    self.request_submit_message(session_id, draft);
-                    return;
-                }
-                // Backend rejected the steer (run still active but not in
-                // a steerable phase). With a single pending slot, keep any
-                // already parked message and restore this draft to the
-                // composer so nothing is silently lost.
-                if self.queue.is_empty() {
-                    self.queue.set(draft);
-                } else {
-                    self.restore_composer_draft(draft);
-                }
-                self.flash_warning(format!(
-                    "{}: {}",
-                    ui_text::t(&self.i18n, "flash-steer-failed-fallback-queue"),
-                    error
-                ));
-            }
-        }
-    }
-
     pub(crate) fn handle_turn_cancelled(&mut self, session_id: i64, result: UiResult<()>) {
         self.run_activity.clear_session(session_id);
         if self.transcript.session_id == Some(session_id) {
@@ -561,56 +509,7 @@ impl App {
 }
 use crate::{
     App, AppMessage, ComposerDraft, DraftSlot, PendingUserMessage, RunActivityTarget, RunOperation,
-    SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource, UiFailure,
-    UiResult, execution_update_is_stale, ui_text,
+    SessionExecutionResource, SessionLoadScope, SessionRefresh, SessionResource, UiResult,
+    execution_update_is_stale, ui_text,
 };
 use agena_tui::main_focus::Focus;
-
-/// A steer that lands after the active run has already ended — for example a
-/// race between the local busy check and the backend response — is reported as
-/// `execution.not_active`. Mirroring codex's steer flow, the message must then
-/// fall through to a fresh user turn instead of being parked in the queue
-/// where nothing would drain it.
-fn steer_failed_because_run_ended(error: &UiFailure) -> bool {
-    error.failure.code.as_str() == "execution.not_active"
-}
-
-#[cfg(test)]
-mod steer_fallback_tests {
-    use agena_failure::{
-        Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
-        RecoveryDirective, RetryDirective, UserPresentation,
-    };
-
-    use super::steer_failed_because_run_ended;
-    use crate::UiFailure;
-
-    fn failure(code: &str) -> UiFailure {
-        UiFailure::from_failure(Failure::new(
-            FailureCode::new(code),
-            FailureCategory::NotFound,
-            FailureResponsibility::Caller,
-            RetryDirective::AfterRefresh,
-            RecoveryDirective::Refresh,
-            FailureImpact::RequestRejected,
-            UserPresentation::new(code, "test failure"),
-        ))
-    }
-
-    #[test]
-    fn run_ended_steer_is_detected_from_execution_not_active() {
-        assert!(steer_failed_because_run_ended(&failure(
-            "execution.not_active"
-        )));
-    }
-
-    #[test]
-    fn non_steerable_run_rejection_is_not_treated_as_run_ended() {
-        assert!(!steer_failed_because_run_ended(&failure(
-            "internal.unexpected"
-        )));
-        assert!(!steer_failed_because_run_ended(&failure(
-            "execution.already_active"
-        )));
-    }
-}

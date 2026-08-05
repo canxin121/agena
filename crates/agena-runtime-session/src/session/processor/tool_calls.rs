@@ -186,7 +186,11 @@ impl SessionProcessor {
             // stream, not a nameless-but-executable tool. Fail the run with a
             // clear message instead of substituting a phantom "unknown" name
             // that would surface as a confusing "unknown Tool API function".
-            let Some(tool_name) = pending.name.as_deref().map(str::trim).filter(|name| !name.is_empty())
+            let Some(tool_name) = pending
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
             else {
                 return Err(AppError::Provider(format!(
                     "provider stream ended a tool call in session {} without a function name",

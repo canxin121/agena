@@ -70,6 +70,8 @@ pub enum AppError {
     SubtaskBudgetExceeded(String),
     #[error("session {0} already has an active execution")]
     ExecutionAlreadyActive(i64),
+    #[error("model returned an empty response")]
+    EmptyResponse,
     #[error("session {0} has no active execution")]
     NoActiveExecution(i64),
     #[error("internal error: {0}")]
@@ -146,6 +148,9 @@ impl AppError {
                 "The subtask reached its usage limit before it could finish."
             }
             Self::ExecutionAlreadyActive(_) => "This session is already running a response.",
+            Self::EmptyResponse => {
+                "The model returned an empty response. It may be temporarily unavailable or misconfigured; try again or choose another model."
+            }
             Self::NoActiveExecution(_) => "This session has no active response.",
             Self::Database(error) if is_database_busy(error) => {
                 "The database is busy. Try again in a moment."
@@ -292,6 +297,13 @@ impl AppError {
                 Responsibility::Caller,
                 Retry::AfterRefresh,
                 Recovery::Refresh,
+            ),
+            Self::EmptyResponse => (
+                "provider.empty_response",
+                Category::DependencyUnavailable,
+                Responsibility::Dependency,
+                Retry::AfterUserAction,
+                Recovery::ChooseAlternative,
             ),
             Self::Cancelled => (
                 // Cancellation is a terminal outcome. If it reaches a
@@ -639,6 +651,22 @@ mod tests {
         let error = AppError::Database(sea_orm::DbErr::Custom("something broke".to_owned()));
         let failure = error.failure();
         assert_eq!(failure.code.as_str(), "internal.unexpected");
+    }
+
+    #[test]
+    fn empty_response_is_classified_as_provider_dependency_failure() {
+        use agena_failure::{FailureCategory, FailureResponsibility, RetryDirective};
+
+        let error = AppError::EmptyResponse;
+        let failure = error.failure();
+
+        assert_eq!(failure.code.as_str(), "provider.empty_response");
+        assert_eq!(failure.category, FailureCategory::DependencyUnavailable);
+        assert_eq!(failure.responsibility, FailureResponsibility::Dependency);
+        assert_eq!(failure.retry, RetryDirective::AfterUserAction);
+        assert!(!error.retryable());
+        assert!(error.public_message().contains("empty response"));
+        assert!(error.to_string().contains("empty response"));
     }
 
     /// Builds a `DbErr::Exec` wrapping a SQLite busy error through the public

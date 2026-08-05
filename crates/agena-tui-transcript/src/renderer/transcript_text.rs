@@ -116,7 +116,12 @@ pub(crate) fn operation_block_copy_text(block: &OperationBlockResource, i18n: &I
 }
 
 pub(crate) fn tool_display_label(tool: &OperationPartResource) -> String {
-    if tool.title.trim().is_empty() {
+    // The activity headline is the direct execution-tool name; producer
+    // converted titles ("Process run …", "Apply patch") are not shown.
+    let tool_name = tool.invocation.name.trim();
+    if !tool_name.is_empty() {
+        tool_name.to_owned()
+    } else if tool.title.trim().is_empty() {
         tool_invocation_label(&tool.invocation)
     } else {
         tool.title.clone()

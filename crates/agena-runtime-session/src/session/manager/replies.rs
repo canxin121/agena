@@ -3,7 +3,7 @@ use std::path::Path;
 use super::{ConversationIdentity, ExecutionConversationTarget, StableRunContext};
 use crate::session::Session;
 use crate::session::model::SessionPartRef;
-use agena_domain::{ToolApiFunction, UserInputReply};
+use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
 use agena_tool::ToolPermissionCheck;
 
@@ -157,25 +157,11 @@ fn operation_authorization(
         .unwrap_or_default()
 }
 
-/// Stable terminal identity for an Operation. Approval-phase prose and the
-/// Tool API gateway are never allowed to become the final title.
+/// Stable terminal identity for an Operation. The final title is the direct
+/// execution-tool name; approval-phase prose and converted gateway names
+/// ("List tools", "Search tools", …) are never allowed to become it.
 fn terminal_operation_title(invocation: &ToolInvocation) -> String {
-    let function = invocation
-        .tool_api_call
-        .as_ref()
-        .map(|call| call.function)
-        .or_else(|| ToolApiFunction::from_function_name(invocation.name.as_str()));
-    match function {
-        Some(ToolApiFunction::List) => "List tools".to_owned(),
-        Some(ToolApiFunction::Search) => "Search tools".to_owned(),
-        Some(ToolApiFunction::Help) => "Inspect tool".to_owned(),
-        Some(ToolApiFunction::Tags) => "List tool tags".to_owned(),
-        Some(ToolApiFunction::Call) => invocation.name.clone(),
-        Some(ToolApiFunction::PluginsList) => "List plugins".to_owned(),
-        Some(ToolApiFunction::PluginsSearch) => "Search plugins".to_owned(),
-        Some(ToolApiFunction::PluginsTags) => "List plugin tags".to_owned(),
-        None => tool_name(invocation),
-    }
+    invocation.name.clone()
 }
 
 fn is_authorization_phase_title(title: &str) -> bool {

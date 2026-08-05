@@ -131,8 +131,27 @@ pub(super) async fn resume_session_state(
         // interrupted runs. `reconcile_interrupted_executions` skips sessions
         // with a live lease, so without this a stale lease from a crashed
         // process would keep its session permanently marked "already running".
-        manager.reap_stale_leases().await?;
-        manager.reconcile_interrupted_executions().await?;
+        //
+        // Both passes scan every session's history and can take tens of
+        // seconds on large databases, so run them in the background and let
+        // the UI open immediately. They are idempotent maintenance, and
+        // `register` atomically steals a stale lease on demand, so deferring
+        // them cannot block a new run.
+        let manager = Arc::clone(manager);
+        tokio::spawn(async move {
+            if let Err(error) = manager.reap_stale_leases().await {
+                tracing::error!(
+                    error = %error,
+                    "background session lease reclamation failed"
+                );
+            }
+            if let Err(error) = manager.reconcile_interrupted_executions().await {
+                tracing::error!(
+                    error = %error,
+                    "background interrupted-execution reconciliation failed"
+                );
+            }
+        });
     }
     Ok(())
 }

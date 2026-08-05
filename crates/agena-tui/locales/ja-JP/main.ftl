@@ -104,6 +104,7 @@ flash-copied-assistant-message = 最後の assistant メッセージをクリッ
 flash-no-visible-transcript = コピーできる表示テキストがありません
 flash-copied-visible-transcript = 表示中の内容をクリップボードにコピーしました
 flash-clipboard-copy-failed = クリップボードへのコピーに失敗しました: {$error}
+flash-message-interrupting = 実行中の処理を中断します - メッセージは次に送信されます
 
 message-role-user = user
 message-role-assistant = assistant

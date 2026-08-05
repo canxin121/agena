@@ -136,7 +136,13 @@ impl WorkflowPlugin {
             lines.extend(pending_checks);
         }
         lines.push(
-            "Update the plan state as you make progress. If the next step needs human input, stop and say exactly what is needed.".to_string(),
+            "Update the plan state as you make progress: mark checks completed via `plan.update` with `step` and `check` (1-based indices), mark steps complete when their checks are done, and move to the next step when this one is finished.".to_string(),
+        );
+        lines.push(
+            "When the whole plan is finished, call `plan.update` with `phase: \"completed\"` (or `\"blocked\"`/`\"cancelled\"` as appropriate) so autorun stops cleanly.".to_string(),
+        );
+        lines.push(
+            "If the next step needs human input or cannot be advanced, stop and say exactly what is needed.".to_string(),
         );
         lines.push("</plan_context>".to_string());
         lines.join("\n")
@@ -236,24 +242,14 @@ impl WorkflowPlugin {
                 }
                 "Updated the plan.".to_string()
             }
-            PlanUpdateTarget::Step(step_id) => {
-                let Some(step_index) = Self::resolve_plan_step_index(&plan, step_id.as_str())
-                else {
-                    return Err(PluginError::invalid_params(format!(
-                        "unknown plan step '{}'; available steps: {}",
-                        step_id,
-                        plan.steps
-                            .iter()
-                            .enumerate()
-                            .map(|(index, step)| format!(
-                                "'{}' [{}]",
-                                step.title,
-                                Self::plan_step_identifier_hint(step, index)
-                            ))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )));
-                };
+            PlanUpdateTarget::Step(step) => {
+                let step_index = Self::resolve_step_index(&plan, step).map_err(|err| {
+                    PluginError::invalid_params(format!(
+                        "{}; available steps: {}",
+                        err.diagnostic.message,
+                        Self::step_listing(&plan)
+                    ))
+                })?;
                 let step = &mut plan.steps[step_index];
                 if let Some(status) = input.status {
                     step.status = status;
@@ -268,48 +264,27 @@ impl WorkflowPlugin {
                 format!("Updated step '{}'.", step.title)
             }
             PlanUpdateTarget::Check {
-                step_id,
-                checkpoint_id,
+                step_index,
+                check_index,
             } => {
-                let Some(step_index) = Self::resolve_plan_step_index(&plan, step_id.as_str())
-                else {
-                    return Err(PluginError::invalid_params(format!(
-                        "unknown plan step '{}'; available steps: {}",
-                        step_id,
-                        plan.steps
-                            .iter()
-                            .enumerate()
-                            .map(|(index, step)| format!(
-                                "'{}' [{}]",
-                                step.title,
-                                Self::plan_step_identifier_hint(step, index)
-                            ))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )));
-                };
+                let step_index = Self::resolve_step_index(&plan, step_index).map_err(|err| {
+                    PluginError::invalid_params(format!(
+                        "{}; available steps: {}",
+                        err.diagnostic.message,
+                        Self::step_listing(&plan)
+                    ))
+                })?;
                 let step = &mut plan.steps[step_index];
                 let checkpoint_text = {
-                    let Some(checkpoint_index) =
-                        Self::resolve_checkpoint_index(step, checkpoint_id.as_str())
-                    else {
-                        return Err(PluginError::invalid_params(format!(
-                            "unknown check '{}' for step '{}'; available checks: {}",
-                            checkpoint_id,
-                            step_id,
-                            step.checkpoints
-                                .iter()
-                                .enumerate()
-                                .map(|(index, checkpoint)| format!(
-                                    "'{}' [{}]",
-                                    checkpoint.text,
-                                    Self::checkpoint_identifier_hint(checkpoint, index)
-                                ))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )));
-                    };
-                    let checkpoint = &mut step.checkpoints[checkpoint_index];
+                    let check_index =
+                        Self::resolve_check_index(step, check_index).map_err(|err| {
+                            PluginError::invalid_params(format!(
+                                "{}; available checks: {}",
+                                err.diagnostic.message,
+                                Self::check_listing(step)
+                            ))
+                        })?;
+                    let checkpoint = &mut step.checkpoints[check_index];
                     checkpoint.status = input
                         .status
                         .expect("validated plan check update requires status");

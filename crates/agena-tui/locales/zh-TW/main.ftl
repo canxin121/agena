@@ -104,6 +104,7 @@ flash-copied-assistant-message = 已將最後一則 assistant 訊息複製到剪
 flash-no-visible-transcript = 沒有可複製的目前可見文字
 flash-copied-visible-transcript = 已將目前可見內容複製到剪貼簿
 flash-clipboard-copy-failed = 剪貼簿複製失敗：{$error}
+flash-message-interrupting = 正在中斷目前執行 - 訊息將立即傳送
 
 message-role-user = 使用者
 message-role-assistant = 助手

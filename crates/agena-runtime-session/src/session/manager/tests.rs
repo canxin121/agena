@@ -4289,7 +4289,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plain_text_turn_without_tool_call_stops_after_one_turn() {
-        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(2, false, false).await;
+        let (manager, calls) =
+            test_manager_with_unfinished_plain_text_provider(2, false, false).await;
         let session = manager
             .create_session(SessionCreateRequest {
                 title: "trailing colon provider".to_owned(),
@@ -4320,7 +4321,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn truncated_plain_text_forces_continuation() {
-        let (manager, calls) = test_manager_with_unfinished_plain_text_provider(0, true, false).await;
+        let (manager, calls) =
+            test_manager_with_unfinished_plain_text_provider(0, true, false).await;
         let session = manager
             .create_session(SessionCreateRequest {
                 title: "truncated provider".to_owned(),

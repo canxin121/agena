@@ -197,11 +197,9 @@ fn assistant_reply_document_parts(
                         id,
                         status: PartExecutionStatusResource::Completed,
                         content: TranscriptPartContent::Activity(
-                            TranscriptActivityContent::TextSegment(Box::new(
-                                TextSegmentActivity {
-                                    text: segment.text.clone(),
-                                },
-                            )),
+                            TranscriptActivityContent::TextSegment(Box::new(TextSegmentActivity {
+                                text: segment.text.clone(),
+                            })),
                         ),
                     }
                 }
@@ -476,7 +474,7 @@ pub(crate) fn activity_presentation(
         ),
         ActivityPayload::TextSegment(segment) => (
             "text_segment".to_owned(),
-            "正文".to_owned(),
+            "Text".to_owned(),
             // The full segment is the expandable body; the collapsed headline
             // truncates it to the available width. Styled like normal body
             // text, not like thinking's muted trail.
@@ -610,12 +608,10 @@ fn bounded_presentation_summary(text: &str) -> String {
 }
 
 fn operation_activity_title(operation: &agena_domain::OperationActivity) -> String {
-    let title = operation.title.trim();
-    if title.is_empty() {
-        operation.invocation.name.clone()
-    } else {
-        title.to_owned()
-    }
+    // The activity headline is the direct execution-tool name. Producer
+    // converted titles ("Process run …", "Read README.md") are display
+    // noise; the invocation name is the stable tool identity.
+    operation.invocation.name.clone()
 }
 fn timestamp(value: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(value).unwrap_or(DateTime::UNIX_EPOCH)
@@ -961,7 +957,7 @@ mod tests {
                     }))
                     .expect("structured shell.run input"),
                 ),
-                title: "Run shell.run".to_owned(),
+                title: "shell.run".to_owned(),
                 // The runtime records the approval decision as the Operation
                 // summary when the tool produced no result (replies.rs). This
                 // is permission transcript prose, never tool output.
@@ -1026,7 +1022,7 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(collapsed_text.contains("Run shell.run"), "{collapsed_text}");
+        assert!(collapsed_text.contains("shell.run"), "{collapsed_text}");
         // The approval sentence is not tool output: it must never surface as
         // the collapsed header summary either.
         assert!(
@@ -1049,10 +1045,7 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(
-            expanded_text.contains("Run shell.run"),
-            "{expanded_text}"
-        );
+        assert!(expanded_text.contains("shell.run"), "{expanded_text}");
         assert!(
             expanded_text.contains("▸ Permissions · 1 permission"),
             "{expanded_text}"
@@ -1062,10 +1055,7 @@ mod tests {
             "{expanded_text}"
         );
         // The approval sentence must never be wrapped in an "Output" section.
-        assert!(
-            !expanded_text.contains("Output"),
-            "{expanded_text}"
-        );
+        assert!(!expanded_text.contains("Output"), "{expanded_text}");
         assert!(
             !expanded_text.contains("Permission allowed once"),
             "{expanded_text}"
@@ -1093,7 +1083,9 @@ mod tests {
             .find(|node| node.key == permissions_key)
             .expect("collapsed Permissions section");
         assert!(
-            permissions_node.copy_text.contains("Allowed once · shell.run"),
+            permissions_node
+                .copy_text
+                .contains("Allowed once · shell.run"),
             "{}",
             permissions_node.copy_text
         );
@@ -1236,11 +1228,19 @@ mod tests {
             .expect("tools_list Activity node");
         assert!(node.toggleable);
         assert!(!node.expanded);
+        // The collapsed headline is the direct tool name; the producer
+        // converted title ("List tools · 2/133") is never rendered.
         assert!(
             collapsed
                 .lines
                 .iter()
-                .any(|line| line.text.contains("List tools · 2/133"))
+                .any(|line| line.text.contains("tools_list"))
+        );
+        assert!(
+            collapsed
+                .lines
+                .iter()
+                .all(|line| !line.text.contains("List tools"))
         );
         assert!(
             collapsed
@@ -1411,10 +1411,7 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(
-            collapsed_text.contains("Inspect shell.run"),
-            "{collapsed_text}"
-        );
+        assert!(collapsed_text.contains("shell.run"), "{collapsed_text}");
         assert!(
             collapsed_text.contains("Found 3 checks"),
             "{collapsed_text}"
@@ -1422,11 +1419,11 @@ mod tests {
         assert!(!collapsed_text.contains('`'), "{collapsed_text}");
         assert!(!collapsed_text.contains("**"), "{collapsed_text}");
         assert!(collapsed.lines.iter().any(|line| {
-            line.text.contains("Inspect shell.run")
+            line.text.contains("shell.run")
                 && line
                     .rich_line
                     .as_ref()
-                    .is_some_and(|line| line.spans.len() >= 7)
+                    .is_some_and(|line| line.spans.len() >= 2)
         }));
 
         let expanded = crate::render_entry_detailed(
@@ -1887,7 +1884,10 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(collapsed_text.contains("Search repository"));
+        // The collapsed headline is the direct tool name; the converted
+        // "Search repository" title is never rendered.
+        assert!(collapsed_text.contains("repo.search"));
+        assert!(!collapsed_text.contains("Search repository"));
         assert!(collapsed_text.contains("2 matches"));
         assert!(!collapsed_text.contains("src/activity.rs"));
 
@@ -1925,9 +1925,9 @@ mod tests {
     }
 
     #[test]
-    fn canonical_activity_headlines_keep_titles_and_use_remaining_width_for_summaries() {
+    fn canonical_activity_headlines_show_tool_name_and_spend_remaining_width_on_summary() {
         let response_id = agena_domain::AssistantReplyId::new();
-        let operation_document = |title: &str, summary: &str| {
+        let operation_document = |invocation_name: &str, summary: &str| {
             ContentDocument::new(vec![ContentNode::activity(ActivityNode {
                 id: agena_domain::ActivityId::new(),
                 owner: ActivityOwner::AssistantReply {
@@ -1940,8 +1940,10 @@ mod tests {
                 lifecycle: ActivityLifecycle::default(),
                 payload: ActivityPayload::Operation(OperationActivity {
                     call_id: ToolCallId::new("call-title"),
-                    invocation: ToolInvocation::new("shell.run", StructuredObject::default()),
-                    title: title.to_owned(),
+                    invocation: ToolInvocation::new(invocation_name, StructuredObject::default()),
+                    // A producer-converted title must never surface: the
+                    // headline shows the execution-tool name instead.
+                    title: "Process run Create a tiny test PNG with pure python".to_owned(),
                     summary: summary.to_owned(),
                     data: serde_json::Value::Null,
                     markdown: String::new(),
@@ -1952,9 +1954,7 @@ mod tests {
             })])
         };
 
-        let ordinary_title = "Process run Create a tiny test PNG with pure python";
-        let ordinary_document =
-            operation_document(ordinary_title, &"PNG result details ".repeat(30));
+        let ordinary_document = operation_document("shell.run", &"PNG result details ".repeat(30));
         let ordinary = assistant_reply_document_entry(
             response_id,
             MessageStatus::Completed,
@@ -1974,15 +1974,16 @@ mod tests {
         let ordinary_headline = ordinary_rendered
             .lines
             .iter()
-            .find(|line| line.text.contains("Process run"))
+            .find(|line| line.text.contains("shell.run"))
             .expect("ordinary Operation headline");
-        assert!(ordinary_headline.text.contains(ordinary_title));
+        assert!(ordinary_headline.text.contains("shell.run"));
+        assert!(!ordinary_headline.text.contains("Process run"));
         assert!(ordinary_headline.text.contains("PNG result details"));
         assert!(ordinary_headline.text.ends_with('…'));
         assert!(unicode_width::UnicodeWidthStr::width(ordinary_headline.text.as_str()) <= 80);
 
-        let long_title = format!("Inspect {}", "very-long-component-".repeat(8));
-        let long_document = operation_document(long_title.as_str(), "complete");
+        let long_name = format!("{}.{}", "very-long-tool-name".repeat(8), "subcommand");
+        let long_document = operation_document(long_name.as_str(), "complete");
         let long = assistant_reply_document_entry(
             response_id,
             MessageStatus::Completed,
@@ -2002,14 +2003,14 @@ mod tests {
         let long_headline = long_rendered
             .lines
             .iter()
-            .find(|line| line.text.contains("Inspect"))
+            .find(|line| line.text.contains("very-long-tool-name"))
             .expect("long Operation headline");
         assert!(long_headline.text.ends_with('…'));
         assert!(unicode_width::UnicodeWidthStr::width(long_headline.text.as_str()) <= 120);
     }
 
     #[test]
-    fn operation_activity_titles_use_the_producer_contract_without_ui_inference() {
+    fn operation_activity_titles_use_the_execution_tool_name() {
         let operation = |name: &str, input: serde_json::Value, title: &str| {
             let provider_arguments =
                 StructuredObject::try_from(input).expect("structured tool input");
@@ -2050,6 +2051,7 @@ mod tests {
             OperationActivity {
                 call_id: ToolCallId::new(format!("call-{name}")),
                 invocation,
+                // The producer-converted title is ignored by the headline.
                 title: title.to_owned(),
                 summary: String::new(),
                 data: serde_json::Value::Null,
@@ -2065,7 +2067,7 @@ mod tests {
                 serde_json::json!({}),
                 "List tools"
             )),
-            "List tools"
+            "tools_list"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2073,7 +2075,7 @@ mod tests {
                 serde_json::json!({"offset": 20}),
                 "List tools · 20/133"
             )),
-            "List tools · 20/133"
+            "tools_list"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2081,7 +2083,7 @@ mod tests {
                 serde_json::json!({"query": "filesystem"}),
                 "Search tools · filesystem",
             )),
-            "Search tools · filesystem"
+            "tools_search"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2089,7 +2091,7 @@ mod tests {
                 serde_json::json!({"query": "filesystem"}),
                 "Search tools · filesystem · 5/12",
             )),
-            "Search tools · filesystem · 5/12"
+            "tools_search"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2097,7 +2099,7 @@ mod tests {
                 serde_json::json!({"tool": "fs.read"}),
                 "Inspect fs.read",
             )),
-            "Inspect fs.read"
+            "tools_help"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2113,7 +2115,7 @@ mod tests {
                 serde_json::json!({"tool": "fs.read", "input": {"path": "README.md"}}),
                 "Read README.md",
             )),
-            "Read README.md"
+            "fs.read"
         );
         assert_eq!(
             operation_activity_title(&operation(
@@ -2121,7 +2123,7 @@ mod tests {
                 serde_json::json!({}),
                 "Repository status",
             )),
-            "Repository status"
+            "agena.repo.status"
         );
     }
 
@@ -2567,7 +2569,7 @@ It has two lines.";
         // label with a preview and the body stays folded, while the final
         // answer is visible inline.
         assert!(
-            collapsed_lines.iter().any(|line| line.contains("正文")),
+            collapsed_lines.iter().any(|line| line.contains("Text")),
             "{collapsed_lines:?}"
         );
         assert!(
@@ -2599,7 +2601,7 @@ It has two lines.";
                 "
 ",
             );
-        assert!(text.contains("正文"), "{text}");
+        assert!(text.contains("Text"), "{text}");
         assert!(
             text.contains("Second paragraph after the tool call."),
             "{text}"
@@ -2665,11 +2667,13 @@ It has two lines.";
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
-            .join("
-");
+            .join(
+                "
+",
+            );
         // Collapsed headline shows the interstitial label; the answer is
         // visible inline without any label.
-        assert!(text.contains("正文"), "{text}");
+        assert!(text.contains("Text"), "{text}");
         assert!(text.contains("That is the answer."), "{text}");
     }
 
@@ -2741,7 +2745,7 @@ It has two lines.";
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("正文"), "{text}");
+        assert!(text.contains("Text"), "{text}");
         assert!(text.contains("fs.read"), "{text}");
     }
 

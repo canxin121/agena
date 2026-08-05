@@ -1683,10 +1683,7 @@ fn render_activity_canonical(
     } else {
         defaults.activity_expanded
     };
-    let expanded = expansions
-        .get(&key)
-        .copied()
-        .unwrap_or(default_expanded);
+    let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);
     let title = title_override.unwrap_or(canonical_title.as_str());
     let error_text = error.as_ref().map(|e| e.user.fallback.clone());

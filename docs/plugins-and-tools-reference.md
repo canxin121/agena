@@ -1630,7 +1630,7 @@ Inspect the current plan state.
 
 输出：
 
-`payload`: `{ plan, view, current_step, current_step_index?, current_step_goal }`. `plan` is null or `{ title, objective, phase, autorun, document_markdown?, steps[] }`; steps contain `{ id, title, description, executor, status, wait_until_ms?, note?, checks[] }`, and checks contain `{ id, text, status }`.
+`payload`: `{ plan, view, current_step, current_step_index?, current_step_goal }`. `plan` is null or `{ title, objective, phase, autorun, document_markdown?, steps[] }`; steps contain `{ title, description, executor, status, wait_until_ms?, note?, checks[] }`, and checks contain `{ text, status }`.
 
 ### `agena.plan.set`
 
@@ -1660,12 +1660,6 @@ Create or replace the current plan.
       "additionalProperties": false,
       "description": "Plan check input. Each check item should use `text`.",
       "properties": {
-        "id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "status": {
           "anyOf": [
             {
@@ -1711,12 +1705,6 @@ Create or replace the current plan.
           "$ref": "#/$defs/WorkflowPlanExecutor",
           "default": "ai",
           "description": "Who should execute the step. Use `ai` for agent work and `human` for manual work."
-        },
-        "id": {
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "note": {
           "type": [
@@ -1817,18 +1805,18 @@ Update the current plan.
 - Tags：`planning`、`mutating`
 - Capabilities：`ask_user`、`plugin_storage`、`statusline`
 - Runtime：concurrency_safe=`false`，streaming=`buffered`，strict=`false`
-- Help：Keep plan-level updates separate from step/check updates: do not send `phase` together with `step_id`, `check_id`, `status`, `wait_until_ms`, or `note`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.
+- Help：Keep plan-level updates separate from step/check updates: do not send `phase` together with `step`, `check`, `status`, `wait_until_ms`, or `note`. Address steps and checks by 1-based index (`step`, `check`). To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.
 
 输入参数：
 
 | 参数 | 必填 | 类型 | 默认值/约束 | 说明 |
 | --- | --- | --- | --- | --- |
 | `autorun` | 否 | `boolean \| null` | — | Whether an approved active plan should keep running automatically. |
-| `check_id` | 否 | `string \| null` | — | — |
+| `check` | 否 | `integer \| null` | minimum=0; format=uint32 | 1-based index of the check within the step to update (1 = first check). Requires `step`. |
 | `note` | 否 | `string \| null` | — | — |
 | `phase` | 否 | `WorkflowPlanPhase \| null` | — | Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`. |
 | `status` | 否 | `WorkflowPlanStepStatus \| null` | — | — |
-| `step_id` | 否 | `string \| null` | — | — |
+| `step` | 否 | `integer \| null` | minimum=0; format=uint32 | 1-based index of the step to update (1 = first step). |
 | `summary` | 否 | `string \| null` | — | Optional completion summary. This is only applied when `phase` is `completed`. |
 | `wait_until_ms` | 否 | `integer \| null` | format=int64 | — |
 
@@ -1860,7 +1848,7 @@ Update the current plan.
     }
   },
   "additionalProperties": false,
-  "description": "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step_id` + `status` to update a step, or `step_id` + `check_id` + `status` to update a check. Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`.",
+  "description": "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`.",
   "properties": {
     "autorun": {
       "description": "Whether an approved active plan should keep running automatically.",
@@ -1870,9 +1858,12 @@ Update the current plan.
       ],
       "x-agena-order": "000001"
     },
-    "check_id": {
+    "check": {
+      "description": "1-based index of the check within the step to update (1 = first check). Requires `step`.",
+      "format": "uint32",
+      "minimum": 0,
       "type": [
-        "string",
+        "integer",
         "null"
       ],
       "x-agena-order": "000004"
@@ -1907,9 +1898,12 @@ Update the current plan.
       ],
       "x-agena-order": "000005"
     },
-    "step_id": {
+    "step": {
+      "description": "1-based index of the step to update (1 = first step).",
+      "format": "uint32",
+      "minimum": 0,
       "type": [
-        "string",
+        "integer",
         "null"
       ],
       "x-agena-order": "000003"

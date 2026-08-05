@@ -13,6 +13,68 @@ const MAX_TOOL_API_REPAIRS: usize = 2;
 const MAX_REJECTED_ARGUMENT_BYTES: usize = 16 * 1024;
 const MAX_REJECTED_CALLS_IN_REPAIR: usize = 16;
 
+/// Outcome of aligning one text-like delta against the already-emitted
+/// prefix during a replay-safe stream restart.
+enum ReplayTextAlignment {
+    /// The delta is entirely inside the already-emitted prefix; drop it.
+    Consumed,
+    /// The delta exactly completes the already-emitted prefix; drop it and
+    /// mark this content stream as live.
+    Aligned,
+    /// The delta extends past the already-emitted prefix; emit only `excess`
+    /// and mark this content stream as live.
+    Live { excess: String },
+    /// The concatenated text differs from the already-emitted prefix; the
+    /// retried stream cannot be spliced into already-emitted output.
+    Diverged { replayed_chars: usize },
+}
+
+/// Align one text or reasoning delta against the concatenated emitted prefix.
+///
+/// Providers (including "deterministic" official endpoints) may re-chunk text
+/// deltas across independent retry requests, so event-by-event `PartialEq`
+/// comparison is too strict and produced spurious "replay prefix diverged"
+/// aborts at chunk boundaries. Comparing the concatenated text keeps the
+/// replay safe (no duplicate output) while tolerating different chunk
+/// boundaries.
+fn align_replay_text(
+    accumulator: &mut String,
+    expected: &str,
+    live: &mut bool,
+    delta: &str,
+) -> ReplayTextAlignment {
+    if *live {
+        return ReplayTextAlignment::Live {
+            excess: delta.to_owned(),
+        };
+    }
+    accumulator.push_str(delta);
+    if accumulator.len() > expected.len() {
+        if !accumulator.starts_with(expected) {
+            return ReplayTextAlignment::Diverged {
+                replayed_chars: expected.len(),
+            };
+        }
+        let excess = accumulator[expected.len()..].to_owned();
+        accumulator.clear();
+        *live = true;
+        if excess.is_empty() {
+            return ReplayTextAlignment::Aligned;
+        }
+        return ReplayTextAlignment::Live { excess };
+    }
+    if expected.starts_with(accumulator.as_str()) {
+        if accumulator.len() == expected.len() {
+            *live = true;
+            return ReplayTextAlignment::Aligned;
+        }
+        return ReplayTextAlignment::Consumed;
+    }
+    ReplayTextAlignment::Diverged {
+        replayed_chars: accumulator.len(),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RejectedToolApiCall {
     name: String,
@@ -34,6 +96,17 @@ fn completion_tool_api_calls(response: &CompletionResponse) -> Vec<RejectedToolA
             },
         })
         .collect()
+}
+
+/// Whether a stream event carries user-visible or actionable content.
+/// `Completed` and `ProviderRetry` are bookkeeping; everything else is
+/// content (text, reasoning, or tool calls). An attempt whose only yielded
+/// events are bookkeeping is an empty response.
+fn completion_stream_event_is_content(event: &CompletionStreamEvent) -> bool {
+    !matches!(
+        event,
+        CompletionStreamEvent::Completed { .. } | CompletionStreamEvent::ProviderRetry { .. }
+    )
 }
 
 fn stream_tool_api_calls(
@@ -826,10 +899,50 @@ impl ProviderRegistry {
 
                 let mut emitted_event_in_attempt = false;
                 let mut should_restart_stream = false;
-                let mut replay_cursor = 0_usize;
                 let mut replay_mode = replay_mode_enabled;
+                // Replay-safe restart alignment. Even "deterministic"
+                // endpoints (e.g. the official OpenAI Responses API) may
+                // re-chunk text deltas across independent requests, so strict
+                // per-event equality is too brittle: compare the concatenated
+                // text/reasoning prefix and reserve exact equality for
+                // structural events (tool calls, Completed).
+                let replay_expected_text = emitted_history
+                    .iter()
+                    .filter_map(|event| match event {
+                        CompletionStreamEvent::TextDelta { delta, .. } => Some(delta.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>();
+                let replay_expected_reasoning = emitted_history
+                    .iter()
+                    .filter_map(|event| match event {
+                        CompletionStreamEvent::ThinkingDelta { delta, .. } => Some(delta.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>();
+                let replay_structural_indices = emitted_history
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, event)| {
+                        if matches!(
+                            event,
+                            CompletionStreamEvent::TextDelta { .. }
+                                | CompletionStreamEvent::ThinkingDelta { .. }
+                        ) {
+                            None
+                        } else {
+                            Some(index)
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut replay_text = String::new();
+                let mut replay_reasoning = String::new();
+                let mut text_replay_live = replay_expected_text.is_empty();
+                let mut reasoning_replay_live = replay_expected_reasoning.is_empty();
+                let mut replay_structural_cursor = 0_usize;
                 let mut emitted_events_in_attempt = 0_u64;
                 let mut replayed_events_in_attempt = 0_u64;
+                let mut emitted_content_in_attempt = false;
                 let mut terminal_event_in_attempt = false;
                 let mut should_restart_for_protocol_repair = false;
                 let mut tool_api_calls = BTreeMap::<String, StreamToolApiCallState>::new();
@@ -850,46 +963,164 @@ impl ProviderRegistry {
                                     usage,
                                 );
                             }
-                            if replay_mode && replay_cursor < emitted_history.len() {
-                                if event == emitted_history[replay_cursor] {
-                                    if matches!(event, CompletionStreamEvent::Completed { .. }) {
-                                        terminal_event_in_attempt = true;
+                            if replay_mode {
+                                // Recompute after the previous event may have
+                                // completed alignment (its `continue` skipped
+                                // the recompute below).
+                                replay_mode = !text_replay_live
+                                    || !reasoning_replay_live
+                                    || replay_structural_cursor
+                                        < replay_structural_indices.len();
+                            }
+                            if replay_mode {
+                                let mut replay_replacement: Option<CompletionStreamEvent> = None;
+                                match &event {
+                                    CompletionStreamEvent::TextDelta { delta, .. } => {
+                                        match align_replay_text(
+                                            &mut replay_text,
+                                            &replay_expected_text,
+                                            &mut text_replay_live,
+                                            delta.as_str(),
+                                        ) {
+                                            ReplayTextAlignment::Consumed
+                                            | ReplayTextAlignment::Aligned => {
+                                                replayed_events_in_attempt += 1;
+                                                continue;
+                                            }
+                                            ReplayTextAlignment::Live { excess } => {
+                                                if let CompletionStreamEvent::TextDelta {
+                                                    provider_id,
+                                                    model,
+                                                    ..
+                                                } = &event
+                                                {
+                                                    replay_replacement =
+                                                        Some(CompletionStreamEvent::TextDelta {
+                                                            provider_id: provider_id.clone(),
+                                                            model: model.clone(),
+                                                            delta: excess,
+                                                        });
+                                                }
+                                            }
+                                            ReplayTextAlignment::Diverged { replayed_chars } => {
+                                                let err = ProviderError::Provider(format!(
+                                                    "provider stream replay text diverged after {replayed_chars} replayed character(s)"
+                                                ));
+                                                tracing::error!(
+                                                    provider_id = provider_id.as_str(),
+                                                    operation = "complete_stream",
+                                                    attempt,
+                                                    retries = retry_index,
+                                                    stage = "replay_prefix",
+                                                    latency_ms = elapsed_ms(attempt_started_at),
+                                                    status = "failed",
+                                                    retry_reason = "replay_prefix_diverged",
+                                                    replayed_events = replayed_events_in_attempt,
+                                                    "provider stream replay text diverged; aborting to avoid duplicate output"
+                                                );
+                                                Err(err)?;
+                                            }
+                                        }
                                     }
-                                    replay_cursor += 1;
-                                    replayed_events_in_attempt += 1;
-                                    if replay_cursor == emitted_history.len() {
-                                        replay_mode = false;
-                                        tracing::debug!(
+                                    CompletionStreamEvent::ThinkingDelta { delta, .. } => {
+                                        match align_replay_text(
+                                            &mut replay_reasoning,
+                                            &replay_expected_reasoning,
+                                            &mut reasoning_replay_live,
+                                            delta.as_str(),
+                                        ) {
+                                            ReplayTextAlignment::Consumed
+                                            | ReplayTextAlignment::Aligned => {
+                                                replayed_events_in_attempt += 1;
+                                                continue;
+                                            }
+                                            ReplayTextAlignment::Live { excess } => {
+                                                if let CompletionStreamEvent::ThinkingDelta {
+                                                    provider_id,
+                                                    model,
+                                                    ..
+                                                } = &event
+                                                {
+                                                    replay_replacement =
+                                                        Some(CompletionStreamEvent::ThinkingDelta {
+                                                            provider_id: provider_id.clone(),
+                                                            model: model.clone(),
+                                                            delta: excess,
+                                                        });
+                                                }
+                                            }
+                                            ReplayTextAlignment::Diverged { replayed_chars } => {
+                                                let err = ProviderError::Provider(format!(
+                                                    "provider stream replay reasoning diverged after {replayed_chars} replayed character(s)"
+                                                ));
+                                                tracing::error!(
+                                                    provider_id = provider_id.as_str(),
+                                                    operation = "complete_stream",
+                                                    attempt,
+                                                    retries = retry_index,
+                                                    stage = "replay_prefix",
+                                                    latency_ms = elapsed_ms(attempt_started_at),
+                                                    status = "failed",
+                                                    retry_reason = "replay_prefix_diverged",
+                                                    replayed_events = replayed_events_in_attempt,
+                                                    "provider stream replay reasoning diverged; aborting to avoid duplicate output"
+                                                );
+                                                Err(err)?;
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        if replay_structural_cursor
+                                            < replay_structural_indices.len()
+                                            && &event
+                                                == &emitted_history[replay_structural_indices
+                                                    [replay_structural_cursor]]
+                                        {
+                                            replay_structural_cursor += 1;
+                                            replayed_events_in_attempt += 1;
+                                            continue;
+                                        }
+                                        // A structural event that is not the next
+                                        // expected one, or one that arrives after
+                                        // the tracked prefix, cannot be spliced
+                                        // into already-emitted output.
+                                        let err = ProviderError::Provider(format!(
+                                            "provider stream replay prefix diverged at structural event index {replay_structural_cursor}"
+                                        ));
+                                        tracing::error!(
                                             provider_id = provider_id.as_str(),
                                             operation = "complete_stream",
                                             attempt,
-                                            status = "replay_prefix_aligned",
+                                            retries = retry_index,
+                                            stage = "replay_prefix",
+                                            latency_ms = elapsed_ms(attempt_started_at),
+                                            status = "failed",
+                                            retry_reason = "replay_prefix_diverged",
                                             replayed_events = replayed_events_in_attempt,
-                                            "provider stream replay prefix aligned"
+                                            "provider stream replay prefix diverged; aborting to avoid duplicate output"
                                         );
+                                        Err(err)?;
                                     }
-                                    continue;
                                 }
 
-                                let err = ProviderError::Provider(format!(
-                                    "provider stream replay prefix diverged at event index {replay_cursor}"
-                                ));
-                                tracing::error!(
-                                    provider_id = provider_id.as_str(),
-                                    operation = "complete_stream",
-                                    attempt,
-                                    retries = retry_index,
-                                    stage = "replay_prefix",
-                                    latency_ms = elapsed_ms(attempt_started_at),
-                                    status = "failed",
-                                    retry_reason = "replay_prefix_diverged",
-                                    replayed_events = replayed_events_in_attempt,
-                                    "provider stream replay prefix diverged; aborting to avoid duplicate output"
-                                );
-                                Err(err)?;
+                                if let Some(replacement) = replay_replacement {
+                                    event = replacement;
+                                }
+                                replay_mode = !text_replay_live
+                                    || !reasoning_replay_live
+                                    || replay_structural_cursor
+                                        < replay_structural_indices.len();
+                                if !replay_mode {
+                                    tracing::debug!(
+                                        provider_id = provider_id.as_str(),
+                                        operation = "complete_stream",
+                                        attempt,
+                                        status = "replay_prefix_aligned",
+                                        replayed_events = replayed_events_in_attempt,
+                                        "provider stream replay prefix aligned"
+                                    );
+                                }
                             }
-
-                            replay_mode = false;
                             if terminal_event_in_attempt {
                                 Err(ProviderError::Provider(format!(
                                     "provider `{provider_id}` emitted a stream event after Completed"
@@ -977,6 +1208,7 @@ impl ProviderRegistry {
 
                                 for buffered_event in buffered_tool_api_turn.drain(..) {
                                     emitted_events_in_attempt += 1;
+                                    emitted_content_in_attempt = true;
                                     if replay_safe_enabled && !replay_buffer_exhausted {
                                         if emitted_history.len() < replay_policy.max_tracked_events {
                                             emitted_history.push(buffered_event.clone());
@@ -990,6 +1222,8 @@ impl ProviderRegistry {
 
                             emitted_event_in_attempt = true;
                             emitted_events_in_attempt += 1;
+                            emitted_content_in_attempt |=
+                                completion_stream_event_is_content(&event);
 
                             if replay_safe_enabled && !replay_buffer_exhausted {
                                 if emitted_history.len() < replay_policy.max_tracked_events {
@@ -1111,7 +1345,7 @@ impl ProviderRegistry {
                     continue;
                 }
 
-                if replay_mode && replay_cursor < emitted_history.len() {
+                if replay_mode {
                     let err = ProviderError::Provider(
                         "provider stream replay ended before replay prefix alignment completed"
                             .to_owned(),
@@ -1140,6 +1374,46 @@ impl ProviderRegistry {
                     Err(ProviderError::Provider(format!(
                         "provider `{provider_id}` stream ended without a Completed event"
                     )))?;
+                }
+
+                // A completed attempt that produced no content at all (no
+                // text, no reasoning, no tool call) is an empty response.
+                // Providers (including official endpoints) transiently
+                // return empty completions; resample within the request
+                // retry budget before surfacing the empty result (mirrors
+                // grok's retryable EmptyResponse classification). Nothing
+                // was emitted, so the restart is safe for every provider
+                // and the replay history is reset to avoid treating the
+                // previous attempt's Completed event as a replay prefix.
+                if !emitted_content_in_attempt && retry_index < retry_policy.max_retries {
+                    let delay = retry_policy.delay_for_retry(retry_index);
+                    tracing::warn!(
+                        provider_id = provider_id.as_str(),
+                        operation = "complete_stream",
+                        attempt,
+                        retries = retry_index,
+                        stage = "empty_response",
+                        max_retries = retry_policy.max_retries,
+                        latency_ms = elapsed_ms(attempt_started_at),
+                        status = "retry_scheduled",
+                        retry_reason = "empty_response",
+                        delay_ms = delay.as_millis() as u64,
+                        "provider stream completed with no content; retrying empty response"
+                    );
+                    yield CompletionStreamEvent::ProviderRetry {
+                        provider_id: model_ref.provider_id.clone(),
+                        model: model_ref.model_id.clone(),
+                        message: "provider stream returned an empty response; retrying".to_owned(),
+                        retry_index,
+                        attempt,
+                        max_retries: retry_policy.max_retries,
+                        delay_ms: delay.as_millis() as u64,
+                    };
+                    tokio::time::sleep(delay).await;
+                    retry_index += 1;
+                    emitted_history.clear();
+                    replay_buffer_exhausted = false;
+                    continue;
                 }
 
                 tracing::info!(
@@ -1816,5 +2090,529 @@ mod tool_api_function_validation_tests {
     fn tolerant_parse_rejects_truly_malformed_arguments() {
         let json = "{\"tool\":";
         assert!(parse_tool_api_arguments_tolerant(json).is_none());
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use agena_domain::{Model, ModelId, ModelRef, ProviderId, Role};
+    use agena_provider::{
+        CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderErrorKind,
+        StreamResumePolicy,
+    };
+    use agena_runtime_contracts::message::Message;
+    use async_trait::async_trait;
+    use futures_util::{StreamExt, stream};
+
+    use crate::provider::{CompletionResponse, ModelRuntime, ProviderRegistry};
+    use crate::ProviderError;
+
+    fn replay_request() -> CompletionRequest {
+        CompletionRequest {
+            model: ModelId::new("test-model"),
+            system: Some("base system".to_owned()),
+            messages: vec![crate::provider::project_completion_input(
+                &Message::prompt_text(Role::User, "hi"),
+            )],
+            tool_api_functions: Vec::new(),
+            provider_native_tools: Default::default(),
+            disable_tools: false,
+            temperature: None,
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: Some("previous".to_owned()),
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        }
+    }
+
+    struct RechunkingReplayProvider {
+        calls: AtomicUsize,
+        model: ModelId,
+    }
+
+    impl RechunkingReplayProvider {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                model: ModelId::new("test-model"),
+            }
+        }
+
+        fn events_for_attempt(
+            &self,
+            attempt: usize,
+        ) -> Vec<Result<CompletionStreamEvent, ProviderError>> {
+            let provider_id = ProviderId::new("replay-test");
+            let model = self.model.clone();
+            if attempt == 0 {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "Hello ".to_owned(),
+                    }),
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "world".to_owned(),
+                    }),
+                    Err(ProviderError::ProviderClassified {
+                        provider: "replay-test".to_owned(),
+                        message: "simulated mid-stream failure".to_owned(),
+                        kind: ProviderErrorKind::Unavailable,
+                        retryable: true,
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "Hello world".to_owned(),
+                    }),
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "!".to_owned(),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id,
+                        model,
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ]
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for RechunkingReplayProvider {
+        fn id(&self) -> &str {
+            "replay-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        fn stream_resume_policy(&self) -> StreamResumePolicy {
+            StreamResumePolicy::ReplaySafePrefix
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            Err(ProviderError::Provider(
+                "non-streaming completion not used in replay test".to_owned(),
+            ))
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_core::Stream<
+                            Item = Result<CompletionStreamEvent, ProviderError>,
+                        > + Send,
+                >,
+            >,
+            ProviderError,
+        > {
+            let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::pin(stream::iter(self.events_for_attempt(attempt))))
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_survives_rechunked_text_deltas() {
+        let provider = Arc::new(RechunkingReplayProvider::new());
+        let mut registry = ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let events = registry
+            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .await
+            .expect("stream startup")
+            .collect::<Vec<_>>()
+            .await;
+        let events = events
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("rechunked replay must not surface a stream error");
+
+        let text = events
+            .iter()
+            .filter_map(|event| match event {
+                CompletionStreamEvent::TextDelta { delta, .. } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(text, vec!["Hello ", "world", "!"]);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, CompletionStreamEvent::ProviderRetry { .. })));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, CompletionStreamEvent::Completed { .. })));
+    }
+
+    struct DivergingReplayProvider {
+        calls: AtomicUsize,
+        model: ModelId,
+    }
+
+    impl DivergingReplayProvider {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                model: ModelId::new("test-model"),
+            }
+        }
+
+        fn events_for_attempt(
+            &self,
+            attempt: usize,
+        ) -> Vec<Result<CompletionStreamEvent, ProviderError>> {
+            let provider_id = ProviderId::new("replay-test");
+            let model = self.model.clone();
+            if attempt == 0 {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "Hello ".to_owned(),
+                    }),
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "world".to_owned(),
+                    }),
+                    Err(ProviderError::ProviderClassified {
+                        provider: "replay-test".to_owned(),
+                        message: "simulated mid-stream failure".to_owned(),
+                        kind: ProviderErrorKind::Unavailable,
+                        retryable: true,
+                    }),
+                ]
+            } else {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "Hello Earth".to_owned(),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id,
+                        model,
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ]
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for DivergingReplayProvider {
+        fn id(&self) -> &str {
+            "replay-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        fn stream_resume_policy(&self) -> StreamResumePolicy {
+            StreamResumePolicy::ReplaySafePrefix
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            Err(ProviderError::Provider(
+                "non-streaming completion not used in replay test".to_owned(),
+            ))
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_core::Stream<
+                            Item = Result<CompletionStreamEvent, ProviderError>,
+                        > + Send,
+                >,
+            >,
+            ProviderError,
+        > {
+            let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::pin(stream::iter(self.events_for_attempt(attempt))))
+        }
+    }
+
+    #[tokio::test]
+    async fn replay_aborts_on_true_text_divergence() {
+        let provider = Arc::new(DivergingReplayProvider::new());
+        let mut registry = ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let events = registry
+            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .await
+            .expect("stream startup")
+            .collect::<Vec<_>>()
+            .await;
+        let error = events
+            .into_iter()
+            .find_map(|item| item.err())
+            .expect("true text divergence must surface a stream error");
+        assert!(error.to_string().contains("replay text diverged"));
+    }
+
+    struct EmptyThenContentProvider {
+        calls: AtomicUsize,
+        model: ModelId,
+    }
+
+    impl EmptyThenContentProvider {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                model: ModelId::new("test-model"),
+            }
+        }
+
+        fn events_for_attempt(
+            &self,
+            attempt: usize,
+        ) -> Vec<Result<CompletionStreamEvent, ProviderError>> {
+            let provider_id = ProviderId::new("replay-test");
+            let model = self.model.clone();
+            if attempt == 0 {
+                vec![Ok(CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                    end_turn: None,
+                })]
+            } else {
+                vec![
+                    Ok(CompletionStreamEvent::TextDelta {
+                        provider_id: provider_id.clone(),
+                        model: model.clone(),
+                        delta: "recovered".to_owned(),
+                    }),
+                    Ok(CompletionStreamEvent::Completed {
+                        provider_id,
+                        model,
+                        finish_reason: Some(CompletionFinishReason::Stop),
+                        usage: None,
+                        provider_metadata: None,
+                        end_turn: None,
+                    }),
+                ]
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for EmptyThenContentProvider {
+        fn id(&self) -> &str {
+            "replay-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            Err(ProviderError::Provider(
+                "non-streaming completion not used in replay test".to_owned(),
+            ))
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_core::Stream<
+                            Item = Result<CompletionStreamEvent, ProviderError>,
+                        > + Send,
+                >,
+            >,
+            ProviderError,
+        > {
+            let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Box::pin(stream::iter(self.events_for_attempt(attempt))))
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_completion_is_resampled_before_surfacing() {
+        let provider = Arc::new(EmptyThenContentProvider::new());
+        let mut registry = ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let events = registry
+            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .await
+            .expect("stream startup")
+            .collect::<Vec<_>>()
+            .await;
+        let events = events
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("resampled empty response must not surface a stream error");
+
+        let text = events
+            .iter()
+            .filter_map(|event| match event {
+                CompletionStreamEvent::TextDelta { delta, .. } => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(text, vec!["recovered"]);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, CompletionStreamEvent::ProviderRetry { .. })));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    struct AlwaysEmptyProvider {
+        calls: AtomicUsize,
+        model: ModelId,
+    }
+
+    impl AlwaysEmptyProvider {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                model: ModelId::new("test-model"),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for AlwaysEmptyProvider {
+        fn id(&self) -> &str {
+            "replay-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            Err(ProviderError::Provider(
+                "non-streaming completion not used in replay test".to_owned(),
+            ))
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_core::Stream<
+                            Item = Result<CompletionStreamEvent, ProviderError>,
+                        > + Send,
+                >,
+            >,
+            ProviderError,
+        > {
+            let attempt = self.calls.fetch_add(1, Ordering::SeqCst);
+            let provider_id = ProviderId::new("replay-test");
+            let model = self.model.clone();
+            let _ = attempt;
+            Ok(Box::pin(stream::iter(vec![Ok(CompletionStreamEvent::Completed {
+                provider_id,
+                model,
+                finish_reason: Some(CompletionFinishReason::Stop),
+                usage: None,
+                provider_metadata: None,
+                end_turn: None,
+            })])))
+        }
+    }
+
+    #[tokio::test]
+    async fn persistently_empty_completion_exhausts_retries_without_content() {
+        let provider = Arc::new(AlwaysEmptyProvider::new());
+        let mut registry = ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        let events = registry
+            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .await
+            .expect("stream startup")
+            .collect::<Vec<_>>()
+            .await;
+        let events = events
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .expect("persistently empty completion still ends without a stream error");
+
+        let content = events
+            .iter()
+            .filter(|event| !matches!(event, CompletionStreamEvent::Completed { .. }))
+            .filter(|event| !matches!(event, CompletionStreamEvent::ProviderRetry { .. }))
+            .count();
+        assert_eq!(content, 0, "no text or tool events should ever be emitted");
+        // Request-level budget: max_retries (5) retries after the first
+        // attempt, all empty, so the provider is called 6 times.
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 6);
     }
 }

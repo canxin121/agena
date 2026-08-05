@@ -640,16 +640,6 @@ pub(super) enum AppMessage {
         session_id: i64,
         live: LiveEvent,
     },
-    /// Result of a `request_steer_input` call. `result` is `Ok` when the
-    /// backend accepted the steer; `Err` when the run was no longer
-    /// steerable (e.g. terminal phase). On error we re-enqueue the draft
-    /// so the user's intent isn't dropped.
-    SteerSubmitted {
-        session_id: i64,
-        pending_message_id: u64,
-        draft: ComposerDraft,
-        result: UiResult<()>,
-    },
     /// Result of a `request_cancel_run` call. We always treat the in-flight
     /// run as gone when this lands, regardless of success — the user has
     /// already signalled cancel intent.

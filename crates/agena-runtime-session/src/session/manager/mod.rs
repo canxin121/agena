@@ -824,6 +824,13 @@ fn part_contents_from_composer_document(
 }
 
 impl SessionManager {
+    /// How long a user-submit waits for a just-cancelled run to unregister
+    /// before reporting `ExecutionAlreadyActive` (the interrupt-and-send
+    /// race: the client submits the next turn as soon as cancellation is
+    /// acknowledged, which can land before the cancelled run has finished
+    /// unwinding and unregistered).
+    const EXECUTION_CANCEL_UNREGISTER_GRACE: Duration = Duration::from_millis(2_000);
+
     async fn conversation_identity_for_execution(
         &self,
         session_id: i64,
@@ -1068,6 +1075,18 @@ impl SessionManager {
         let identity = self
             .conversation_identity_for_execution(session_id, source, conversation_target)
             .await?;
+        // Interrupt-and-send race: the client submits the next user turn as
+        // soon as cancellation is acknowledged, which can land before the
+        // cancelled run has finished unwinding and unregistered. On the
+        // user-submit path only, wait briefly for a cancelling run to release
+        // the session; a live (non-cancelling) run still fails immediately
+        // with `AlreadyActive`.
+        if source == ExecutionSource::User {
+            self.execution_registry
+                .wait_until_cancelled_released(session_id, Self::EXECUTION_CANCEL_UNREGISTER_GRACE)
+                .await
+                .map_err(execution_control_to_app_error)?;
+        }
         let (control, steer_rx) = self
             .execution_registry
             .register(session_id, identity.turn_id, identity.reply_id)

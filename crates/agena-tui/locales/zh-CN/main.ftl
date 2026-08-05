@@ -1557,6 +1557,7 @@ flash-speed-mode-required = 需要提供 speed mode 名称
 flash-parent-session-missing = 当前会话没有父会话
 flash-command-usage = 用法：{$usage}
 flash-command-does-not-support-attachments = slash 命令不支持暂存附件
+flash-message-interrupting = 正在中断当前运行 - 消息将立即发送
 flash-message-queued = 消息待发 — 当前运行结束后自动发送
 flash-message-replaced = 已有待发消息 — 已替换
 flash-steer-sent = 已注入当前运行

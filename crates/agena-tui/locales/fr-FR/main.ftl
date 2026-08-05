@@ -104,6 +104,7 @@ flash-copied-assistant-message = dernier message assistant copie dans le presse-
 flash-no-visible-transcript = aucun texte visible a copier
 flash-copied-visible-transcript = zone visible copiee dans le presse-papiers
 flash-clipboard-copy-failed = echec de la copie vers le presse-papiers : {$error}
+flash-message-interrupting = interruption de l'execution en cours - le message sera envoye ensuite
 
 message-role-user = utilisateur
 message-role-assistant = assistant

@@ -3,21 +3,20 @@ use agena_domain::{ToolApiCall, ToolApiFunction};
 use agena_provider::ToolApiDefinition;
 
 pub(crate) fn tool_execution_title(name: Option<&str>) -> String {
-    format!("Run {}", name.unwrap_or("unknown").trim())
+    name.unwrap_or("unknown").trim().to_owned()
 }
 
 pub(crate) fn provider_native_tool_execution_title(
     title: &str,
     tool_name: &str,
-    input: &StructuredObject,
+    _input: &StructuredObject,
 ) -> String {
     let trimmed = title.trim();
     if !trimmed.is_empty() {
-        return trimmed.to_owned();
+        trimmed.to_owned()
+    } else {
+        tool_name.trim().to_owned()
     }
-
-    let invocation = ToolInvocation::new(tool_name.to_owned(), input.clone());
-    tool_invocation_label(&invocation)
 }
 
 pub(crate) fn placeholder_tool_invocation(
@@ -138,39 +137,6 @@ pub(crate) fn tool_invocation_for_definition(
         plugin_name: None,
         input,
     }
-}
-
-pub(crate) fn tool_invocation_label(invocation: &ToolInvocation) -> String {
-    let input = serde_json::Value::from(invocation.input.clone());
-    if let Some(function_name) = invocation
-        .tool_api_call
-        .as_ref()
-        .map(|call| call.function.function_name())
-        && let Some(tool_name) = input.get("tool").and_then(serde_json::Value::as_str)
-        && !tool_name.trim().is_empty()
-    {
-        return format!("{function_name} {}", tool_name.trim());
-    }
-    for key in [
-        "command",
-        "file_path",
-        "path",
-        "pattern",
-        "query",
-        "url",
-        "description",
-        "action",
-        "id",
-        "expression",
-        "notebook_path",
-    ] {
-        if let Some(value) = input.get(key).and_then(serde_json::Value::as_str)
-            && !value.trim().is_empty()
-        {
-            return format!("{} {}", invocation.name, value.trim());
-        }
-    }
-    invocation.name.clone()
 }
 
 pub(crate) fn parse_custom_input(arguments_json: &str) -> Result<StructuredObject, AppError> {
@@ -299,13 +265,9 @@ mod tests {
             r#"{"tool":"   "}"#,
             r#"{"tool":null,"input":{}}"#,
         ] {
-            let invocation = parse_tool_invocation_lossy(
-                13,
-                "tools_call",
-                arguments_json,
-                &available,
-            )
-            .expect("tools_call args must parse");
+            let invocation =
+                parse_tool_invocation_lossy(13, "tools_call", arguments_json, &available)
+                    .expect("tools_call args must parse");
 
             assert_eq!(
                 invocation.name, "tools_call",

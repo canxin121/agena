@@ -1,6 +1,7 @@
 //! Synchronous fast path. Interactive tools always ask; read-only tools,
-//! in-workspace reads, managed project-state writes, and exact no-op shell
-//! commands are allowed without a model call.
+//! in-workspace reads, managed project-state writes, system temp-directory
+//! reads/writes, and exact no-op shell commands are allowed without a model
+//! call.
 //!
 //! Read-only detection is contract-driven ([`ToolCapabilities::read_only`]),
 //! never tool-name allowlists and never tool tags, so MCP and future plugins
@@ -15,6 +16,9 @@ ALLOW actions that are clearly safe, local to the machine, and reversible: routi
 development actions inside the configured workspace, and read-only access to external
 resources (reading files or fetching data outside the workspace) when the action is
 reasonable and does not expose secrets, credentials, private keys, or personal data.
+Reads and writes inside system temporary directories (for example /tmp, /var/tmp,
+/private/tmp, or the platform's temp directory) are routine scratch-space operations
+and may be allowed.
 BLOCK actions that write outside the configured workspace, are irreversible or destructive,
 exfiltrate secrets or private data, probe credentials, weaken persistent security, or run
 untrusted code.
@@ -54,15 +58,23 @@ pub fn auto_fast_path(action: &ActionSpec, managed_project_root: Option<&str>) -
             access,
             workspace_root,
             target,
-        } => match access.as_str() {
-            "read" if path_is_within_workspace(target, workspace_root) => AutoFastPath::Allow,
-            "write"
-                if managed_project_root
-                    .is_some_and(|root| path_is_within_workspace(target, root)) =>
-            {
-                AutoFastPath::Allow
+        } => {
+            // System temp directories are scratch space: reading and writing
+            // inside them is routine, reversible, and safe to auto-approve even
+            // when the target lies outside the configured workspace.
+            if path_is_within_temp_dir(target) {
+                return AutoFastPath::Allow;
             }
-            _ => AutoFastPath::Defer,
+            match access.as_str() {
+                "read" if path_is_within_workspace(target, workspace_root) => AutoFastPath::Allow,
+                "write"
+                    if managed_project_root
+                        .is_some_and(|root| path_is_within_workspace(target, root)) =>
+                {
+                    AutoFastPath::Allow
+                }
+                _ => AutoFastPath::Defer,
+            }
         },
         ActionSpec::Network { .. } => AutoFastPath::Defer,
     }
@@ -79,8 +91,47 @@ fn is_exact_noop_command(command: &str) -> bool {
 }
 
 pub(crate) fn path_is_within_workspace(target: &str, workspace_root: &str) -> bool {
+    path_is_within_root(target, workspace_root)
+}
+
+/// Well-known system temporary directories: scratch space that is safe to
+/// auto-approve. The platform's configured temp dir (TMPDIR / TMP / TEMP) is
+/// checked separately because it varies per user (macOS: /var/folders/.../T,
+/// Windows: %LOCALAPPDATA%\Temp).
+const SYSTEM_TEMP_DIR_ROOTS: &[&str] = &[
+    "/tmp",
+    "/private/tmp",
+    "/var/tmp",
+    "/private/var/tmp",
+    "C:/Windows/Temp",
+];
+
+/// True when `target` is inside one of the system's temporary directories.
+/// Temp directories are scratch space: reads and writes there are routine,
+/// reversible, and safe to auto-approve without a model call.
+fn path_is_within_temp_dir(target: &str) -> bool {
     let target = target.replace('\\', "/");
-    let root = workspace_root.replace('\\', "/");
+    if SYSTEM_TEMP_DIR_ROOTS
+        .iter()
+        .any(|root| path_is_within_root(&target, root))
+    {
+        return true;
+    }
+    // The platform's configured temp dir (TMPDIR / TMP / TEMP) is also scratch
+    // space, e.g. macOS /var/folders/.../T or the Windows per-user %TEMP%.
+    let env_root = std::env::temp_dir().to_string_lossy().replace('\\', "/");
+    !env_root.is_empty() && path_is_within_root(&target, &env_root)
+}
+
+fn path_is_within_root(target: &str, root: &str) -> bool {
+    let mut target = target.replace('\\', "/");
+    let mut root = root.replace('\\', "/");
+    if cfg!(windows) {
+        // Windows paths are case-insensitive; the policy layer normalizes
+        // paths the same way.
+        target.make_ascii_lowercase();
+        root.make_ascii_lowercase();
+    }
     let root = root.trim_end_matches('/');
     if root.is_empty() {
         return false;
@@ -199,6 +250,55 @@ mod tests {
                     None
                 ),
                 AutoFastPath::Allow
+            );
+        }
+    }
+
+    #[test]
+    fn allows_temp_directory_reads_and_writes() {
+        for target in [
+            "/tmp/agena_pty.log",
+            "/private/tmp/agena_pty.log",
+            "/var/tmp/scratch.bin",
+            "/private/var/tmp/scratch.bin",
+            "C:/Windows/Temp/agena.tmp",
+            "/tmp",
+        ] {
+            assert_eq!(
+                auto_fast_path(&path("read", "/work", target), None),
+                AutoFastPath::Allow,
+                "{target} read should be auto-approved"
+            );
+            assert_eq!(
+                auto_fast_path(&path("write", "/work", target), None),
+                AutoFastPath::Allow,
+                "{target} write should be auto-approved"
+            );
+        }
+        // The platform's configured temp dir (TMPDIR / TMP / TEMP) is also
+        // scratch space and differs per user (macOS /var/folders/.../T,
+        // Windows %LOCALAPPDATA%\Temp).
+        let platform_temp = std::env::temp_dir().join("agena-approval-test.log");
+        let platform_temp = platform_temp.to_string_lossy().replace('\\', "/");
+        assert_eq!(
+            auto_fast_path(&path("write", "/work", &platform_temp), None),
+            AutoFastPath::Allow,
+            "platform temp dir write should be auto-approved"
+        );
+    }
+
+    #[test]
+    fn temp_directory_allowance_does_not_leak_outside() {
+        for target in [
+            "/tmp/../etc/passwd",
+            "/tmp-other/scratch.bin",
+            "/etc/passwd",
+            "/var",
+        ] {
+            assert_eq!(
+                auto_fast_path(&path("write", "/work", target), None),
+                AutoFastPath::Defer,
+                "{target} must not be auto-approved as a temp write"
             );
         }
     }

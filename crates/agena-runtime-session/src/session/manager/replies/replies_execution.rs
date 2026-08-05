@@ -58,8 +58,7 @@ enum TurnContinuation {
 
 /// The message injected when a model turn was cut off by the output limit.
 /// Kept terse and imperative so the model resumes work instead of repeating.
-const TRUNCATED_CONTINUATION_PROMPT: &str =
-    "Your previous response was cut off by the output limit. Continue directly from where it stopped; do not repeat what was already written.";
+const TRUNCATED_CONTINUATION_PROMPT: &str = "Your previous response was cut off by the output limit. Continue directly from where it stopped; do not repeat what was already written.";
 
 /// Decide whether the stable-run loop should request another model turn after
 /// the given outcome.
@@ -519,8 +518,7 @@ impl SessionManager {
                         &mut truncation_continuation_remaining,
                         &mut follow_up_continuation_remaining,
                     ) {
-                        TurnContinuation::PendingTools
-                        | TurnContinuation::FollowUpRequested => {
+                        TurnContinuation::PendingTools | TurnContinuation::FollowUpRequested => {
                             // Tools will be executed by the pending-tools branch,
                             // or the model explicitly asked to keep working.
                             model_requested = true;
@@ -2903,7 +2901,11 @@ mod should_continue_turn_tests {
         ] {
             let (continuation, truncation_budget, follow_up_budget) =
                 decide(&outcome(reason, false), true);
-            assert_eq!(continuation, TurnContinuation::PendingTools, "reason={reason:?}");
+            assert_eq!(
+                continuation,
+                TurnContinuation::PendingTools,
+                "reason={reason:?}"
+            );
             assert_eq!(truncation_budget, 4);
             assert_eq!(follow_up_budget, 4);
         }
@@ -2933,8 +2935,7 @@ mod should_continue_turn_tests {
 
     #[test]
     fn end_turn_false_continues_under_budget() {
-        let (continuation, _, follow_up_budget) =
-            decide(&outcome(FinishReason::Stop, true), false);
+        let (continuation, _, follow_up_budget) = decide(&outcome(FinishReason::Stop, true), false);
         assert_eq!(continuation, TurnContinuation::FollowUpRequested);
         assert_eq!(follow_up_budget, 3, "follow-up budget decremented");
     }
@@ -2944,8 +2945,12 @@ mod should_continue_turn_tests {
         let mut truncation_budget = 4;
         let mut follow_up_budget = 0;
         let outcome = outcome(FinishReason::Stop, true);
-        let continuation =
-            should_continue_turn(&outcome, false, &mut truncation_budget, &mut follow_up_budget);
+        let continuation = should_continue_turn(
+            &outcome,
+            false,
+            &mut truncation_budget,
+            &mut follow_up_budget,
+        );
         assert_eq!(continuation, TurnContinuation::Stop);
     }
 
@@ -2962,8 +2967,12 @@ mod should_continue_turn_tests {
         let mut truncation_budget = 0;
         let mut follow_up_budget = 4;
         let outcome = outcome(FinishReason::MaxTokens, false);
-        let continuation =
-            should_continue_turn(&outcome, false, &mut truncation_budget, &mut follow_up_budget);
+        let continuation = should_continue_turn(
+            &outcome,
+            false,
+            &mut truncation_budget,
+            &mut follow_up_budget,
+        );
         assert_eq!(continuation, TurnContinuation::Stop);
     }
 

@@ -73,8 +73,20 @@ pub(crate) fn resolve_http_adapter_base_url(
 ) -> Result<String, ConfigError> {
     let (base_url, protocol_paths) = provider_endpoint_root(auth, provider_id)?;
     let normalized = normalize_base_url(base_url)?;
-    let protocol_path = http_adapter_protocol_path(protocol_paths, adapter);
+    let protocol_path = http_adapter_protocol_path(protocol_paths, adapter).trim();
     if protocol_path.is_empty() {
+        return Ok(normalized);
+    }
+    let protocol_path = if protocol_path.starts_with('/') {
+        protocol_path.to_owned()
+    } else {
+        format!("/{protocol_path}")
+    };
+    // A custom base URL frequently already carries the protocol prefix (for
+    // example `https://api.example.com/v1` from OpenAI SDK conventions).
+    // Appending the prefix again would produce `https://api.example.com/v1/v1`
+    // and break every request, so only append when it is not already present.
+    if normalized.ends_with(protocol_path.as_str()) {
         Ok(normalized)
     } else {
         Ok(format!("{normalized}{protocol_path}"))
@@ -757,4 +769,79 @@ where
     map.iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use agena_provider::ProviderProtocolPathsConfig;
+
+    fn api_auth(
+        base_url: &str,
+        protocol_paths: ProviderProtocolPathsConfig,
+    ) -> ProviderAuthConfig {
+        ProviderAuthConfig::Api(ProviderApiAuthConfig::custom(
+            Some(base_url.to_owned()),
+            protocol_paths,
+            None,
+        ))
+    }
+
+    #[test]
+    fn protocol_path_is_appended_to_bare_base_url() {
+        let auth = api_auth("https://api.example.com", ProviderProtocolPathsConfig::default());
+        assert_eq!(
+            resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::OpenAi).unwrap(),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(
+            resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::Anthropic).unwrap(),
+            "https://api.example.com/v1"
+        );
+        assert_eq!(
+            resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::Gemini).unwrap(),
+            "https://api.example.com/v1beta"
+        );
+    }
+
+    #[test]
+    fn protocol_path_is_not_doubled_when_base_url_already_contains_it() {
+        let openai =
+            api_auth("https://api.example.com/v1", ProviderProtocolPathsConfig::default());
+        assert_eq!(
+            resolve_http_adapter_base_url("test", &openai, HttpAdapterKind::OpenAi).unwrap(),
+            "https://api.example.com/v1"
+        );
+
+        let gemini = api_auth(
+            "https://api.example.com/v1beta/",
+            ProviderProtocolPathsConfig::default(),
+        );
+        assert_eq!(
+            resolve_http_adapter_base_url("test", &gemini, HttpAdapterKind::Gemini).unwrap(),
+            "https://api.example.com/v1beta"
+        );
+    }
+
+    #[test]
+    fn protocol_path_without_leading_slash_is_normalized() {
+        let mut paths = ProviderProtocolPathsConfig::default();
+        paths.openai = "v1".to_owned();
+        let auth = api_auth("https://api.example.com", paths);
+        assert_eq!(
+            resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::OpenAi).unwrap(),
+            "https://api.example.com/v1"
+        );
+    }
+
+    #[test]
+    fn empty_protocol_path_leaves_base_url_untouched() {
+        let mut paths = ProviderProtocolPathsConfig::default();
+        paths.openai = String::new();
+        let auth = api_auth("https://api.example.com", paths);
+        assert_eq!(
+            resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::OpenAi).unwrap(),
+            "https://api.example.com"
+        );
+    }
 }

@@ -307,11 +307,21 @@ pub struct ProviderCatalogEntry {
     pub adapters: Vec<ProviderAdapterSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderProtocolPaths {
     pub openai: String,
     pub anthropic: String,
     pub gemini: String,
+}
+
+impl Default for ProviderProtocolPaths {
+    fn default() -> Self {
+        Self {
+            openai: "/v1".to_owned(),
+            anthropic: "/v1".to_owned(),
+            gemini: "/v1beta".to_owned(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -466,4 +476,25 @@ pub trait ProviderModelSource: Send + Sync {
         &self,
         provider_id: &ProviderId,
     ) -> Result<Vec<Model>, ProviderCatalogError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draft_protocol_paths_default_matches_config_default() {
+        // Draft model discovery must hit the same protocol paths as a saved
+        // provider config; otherwise ad-hoc listing (TUI Ctrl+R in the
+        // provider studio) requests `{base_url}/models` instead of
+        // `{base_url}/v1/models` and fails with 404 for OpenAI-compatible
+        // gateways (e.g. cpa).
+        let draft_default = ProviderProtocolPaths::default();
+        let config_default = ProviderProtocolPathsConfig::default();
+        assert_eq!(draft_default.openai, config_default.openai);
+        assert_eq!(draft_default.anthropic, config_default.anthropic);
+        assert_eq!(draft_default.gemini, config_default.gemini);
+        assert_eq!(draft_default.openai, "/v1");
+        assert_eq!(draft_default.gemini, "/v1beta");
+    }
 }

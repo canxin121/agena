@@ -43,6 +43,9 @@ fn run_abort_problem(reason: RunAbortReason) -> Option<agena_failure::UserProble
 
     let (code, category, responsibility, retry, recovery, fallback) = match reason {
         RunAbortReason::UserCancelled => return None,
+        // Deliberate early stops (superseded by newer input, or a configured
+        // budget exhausted) are not failures, so surface no user problem.
+        RunAbortReason::Replaced | RunAbortReason::BudgetLimited => return None,
         RunAbortReason::ProviderError => (
             "provider.response_failed",
             FailureCategory::DependencyUnavailable,
@@ -2447,6 +2450,9 @@ where
             EventKind::RunAborted(payload) => {
                 let status = match payload.reason {
                     RunAbortReason::UserCancelled => ExecutionStatus::Cancelled,
+                    RunAbortReason::Replaced | RunAbortReason::BudgetLimited => {
+                        ExecutionStatus::Cancelled
+                    }
                     RunAbortReason::ProcessRestart
                     | RunAbortReason::ProviderError
                     | RunAbortReason::Internal => ExecutionStatus::Failed,

@@ -26,6 +26,12 @@ pub enum RunAbortReason {
     UserCancelled,
     /// Provider returned an error before the run could close.
     ProviderError,
+    /// The run was superseded by a newer user message or steer input before
+    /// it completed; the old turn is replaced, not failed.
+    Replaced,
+    /// A configured usage or step budget (max turns, token/cost limit) was
+    /// exhausted and the run stopped early on purpose.
+    BudgetLimited,
     /// Internal scheduling error.
     Internal,
 }

@@ -42,7 +42,7 @@ pub(crate) struct SessionCompositionInputs<
     pub(crate) providers: Providers,
     pub(crate) plugins: Plugins,
     pub(crate) lsp_registry: Lsp,
-        pub(crate) workspace_root: Workspace,
+    pub(crate) workspace_root: Workspace,
     pub(crate) config: Config,
     pub(crate) mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     /// Background-process registry installed into every tool executor built
@@ -64,6 +64,10 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
     pub(crate) cache_limits: agena_domain::SessionCacheLimits,
     pub(crate) max_concurrent_tools: usize,
+    /// Cap on model turns within one stable run; `None` uses the session
+    /// manager's fallback (`DEFAULT_MAX_MODEL_TURNS`). Not yet wired to TOML;
+    /// runtime keeps the default so behavior matches the session default.
+    pub(crate) max_turns: Option<usize>,
     pub(crate) tool_presentation: agena_plugin_host::ToolPresentationConfig,
 }
 
@@ -82,6 +86,8 @@ pub(crate) fn session_build_config_from_resolved(
         },
         cache_limits: agena_domain::SessionCacheLimits::default(),
         max_concurrent_tools: DEFAULT_MAX_CONCURRENT_TOOLS,
+        // Mirrors `DEFAULT_MAX_MODEL_TURNS` in agena-runtime-session.
+        max_turns: Some(100),
         tool_presentation: config.plugins.policy.tool_presentation.clone(),
     }
 }

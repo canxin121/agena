@@ -5,7 +5,7 @@ use agena_provider::{CompletionUsage, StreamResumePolicy};
 use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -25,11 +25,24 @@ use super::{CompletionResponse, ModelRuntime, wire_message};
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 
-const REQUEST_MAX_RETRIES: u32 = 5;
+/// How many times a retryable provider request is retried before the request
+/// fails. 10 mirrors codex's `stream_max_retries` default and is deliberately
+/// generous: transient network failures (timeout, connect, 429/5xx) are the
+/// most common reason a reply would otherwise be interrupted, and the circuit
+/// breaker below keeps us from hammering a provider that is actually down.
+const REQUEST_MAX_RETRIES: u32 = 10;
 const RETRY_BASE_DELAY_MS: u64 = 250;
 const RETRY_MAX_DELAY_MS: u64 = 2_000;
 const STREAM_REPLAY_MAX_RETRIES_AFTER_OUTPUT: u32 = 5;
 const STREAM_REPLAY_MAX_TRACKED_EVENTS: usize = 2048;
+
+/// Circuit-breaker trip threshold: after this many consecutive request-level
+/// failures for one provider, the breaker opens and new requests fail fast
+/// instead of burning the full retry budget against a provider that is down.
+const BREAKER_TRIP_THRESHOLD: u32 = 3;
+/// How long the circuit stays open before the next request is allowed to try
+/// again (half-open probe).
+const BREAKER_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy)]
 struct RequestRetryPolicy {
@@ -268,6 +281,64 @@ pub struct ProviderRegistry {
     providers: HashMap<String, Arc<dyn ModelRuntime>>,
     retry_policy: RequestRetryPolicy,
     stream_replay_policy: StreamReplayPolicy,
+    breaker: Arc<Mutex<HashMap<String, BreakerState>>>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BreakerState {
+    consecutive_failures: u32,
+    /// When the circuit is open (Some), requests fail fast until this instant.
+    open_until: Option<Instant>,
+}
+
+/// Whether the circuit for this provider is currently open. Lock failure is
+/// treated as closed (fail-open is safer than suppressing traffic on a lock
+/// hiccup).
+fn breaker_open(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, provider_id: &str) -> bool {
+    let Ok(breaker) = breaker.lock() else {
+        return false;
+    };
+    let Some(state) = breaker.get(provider_id) else {
+        return false;
+    };
+    state
+        .open_until
+        .is_some_and(|open_until| Instant::now() < open_until)
+}
+
+/// Record a request-level failure for a provider. Trips the circuit once the
+/// consecutive-failure threshold is reached; a later success resets.
+fn breaker_record_failure(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, provider_id: &str) {
+    let Ok(mut breaker) = breaker.lock() else {
+        return;
+    };
+    let state = breaker.entry(provider_id.to_owned()).or_default();
+    state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+    if state.consecutive_failures >= BREAKER_TRIP_THRESHOLD {
+        state.open_until = Some(Instant::now() + BREAKER_COOLDOWN);
+        tracing::warn!(
+            provider_id,
+            consecutive_failures = state.consecutive_failures,
+            cooldown_secs = BREAKER_COOLDOWN.as_secs(),
+            "provider circuit breaker opened after consecutive request failures"
+        );
+    }
+}
+
+/// Record a successful request for a provider; closes an open circuit and
+/// resets the consecutive-failure counter.
+fn breaker_record_success(breaker: &Arc<Mutex<HashMap<String, BreakerState>>>, provider_id: &str) {
+    let Ok(mut breaker) = breaker.lock() else {
+        return;
+    };
+    let state = breaker.entry(provider_id.to_owned()).or_default();
+    if state.open_until.is_some() {
+        tracing::info!(
+            provider_id,
+            "provider circuit breaker closed after a successful request"
+        );
+    }
+    *state = BreakerState::default();
 }
 
 struct PluginRegisteredProvider {
@@ -333,7 +404,37 @@ impl ProviderRegistry {
             providers: HashMap::new(),
             retry_policy: RequestRetryPolicy::default(),
             stream_replay_policy: StreamReplayPolicy::default(),
+            breaker: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Whether the circuit for this provider is currently open: recent
+    /// consecutive request-level failures tripped it, so new requests should
+    /// fail fast instead of burning the full retry budget.
+    fn breaker_open(&self, provider_id: &str) -> bool {
+        breaker_open(&self.breaker, provider_id)
+    }
+
+    /// Record a request-level failure for a provider. Trips the circuit once
+    /// the consecutive-failure threshold is reached; a later success resets.
+    fn breaker_record_failure(&self, provider_id: &str) {
+        breaker_record_failure(&self.breaker, provider_id)
+    }
+
+    /// Record a successful request for a provider; closes an open circuit and
+    /// resets the consecutive-failure counter.
+    fn breaker_record_success(&self, provider_id: &str) {
+        breaker_record_success(&self.breaker, provider_id)
+    }
+
+    /// Circuit-aware retry decision: an open circuit suppresses retries so the
+    /// caller surfaces the underlying error promptly (and can fall back to an
+    /// alternate model) instead of hammering a provider that is down.
+    fn should_retry_error(&self, provider_id: &str, err: &ProviderError, retry_index: u32) -> bool {
+        if self.breaker_open(provider_id) {
+            return false;
+        }
+        err.retryable() && retry_index < self.retry_policy.max_retries
     }
 
     pub fn build_http_client(
@@ -435,10 +536,6 @@ impl ProviderRegistry {
         ))
     }
 
-    fn should_retry_error(&self, err: &ProviderError, retry_index: u32) -> bool {
-        err.retryable() && retry_index < self.retry_policy.max_retries
-    }
-
     async fn call_with_retry<T, F, Fut>(
         &self,
         provider_id: &str,
@@ -464,6 +561,7 @@ impl ProviderRegistry {
 
             match op().instrument(request_span.clone()).await {
                 Ok(value) => {
+                    self.breaker_record_success(provider_id);
                     tracing::info!(
                         provider_id,
                         operation,
@@ -477,7 +575,8 @@ impl ProviderRegistry {
                 }
                 Err(err) => {
                     let reason = retry_reason(&err);
-                    if !self.should_retry_error(&err, retry_index) {
+                    if !self.should_retry_error(provider_id, &err, retry_index) {
+                        self.breaker_record_failure(provider_id);
                         tracing::error!(
                             provider_id,
                             operation,
@@ -633,6 +732,36 @@ mod tests {
     use super::estimate_total_cost_from_metadata;
     use agena_domain::{ModelMetadata, ModelPricing};
     use agena_provider::CompletionUsage;
+
+    #[test]
+    fn breaker_trips_after_consecutive_failures_and_closes_on_success() {
+        let registry = super::ProviderRegistry::new();
+        assert!(!registry.breaker_open("p1"));
+
+        registry.breaker_record_failure("p1");
+        assert!(!registry.breaker_open("p1"));
+        registry.breaker_record_failure("p1");
+        assert!(!registry.breaker_open("p1"));
+        registry.breaker_record_failure("p1");
+        assert!(registry.breaker_open("p1"));
+
+        // Failures are tracked per provider: another provider does not trip
+        // this circuit and does not reset the open one.
+        registry.breaker_record_failure("p2");
+        registry.breaker_record_failure("p2");
+        assert!(!registry.breaker_open("p2"));
+        assert!(registry.breaker_open("p1"));
+        registry.breaker_record_failure("p2");
+        assert!(registry.breaker_open("p2"));
+        assert!(registry.breaker_open("p1"));
+
+        // A success closes the circuit and resets the counter.
+        registry.breaker_record_success("p1");
+        assert!(!registry.breaker_open("p1"));
+        assert!(registry.breaker_open("p2"));
+        registry.breaker_record_success("p2");
+        assert!(!registry.breaker_open("p2"));
+    }
 
     #[test]
     fn cost_estimation_prices_visible_output_and_reasoning_once_each() {

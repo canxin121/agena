@@ -47,6 +47,7 @@ pub(super) fn build_or_reconfigure_session_manager(
         auto_compaction: build_config.auto_compaction,
         cache_limits: build_config.cache_limits,
         max_concurrent_tools: build_config.max_concurrent_tools,
+        max_turns: build_config.max_turns,
     };
 
     if let Some(manager) = existing {

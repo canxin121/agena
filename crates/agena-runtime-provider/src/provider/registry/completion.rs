@@ -1,12 +1,14 @@
 use futures_util::StreamExt;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use agena_provider::{CompletionToolCall, CompletionUsage, ProviderCompactionOutput};
 
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, Instant, ModelRef, ModelRuntime,
-    ProviderError, ProviderRegistry, Stream, elapsed_ms, hydrate_usage_cost_from_provider_metadata,
-    retry_reason, stream_resume_policy_label, validate_request_capabilities,
+    ProviderError, ProviderRegistry, Stream, breaker_open, breaker_record_failure,
+    breaker_record_success, elapsed_ms, hydrate_usage_cost_from_provider_metadata, retry_reason,
+    stream_resume_policy_label, validate_request_capabilities,
 };
 
 /// Safety ceiling for protocol repair turns. This is deliberately large and is
@@ -231,6 +233,24 @@ fn append_tool_api_repair_turn(
             "Trusted Agena transport correction: the original user's task is still unresolved. The preceding Tool API call was rejected before execution. It produced no tool result and must not be reported as successful.\nError: {error}\nRejected calls: {}\nThe only allowed Tool API function names are: [{declared}].{guidance}\nRetry the unresolved tool step now. Emit an exact declared Tool API function call; do not answer the user's task, narrate a call, invent a result, or repeat an execution-tool name as `function.name`.",
             rejected_calls_json(calls),
         ) }],
+        provider_state: Default::default(),
+    });
+    request.previous_response_id = None;
+    request.temperature = Some(0.0);
+}
+
+/// Append a short nudge for an empty-response retry (mirrors gemini's
+/// on-retry nudging: "you only produced thinking, please answer now"). The
+/// previous attempt completed with no text, reasoning, or tool call, so the
+/// next attempt must be told the task is still open instead of silently
+/// resampling the same empty completion.
+fn append_empty_response_nudge(request: &mut CompletionRequest) {
+    request.messages.push(agena_provider::CompletionInputMessage {
+        role: agena_domain::Role::User,
+        parts: vec![agena_provider::CompletionInputPart::Text {
+            text: "Trusted Agena runtime note: the previous provider attempt returned an empty response with no text, reasoning, or tool call. The user's task is still unresolved. Provide your final answer now, or emit a valid Tool API call to make progress."
+                .to_owned(),
+        }],
         provider_state: Default::default(),
     });
     request.previous_response_id = None;
@@ -831,6 +851,7 @@ impl ProviderRegistry {
         let replay_policy = self.stream_replay_policy;
         let provider_resume_policy = provider.stream_resume_policy();
         let replay_safe_enabled = replay_policy.enabled(provider_resume_policy);
+        let breaker = Arc::clone(&self.breaker);
 
         let stream = async_stream::try_stream! {
             let request_span = tracing::info_span!(
@@ -846,6 +867,7 @@ impl ProviderRegistry {
             let mut replay_buffer_exhausted = false;
             let mut protocol_repair_count = 0_usize;
             let mut discarded_usage = None;
+            let mut has_nudged_empty_response = false;
 
             loop {
                 let attempt = retry_index + 1;
@@ -862,6 +884,22 @@ impl ProviderRegistry {
                     tracked_events = emitted_history.len() as u64,
                     "provider stream attempt started"
                 );
+
+                if breaker_open(&breaker, &provider_id) {
+                    let err = ProviderError::Provider(format!(
+                        "provider `{provider_id}` request skipped: circuit breaker is open after consecutive request failures"
+                    ));
+                    tracing::warn!(
+                        provider_id = provider_id.as_str(),
+                        operation = "complete_stream",
+                        attempt,
+                        retries = retry_index,
+                        stage = "circuit_open",
+                        "provider circuit breaker is open; skipping request to fail fast"
+                    );
+                    Err(err)?;
+                    continue;
+                }
 
                 let mut inner_stream = match provider
                     .complete_stream_for_adapter(adapter_id.as_ref(), request.clone())
@@ -881,7 +919,9 @@ impl ProviderRegistry {
                         stream
                     }
                     Err(err) => {
-                        let can_retry = err.retryable() && retry_index < retry_policy.max_retries;
+                        let can_retry = err.retryable()
+                            && retry_index < retry_policy.max_retries
+                            && !breaker_open(&breaker, &provider_id);
                         let reason = retry_reason(&err);
                         if can_retry {
                             let delay = retry_policy.delay_for_retry(retry_index);
@@ -926,6 +966,7 @@ impl ProviderRegistry {
                             "provider stream startup failed"
                         );
 
+                        breaker_record_failure(&breaker, &provider_id);
                         Err(err)?;
                         continue;
                     }
@@ -1283,7 +1324,9 @@ impl ProviderRegistry {
                             yield event;
                         }
                         Err(err) => {
-                            let can_retry_now = err.retryable() && retry_index < retry_policy.max_retries;
+                            let can_retry_now = err.retryable()
+                                && retry_index < retry_policy.max_retries
+                                && !breaker_open(&breaker, &provider_id);
                             let can_retry_early_stream_error = !emitted_event_in_attempt
                                 && can_retry_now;
 
@@ -1374,6 +1417,7 @@ impl ProviderRegistry {
                                 "provider stream failed"
                             );
 
+                            breaker_record_failure(&breaker, &provider_id);
                             Err(err)?;
                         }
                     }
@@ -1451,7 +1495,20 @@ impl ProviderRegistry {
                     retry_index += 1;
                     emitted_history.clear();
                     replay_buffer_exhausted = false;
+                    if !has_nudged_empty_response {
+                        append_empty_response_nudge(&mut request);
+                        has_nudged_empty_response = true;
+                    }
                     continue;
+                }
+
+                if !emitted_content_in_attempt {
+                    // The full empty-response budget was consumed: the request
+                    // completed but produced nothing usable, so record it as a
+                    // request failure for the circuit breaker too.
+                    breaker_record_failure(&breaker, &provider_id);
+                } else {
+                    breaker_record_success(&breaker, &provider_id);
                 }
 
                 tracing::info!(
@@ -2643,7 +2700,7 @@ mod replay_tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn persistently_empty_completion_exhausts_retries_without_content() {
         let provider = Arc::new(AlwaysEmptyProvider::new());
         let mut registry = ProviderRegistry::new();
@@ -2669,8 +2726,109 @@ mod replay_tests {
             .filter(|event| !matches!(event, CompletionStreamEvent::ProviderRetry { .. }))
             .count();
         assert_eq!(content, 0, "no text or tool events should ever be emitted");
-        // Request-level budget: max_retries (5) retries after the first
-        // attempt, all empty, so the provider is called 6 times.
-        assert_eq!(provider.calls.load(Ordering::SeqCst), 6);
+        // Request-level budget: max_retries (10) retries after the first
+        // attempt, all empty, so the provider is called 11 times.
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 11);
+    }
+
+    struct AlwaysFailingStartupProvider {
+        calls: AtomicUsize,
+        model: ModelId,
+    }
+
+    impl AlwaysFailingStartupProvider {
+        fn new() -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                model: ModelId::new("test-model"),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ModelRuntime for AlwaysFailingStartupProvider {
+        fn id(&self) -> &str {
+            "breaker-test"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, ProviderError> {
+            Err(ProviderError::Provider(
+                "non-streaming completion not used in breaker test".to_owned(),
+            ))
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_core::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                        + Send,
+                >,
+            >,
+            ProviderError,
+        > {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Err(ProviderError::ProviderClassified {
+                provider: "breaker-test".to_owned(),
+                message: "simulated persistent outage".to_owned(),
+                kind: ProviderErrorKind::Unavailable,
+                retryable: true,
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn breaker_fails_fast_after_consecutive_request_failures() {
+        let provider = Arc::new(AlwaysFailingStartupProvider::new());
+        let mut registry = ProviderRegistry::new();
+        registry.register_arc(provider.clone());
+
+        for _ in 0..3 {
+            let events = registry
+                .complete_stream(
+                    &ModelRef::new("breaker-test", "test-model"),
+                    replay_request(),
+                )
+                .await
+                .expect("stream startup")
+                .collect::<Vec<_>>()
+                .await;
+            let errors = events.into_iter().filter_map(Result::err).count();
+            assert_eq!(
+                errors, 1,
+                "each request surfaces exactly one startup failure"
+            );
+        }
+        // Each of the three requests burned the full retry budget
+        // (1 initial attempt + 10 retries), tripping the circuit.
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 33);
+
+        // The circuit is now open: the next request fails fast without
+        // contacting the provider again.
+        let events = registry
+            .complete_stream(
+                &ModelRef::new("breaker-test", "test-model"),
+                replay_request(),
+            )
+            .await
+            .expect("stream startup")
+            .collect::<Vec<_>>()
+            .await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 33);
+        let errors = events.into_iter().filter_map(Result::err).count();
+        assert_eq!(errors, 1);
     }
 }

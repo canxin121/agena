@@ -1,10 +1,10 @@
 {
   "counts": {
     "bundled_skills": 14,
-    "execution_tools": 137,
+    "execution_tools": 138,
     "gateway_tools": 4,
     "plugins": 24,
-    "tools": 141
+    "tools": 142
   },
   "plugins": [
     {
@@ -414,6 +414,18 @@
       ],
       "id": "agena.context",
       "tools": [
+        {
+          "canonical_name": "agena.context.environment",
+          "conditional": null,
+          "definition_identity": "fd56b07526cd2e876a9e0c8566cf24ec98d760870c83397458c07a485cac80da",
+          "gateway": false,
+          "input_schema_sha256": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "tags": [
+            "query",
+            "discovery"
+          ]
+        },
         {
           "canonical_name": "agena.context.status",
           "conditional": null,

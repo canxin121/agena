@@ -1,9 +1,13 @@
-//! Safe model-context budget, model identity, and compaction status.
+//! Safe model-context budget, model identity, compaction status, and session
+//! environment facts.
 
+use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::host_api::{HostClient, HostContextStatusRequest};
+use agena_plugin_host::sdk::host_api::{
+    HostClient, HostContextStatusRequest, HostGetSessionRequest,
+};
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
 };
@@ -12,6 +16,41 @@ pub(crate) const CONTEXT_PLUGIN_ID: &str = "agena.context";
 
 pub(crate) struct ContextPlugin {
     host: OnceLock<Arc<dyn HostClient>>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GitFacts {
+    branch: Option<String>,
+    short_sha: Option<String>,
+    dirty: bool,
+}
+
+fn run_git(workspace: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Fresh git facts for a workspace. Deliberately uncached: the environment can
+/// change mid-session, so callers query on demand for current values.
+fn git_facts(workspace: &Path) -> Option<GitFacts> {
+    let branch = run_git(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let short_sha = run_git(workspace, &["rev-parse", "--short", "HEAD"]);
+    let dirty = run_git(workspace, &["status", "--porcelain"])
+        .map(|status| !status.trim().is_empty())
+        .unwrap_or(false);
+    Some(GitFacts {
+        branch: Some(branch),
+        short_sha,
+        dirty,
+    })
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -141,6 +180,87 @@ impl ContextPlugin {
             Vec::new(),
         ))
     }
+
+    #[tool(
+        tags(query, discovery),
+        summary = "Inspect the current session environment: working directory, git state, shell, OS, and session identity.",
+        read_only,
+        display = detailed,
+        concurrency_safe
+    )]
+    async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
+        let host = self
+            .host
+            .get()
+            .ok_or_else(|| PluginError::internal("context plugin invoked before init"))?;
+        let workspace = Path::new(context.workspace_root);
+        let mut lines = vec![format!("Working directory: {}", workspace.display())];
+        let mut git_branch = None::<String>;
+        let mut git_short_sha = None::<String>;
+        let mut git_dirty = false;
+        if let Some(facts) = git_facts(workspace) {
+            git_branch = facts.branch;
+            git_short_sha = facts.short_sha;
+            git_dirty = facts.dirty;
+            if let (Some(branch), Some(short_sha)) =
+                (git_branch.as_deref(), git_short_sha.as_deref())
+            {
+                let dirty = if git_dirty { " (dirty)" } else { "" };
+                lines.push(format!("Git: {branch} @ {short_sha}{dirty}"));
+            } else if let Some(branch) = git_branch.as_deref() {
+                lines.push(format!("Git branch: {branch}"));
+            }
+        }
+        let shell = std::env::var("SHELL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| {
+                if cfg!(windows) {
+                    "powershell".to_string()
+                } else {
+                    "/bin/bash".to_string()
+                }
+            });
+        lines.push(format!("Shell: {shell}"));
+        lines.push(format!(
+            "OS: {} {}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        ));
+        let session = host
+            .get_session(HostGetSessionRequest {
+                session_id: Some(context.session_id),
+            })
+            .await;
+        let is_subagent = session
+            .as_ref()
+            .is_ok_and(|response| response.session.is_subagent);
+        if is_subagent {
+            lines.push(format!("Session: subagent {}", context.session_id));
+        } else {
+            lines.push(format!("Session: {}", context.session_id));
+        }
+        let text = lines.join("\n");
+        let payload = serde_json::json!({
+            "workspace_root": context.workspace_root,
+            "git_branch": git_branch,
+            "git_short_sha": git_short_sha,
+            "git_dirty": git_dirty,
+            "shell": shell,
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "session_id": context.session_id,
+            "is_subagent": is_subagent,
+        });
+        Ok(ToolInvokeOutput::from_parts(
+            "session environment",
+            "environment facts",
+            text,
+            Some(payload),
+            std::collections::BTreeMap::new(),
+            Vec::new(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -150,9 +270,9 @@ mod tests {
     use super::ContextPlugin;
 
     #[test]
-    fn manifest_exposes_safe_context_status() {
+    fn manifest_exposes_safe_context_status_and_environment() {
         let manifest = ContextPlugin::new().manifest();
-        assert_eq!(manifest.tools.len(), 1);
-        assert_eq!(manifest.tools[0].name, "status");
+        assert!(manifest.tools.iter().any(|tool| tool.name == "status"));
+        assert!(manifest.tools.iter().any(|tool| tool.name == "environment"));
     }
 }

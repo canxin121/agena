@@ -66,6 +66,7 @@ impl PlanPlugin {
     #[tool(
         tags(mutate, planning),
         summary = "Create or replace the current plan.",
+        help = "Use for non-trivial implementation work: new features, multiple viable approaches, changing existing behavior or structure, architectural decisions, changes touching 2-3 or more files, unclear requirements, or when user preference affects the direction. Skip for single-line fixes, clearly scoped single-function changes, or pure research/read-only work. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools, clarify with `ask`, and refine. Present the finished plan for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.",
         planning,
         mutating,
         display = brief,

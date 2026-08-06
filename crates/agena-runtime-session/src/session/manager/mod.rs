@@ -383,6 +383,7 @@ mod history;
 mod permission_service;
 mod replies;
 mod runs;
+mod session_prompt;
 mod sessions;
 mod stats;
 mod tests;

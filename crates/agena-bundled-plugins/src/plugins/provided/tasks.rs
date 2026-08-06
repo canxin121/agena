@@ -192,7 +192,7 @@ impl TasksPlugin {
     #[tool(
         tags(subtask, execute),
         summary = "Create or resume a delegated subagent task. Attach Skill names in `skills` so the child session applies them as task guidance.",
-        help = "Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
+        help = "Use when the work is genuinely parallel, independent, or read-heavy across many files, or when a matching subagent type exists. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
         task,
         subtask,
         display = detailed,

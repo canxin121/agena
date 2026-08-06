@@ -571,9 +571,9 @@
         {
           "canonical_name": "agena.fs.apply_patch",
           "conditional": null,
-          "definition_identity": "417276cd66955e08ec36488a087a95ed8eeccfaaa01400a8c0bd0a1f7aab071d",
+          "definition_identity": "d61e85bf4647322807a84aef2892dc85451f94e7a9cc9ff4ac01c2b1c9f33fad",
           "gateway": false,
-          "input_schema_sha256": "5d4d1dfc1e7fbb1f582fc5a40a103bf2d4cc7a7a5d3587d3adb6842373db5406",
+          "input_schema_sha256": "a40aafd7ed5890c49064255d949b8aaaf4b014367570c3646f1df6ec64ce315a",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",

@@ -344,6 +344,57 @@ impl OpenAiTransport {
         }));
     }
 
+    /// OpenAI-style reasoning items carry the chain-of-thought as opaque
+    /// `encrypted_content`. Some Responses-compatible gateways validate that
+    /// the plaintext `content` array on such items is empty
+    /// (`array_above_max_length` on `input[N].content`), so strip `content`
+    /// before replay whenever the item already carries encrypted content.
+    /// Chat-style `reasoning_content` items (content only, no
+    /// `encrypted_content`) are replayed unchanged so models like deepseek
+    /// still receive their prior reasoning.
+    pub(super) fn sanitize_responses_reasoning_item(
+        mut item: serde_json::Value,
+    ) -> serde_json::Value {
+        if item
+            .get("encrypted_content")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|content| !content.is_empty())
+            && let Some(object) = item.as_object_mut()
+        {
+            object.remove("content");
+        }
+        item
+    }
+
+    /// Drop the plaintext `content` array from every reasoning input item.
+    /// Last-resort recovery for gateways that reject reasoning content replay
+    /// even for chat-style items; the opaque state (when present) and summary
+    /// are preserved, and non-reasoning items are untouched.
+    pub(super) fn strip_responses_reasoning_content(input: &mut [OpenAiResponsesInputItem]) {
+        for item in input.iter_mut() {
+            if let OpenAiResponsesInputItem::Reasoning(value) = item
+                && let Some(object) = value.as_object_mut()
+            {
+                object.remove("content");
+            }
+        }
+    }
+
+    /// True when the provider rejected the request because a reasoning input
+    /// item carried a non-empty plaintext `content` array
+    /// (`array_above_max_length` on `input[N].content`). Used to decide the
+    /// one-shot reasoning-content retry in `complete_stream`.
+    pub(super) fn is_reasoning_content_array_error(error: &ProviderError) -> bool {
+        let message = match error {
+            ProviderError::HttpStatus { body, .. } => body,
+            ProviderError::ProviderClassified { message, .. } => message,
+            _ => return false,
+        };
+        message.contains("array_above_max_length")
+            && message.contains("input[")
+            && message.contains(".content")
+    }
+
     pub(super) fn append_responses_items_for_message(
         input: &mut Vec<OpenAiResponsesInputItem>,
         message: &CompletionInputMessage,
@@ -401,6 +452,7 @@ impl OpenAiTransport {
                                     }
                             })
                             .cloned()
+                            .map(Self::sanitize_responses_reasoning_item)
                             .map(OpenAiResponsesInputItem::Reasoning),
                     );
                 }
@@ -824,7 +876,7 @@ impl OpenAiTransport {
 
 #[cfg(test)]
 mod tool_api_history_tests {
-    use super::{OpenAiTransport, validate_responses_input};
+    use super::{OpenAiTransport, ProviderError, validate_responses_input};
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
     use agena_domain::{Role, StructuredObject, TimeRange};
@@ -938,5 +990,97 @@ mod tool_api_history_tests {
             Some("reasoned text"),
             "the reasoning content must survive replay for reasoning_content models"
         );
+    }
+
+    #[test]
+    fn encrypted_reasoning_replay_drops_plaintext_content_array() {
+        let invocation = ToolInvocation::new(
+            "fs.read",
+            StructuredObject::try_from(serde_json::json!({ "path": "a.txt" }))
+                .expect("structured input"),
+        );
+        let mut assistant = Message::prompt_parts(
+            Role::Assistant,
+            vec![PartContent::operation(OperationPart::completed(
+                0,
+                invocation,
+                agena_runtime_contracts::message::OperationCompletion::new(
+                    "Read",
+                    "Read file",
+                    "contents".to_owned(),
+                    Vec::new(),
+                    Vec::new(),
+                    ToolOutput::default(),
+                ),
+                TimeRange::default(),
+            ))],
+        );
+        assistant.provider_state = Some(MessageProviderState {
+            openai_reasoning_items: vec![serde_json::json!({
+                "type": "reasoning",
+                "summary": [
+                    { "type": "summary_text", "text": "summary" }
+                ],
+                "content": [
+                    { "type": "reasoning_text", "text": "first" },
+                    { "type": "reasoning_text", "text": "second" }
+                ],
+                "encrypted_content": "opaque-state"
+            })],
+            ..MessageProviderState::default()
+        });
+
+        let mut input = Vec::new();
+        let assistant = crate::provider::project_completion_input(&assistant);
+        OpenAiTransport::append_responses_items_for_message(&mut input, &assistant);
+        validate_responses_input(input.as_slice()).expect("provider-safe replay input");
+
+        let value = serde_json::to_value(&input).expect("serialize replay input");
+        let reasoning = value
+            .as_array()
+            .expect("responses input array")
+            .iter()
+            .find(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning"))
+            .expect("encrypted reasoning must be replayed");
+        assert_eq!(
+            reasoning.get("encrypted_content").and_then(serde_json::Value::as_str),
+            Some("opaque-state")
+        );
+        assert!(
+            reasoning.get("content").is_none(),
+            "encrypted reasoning must not replay plaintext content"
+        );
+        assert_eq!(
+            reasoning.pointer("/summary/0/text").and_then(serde_json::Value::as_str),
+            Some("summary"),
+            "summary metadata should remain available"
+        );
+    }
+
+    #[test]
+    fn reasoning_content_error_matcher_is_narrow_and_provider_error_only() {
+        let error = ProviderError::HttpStatus {
+            provider: "cpa".to_owned(),
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: "Invalid 'input[48].content': array too long (code=\"array_above_max_length\")"
+                .to_owned(),
+            kind: agena_provider::ProviderErrorKind::InvalidRequest,
+            retryable: false,
+        };
+        assert!(OpenAiTransport::is_reasoning_content_array_error(&error));
+
+        let unrelated = ProviderError::HttpStatus {
+            provider: "cpa".to_owned(),
+            status: reqwest::StatusCode::BAD_REQUEST,
+            body: "Invalid 'input[48].content': malformed content (code=\"invalid_request\")"
+                .to_owned(),
+            kind: agena_provider::ProviderErrorKind::InvalidRequest,
+            retryable: false,
+        };
+        assert!(!OpenAiTransport::is_reasoning_content_array_error(&unrelated));
+
+        assert!(!OpenAiTransport::is_reasoning_content_array_error(
+            &ProviderError::Internal("array_above_max_length input[48].content".to_owned())
+        ));
     }
 }

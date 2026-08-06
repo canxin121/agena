@@ -62,7 +62,7 @@ pub(super) struct OpenAiResponsesCompactRequest {
     pub(super) text: Option<OpenAiResponsesTextConfig>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(super) struct OpenAiResponsesReasoningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) effort: Option<String>,

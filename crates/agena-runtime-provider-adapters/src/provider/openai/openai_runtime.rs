@@ -568,82 +568,111 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         tracing::Span::current().record("provider", tracing::field::display(self.id.as_str()));
         let model = request.model.clone();
 
-        let input = self.responses_input_for_request(&request)?;
+        let mut input = self.responses_input_for_request(&request)?;
         let tool_plan = self.responses_tool_plan_for_request(&request)?;
         let reasoning = OpenAiTransport::responses_reasoning_config(&request, model.as_ref());
+        let include = OpenAiTransport::responses_include(
+            tool_plan.include,
+            reasoning.as_ref(),
+            self.supports_codex_compat_headers() || self.is_official_openai_endpoint(),
+        );
 
-        let body = OpenAiResponsesRequest {
-            model: model.to_string(),
-            instructions: OpenAiTransport::responses_instructions(&request),
-            input,
-            tools: tool_plan.tools,
-            tool_choice: "auto".to_owned(),
-            parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
-            include: OpenAiTransport::responses_include(
-                tool_plan.include,
-                reasoning.as_ref(),
-                self.supports_codex_compat_headers() || self.is_official_openai_endpoint(),
-            ),
-            max_output_tokens: self.responses_request_max_output_tokens(&request),
-            temperature: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.temperature)
-                .flatten(),
-            prompt_cache_key: request.prompt_cache_key.clone(),
-            previous_response_id: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then(|| request.previous_response_id.clone())
-                .flatten(),
-            store: false,
-            stream: true,
-            top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                .then_some(request.top_p)
-                .flatten(),
-            reasoning,
-            service_tier: OpenAiTransport::responses_service_tier(&request),
-            text: OpenAiTransport::responses_text_config(&request),
-            client_metadata: OpenAiTransport::responses_client_metadata(
-                RequestHeaderContext::from_request(&request),
-            ),
-        };
-        let body_json =
-            utils::serialize_request_body_with_patch(&body, &request.request_override.body_patch)?;
+        // Some Responses-compatible gateways reject reasoning items that carry
+        // both opaque `encrypted_content` and a plaintext `content` array
+        // (`array_above_max_length` on `input[N].content`).
+        // `responses_input_for_request` already strips the content array from
+        // those items; as a last resort, retry once with the content array
+        // removed from every reasoning item so a single provider quirk cannot
+        // kill the whole turn.
+        let mut retry_without_reasoning_content = false;
+        let response = loop {
+            let attempt_input = if retry_without_reasoning_content {
+                let mut cleaned = self.responses_input_for_request(&request)?;
+                OpenAiTransport::strip_responses_reasoning_content(cleaned.as_mut_slice());
+                cleaned
+            } else {
+                std::mem::take(&mut input)
+            };
+            let body = OpenAiResponsesRequest {
+                model: model.to_string(),
+                instructions: OpenAiTransport::responses_instructions(&request),
+                input: attempt_input,
+                tools: tool_plan.tools.clone(),
+                tool_choice: "auto".to_owned(),
+                parallel_tool_calls: OpenAiTransport::responses_parallel_tool_calls(&request),
+                include: include.clone(),
+                max_output_tokens: self.responses_request_max_output_tokens(&request),
+                temperature: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
+                    .then_some(request.temperature)
+                    .flatten(),
+                prompt_cache_key: request.prompt_cache_key.clone(),
+                previous_response_id: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
+                    .then(|| request.previous_response_id.clone())
+                    .flatten(),
+                store: false,
+                stream: true,
+                top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
+                    .then_some(request.top_p)
+                    .flatten(),
+                reasoning: reasoning.clone(),
+                service_tier: OpenAiTransport::responses_service_tier(&request),
+                text: OpenAiTransport::responses_text_config(&request),
+                client_metadata: OpenAiTransport::responses_client_metadata(
+                    RequestHeaderContext::from_request(&request),
+                ),
+            };
+            let body_json = utils::serialize_request_body_with_patch(
+                &body,
+                &request.request_override.body_patch,
+            )?;
 
-        let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
-            let endpoint = self
-                .responses_endpoint()
-                .expect("responses endpoint should resolve");
-            let mut headers =
-                self.auth_headers(RequestHeaderContext::from_request(&request), api_key);
-            headers.insert(
-                reqwest::header::ACCEPT.as_str().to_owned(),
-                "text/event-stream".to_owned(),
-            );
-            headers.insert(
-                reqwest::header::CONTENT_TYPE.as_str().to_owned(),
-                "application/json".to_owned(),
-            );
-            utils::adapter_log_http_request_json(
-                self.id.as_str(),
-                RESPONSES_ADAPTER_KIND,
-                "complete_stream.responses",
-                "POST",
-                endpoint.as_str(),
-                headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
-                Some(&body_json),
-            );
-            utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
-                .json(&body_json)
-        })
-        .await?;
+            let response = utils::send_with_credential_refresh(&self.api_key, |api_key| {
+                let endpoint = self
+                    .responses_endpoint()
+                    .expect("responses endpoint should resolve");
+                let mut headers =
+                    self.auth_headers(RequestHeaderContext::from_request(&request), api_key);
+                headers.insert(
+                    reqwest::header::ACCEPT.as_str().to_owned(),
+                    "text/event-stream".to_owned(),
+                );
+                headers.insert(
+                    reqwest::header::CONTENT_TYPE.as_str().to_owned(),
+                    "application/json".to_owned(),
+                );
+                utils::adapter_log_http_request_json(
+                    self.id.as_str(),
+                    RESPONSES_ADAPTER_KIND,
+                    "complete_stream.responses",
+                    "POST",
+                    endpoint.as_str(),
+                    headers.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                    Some(&body_json),
+                );
+                utils::apply_resolved_request_headers(self.client.post(endpoint), &headers)
+                    .json(&body_json)
+            })
+            .await?;
 
-        if !response.status().is_success() {
-            return Err(utils::http_status_error_from_response_logged(
+            if response.status().is_success() {
+                break response;
+            }
+
+            let error = utils::http_status_error_from_response_logged(
                 self.id.as_str(),
                 RESPONSES_ADAPTER_KIND,
                 "complete_stream.responses",
                 response,
             )
-            .await);
-        }
+            .await;
+            if !retry_without_reasoning_content
+                && OpenAiTransport::is_reasoning_content_array_error(&error)
+            {
+                retry_without_reasoning_content = true;
+                continue;
+            }
+            return Err(error);
+        };
 
         if self.should_require_sse_content_type() {
             utils::ensure_response_content_type(self.id.as_str(), &response, "text/event-stream")?;

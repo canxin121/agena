@@ -40,18 +40,17 @@ impl SessionManager {
         // snapshot so no session keeps applying stale rules.
         self.invalidate_rule_snapshots();
         let expected_version = Some(session.version);
-        self.store
-            .persist(
-                SessionCommit {
-                    session,
-                    checkpoints,
-                    client_events,
-                    persisted_rules,
-                    expected_version,
-                },
-                state.cache_policy(),
-            )
-            .await
+        Box::pin(self.store.persist(
+            SessionCommit {
+                session,
+                checkpoints,
+                client_events,
+                persisted_rules,
+                expected_version,
+            },
+            state.cache_policy(),
+        ))
+        .await
     }
 
     pub(in crate::session::manager) fn apply_run_selection_to_session(

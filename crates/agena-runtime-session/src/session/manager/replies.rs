@@ -691,18 +691,17 @@ impl SessionManager {
             cancel_unanswered_request_parts_for_operation(&mut session, tool_call_id.as_ref())?;
         changed_part_ids.push(resolved.pending.part.part_id);
         let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
-        let session = self
-            .persist_session_changes_with_rules(
-                session,
-                vec![MessageCheckpoint::parts(
-                    assistant_message.id,
-                    changed_part_ids,
-                )],
-                Vec::new(),
-                persisted_rules,
-                state.clone(),
-            )
-            .await?;
+        let session = Box::pin(self.persist_session_changes_with_rules(
+            session,
+            vec![MessageCheckpoint::parts(
+                assistant_message.id,
+                changed_part_ids,
+            )],
+            Vec::new(),
+            persisted_rules,
+            state.clone(),
+        ))
+        .await?;
         let mut events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
             message_id: HistoryMessageId(assistant_message.id),
             call_id: tool_call_id,
@@ -1026,8 +1025,7 @@ impl SessionManager {
         &self,
         request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError> {
-        match self
-            .reply_permission_dispatch(request, ReplyExecutionMode::Await)
+        match Box::pin(self.reply_permission_dispatch(request, ReplyExecutionMode::Await))
             .await?
         {
             ReplyDispatch::Completed(session) => Ok(*session),
@@ -1041,8 +1039,7 @@ impl SessionManager {
         &self,
         request: SessionPermissionReplyRequest,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
-        match self
-            .reply_permission_dispatch(request, ReplyExecutionMode::Start)
+        match Box::pin(self.reply_permission_dispatch(request, ReplyExecutionMode::Start))
             .await?
         {
             ReplyDispatch::Completed(session) => {

@@ -1,12 +1,3 @@
-# The async reply/continuation state machines nest deeply enough that Tokio
-# worker threads (macOS gives newly created threads a 512 KiB default stack)
-# can overflow in repository tests, e.g.
-# session::manager::tests::approved_provider_tool_executes_once_then_continues_the_same_turn.
-# Raise the default thread stack so the full test suite is deterministic on
-# every developer machine and in CI.
-[env]
-RUST_MIN_STACK = "16777216"
-
 # macOS ld64 warns when __eh_frame exceeds 16MB, the compact-unwind encoder
 # limit. Unoptimized dev binaries contain enough functions to exceed that
 # (33MB in a debug build of the agena TUI). Disabling the compact unwind table

@@ -527,6 +527,11 @@ impl App {
             if segment.segment_id.starts_with("agena.terminal.") {
                 continue;
             }
+            // Plan progress has a dedicated composer bottom-right chip; keeping
+            // it in the footer would duplicate it above the input box.
+            if segment.segment_id == "plan" {
+                continue;
+            }
             if segment.content.trim().is_empty() {
                 continue;
             }

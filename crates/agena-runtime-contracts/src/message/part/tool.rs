@@ -340,7 +340,11 @@ pub struct InteractionNotifyToolInput {
     pub level: InteractionNotificationLevel,
 }
 
-/// Textual patch payload in the agena patch format.
+/// Textual patch payload in the agena patch format. Must start with the exact
+/// marker line `*** Begin Patch` and end with the exact marker line
+/// `*** End Patch`; use `*** Update File:` / `*** Add File:` / `*** Delete File:`
+/// directives with `@@` hunks (context lines start with a space, removed lines
+/// with `-`, added lines with `+`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 pub struct ApplyPatchToolInput {
     /// Unified patch text to apply to the workspace.

@@ -28,6 +28,17 @@ pub const AGENA_CORE_PROMPT_TAIL: &str = r#"# Provider-issued tools
 
 Tools that proxy an official hosted provider service (`chatgpt.*`, `claude.*`, `gemini.*`) are usable only when you yourself are an official model of that provider. Judge this from `context.status`: read the reported `model_id` (and `model_provider_id`) and decide whether you are an official OpenAI/ChatGPT model, an official Anthropic/Claude model, or an official Google/Gemini model. Never call a `chatgpt.*` tool unless you are an official OpenAI model, a `claude.*` tool unless you are an official Anthropic model, or a `gemini.*` tool unless you are an official Google model. Being an official model is not enough: credentials, plan, or network failures can still make such a tool unavailable. A denial is a normal outcome; never claim success from a call that did not complete, and fall back to other tools.
 
+# Correct tool usage
+
+Use tools exactly as the runtime declares them. A malformed tool call is rejected by the transport and sent back for repair, so precision keeps the run moving:
+
+- Get exact tool names from `tools_list` / `tools_search`; never invent, guess, or abbreviate a tool name. Execution tools such as `fs.read` or `session.get` are reached only through the `tools_call` gateway - never emit an execution-tool name as a top-level function name.
+- Before the first call to a tool, read its live contract with `tools_help` unless the complete current contract is already established; then pass exactly the required arguments with the correct names, types, and values - no missing fields, no wrong types.
+- Emit one complete, well-formed call per function: valid JSON arguments with correct quoting and escapes, no stray control characters, no truncation.
+- Never place a Tool API function name (for example `tools_call`, `tools_help`, `tools_list`, `plugins_list`) inside `tools_call.arguments.tool`; Tool API functions are called directly, execution tools are called through `tools_call`.
+- When a call is rejected, read the transport correction and retry with an exact declared function and valid arguments.
+- For `fs.apply_patch`, the `patch` argument must start with the exact marker line `*** Begin Patch` and end with `*** End Patch`, using `*** Update File:` / `*** Add File:` / `*** Delete File:` directives with `@@` hunks (context lines start with a space, removed lines with `-`, added lines with `+`).
+
 # Care, output, and safety
 
 Consider blast radius before acting: favor small, targeted, reversible changes; verify the target and authorization before anything destructive or hard to reverse; run a test when it would catch a mistake, then report what actually happened.
@@ -66,9 +77,10 @@ mod tests {
                 .contains("Never call a `chatgpt.*` tool unless you are an official OpenAI model")
         );
         assert!(prompt.contains("blast radius"));
+        assert!(prompt.contains("# Correct tool usage"));
+        assert!(prompt.contains("*** Begin Patch"));
+        assert!(prompt.contains("`tools_call` gateway"));
         assert!(!prompt.contains("# Tools & Plugins"));
-        assert!(!prompt.contains("tools_list"));
-        assert!(!prompt.contains("plugins_list"));
         for obsolete in ["build agent", "explore agent", "verification agent"] {
             assert!(!prompt.to_ascii_lowercase().contains(obsolete));
         }

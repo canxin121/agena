@@ -9,7 +9,12 @@ use super::{
     retry_reason, stream_resume_policy_label, validate_request_capabilities,
 };
 
-const MAX_TOOL_API_REPAIRS: usize = 2;
+/// Safety ceiling for protocol repair turns. This is deliberately large and is
+/// not a small "give up" budget: a provider that emits malformed Tool API
+/// calls must never interrupt the session. Reaching the ceiling degrades
+/// gracefully - the rejected calls are dropped and the run finishes with the
+/// remaining response content - instead of aborting the run.
+const MAX_TOOL_API_REPAIRS: usize = 64;
 const MAX_REJECTED_ARGUMENT_BYTES: usize = 16 * 1024;
 const MAX_REJECTED_CALLS_IN_REPAIR: usize = 16;
 
@@ -244,12 +249,6 @@ fn merge_completion_usage(
         return;
     };
     target.add_assign(&additional);
-}
-
-fn tool_api_repair_exhausted(provider_id: &str) -> ProviderError {
-    ProviderError::Provider(format!(
-        "provider `{provider_id}` could not produce a valid Agena Tool API call after {MAX_TOOL_API_REPAIRS} internal repair attempts"
-    ))
 }
 
 fn declared_tool_api_functions(request: &CompletionRequest) -> BTreeSet<String> {
@@ -526,10 +525,39 @@ fn validate_completion_tool_calls(
             arguments_json,
             ..
         } = call;
-        validate_returned_tool_api_function(provider_id, name, declared)?;
-        validate_tool_api_arguments(provider_id, name, arguments_json)?;
+        validate_completion_tool_call(provider_id, name, arguments_json, declared)?;
     }
     Ok(())
+}
+
+fn validate_completion_tool_call(
+    provider_id: &str,
+    name: &str,
+    arguments_json: &str,
+    declared: &BTreeSet<String>,
+) -> Result<(), ProviderError> {
+    validate_returned_tool_api_function(provider_id, name, declared)?;
+    validate_tool_api_arguments(provider_id, name, arguments_json)
+}
+
+/// Keep only the tool calls in a response that individually pass transport
+/// validation. Used when protocol repair is exhausted so the run can finish
+/// with the valid calls (if any) instead of aborting the whole response.
+fn retain_valid_completion_tool_calls(
+    provider_id: &str,
+    response: &mut CompletionResponse,
+    declared: &BTreeSet<String>,
+) {
+    response.tool_calls.retain(|call| {
+        matches!(call, CompletionToolCall::Function { name, arguments_json, .. }
+            if validate_completion_tool_call(
+                provider_id,
+                name,
+                arguments_json,
+                declared,
+            )
+            .is_ok())
+    });
 }
 
 #[derive(Default)]
@@ -727,14 +755,20 @@ impl ProviderRegistry {
                     );
                 }
                 Err(error) => {
-                    tracing::error!(
+                    tracing::warn!(
                         provider_id = model.provider_id.as_ref(),
                         model_id = model.model_id.as_ref(),
                         repair_count,
                         error = %error,
-                        "provider exhausted internal Tool API repairs"
+                        "provider exhausted internal Tool API repairs; dropping the rejected tool calls and finishing the response without them"
                     );
-                    return Err(tool_api_repair_exhausted(model.provider_id.as_ref()));
+                    retain_valid_completion_tool_calls(
+                        model.provider_id.as_ref(),
+                        &mut response,
+                        &declared_tool_api_functions,
+                    );
+                    merge_completion_usage(&mut response.usage, discarded_usage.take());
+                    return Ok(response);
                 }
             }
         }
@@ -1191,16 +1225,20 @@ impl ProviderRegistry {
                                         should_restart_for_protocol_repair = true;
                                         break;
                                     }
-                                    tracing::error!(
+                                    tracing::warn!(
                                         provider_id = provider_id.as_str(),
                                         model_id = model_id.as_str(),
                                         protocol_repair_count,
                                         error = %error,
-                                        "provider exhausted internal Tool API stream repairs"
+                                        "provider exhausted internal Tool API stream repairs; dropping the rejected tool calls and finishing the stream without them"
                                     );
-                                    Err(tool_api_repair_exhausted(
-                                        provider_id.as_str(),
-                                    ))?;
+                                    buffered_tool_api_turn.retain(|buffered| {
+                                        !matches!(
+                                            buffered,
+                                            CompletionStreamEvent::ToolCallDelta { .. }
+                                                | CompletionStreamEvent::ToolCallSnapshot { .. }
+                                        )
+                                    });
                                 }
                                 if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
                                     merge_completion_usage(usage, discarded_usage.take());
@@ -1448,10 +1486,10 @@ mod tool_api_function_validation_tests {
     };
 
     use super::{
-        RejectedToolApiCall, StreamToolApiCallState, parse_tool_api_arguments_tolerant,
-        stream_tool_api_calls, validate_provider_native_tool_definition_boundary,
-        validate_returned_tool_api_function, validate_stream_tool_api_event,
-        validate_tool_api_arguments,
+        MAX_TOOL_API_REPAIRS, RejectedToolApiCall, StreamToolApiCallState,
+        parse_tool_api_arguments_tolerant, stream_tool_api_calls,
+        validate_provider_native_tool_definition_boundary, validate_returned_tool_api_function,
+        validate_stream_tool_api_event, validate_tool_api_arguments,
     };
     use crate::provider::{CompletionResponse, ModelRuntime};
     use agena_domain::Role;
@@ -1987,23 +2025,27 @@ mod tool_api_function_validation_tests {
     }
 
     #[tokio::test]
-    async fn exhausted_repairs_return_a_sanitized_terminal_error() {
+    async fn exhausted_repairs_degrade_gracefully_instead_of_aborting() {
         let provider = std::sync::Arc::new(ProtocolRepairProvider::repair_after(usize::MAX));
         let mut registry = crate::provider::ProviderRegistry::new();
         registry.register_arc(provider.clone());
 
-        let error = registry
+        let response = registry
             .complete(
                 &ModelRef::new("repair-test", "test-model"),
                 repair_request(),
             )
             .await
-            .expect_err("a persistently invalid provider must fail closed");
-        let message = error.to_string();
-        assert!(message.contains("after 2 internal repair attempts"));
-        assert!(!message.contains("unknown Tool API function"));
-        assert!(!message.contains("fs.read"));
-        assert_eq!(provider.calls.load(Ordering::SeqCst), 3);
+            .expect("a persistently invalid provider must degrade gracefully, not abort the run");
+        // The rejected calls are dropped and the response still completes.
+        assert!(response.tool_calls.is_empty());
+        // Initial attempt plus one repair per allowed repair turn.
+        assert_eq!(
+            provider.calls.load(Ordering::SeqCst),
+            MAX_TOOL_API_REPAIRS + 1
+        );
+        let requests = provider.requests.lock().expect("requests lock");
+        assert_eq!(requests.len(), MAX_TOOL_API_REPAIRS + 1);
     }
 
     #[tokio::test]
@@ -2109,8 +2151,8 @@ mod replay_tests {
     use async_trait::async_trait;
     use futures_util::{StreamExt, stream};
 
-    use crate::provider::{CompletionResponse, ModelRuntime, ProviderRegistry};
     use crate::ProviderError;
+    use crate::provider::{CompletionResponse, ModelRuntime, ProviderRegistry};
 
     fn replay_request() -> CompletionRequest {
         CompletionRequest {
@@ -2236,9 +2278,8 @@ mod replay_tests {
         ) -> Result<
             std::pin::Pin<
                 Box<
-                    dyn futures_core::Stream<
-                            Item = Result<CompletionStreamEvent, ProviderError>,
-                        > + Send,
+                    dyn futures_core::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                        + Send,
                 >,
             >,
             ProviderError,
@@ -2255,7 +2296,10 @@ mod replay_tests {
         registry.register_arc(provider.clone());
 
         let events = registry
-            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .complete_stream(
+                &ModelRef::new("replay-test", "test-model"),
+                replay_request(),
+            )
             .await
             .expect("stream startup")
             .collect::<Vec<_>>()
@@ -2273,12 +2317,16 @@ mod replay_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(text, vec!["Hello ", "world", "!"]);
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, CompletionStreamEvent::ProviderRetry { .. })));
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, CompletionStreamEvent::Completed { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CompletionStreamEvent::ProviderRetry { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CompletionStreamEvent::Completed { .. }))
+        );
     }
 
     struct DivergingReplayProvider {
@@ -2372,9 +2420,8 @@ mod replay_tests {
         ) -> Result<
             std::pin::Pin<
                 Box<
-                    dyn futures_core::Stream<
-                            Item = Result<CompletionStreamEvent, ProviderError>,
-                        > + Send,
+                    dyn futures_core::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                        + Send,
                 >,
             >,
             ProviderError,
@@ -2391,7 +2438,10 @@ mod replay_tests {
         registry.register_arc(provider.clone());
 
         let events = registry
-            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .complete_stream(
+                &ModelRef::new("replay-test", "test-model"),
+                replay_request(),
+            )
             .await
             .expect("stream startup")
             .collect::<Vec<_>>()
@@ -2480,9 +2530,8 @@ mod replay_tests {
         ) -> Result<
             std::pin::Pin<
                 Box<
-                    dyn futures_core::Stream<
-                            Item = Result<CompletionStreamEvent, ProviderError>,
-                        > + Send,
+                    dyn futures_core::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                        + Send,
                 >,
             >,
             ProviderError,
@@ -2499,7 +2548,10 @@ mod replay_tests {
         registry.register_arc(provider.clone());
 
         let events = registry
-            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .complete_stream(
+                &ModelRef::new("replay-test", "test-model"),
+                replay_request(),
+            )
             .await
             .expect("stream startup")
             .collect::<Vec<_>>()
@@ -2517,9 +2569,11 @@ mod replay_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(text, vec!["recovered"]);
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, CompletionStreamEvent::ProviderRetry { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, CompletionStreamEvent::ProviderRetry { .. }))
+        );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
     }
 
@@ -2566,9 +2620,8 @@ mod replay_tests {
         ) -> Result<
             std::pin::Pin<
                 Box<
-                    dyn futures_core::Stream<
-                            Item = Result<CompletionStreamEvent, ProviderError>,
-                        > + Send,
+                    dyn futures_core::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                        + Send,
                 >,
             >,
             ProviderError,
@@ -2577,14 +2630,16 @@ mod replay_tests {
             let provider_id = ProviderId::new("replay-test");
             let model = self.model.clone();
             let _ = attempt;
-            Ok(Box::pin(stream::iter(vec![Ok(CompletionStreamEvent::Completed {
-                provider_id,
-                model,
-                finish_reason: Some(CompletionFinishReason::Stop),
-                usage: None,
-                provider_metadata: None,
-                end_turn: None,
-            })])))
+            Ok(Box::pin(stream::iter(vec![Ok(
+                CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                    end_turn: None,
+                },
+            )])))
         }
     }
 
@@ -2595,7 +2650,10 @@ mod replay_tests {
         registry.register_arc(provider.clone());
 
         let events = registry
-            .complete_stream(&ModelRef::new("replay-test", "test-model"), replay_request())
+            .complete_stream(
+                &ModelRef::new("replay-test", "test-model"),
+                replay_request(),
+            )
             .await
             .expect("stream startup")
             .collect::<Vec<_>>()

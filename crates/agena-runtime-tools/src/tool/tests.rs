@@ -561,7 +561,8 @@ async fn only_five_gateway_functions_are_provider_visible() {
         .definition()
         .description;
     assert!(call_description.contains("Never invent the tool name"));
-    assert!(call_description.contains("complete object"));
+    assert!(call_description.contains("complete argument object"));
+    assert!(call_description.contains("never a Tool API function name"));
     for binding in bindings
         .iter()
         .filter(|binding| binding.function() != agena_domain::ToolApiFunction::Call)
@@ -748,9 +749,10 @@ fn compact_tool_payload_preserves_patch_changes_without_the_full_diff() {
 async fn gateway_tools_call_without_a_target_is_rejected_as_invalid_input() {
     let workspace_root = std::env::current_dir().expect("resolve test workspace");
     let mut plugins_config = PluginsConfig::default();
-    plugins_config
-        .list
-        .insert("agena.tools".to_string(), ConfiguredPlugin::static_default());
+    plugins_config.list.insert(
+        "agena.tools".to_string(),
+        ConfiguredPlugin::static_default(),
+    );
     let plugins = PluginHost::new(PluginHostBuildConfig {
         static_plugins: vec![StaticPluginRegistration::new(
             "agena.tools".parse().expect("valid Tool API plugin key"),

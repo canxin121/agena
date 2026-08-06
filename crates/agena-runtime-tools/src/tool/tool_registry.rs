@@ -159,12 +159,12 @@ impl ToolApiBinding {
                         "tool": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "Exact current-session execution-tool name returned by tools_list or tools_search."
+                            "description": "Exact current-session execution-tool name returned by tools_list or tools_search. Must name an execution tool (for example `fs.read`); never a Tool API function name such as `tools_call`, `tools_help`, or `tools_list`."
                         },
                         "input": {
                             "type": "object",
                             "additionalProperties": true,
-                            "description": "One complete argument object matching the selected execution tool's live tools_help contract."
+                            "description": "One complete argument object matching the selected execution tool's live tools_help contract. Required; supply every field the tool requires with correct names, types, and values, as valid JSON (correct quoting and escapes, no stray control characters)."
                         }
                     }
                 }),
@@ -201,28 +201,28 @@ impl ToolApiBinding {
 fn tool_api_description(function: ToolApiFunction) -> &'static str {
     match function {
         ToolApiFunction::List => {
-            "Enumerate the current live execution-tool inventory. Use this whenever the pending request asks which tools or capabilities are available or broad inventory is useful; never answer inventory questions from memory. Each result contains an exact current-session identifier. Use tools_help before the first tools_call when that tool's complete live input contract is not already established. Execution-tool identifiers are not provider function names. Supports pagination and tag filters."
+            "Enumerate the current live execution-tool inventory. Use this whenever the pending request asks which tools or capabilities are available or broad inventory is useful; never answer inventory questions from memory. Each result contains an exact current-session identifier. Use tools_help before the first tools_call when that tool's complete live input contract is not already established. Execution-tool identifiers are not provider function names. Supports pagination and tag filters. Call this function directly with well-formed JSON arguments (for example {\"limit\":200}); never put its name inside tools_call.arguments.tool."
         }
         ToolApiFunction::Search => {
-            "Locate a live Agena execution tool by the capability needed for the pending task, exact or partial name, summary, or tag. Use this before naming a tool unless an exact current-session identifier is already established. If a prior tools_call reported an unknown tool, search instead of choosing a suggestion and guessing its schema. Use the exact returned name in tools_help, then tools_call. Execution-tool names never become provider function names."
+            "Locate a live Agena execution tool by the capability needed for the pending task, exact or partial name, summary, or tag. Use this before naming a tool unless an exact current-session identifier is already established. If a prior tools_call reported an unknown tool, search instead of choosing a suggestion and guessing its schema. Use the exact returned name in tools_help, then tools_call. Execution-tool names never become provider function names. Pass valid JSON arguments; call this function directly, never inside tools_call.arguments.tool."
         }
         ToolApiFunction::Help => {
-            "Get the live input schema, required fields, examples, and usage notes for one exact Agena execution-tool identifier returned by tools_list or tools_search. Use this before the first tools_call unless the complete current contract is already established by reusable or embedded help. This function describes the tool but does not run or authorize it."
+            "Get the live input schema, required fields, examples, and usage notes for one exact Agena execution-tool identifier returned by tools_list or tools_search. The `tool` argument must be a string naming an execution tool (for example `fs.read`) - never a Tool API function name. Use this before the first tools_call unless the complete current contract is already established by reusable or embedded help. This function describes the tool but does not run or authorize it. Arguments must be valid JSON with correct syntax."
         }
         ToolApiFunction::Tags => {
-            "List tags used by the Agena execution tools available in this session. Use returned tags to filter tools_list or tools_search. This function does not run an execution tool."
+            "List tags used by the Agena execution tools available in this session. Use returned tags to filter tools_list or tools_search. This function does not run an execution tool. Call it directly with valid JSON arguments; never route it through tools_call."
         }
         ToolApiFunction::Call => {
-            "Run one known Agena execution tool. Never invent the tool name or guess its input schema. Set tool to an exact current-session identifier established by tools_list or tools_search, and set input to one complete object derived from live tools_help or reusable embedded help. If the tool is unknown, return to tools_search; if validation embeds complete help, read it and retry tools_call directly. The provider function name is always tools_call; all ordinary tools execute through this gateway."
+            "Run one known Agena execution tool. Never invent the tool name or guess its input schema. Set `tool` to an exact current-session execution-tool identifier returned by tools_list or tools_search (for example `fs.read`); `tool` must be an execution tool, never a Tool API function name such as `tools_call`, `tools_help`, or `tools_list`. Set `input` to one complete argument object that exactly matches the selected tool's live tools_help contract - correct field names, types, and values; omit nothing required. Arguments must be valid JSON: correct quoting and escapes, no stray control characters, no truncation. If the tool is unknown, return to tools_search; if validation embeds complete help, read it and retry tools_call directly. The provider function name is always tools_call; all ordinary tools execute through this gateway. When the transport rejects a call, read the correction and re-emit with an exact tool name and valid arguments."
         }
         ToolApiFunction::PluginsList => {
-            "Enumerate the current live plugin inventory. Each result lists the plugin id, version, summary, metadata tags, and the number of tools it publishes. Use this whenever the request asks which plugins or extensions are available; never answer plugin inventory from memory."
+            "Enumerate the current live plugin inventory. Each result lists the plugin id, version, summary, metadata tags, and the number of tools it publishes. Use this whenever the request asks which plugins or extensions are available; never answer plugin inventory from memory. Call this function directly with valid JSON arguments; never route it through tools_call."
         }
         ToolApiFunction::PluginsSearch => {
-            "Locate a live plugin by the capability it provides, exact or partial plugin id, summary, or tag. Useful before choosing a plugin or understanding which plugin owns a tool. Returns the same fields as plugins_list."
+            "Locate a live plugin by the capability it provides, exact or partial plugin id, summary, or tag. Useful before choosing a plugin or understanding which plugin owns a tool. Returns the same fields as plugins_list. Call this function directly with valid JSON arguments; never route it through tools_call."
         }
         ToolApiFunction::PluginsTags => {
-            "List tags used by the plugins loaded in this session. Use returned tags to filter plugins_list or plugins_search."
+            "List tags used by the plugins loaded in this session. Use returned tags to filter plugins_list or plugins_search. Call this function directly with valid JSON arguments; never route it through tools_call."
         }
     }
 }

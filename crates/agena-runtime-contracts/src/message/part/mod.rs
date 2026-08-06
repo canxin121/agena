@@ -3,6 +3,7 @@ mod content;
 mod hook;
 mod interaction;
 mod message_part;
+mod notice;
 mod skill_reference;
 mod tool;
 
@@ -11,6 +12,7 @@ pub use content::{PartContent, RuntimeActivity};
 pub use hook::HookPart;
 pub use interaction::{InteractiveRequestPart, RequestPart};
 pub use message_part::MessagePart;
+pub use notice::NoticePart;
 pub use skill_reference::{SkillReference, SkillReferencePart};
 pub use tool::tool_output_content_blocks;
 pub use tool::{

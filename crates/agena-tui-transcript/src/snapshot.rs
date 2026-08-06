@@ -570,6 +570,12 @@ pub(crate) fn activity_presentation(
             hook.summary.clone(),
             None,
         ),
+        ActivityPayload::Notice(notice) => (
+            "notice".to_owned(),
+            "Notice".to_owned(),
+            notice.summary.clone(),
+            None,
+        ),
         ActivityPayload::Custom(custom) => (
             custom.schema.clone(),
             custom

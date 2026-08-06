@@ -361,6 +361,7 @@ pub enum ActivityPayload {
     Hook(HookActivity),
     Error(ErrorActivity),
     Custom(CustomActivity),
+    Notice(NoticeActivity),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -679,6 +680,21 @@ pub struct HookActivity {
 #[serde(deny_unknown_fields)]
 pub struct ErrorActivity {
     pub problem: agena_failure::UserProblem,
+}
+
+/// A runtime-originated, human-facing notice recorded as a first-class
+/// transcript activity (for example "model-turn budget exhausted"). It is
+/// user-facing only and is never projected to a model.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NoticeActivity {
+    /// Machine-readable notice category, e.g. `max_turns_exhausted`.
+    pub kind: String,
+    /// Short human-facing summary (the collapsed headline).
+    pub summary: String,
+    /// Optional human-facing detail rendered when expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// One body of assistant reply text that is not the opening paragraph — a

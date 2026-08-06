@@ -222,6 +222,7 @@ fn name_from_content(content: &PartContent) -> Option<String> {
         PartContent::Activity(RuntimeActivity::Hook(hook)) => {
             Some(format!("hook:{}", hook.hook))
         }
+        PartContent::Activity(RuntimeActivity::Notice(_)) => Some("notice".to_string()),
     }
 }
 
@@ -249,6 +250,9 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
             truncate_summary(request.summary_text().as_str())
         }
         PartContent::Activity(RuntimeActivity::Hook(hook)) => truncate_summary(&hook.summary),
+        PartContent::Activity(RuntimeActivity::Notice(notice)) => {
+            truncate_summary(&notice.summary)
+        }
     }
 }
 
@@ -313,6 +317,7 @@ fn truncate_summary(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::NoticePart;
     use crate::{OperationPart, PartContent};
     use agena_domain::{StructuredObject, TimeRange, ToolOutput};
 
@@ -399,6 +404,29 @@ mod tests {
         // Discovery headers use the composed page-title prose, not the bare
         // gateway tool name.
         assert_eq!(part.name.as_deref(), Some("List tools · 20/133"));
+        assert!(part.has_detail);
+    }
+
+    #[test]
+    fn notice_parts_derive_name_summary_and_detail_from_the_notice() {
+        let notice = NoticePart {
+            kind: "max_turns_exhausted".to_owned(),
+            summary: "Model-turn budget exhausted; the run stopped.".to_owned(),
+            detail: Some("Raise the cap via session.max_turns.".to_owned()),
+        };
+        let part = MessagePart::from_content(
+            1,
+            1,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            PartContent::notice(notice),
+        );
+
+        assert_eq!(part.name.as_deref(), Some("notice"));
+        assert_eq!(
+            part.summary.as_deref(),
+            Some("Model-turn budget exhausted; the run stopped.")
+        );
         assert!(part.has_detail);
     }
 }

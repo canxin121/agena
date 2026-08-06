@@ -259,6 +259,10 @@ pub enum SessionProjectedPartDetail {
     },
     Operation(Box<SessionProjectedOperationPart>),
     Hook(Box<SessionProjectedHookPart>),
+    Notice {
+        summary: String,
+        detail: Option<String>,
+    },
     Opaque(serde_json::Value),
 }
 

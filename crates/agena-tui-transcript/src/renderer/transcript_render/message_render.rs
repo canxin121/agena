@@ -415,6 +415,17 @@ fn canonical_activity_details(
                 (None, None) => Vec::new(),
             }
         }
+        agena_domain::ActivityPayload::Notice(notice) => notice
+            .detail
+            .as_ref()
+            .map(|detail| {
+                vec![CanonicalActivityDetail::section(
+                    "Notice",
+                    detail.clone(),
+                    CanonicalActivityDetailFormat::Plain,
+                )]
+            })
+            .unwrap_or_default(),
         agena_domain::ActivityPayload::Checklist(checklist) => {
             let body = checklist
                 .items
@@ -500,7 +511,7 @@ fn canonical_activity_details(
         // The problem is rendered once by the shared red Error section.
         agena_domain::ActivityPayload::Error(error) => {
             let problem = &error.problem;
-            let lines = vec![
+            let lines = [
                 format!(
                     "{}: {}",
                     ui_text::t(i18n, "failure-detail-code"),
@@ -1703,6 +1714,7 @@ pub(crate) fn render_part_node(
 /// transcript keeps one headline/expandable-section contract. The legacy
 /// `Error` part and a failed reply lifecycle both project into
 /// `ActivityPayload::Error` here instead of owning separate renderers.
+#[allow(clippy::too_many_arguments)]
 fn render_activity_canonical(
     message: &TranscriptEntry,
     part: &TranscriptEntryPart,

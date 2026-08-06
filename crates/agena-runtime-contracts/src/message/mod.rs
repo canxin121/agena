@@ -13,7 +13,7 @@ pub use part::{
     CronListToolInput, CronMisfirePolicyInput, CronRetryPolicyInput, CronUpdateToolInput,
     EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput, GrepToolInput, HookPart,
     InteractionNotifyToolInput, InteractiveRequestPart, LspDefinitionToolInput,
-    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MessagePart,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MessagePart, NoticePart,
     ModelVisibleOutput, OperationBlock, OperationCompletion, OperationPart, PartContent,
     ReadToolInput, RequestPart, RuntimeActivity, ScheduleWakeupToolInput, ShellCommandInput,
     ShellMonitorInput, ShellMonitorPatternKind, ShellToolInput, SkillReference, SkillReferencePart,

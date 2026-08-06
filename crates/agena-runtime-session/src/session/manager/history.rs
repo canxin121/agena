@@ -1507,6 +1507,12 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
                 },
             ))
         }
+        PartContent::Activity(crate::message::RuntimeActivity::Notice(value)) => {
+            agena_runtime::SessionProjectedPartDetail::Notice {
+                summary: value.summary.clone(),
+                detail: value.detail.clone(),
+            }
+        }
     }
 }
 

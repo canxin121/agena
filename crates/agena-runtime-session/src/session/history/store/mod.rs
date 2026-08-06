@@ -1171,10 +1171,10 @@ pub(crate) fn activity_payload(
     role: Role,
 ) -> Option<agena_domain::ActivityPayload> {
     use agena_domain::{
-        ActivityPayload, ErrorActivity, HookActivity, InteractionActivity, OperationActivity,
-        OperationActivityError, ReasoningActivity, ResourceActivity, ResourceKind,
-        ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
-        ToolCallId,
+        ActivityPayload, ErrorActivity, HookActivity, InteractionActivity, NoticeActivity,
+        OperationActivity, OperationActivityError, ReasoningActivity, ResourceActivity,
+        ResourceKind, ResourceReference, SkillReferenceActivity, TextArtifactActivity,
+        TextSegmentActivity, ToolCallId,
     };
     match part.content.as_ref()? {
         // Assistant text parts that carry an ActivityId are interstitial body
@@ -1295,6 +1295,13 @@ pub(crate) fn activity_payload(
                 plugin_id: hook.plugin_id.clone(),
                 summary: hook.summary.clone(),
                 detail: hook.detail.clone(),
+            }))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Notice(notice)) => {
+            Some(ActivityPayload::Notice(NoticeActivity {
+                kind: notice.kind.clone(),
+                summary: notice.summary.clone(),
+                detail: notice.detail.clone(),
             }))
         }
     }

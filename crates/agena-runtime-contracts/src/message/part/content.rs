@@ -2,7 +2,10 @@ use agena_domain::{ErrorPart, PartKind, ReasoningPart, TextPart};
 use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
-use super::{AttachmentItem, AttachmentPart, HookPart, OperationPart, RequestPart, SkillReferencePart};
+use super::{
+    AttachmentItem, AttachmentPart, HookPart, NoticePart, OperationPart, RequestPart,
+    SkillReferencePart,
+};
 
 /// Rich execution payload carried by the one structured-content envelope.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -16,6 +19,7 @@ pub enum RuntimeActivity {
     Interaction(RequestPart),
     Hook(HookPart),
     Error(ErrorPart),
+    Notice(NoticePart),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
@@ -62,6 +66,10 @@ impl PartContent {
 
     pub fn hook(part: HookPart) -> Self {
         Self::Activity(RuntimeActivity::Hook(part))
+    }
+
+    pub fn notice(part: NoticePart) -> Self {
+        Self::Activity(RuntimeActivity::Notice(part))
     }
 
     pub fn error(part: ErrorPart) -> Self {

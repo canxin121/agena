@@ -48,10 +48,10 @@ pub struct ComposerEditorSurfaceSpec<'a> {
     pub editor_lines: Text<'a>,
     pub placeholder: Option<Line<'a>>,
     pub cursor: Option<(u16, u16)>,
-    /// Optional status chip rendered centered inside the composer's top
-    /// border, breaking the horizontal line. The line's spans should carry
-    /// the chip background so the border does not show through as a blank
-    /// gap.
+    /// Optional status chip rendered against the left corner of the
+    /// composer's top border, breaking the horizontal line. The line's spans
+    /// should carry the chip background so the border does not show through
+    /// as a blank gap.
     pub status: Option<Line<'static>>,
     /// Optional status chip rendered against the top border's right corner.
     pub status_top_right: Option<Line<'static>>,
@@ -164,6 +164,54 @@ pub fn composer_status_placement_reserving(
         text_column: column.saturating_add(1),
         left_dashes,
         right_dashes,
+    })
+}
+
+/// Computes where a status chip sits against the left corner of the
+/// composer's top border while reserving `reserve_right` cells for a
+/// right-corner chip (the reserved cells cover the corner chip's full width
+/// plus one separating dash). Returns `None` when there is no room for a
+/// readable chip.
+pub fn composer_status_placement_left(
+    outer: Rect,
+    text: &str,
+    reserve_right: u16,
+) -> Option<ComposerStatusPlacement> {
+    if outer.width < 4 || text.trim().is_empty() {
+        return None;
+    }
+    let reserved = if reserve_right > 0 {
+        reserve_right.saturating_add(1)
+    } else {
+        0
+    };
+    let max_text_width = usize::from(outer.width.saturating_sub(4).saturating_sub(reserved));
+    if max_text_width == 0 {
+        return None;
+    }
+    let text = if UnicodeWidthStr::width(text) > max_text_width {
+        truncate_display_text_with_suffix(text, max_text_width, "…")
+    } else {
+        text.to_string()
+    };
+    if text.trim().is_empty() {
+        return None;
+    }
+
+    let text_width = u16::try_from(UnicodeWidthStr::width(text.as_str())).unwrap_or(u16::MAX);
+    let chip_width = text_width.saturating_add(2);
+    let column = outer.x.saturating_add(1);
+    Some(ComposerStatusPlacement {
+        text,
+        chip_width,
+        column,
+        text_column: column.saturating_add(1),
+        left_dashes: 0,
+        right_dashes: outer
+            .width
+            .saturating_sub(2)
+            .saturating_sub(reserved)
+            .saturating_sub(chip_width),
     })
 }
 
@@ -378,7 +426,7 @@ pub fn render_composer_editor_surface(
         composer_corner_placement_right(layout.outer, line_plain_text(line).as_str())
     });
     let status_placement = status.and_then(|line| {
-        composer_status_placement_reserving(
+        composer_status_placement_left(
             layout.outer,
             line_plain_text(line).as_str(),
             top_right_placement.as_ref().map(|p| p.chip_width).unwrap_or(0),
@@ -391,7 +439,7 @@ pub fn render_composer_editor_surface(
         composer_corner_placement_right(layout.outer, line_plain_text(line).as_str())
     });
 
-    // The horizontal border rows are drawn by hand so the centered status
+    // The horizontal border rows are drawn by hand so the left-aligned status
     // chip and the corner chips all break the line; the block only paints the
     // two vertical edges.
     let block = Block::default().borders(Borders::LEFT | Borders::RIGHT);

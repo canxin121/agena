@@ -350,28 +350,19 @@ impl App {
     }
 
     pub(crate) fn transcript_surface_title(&self) -> String {
-        let session_part = ui_text::transcript_header_title(
+        ui_text::transcript_header_title(
             &self.i18n,
             self.transcript.session_id,
             self.transcript.session_title.as_str(),
-        );
-        let model_parts = self.current_session_model_label_parts();
-        if model_parts.is_empty() {
-            session_part
-        } else {
-            format!(
-                "{}  ·  {}",
-                model_parts.join("  ·  "),
-                session_part.trim()
-            )
-        }
+        )
     }
 
     pub(crate) fn render_composer(&mut self, frame: &mut Frame, area: Rect) {
-        // Status chips live on the border rows: the main status is centered in
-        // the top border, the top-right corner holds history/approval, the
-        // bottom-left corner holds background activity, and the bottom-right
-        // corner holds plan progress. The layout gets no dedicated row.
+        // Status chips live on the border rows: the main status sits at the
+        // top border's left corner, the top-right corner holds
+        // history/approval, the bottom-left corner holds background activity,
+        // and the bottom-right corner holds plan progress. The layout gets no
+        // dedicated row.
         let layout = layout_composer_surface(area);
         let texts = self.composer_chip_texts();
         let placements = composer_chip_placements(layout.outer, &texts);
@@ -696,10 +687,10 @@ impl App {
             .filter(|content| !content.is_empty())
     }
 
-    /// The four status-chip texts for the current frame. The centered top
-    /// border chip keeps the remaining session status parts; the corner chips
-    /// carry background activity (bottom-left), history search or pending
-    /// approval (top-right), and plan progress (bottom-right).
+    /// The four status-chip texts for the current frame. The top-left border
+    /// chip keeps the remaining session status parts; the corner chips carry
+    /// background activity (bottom-left), history search or pending approval
+    /// (top-right), and plan progress (bottom-right).
     fn composer_chip_texts(&self) -> ComposerChipTexts {
         ComposerChipTexts {
             status: sanitize_display_text(self.composer_status_parts().join("  |  ").as_str()),
@@ -917,14 +908,14 @@ struct ComposerChipPlacements {
 }
 
 /// Computes where each composer chip sits on its border row. Order matters:
-/// the top-right chip is placed first so the centered status chip can reserve
-/// its width, mirroring `render_composer_editor_surface`.
+/// the top-right chip is placed first so the left status chip can reserve its
+/// width, mirroring `render_composer_editor_surface`.
 fn composer_chip_placements(outer: Rect, texts: &ComposerChipTexts) -> ComposerChipPlacements {
     let top_right = texts
         .top_right
         .as_deref()
         .and_then(|text| composer_corner_placement_right(outer, text));
-    let status = composer_status_placement_reserving(
+    let status = composer_status_placement_left(
         outer,
         texts.status.as_str(),
         top_right
@@ -1051,7 +1042,7 @@ use super::{
     Style, Text, VerticalSectionSize, WrappedTextSpec, apply_block_highlight,
     apply_cursor_cell_highlight, apply_line_cell_highlight, build_wrapped_text_lines,
     composer_corner_placement_left, composer_corner_placement_right,
-    composer_status_placement_reserving, find_search_ranges, inset_rect, layout_composer_surface,
+    composer_status_placement_left, find_search_ranges, inset_rect, layout_composer_surface,
     layout_header_body_footer_surface, min, pane_header_height,
     pending_interactive_counts_for_execution, render_composer_editor_surface,
     render_header_body_footer_text_surface, render_wrapped_text, sanitize_display_text,

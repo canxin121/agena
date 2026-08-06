@@ -9,7 +9,7 @@ use agena_tui_components::{
     WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec,
     build_accented_two_line_list_item, build_detail_two_line_list_item, build_wrapped_text_lines,
     composer_corner_placement_left, composer_corner_placement_right,
-    composer_status_placement_reserving, format_fixed_columns, format_key_value_segment,
+    composer_status_placement_left, format_fixed_columns, format_key_value_segment,
     inset_rect, join_inline_segments, layout_composer_surface,
     layout_header_body_footer_surface, pane_header_height, panel_highlight_style,
     render_composer_editor_surface, render_confirm_dialog,

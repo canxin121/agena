@@ -395,7 +395,16 @@ impl WorkflowPlugin {
             let _ = self.sync_plan_statusline(None).await;
             return Ok(None);
         };
-        self.sync_plan_statusline(Some(&plan)).await?;
+        // The statusline sync is cosmetic. A failure here must not abort the
+        // stop hook, which would hide the plan autorun continuation (and, at
+        // the dispatch level, every other plugin's hook run) from the run.
+        if let Err(error) = self.sync_plan_statusline(Some(&plan)).await {
+            tracing::warn!(
+                target: "agena::workflow",
+                plan = %plan.title,
+                "plan statusline sync failed during agent.stop: {error}"
+            );
+        }
         if plan.phase != WorkflowPlanPhase::Active || !plan.autorun {
             return Ok(None);
         }
@@ -499,10 +508,11 @@ mod tests {
 
     use super::workflow_runtime::discovery_text_output;
     use super::{
-        AvailableToolRecord, HostRegisteredToolDescriptor, PlanUpdateInput, ToolApiHelpInput,
-        ToolDescriptor, ToolDiscoveryConfig, WorkflowPlan, WorkflowPlanCheckpoint,
-        WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
-        WorkflowPlugin, PlanUpdateTarget, compact_tool_summary, validate_tool_discovery_config,
+        AvailableToolRecord, HostRegisteredToolDescriptor, PlanUpdateInput, PlanUpdateTarget,
+        ToolApiHelpInput, ToolDescriptor, ToolDiscoveryConfig, WorkflowPlan,
+        WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
+        WorkflowPlanStepStatus, WorkflowPlugin, compact_tool_summary,
+        validate_tool_discovery_config,
     };
     use agena_plugin_host::sdk::{
         Plugin, PluginErrorKind, PluginKey, ToolDefinition, ToolKey, ToolTag,
@@ -789,8 +799,7 @@ mod tests {
         assert!(route.contains("\"writes\""), "{route}");
         assert!(route.contains("\"network\""), "{route}");
         assert!(
-            route.contains(r#""reads":["#)
-                || route.contains(r#""reads": ["#),
+            route.contains(r#""reads":["#) || route.contains(r#""reads": ["#),
             "{route}"
         );
         assert!(route.contains("\"<target>\""), "{route}");
@@ -865,8 +874,14 @@ mod tests {
     fn resolve_check_index_uses_1_based_indices() {
         let plan = sample_plan();
 
-        assert_eq!(WorkflowPlugin::resolve_check_index(&plan.steps[0], 1).unwrap(), 0);
-        assert_eq!(WorkflowPlugin::resolve_check_index(&plan.steps[0], 2).unwrap(), 1);
+        assert_eq!(
+            WorkflowPlugin::resolve_check_index(&plan.steps[0], 1).unwrap(),
+            0
+        );
+        assert_eq!(
+            WorkflowPlugin::resolve_check_index(&plan.steps[0], 2).unwrap(),
+            1
+        );
 
         let zero = WorkflowPlugin::resolve_check_index(&plan.steps[0], 0)
             .expect_err("check 0 must be rejected as not 1-based");
@@ -953,11 +968,26 @@ mod tests {
         empty.steps.clear();
         assert_eq!(WorkflowPlugin::plan_statusline_content(&empty), "⏳");
 
-        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Planning), "⏳");
-        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Active), "▶");
-        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Blocked), "⚠");
-        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Completed), "✓");
-        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Cancelled), "✕");
+        assert_eq!(
+            WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Planning),
+            "⏳"
+        );
+        assert_eq!(
+            WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Active),
+            "▶"
+        );
+        assert_eq!(
+            WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Blocked),
+            "⚠"
+        );
+        assert_eq!(
+            WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Completed),
+            "✓"
+        );
+        assert_eq!(
+            WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Cancelled),
+            "✕"
+        );
     }
 
     #[test]

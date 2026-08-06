@@ -1231,7 +1231,10 @@ impl PluginHost {
         &self,
         input: AgentStopInput,
     ) -> Result<AgentStopPatch, PluginError> {
-        Ok(self.dispatch_agent_stop_cancellable(input, None).await?.patch)
+        Ok(self
+            .dispatch_agent_stop_cancellable(input, None)
+            .await?
+            .patch)
     }
 
     pub async fn dispatch_agent_stop_cancellable(
@@ -1255,7 +1258,7 @@ impl PluginHost {
                 session_id: Some(input.session_id),
                 ..Default::default()
             };
-            let v = await_transport_with_cancellation(
+            let v = match await_transport_with_cancellation(
                 cancellation.clone(),
                 host_api::run_in_host_callback_context(
                     context,
@@ -1263,7 +1266,35 @@ impl PluginHost {
                 ),
             )
             .await
-            .map_err(transport_to_plugin_error)?;
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    // One plugin's hook failure must not hide the other hooks'
+                    // decisions (for example the workflow plan autorun
+                    // continuation) nor the run's hook activity. Record the
+                    // failure as an observed run and keep dispatching. A
+                    // cancelled run still aborts immediately.
+                    if cancellation
+                        .as_ref()
+                        .is_some_and(|token| token.is_cancelled())
+                    {
+                        return Err(transport_to_plugin_error(err));
+                    }
+                    tracing::warn!(
+                        target: "agena_plugin_host::agent_stop",
+                        plugin = %plugin_id,
+                        error = %err,
+                        "agent.stop hook failed; continuing to remaining plugins"
+                    );
+                    runs.push(AgentStopHookRun {
+                        plugin_id,
+                        hook: "agent.stop".to_string(),
+                        continue_with_message: None,
+                        reason: Some(format!("hook failed: {err}")),
+                    });
+                    continue;
+                }
+            };
             if matches!(&v, serde_json::Value::Null) {
                 runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
                 continue;
@@ -1616,23 +1647,22 @@ where
 use super::{
     AgentStopDispatch, AgentStopHookRun, AgentStopInput, AgentStopPatch, Arc, AuthInput,
     AuthOutput, BTreeMap, ChatHeadersInput, ChatHeadersPatch, ChatMessageInput, ChatMessagePatch,
-    ChatMessagesTransformInput,
-    ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
-    ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
-    CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch, Duration, EventEnvelope,
-    HashMap, HookSubscription, HostCallbackContext, HostHandle, HostStatuslineSegment,
-    HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput, PluginCommandCatalogItem,
-    PluginCommandInvokeInput, PluginCommandOutput, PluginError, PluginHost, PluginInspect,
-    PluginKey, PluginLogRecord, PluginLogStore, PluginStudioControlCatalogItem,
-    PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginToolRegistry,
-    PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction, PluginUiCatalog,
-    PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch, RegisteredTool, RwLock,
-    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
-    TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolInvokeStream, ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput,
-    ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd, TransportError,
-    UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
+    ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch,
+    ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch,
+    CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch,
+    Duration, EventEnvelope, HashMap, HookSubscription, HostCallbackContext, HostHandle,
+    HostStatuslineSegment, HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput,
+    PluginCommandCatalogItem, PluginCommandInvokeInput, PluginCommandOutput, PluginError,
+    PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
+    PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
+    PluginToolRegistry, PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction,
+    PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
+    RegisteredTool, RwLock, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
+    ShellEnvPatch, TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput,
+    ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput,
+    ToolInvokeOutput, ToolInvokeStream, ToolKey, ToolPermissionNetworksInput,
+    ToolPermissionPathsInput, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd,
+    TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
     block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
     block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
     merge_json, method, shutdown_transport, tool_hook_context, transport_to_plugin_error,

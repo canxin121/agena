@@ -86,8 +86,10 @@ pub(crate) fn session_build_config_from_resolved(
         },
         cache_limits: agena_domain::SessionCacheLimits::default(),
         max_concurrent_tools: DEFAULT_MAX_CONCURRENT_TOOLS,
-        // Mirrors `DEFAULT_MAX_MODEL_TURNS` in agena-runtime-session.
-        max_turns: Some(100),
+        // `None` falls back to `DEFAULT_MAX_MODEL_TURNS` (500) in
+        // agena-runtime-session; `Some(0)` means unlimited (handled in
+        // `replies_execution.rs`).
+        max_turns: config.session.max_turns,
         tool_presentation: config.plugins.policy.tool_presentation.clone(),
     }
 }

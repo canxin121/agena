@@ -862,6 +862,7 @@ mod tests {
             ),
             ("session.compaction.auto", JsonValue::from(false)),
             ("session.compaction.reserved_tokens", JsonValue::from(8192)),
+            ("session.max_turns", JsonValue::from(42)),
             (
                 "plugins.policy.tool_presentation.default_mode",
                 JsonValue::from("brief"),
@@ -898,6 +899,7 @@ mod tests {
             .expect("resolve edited config");
         assert!(!resolved.session.compaction.auto);
         assert_eq!(resolved.session.compaction.reserved_tokens, Some(8192));
+        assert_eq!(resolved.session.max_turns, Some(42));
         assert_eq!(resolved.runtime.providers.client_versions.codex, "0.200.1");
         assert_eq!(
             resolved

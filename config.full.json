@@ -24,7 +24,8 @@
     "compaction": {
       "auto": true,
       "reserved_tokens": 12000
-    }
+    },
+    "max_turns": 500
   },
   "permission": {
     "path": {

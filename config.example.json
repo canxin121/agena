@@ -19,7 +19,8 @@
   "session": {
     "compaction": {
       "auto": true
-    }
+    },
+    "max_turns": 500
   },
   "plugins": {
     "policy": {

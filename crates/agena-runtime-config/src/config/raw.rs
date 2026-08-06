@@ -450,13 +450,20 @@ impl RawConfig {
         crate::apply_config_env_number(env, "AGENA_SESSION_COMPACTION_RESERVED_TOKENS", |value| {
             compaction_reserved_tokens = Some(value)
         })?;
-        let session = (compaction_auto.is_some() || compaction_reserved_tokens.is_some())
-            .then_some(RawSessionConfig {
-                compaction: Some(RawSessionCompactionConfig {
-                    auto: compaction_auto,
-                    reserved_tokens: compaction_reserved_tokens,
-                }),
-            });
+        let mut session_max_turns = None;
+        crate::apply_config_env_number(env, "AGENA_SESSION_MAX_TURNS", |value| {
+            session_max_turns = Some(value)
+        })?;
+        let session = (compaction_auto.is_some()
+            || compaction_reserved_tokens.is_some()
+            || session_max_turns.is_some())
+        .then_some(RawSessionConfig {
+            compaction: Some(RawSessionCompactionConfig {
+                auto: compaction_auto,
+                reserved_tokens: compaction_reserved_tokens,
+            }),
+            max_turns: session_max_turns,
+        });
 
         Ok(Self {
             tracing,
@@ -908,6 +915,10 @@ fn normalize_provider_client_version(
 pub struct RawSessionConfig {
     #[merge(strategy = option_struct_merge)]
     pub compaction: Option<RawSessionCompactionConfig>,
+    /// Cap on model turns within one stable run. `0` means unlimited;
+    /// `None` falls back to `DEFAULT_MAX_MODEL_TURNS` (500).
+    #[merge(strategy = option_override)]
+    pub max_turns: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -927,6 +938,7 @@ impl SessionConfig {
                 auto: compaction.auto.unwrap_or(true),
                 reserved_tokens: compaction.reserved_tokens,
             },
+            max_turns: raw.max_turns,
         }
     }
 }

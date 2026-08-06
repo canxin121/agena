@@ -220,6 +220,67 @@ mod tests {
     }
 
     #[test]
+    fn session_max_turns_env_and_default_resolve() {
+        let root = test_root();
+        let base = TestEnvironment {
+            values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
+        };
+
+        // `None` when the env var is absent (falls back to the session
+        // manager's default).
+        let plain = ConfigLoader::new(base.clone())
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect("load config without max_turns env");
+        assert_eq!(plain.config.session.max_turns, None);
+
+        // Positive value from env.
+        let capped = ConfigLoader::new(TestEnvironment {
+            values: BTreeMap::from([
+                ("HOME".to_owned(), root.display().to_string()),
+                ("AGENA_SESSION_MAX_TURNS".to_owned(), "25".to_owned()),
+            ]),
+        })
+        .load(&LoadConfigRequest {
+            workspace_root: Some(root.join("workspace")),
+            ..LoadConfigRequest::default()
+        })
+        .expect("load config with max_turns env");
+        assert_eq!(capped.config.session.max_turns, Some(25));
+
+        // `0` means unlimited, surfaced verbatim so the session manager can
+        // translate it.
+        let unlimited = ConfigLoader::new(TestEnvironment {
+            values: BTreeMap::from([
+                ("HOME".to_owned(), root.display().to_string()),
+                ("AGENA_SESSION_MAX_TURNS".to_owned(), "0".to_owned()),
+            ]),
+        })
+        .load(&LoadConfigRequest {
+            workspace_root: Some(root.join("workspace")),
+            ..LoadConfigRequest::default()
+        })
+        .expect("load config with zero max_turns env");
+        assert_eq!(unlimited.config.session.max_turns, Some(0));
+
+        // A non-numeric value must be rejected.
+        let invalid = ConfigLoader::new(TestEnvironment {
+            values: BTreeMap::from([
+                ("HOME".to_owned(), root.display().to_string()),
+                ("AGENA_SESSION_MAX_TURNS".to_owned(), "many".to_owned()),
+            ]),
+        })
+        .load(&LoadConfigRequest {
+            workspace_root: Some(root.join("workspace")),
+            ..LoadConfigRequest::default()
+        });
+        assert!(invalid.is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn client_versions_compaction_and_presentation_policy_resolve() {
         let root = test_root();
         let config_dir = root.join("agena");
@@ -240,7 +301,8 @@ mod tests {
                     "compaction": {
                         "auto": false,
                         "reserved_tokens": 8192
-                    }
+                    },
+                    "max_turns": 50
                 },
                 "plugins": {
                     "policy": {
@@ -279,6 +341,7 @@ mod tests {
             resolution.config.session.compaction.reserved_tokens,
             Some(8192)
         );
+        assert_eq!(resolution.config.session.max_turns, Some(50));
         assert_eq!(
             resolution
                 .config

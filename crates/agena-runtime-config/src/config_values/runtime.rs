@@ -106,6 +106,10 @@ impl Default for ProviderClientVersionSettings {
 #[serde(default)]
 pub struct SessionConfig {
     pub compaction: SessionCompactionConfig,
+    /// Cap on model turns within one stable run. `0` means unlimited;
+    /// `None` falls back to `DEFAULT_MAX_MODEL_TURNS` (500).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

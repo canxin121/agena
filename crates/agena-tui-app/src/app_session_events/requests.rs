@@ -19,10 +19,12 @@ impl App {
         };
         if scope.mode == SessionViewMode::Subtree && scope.anchor_session_id.is_none() {
             self.session_load.loading = false;
+            self.session_load.requested_at = None;
             self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
             return;
         }
         self.session_load.pending_scope = Some(scope.clone());
+        self.session_load.requested_at = Some(Instant::now());
 
         tokio::spawn(async move {
             let (result, subtree_root_id) = match scope.mode {
@@ -215,6 +217,7 @@ impl App {
         }
 
         self.transcript.state_loading = true;
+        self.transcript.state_load_in_flight_since = Some(Instant::now());
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -241,6 +244,7 @@ impl App {
             return;
         }
         self.transcript.refreshing = true;
+        self.transcript.refresh_in_flight_since = Some(Instant::now());
         self.last_refresh_at = Instant::now();
 
         let backend = self.backend.clone();

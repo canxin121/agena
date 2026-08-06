@@ -41,6 +41,8 @@ impl TranscriptState {
             pending_user_messages: Vec::new(),
             refreshing: false,
             state_loading: false,
+            refresh_in_flight_since: None,
+            state_load_in_flight_since: None,
             viewport: TranscriptViewport::default(),
             interaction: TranscriptInteraction::default(),
             search_query: String::new(),
@@ -92,6 +94,41 @@ impl TranscriptState {
         self.merge_snapshot(execution.transcript.clone());
         self.execution = Some(execution);
         self.invalidate_render();
+    }
+
+    /// Clear in-flight request flags that have exceeded `timeout` so the
+    /// periodic refresh resumes even when a response was lost (spawned task
+    /// panicked, message dropped, or a backend call that never resolved).
+    /// Returns true when anything was recovered.
+    pub(crate) fn recover_stalled_requests(&mut self, timeout: Duration) -> bool {
+        let mut recovered = false;
+        if self
+            .refresh_in_flight_since
+            .is_some_and(|since| since.elapsed() >= timeout)
+        {
+            self.refreshing = false;
+            self.refresh_in_flight_since = None;
+            recovered = true;
+        }
+        if self
+            .state_load_in_flight_since
+            .is_some_and(|since| since.elapsed() >= timeout)
+        {
+            self.state_loading = false;
+            self.state_load_in_flight_since = None;
+            recovered = true;
+        }
+        recovered
+    }
+
+    /// True when any assistant reply in the snapshot has not reached a
+    /// terminal status. A terminal execution must never leave such a reply
+    /// behind; the caller uses this as a safety net to force a refresh.
+    pub(crate) fn has_non_terminal_replies(&self) -> bool {
+        self.snapshot
+            .turns
+            .iter()
+            .any(|turn| !turn.reply.status.is_terminal())
     }
 
     pub(crate) fn merge_snapshot(&mut self, snapshot: agena_domain::TranscriptSnapshot) {
@@ -2978,8 +3015,8 @@ fn transcript_cursor_cell_range(line: &RenderedLine, column: usize) -> Range<usi
 
 use super::TranscriptAction;
 use crate::{
-    BTreeMap, BTreeSet, I18n, PendingUserMessage, Range, RenderedLine, RenderedTranscript,
-    RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
+    BTreeMap, BTreeSet, Duration, I18n, PendingUserMessage, Range, RenderedLine,
+    RenderedTranscript, RenderedTranscriptNode, SessionExecutionResource, TranscriptBlockCursor,
     TranscriptBlockSelectionMode, TranscriptContentId, TranscriptCursor, TranscriptCursorAnchor,
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
@@ -2998,3 +3035,76 @@ use crate::{
     transcript_semantic_line_range, transcript_should_fall_back_to_message_navigation,
     transcript_vertical_line_navigation_step, transcript_vertical_navigation_step,
 };
+
+#[cfg(test)]
+mod stall_recovery_tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn state() -> TranscriptState {
+        TranscriptState::new(
+            I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+        )
+    }
+
+    #[test]
+    fn elapsed_in_flight_requests_are_force_cleared() {
+        let mut state = state();
+        state.refreshing = true;
+        state.state_loading = true;
+        state.refresh_in_flight_since = Some(Instant::now());
+        state.state_load_in_flight_since = Some(Instant::now());
+
+        // A zero timeout has already elapsed for both requests: the wedge
+        // must be broken so the periodic refresh can resume.
+        assert!(state.recover_stalled_requests(Duration::ZERO));
+        assert!(!state.refreshing);
+        assert!(!state.state_loading);
+        assert!(state.refresh_in_flight_since.is_none());
+        assert!(state.state_load_in_flight_since.is_none());
+    }
+
+    #[test]
+    fn fresh_in_flight_requests_survive_the_recovery_pass() {
+        let mut state = state();
+        state.refreshing = true;
+        state.state_loading = true;
+        state.refresh_in_flight_since = Some(Instant::now());
+        state.state_load_in_flight_since = Some(Instant::now());
+
+        assert!(!state.recover_stalled_requests(Duration::from_secs(3600)));
+        assert!(state.refreshing);
+        assert!(state.state_loading);
+    }
+
+    #[test]
+    fn in_progress_reply_counts_as_non_terminal_until_completed() {
+        let mut state = state();
+        let turn_id = agena_domain::TurnId::new();
+        state.snapshot.turns.push(agena_domain::TurnSnapshot {
+            id: turn_id,
+            session_id: 1,
+            sequence: 1,
+            input: agena_domain::ContentDocument::default(),
+            reply: agena_domain::AssistantReplySnapshot {
+                id: agena_domain::AssistantReplyId::new(),
+                turn_id,
+                status: agena_domain::AssistantReplyStatus::InProgress,
+                content: agena_domain::ContentDocument::default(),
+                revision_seq: 1,
+                created_at_ms: 0,
+                finished_at_ms: None,
+                failure: None,
+            },
+            created_at_ms: 0,
+        });
+
+        assert!(state.has_non_terminal_replies());
+
+        state.snapshot.turns[0].reply.status = agena_domain::AssistantReplyStatus::Completed;
+        assert!(!state.has_non_terminal_replies());
+    }
+}

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use crate::commands::CommandSpec;
 
@@ -158,7 +159,30 @@ pub(crate) use agena_tui::notice::{NoticeScope, NoticeSeverity, UiNotice};
 pub(crate) struct SessionListLoadState {
     pub(crate) pending_scope: Option<SessionLoadScope>,
     pub(crate) loading: bool,
+    /// When the current session-list request was issued. A request whose
+    /// response is lost would otherwise leave `loading` set forever, and
+    /// `request_sessions` coalesces every later request while it is set —
+    /// freezing the session list at stale rows. The stall timer recovers it.
+    pub(crate) requested_at: Option<Instant>,
     pub(crate) initialized: bool,
+}
+
+impl SessionListLoadState {
+    /// Clear an in-flight session-list request that has exceeded `timeout` so
+    /// the next `request_sessions` can proceed. Returns true when recovered.
+    pub(crate) fn recover_stalled_request(&mut self, timeout: Duration) -> bool {
+        if self.loading
+            && self
+                .requested_at
+                .is_some_and(|requested_at| requested_at.elapsed() >= timeout)
+        {
+            self.loading = false;
+            self.pending_scope = None;
+            self.requested_at = None;
+            return true;
+        }
+        false
+    }
 }
 
 /// Composer recovery belongs to the session submit lifecycle rather than the
@@ -183,6 +207,14 @@ pub(crate) struct TranscriptState {
     pub(crate) pending_user_messages: Vec<PendingUserMessage>,
     pub(crate) refreshing: bool,
     pub(crate) state_loading: bool,
+    /// When the current session refresh was issued; `None` while idle. A
+    /// refresh whose response never arrives leaves `refreshing` set and
+    /// blocks every later refresh, freezing the transcript at a stale
+    /// snapshot. `recover_stalled_requests` clears the wedge.
+    pub(crate) refresh_in_flight_since: Option<Instant>,
+    /// When the current session-state load was issued. Same recovery
+    /// contract as `refresh_in_flight_since`.
+    pub(crate) state_load_in_flight_since: Option<Instant>,
     pub(crate) viewport: TranscriptViewport,
     pub(crate) interaction: TranscriptInteraction,
     pub(crate) search_query: String,

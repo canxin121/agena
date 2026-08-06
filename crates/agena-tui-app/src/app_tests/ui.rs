@@ -468,3 +468,31 @@ mod transcript_navigation_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod session_list_load_state_tests {
+    use crate::SessionListLoadState;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stalled_session_list_request_is_recovered() {
+        let mut state = SessionListLoadState::default();
+        state.loading = true;
+        state.requested_at = Some(Instant::now());
+
+        assert!(state.recover_stalled_request(Duration::ZERO));
+        assert!(!state.loading);
+        assert!(state.pending_scope.is_none());
+        assert!(state.requested_at.is_none());
+    }
+
+    #[test]
+    fn fresh_session_list_request_survives_the_recovery_pass() {
+        let mut state = SessionListLoadState::default();
+        state.loading = true;
+        state.requested_at = Some(Instant::now());
+
+        assert!(!state.recover_stalled_request(Duration::from_secs(3600)));
+        assert!(state.loading);
+    }
+}

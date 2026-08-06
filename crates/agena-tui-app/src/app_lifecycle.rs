@@ -312,6 +312,20 @@ impl App {
             self.notice = None;
         }
 
+        // A refresh or session-state-load response can be lost (spawned task
+        // panicked, message dropped, or a backend call that never resolved).
+        // The in-flight flag would then stay set and block every later
+        // refresh, freezing the transcript at a stale snapshot — including
+        // stuck \"working\" indicators and a reply that never converges.
+        // Recover the wedge so the periodic refresh resumes.
+        self.transcript
+            .recover_stalled_requests(Duration::from_millis(REFRESH_STALL_TIMEOUT_MS));
+        // The session list has the same in-flight contract: a lost response
+        // would leave `loading` set and coalesce every later request, freezing
+        // the list at stale rows. Recover it alongside the transcript.
+        self.session_load
+            .recover_stalled_request(Duration::from_millis(REFRESH_STALL_TIMEOUT_MS));
+
         if let Some(session_id) = self.transcript.session_id
             && !self.transcript.refreshing
             && !self.transcript.state_loading
@@ -463,11 +477,11 @@ use crate::Result;
 use crate::{
     App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
     DraftStore, Duration, Editor, Event, HashSet, I18n, Instant, LaunchOptions, LayoutCache,
-    PromptHistory, REFRESH_INTERVAL_MS, Route, RunActivityTracker, RunOptionsState,
-    SessionComposerState, SessionListLoadState, TerminalIntegrationState, TerminalRuntime,
-    TranscriptDetailDefaults, TranscriptState, UI_TICK_MS, default_draft_store_path,
-    default_prompt_history_path, interval, provider_studio_auth_poll_interval, ui_text,
-    unbounded_channel,
+    PromptHistory, REFRESH_INTERVAL_MS, REFRESH_STALL_TIMEOUT_MS, Route, RunActivityTracker,
+    RunOptionsState, SessionComposerState, SessionListLoadState, TerminalIntegrationState,
+    TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
+    default_draft_store_path, default_prompt_history_path, interval,
+    provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::status_line::StatusLinePresentation;

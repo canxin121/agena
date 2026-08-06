@@ -1882,6 +1882,12 @@ impl AgenaRuntime {
                         async move {
                             if let Some(manager) = runtime.current_snapshot().session_manager() {
                                 manager.prune_cache();
+                                if let Err(error) = manager.reap_stale_leases().await {
+                                    tracing::warn!(
+                                        error = %error,
+                                        "session lease reaping failed"
+                                    );
+                                }
                             }
                         }
                     },

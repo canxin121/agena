@@ -62,6 +62,13 @@ pub(super) const TIMELINE_EVENT_LIMIT: u64 = 200;
 // continuously re-rendering a large transcript at ~31 FPS while a tool waits.
 pub(super) const UI_TICK_MS: u64 = 100;
 pub(super) const REFRESH_INTERVAL_MS: u64 = 250;
+/// Maximum time an in-flight session refresh or state load may remain
+/// unresolved before the TUI force-clears the in-flight flag and resumes
+/// periodic refresh. A healthy refresh completes far faster (the SQLite busy
+/// timeout is 15s); a lost response (spawned task panicked or its message was
+/// dropped) would otherwise wedge the flag forever and freeze the transcript
+/// at a stale snapshot with stuck \"working\" indicators.
+pub(super) const REFRESH_STALL_TIMEOUT_MS: u64 = 30_000;
 pub(super) const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
 pub(super) const MAX_FILE_MENTION_SUGGESTIONS: usize = 100;
 pub(super) const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;

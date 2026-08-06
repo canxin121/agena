@@ -74,6 +74,23 @@ impl App {
         let session_id = execution.session.id;
         let sequence = execution.latest_event_seq;
         self.transcript.apply_execution(execution);
+        if is_terminal {
+            // A terminal execution means no run is in flight for this
+            // session. Clear any local run activity (submit/continue/
+            // compact/rewind) whose response was lost, so the top-right
+            // activity indicator agrees with the terminal title and progress
+            // bar. Repeated applications are idempotent.
+            self.run_activity.clear_session(session_id);
+            // Safety net: a terminal execution must never leave a
+            // non-terminal reply in the transcript. If the durable snapshot
+            // did not converge (for example the refresh that carried it was
+            // the last one before a lost response), force one refresh so the
+            // reply status and inline body rendering catch up. Guarded by
+            // `was_running` so repeated terminal refreshes cannot loop.
+            if was_running && self.transcript.has_non_terminal_replies() {
+                self.request_refresh(session_id, true);
+            }
+        }
         self.session_controller
             .apply(&agena_tui_session::SessionEvent::SessionRefreshed {
                 session_id,

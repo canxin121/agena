@@ -169,6 +169,7 @@ impl App {
 
         self.session_load.pending_scope = None;
         self.session_load.loading = false;
+        self.session_load.requested_at = None;
 
         let selected_id = self
             .sessions
@@ -277,6 +278,7 @@ impl App {
         }
 
         self.transcript.state_loading = false;
+        self.transcript.state_load_in_flight_since = None;
         match result {
             Ok(execution) => {
                 let session_id = execution.session.id;
@@ -311,6 +313,7 @@ impl App {
         }
 
         self.transcript.refreshing = false;
+        self.transcript.refresh_in_flight_since = None;
         let pending = self.pending_refresh.take();
 
         match result {

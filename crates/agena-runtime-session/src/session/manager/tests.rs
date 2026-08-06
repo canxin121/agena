@@ -2221,6 +2221,104 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn host_user_input_resolves_tool_mid_execution_by_call_id() {
+        // Regression: a tool is moved to InProgress before it executes, so
+        // `pending_tools()` (a Pending-only projection) no longer contains it
+        // while the tool is running. `ask` and the plan review window run
+        // during that window, so the host user input request must resolve the
+        // executing part directly by call id instead of erroring with
+        // "pending tool not found".
+        let manager = test_manager().await;
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "mid-execution host input".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create host input session");
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve mid-execution message ids");
+        let call_id = 77;
+        let operation_id = "mid-execution-operation";
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(OperationPart::pending(
+                call_id,
+                ToolInvocation::new("test.reply_probe.run", StructuredObject::default()),
+                "Run reply_probe.run",
+                TimeRange::default(),
+            ))],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: options.model.provider_id.to_string(),
+                model_id: options.model.model_id.to_string(),
+                ..MessageMetadata::default()
+            },
+        )
+        .expect("build mid-execution operation message");
+        message.parts[0].operation_id = Some(operation_id.to_owned());
+        // The tool is executing right now: the part is InProgress, which the
+        // pending-operation projection (Pending-only) deliberately skips.
+        message.parts[0].status = ExecutionStatus::InProgress;
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist mid-execution operation");
+        assert!(
+            session.pending_tools().is_empty(),
+            "InProgress tools are not part of the Pending-only projection"
+        );
+
+        let response = manager
+            .request_host_user_input(
+                session.id,
+                call_id,
+                crate::message::AskUserToolInput {
+                    title: "Continue?".to_owned(),
+                    body_markdown: "Host tool is waiting.".to_owned(),
+                    kind: "single".to_owned(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
+                    auto_resolution_ms: Some(300),
+                    questions: vec![UserInputQuestion {
+                        id: "continue".to_owned(),
+                        header: String::new(),
+                        question: "Continue?".to_owned(),
+                        options: Vec::new(),
+                        multiple: false,
+                        allow_custom: true,
+                    }],
+                },
+            )
+            .await
+            .expect("host user input resolves the in-progress tool by call id");
+        assert!(response.timed_out);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn explicit_plugin_command_does_not_consult_tool_permission_policy() {
         let manager = test_manager_with_tool_policy(ToolPermissionPolicy::new(
@@ -4608,6 +4706,202 @@ mod tests {
             ))
             .await
             .expect("submit user message");
+    }
+
+    #[derive(Default)]
+    struct AgentStopAutorunProbe;
+
+    static AUTORUN_PROBE_HOOK_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static AUTORUN_PROBE_CONTINUATIONS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "autorun_probe",
+        version = "0.1.0",
+        summary = "agent.stop autorun continuation regression fixture."
+    )]
+    impl AgentStopAutorunProbe {
+        #[hook(agent.stop)]
+        async fn agent_stop(
+            &self,
+            _input: agena_plugin_host::AgentStopInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::AgentStopPatch>> {
+            AUTORUN_PROBE_HOOK_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if AUTORUN_PROBE_CONTINUATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Ok(Some(agena_plugin_host::AgentStopPatch {
+                    continue_with_message: Some("continue with the next plan step".to_owned()),
+                    reason: Some("workflow plan autorun".to_owned()),
+                }));
+            }
+            Ok(None)
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingAgentStopHook;
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "aaa_failing_stop_hook",
+        version = "0.1.0",
+        summary = "agent.stop hook failure isolation regression fixture."
+    )]
+    impl FailingAgentStopHook {
+        #[hook(agent.stop)]
+        async fn agent_stop(
+            &self,
+            _input: agena_plugin_host::AgentStopInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::AgentStopPatch>> {
+            Err(agena_plugin_host::PluginError::internal(
+                "intentional failing stop hook".to_owned(),
+            ))
+        }
+    }
+
+    async fn test_manager_with_autorun_stop_hook()
+    -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            "test.aaa_failing_stop_hook".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        plugins_config.list.insert(
+            "test.autorun_probe".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![
+                StaticPluginRegistration::new(
+                    "test.aaa_failing_stop_hook"
+                        .parse()
+                        .expect("valid failing stop hook plugin key"),
+                    FailingAgentStopHook,
+                ),
+                StaticPluginRegistration::new(
+                    "test.autorun_probe"
+                        .parse()
+                        .expect("valid autorun probe plugin key"),
+                    AgentStopAutorunProbe,
+                ),
+            ],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(UnfinishedPlainTextProvider {
+            default_model: ModelId::new("unfinished-plain-text-model"),
+            calls: Arc::clone(&calls),
+            dangling_turns: 2,
+            truncate_first: false,
+            always_truncate: false,
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        (manager, calls)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn agent_stop_hook_continuation_injects_message_and_records_activity() {
+        AUTORUN_PROBE_HOOK_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        AUTORUN_PROBE_CONTINUATIONS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let (manager, calls) = test_manager_with_autorun_stop_hook().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "autorun stop hook".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create autorun session");
+        submit_plain_text_user_message(&manager, session.id).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+        assert_eq!(
+            AUTORUN_PROBE_HOOK_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "agent.stop must run at every natural stop"
+        );
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the first continuation must request another model turn"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        let has_continuation = finished.messages.iter().any(|message| {
+            message.role == Role::User
+                && message.metadata.source == agena_domain::MessageSource::System
+                && message
+                    .as_text_lossy()
+                    .contains("continue with the next plan step")
+        });
+        assert!(
+            has_continuation,
+            "continuation user message must be injected"
+        );
+        let has_hook_activity = finished.messages.iter().any(|message| {
+            message.role == Role::Assistant
+                && message.metadata.source == agena_domain::MessageSource::System
+                && message.parts.iter().any(|part| {
+                    matches!(
+                        part.content,
+                        Some(PartContent::Activity(
+                            crate::message::RuntimeActivity::Hook(_)
+                        ))
+                    )
+                })
+        });
+        assert!(
+            has_hook_activity,
+            "agent.stop hook run must be recorded as transcript activity"
+        );
+        assert!(finished.next_pending_tool().is_none());
+        assert!(finished.pending_interactive_requests().is_empty());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

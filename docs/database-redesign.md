@@ -297,8 +297,10 @@ shrink, and events that embed parts shrink too.
 - `cargo test -p agena-runtime-session --lib`: 97 passed.
 - `cargo test --workspace`: all affected suites pass. Two pre-existing failures
   are unrelated to this work and reproduce on the unmodified baseline:
-  1. `approved_provider_tool_executes_once_then_continues_the_same_turn`
-     overflows the tokio worker stack (`RUST_MIN_STACK=16777216` works around it).
+  1. `approved_provider_tool_executes_once_then_continues_the_same_turn` used to
+     overflow the tokio worker stack; the reply/continuation state machines were
+     boxed (`Box::pin`) so the deepest debug chain stays below the standard
+     2 MiB worker stack and the `RUST_MIN_STACK` workaround was removed.
   2. `capability_identity_snapshot_matches_committed_json` — committed snapshot
      drifted from current tool schemas (needs `agena inspect --json
      --identity-snapshot` regeneration).

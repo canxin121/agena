@@ -364,7 +364,12 @@ pub type TracingFilterReloadHandle =
     tracing_subscriber::reload::Handle<tracing_subscriber::EnvFilter, tracing_subscriber::Registry>;
 
 /// Production worker-thread stack size used by deep tool and session flows.
-pub const APP_RUNTIME_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
+///
+/// The reply/continuation state machines used to nest tool execution and
+/// permission replies; with the inline async levels boxed, the deepest debug
+/// chain stays below ~1.5 MiB, so 2 MiB (the standard async worker stack) is
+/// comfortable while the old 16 MiB setting was excessive.
+pub const APP_RUNTIME_THREAD_STACK_SIZE: usize = 2 * 1024 * 1024;
 
 /// Build the multi-thread Tokio runtime used by Agena binaries.
 pub fn build_app_runtime() -> std::io::Result<tokio::runtime::Runtime> {
@@ -394,7 +399,7 @@ mod tests {
     #[test]
     fn builds_multi_thread_runtime() {
         const {
-            assert!(APP_RUNTIME_THREAD_STACK_SIZE >= 8 * 1024 * 1024);
+            assert!(APP_RUNTIME_THREAD_STACK_SIZE >= 2 * 1024 * 1024);
         }
         let runtime = build_app_runtime().expect("runtime should build");
         runtime.block_on(async { tokio::task::yield_now().await });

@@ -21,7 +21,7 @@ static FALLBACK_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .thread_name("agena-tool-fallback")
-        .thread_stack_size(32 * 1024 * 1024)
+        .thread_stack_size(2 * 1024 * 1024)
         .enable_all()
         .build()
         .expect("tool fallback runtime")

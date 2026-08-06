@@ -157,9 +157,10 @@ fn operation_authorization(
         .unwrap_or_default()
 }
 
-/// Stable terminal identity for an Operation. The final title is the direct
-/// execution-tool name; approval-phase prose and converted gateway names
-/// ("List tools", "Search tools", …) are never allowed to become it.
+/// Stable terminal identity for an Operation on paths that carry no composed
+/// result title (failure, non-execution, approval phase). The direct
+/// execution-tool name is the fallback; success-path titles are composed as
+/// "<tool> · <call summary>" by `agena_tool::compose_tool_title`.
 fn terminal_operation_title(invocation: &ToolInvocation) -> String {
     invocation.name.clone()
 }

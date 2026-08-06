@@ -66,6 +66,10 @@ impl AgenaCli {
             );
             return Ok(());
         }
+        if args.tools_reference {
+            print!("{}", agena_bundled_plugins::bundled_tools_markdown_reference());
+            return Ok(());
+        }
         let manifest = agena_bundled_plugins::bundled_capability_manifest();
         println!(
             "{}",

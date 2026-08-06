@@ -469,6 +469,10 @@ pub struct InspectArgs {
     /// Emit the reviewable identity-only snapshot used by the CI drift check.
     #[arg(long, requires = "json")]
     pub identity_snapshot: bool,
+    /// Emit the generated Markdown tool reference committed at
+    /// `docs/generated/tools-reference.md` and embedded into `cargo doc`.
+    #[arg(long)]
+    pub tools_reference: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1632,6 +1636,14 @@ mod parser_contract_tests {
         assert!(matches!(
             &snapshot.command,
             Some(AgenaCommand::Inspect(args)) if args.json && args.identity_snapshot
+        ));
+
+        let reference =
+            AgenaCli::try_parse_from(["agena", "inspect", "--tools-reference"])
+                .expect("parse inspect tools reference command");
+        assert!(matches!(
+            &reference.command,
+            Some(AgenaCommand::Inspect(args)) if args.tools_reference
         ));
     }
 

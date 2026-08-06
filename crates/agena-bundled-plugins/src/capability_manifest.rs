@@ -67,18 +67,18 @@ pub struct BundledSkillCapability {
     pub bundled: bool,
 }
 
-/// Return the complete source-level bundled catalog. `agena.mcp` is included
-/// and marked conditional because runtime registration requires an MCP
-/// manager. `agena.schema_lab` is present only when its compile-time feature is
-/// enabled and is marked accordingly.
-pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
+/// Collect the complete source-level bundled catalog as `(manifest,
+/// conditional)` pairs. Shared by the capability manifest, the identity
+/// snapshot, and the generated `cargo doc` tool reference so every surface
+/// enumerates exactly the same plugins.
+pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)> {
     let mut plugins = Vec::new();
     macro_rules! add {
         ($plugin:expr) => {
-            plugins.push(plugin_capability($plugin.manifest(), None));
+            plugins.push(($plugin.manifest(), None));
         };
         ($plugin:expr, $condition:literal) => {
-            plugins.push(plugin_capability(
+            plugins.push((
                 $plugin.manifest(),
                 Some($condition.to_string()),
             ));
@@ -116,6 +116,18 @@ pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
     add!(crate::tool::new_tasks_plugin());
     add!(crate::tool::new_tool_api_plugin());
     add!(crate::tool::new_web_plugin());
+    plugins
+}
+
+/// Return the complete source-level bundled catalog. `agena.mcp` is included
+/// and marked conditional because runtime registration requires an MCP
+/// manager. `agena.schema_lab` is present only when its compile-time feature is
+/// enabled and is marked accordingly.
+pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
+    let mut plugins = bundled_plugin_manifests()
+        .into_iter()
+        .map(|(manifest, conditional)| plugin_capability(manifest, conditional))
+        .collect::<Vec<_>>();
     plugins.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut skills = agena_skills::bundled::all()

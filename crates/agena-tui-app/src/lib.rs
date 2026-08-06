@@ -210,6 +210,7 @@ use agena_tui_platform::terminal::TerminalRuntime;
 use agena_tui_platform::terminal_transfer::{download_providers, request_download};
 
 mod app_activities;
+mod app_plan_viewer;
 mod app_choice_helpers;
 mod app_command_actions;
 mod app_command_helpers;

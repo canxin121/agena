@@ -82,6 +82,10 @@ impl App {
                 HelpPreset::ActionPane,
                 ui_text::t(&self.i18n, "context-help-context-activities"),
             ),
+            Route::PlanViewer(_) => self.help_for(
+                HelpPreset::ActionPane,
+                ui_text::t(&self.i18n, "context-help-context-plan-viewer"),
+            ),
             Route::SettingsStudio(dialog) => {
                 self.help_for(HelpPreset::Settings, dialog.title.clone())
             }

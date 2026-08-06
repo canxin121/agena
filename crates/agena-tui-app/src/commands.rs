@@ -38,6 +38,7 @@ pub enum CommandId {
     Status,
     Usage,
     Activities,
+    Plan,
     Btw,
 }
 
@@ -354,6 +355,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         aliases: &["background", "tasks"],
         arguments: "",
         summary_key: "command-activities-summary",
+    },
+    CommandSpec {
+        id: CommandId::Plan,
+        name: "plan",
+        aliases: &["plan-view", "show-plan"],
+        arguments: "",
+        summary_key: "command-plan-summary",
     },
     CommandSpec {
         id: CommandId::Btw,

@@ -135,6 +135,10 @@ impl App {
                     self.open_usage_dashboard();
                     return;
                 }
+                KeyAction::OpenPlan if self.focus != Focus::Composer => {
+                    self.open_plan_viewer();
+                    return;
+                }
                 _ => {}
             }
         }
@@ -272,6 +276,7 @@ impl App {
             Route::Main => false,
             Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
             Route::Activities(dialog) => self.handle_activities_key(key, dialog),
+            Route::PlanViewer(dialog) => self.handle_plan_viewer_key(key, dialog),
             Route::SettingsStudio(dialog) => self.handle_settings_studio_overlay_key(key, dialog),
             Route::ClientVersionsStudio(dialog) => {
                 self.handle_client_versions_studio_overlay_key(key, dialog)

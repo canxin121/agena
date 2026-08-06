@@ -518,6 +518,14 @@ pub(super) enum AppMessage {
     ActivitiesCleared {
         result: UiResult<bool>,
     },
+    PlanViewerLoaded {
+        request_id: u64,
+        result: UiResult<PlanViewerData>,
+    },
+    PlanAutorunToggled {
+        request_id: u64,
+        result: UiResult<bool>,
+    },
     UsageStatsLoaded {
         request_id: u64,
         result: UiResult<UsageStats>,
@@ -811,6 +819,7 @@ pub(super) enum Route {
     Main,
     Usage(UsageDashboardState),
     Activities(ActivitiesState),
+    PlanViewer(PlanViewerState),
     SettingsStudio(SettingsStudioOverlay),
     ClientVersionsStudio(SettingsStudioOverlay),
     PermissionStudio(PermissionStudioOverlay),
@@ -878,6 +887,41 @@ impl ActivitiesState {
             log_request_id: 0,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PlanViewerState {
+    pub(super) presentation: agena_tui::plan_viewer::PlanViewerPresentation,
+    pub(super) loading: bool,
+    pub(super) error: Option<String>,
+    pub(super) summary: Option<String>,
+    pub(super) markdown: Option<String>,
+    pub(super) autorun: Option<bool>,
+    pub(super) request_id: u64,
+    pub(super) toggle_request_id: u64,
+}
+
+impl PlanViewerState {
+    pub(super) fn new() -> Self {
+        Self {
+            presentation: agena_tui::plan_viewer::PlanViewerPresentation::new(),
+            loading: false,
+            error: None,
+            summary: None,
+            markdown: None,
+            autorun: None,
+            request_id: 0,
+            toggle_request_id: 0,
+        }
+    }
+}
+
+/// Structured payload projected from the `agena.plan` `get` UI tool for the
+/// plan viewer route.
+#[derive(Debug, Clone)]
+pub(super) struct PlanViewerData {
+    pub(super) markdown: String,
+    pub(super) autorun: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

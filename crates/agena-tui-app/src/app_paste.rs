@@ -10,6 +10,7 @@ impl App {
             Route::Main => self.focus == Focus::Composer,
             Route::Usage(_)
             | Route::Activities(_)
+            | Route::PlanViewer(_)
             | Route::SettingsStudio(_)
             | Route::ClientVersionsStudio(_) => false,
             Route::PermissionStudio(dialog) => dialog.editor.is_some(),
@@ -40,6 +41,7 @@ impl App {
                 Route::Main => {}
                 Route::Usage(_)
                 | Route::Activities(_)
+                | Route::PlanViewer(_)
                 | Route::SettingsStudio(_)
                 | Route::ClientVersionsStudio(_) => {
                     handled_route = true;

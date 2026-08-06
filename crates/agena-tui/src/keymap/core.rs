@@ -21,6 +21,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('n') if unmodified(key) => Some(A::SearchNext),
             K::Char('r') if unmodified(key) => Some(A::Continue),
             K::Char('U') if unmodified_or_shift(key) => Some(A::OpenUsage),
+            K::Char('p') if only_ctrl(key) => Some(A::OpenPlan),
             _ => None,
         },
         KeyContext::Sessions => match key.code {
@@ -190,6 +191,17 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
             K::Char('e') if unmodified(key) => Some(A::Edit),
             K::Char('d') if only_ctrl(key) => Some(A::Clear),
             _ => tab_navigation_action(key),
+        },
+        KeyContext::PlanViewer => match key.code {
+            K::Esc if unmodified(key) => Some(A::Close),
+            K::Char('q') if unmodified(key) => Some(A::Close),
+            K::Up | K::Char('k') if unmodified(key) => Some(A::MoveUp),
+            K::Down | K::Char('j') if unmodified(key) => Some(A::MoveDown),
+            K::PageUp if unmodified(key) => Some(A::PageUp),
+            K::PageDown if unmodified(key) => Some(A::PageDown),
+            K::Char('r') if unmodified_or_shift(key) || only_ctrl(key) => Some(A::Refresh),
+            K::Char('a') if unmodified(key) || only_ctrl(key) => Some(A::PlanToggleAutorun),
+            _ => None,
         },
         _ => None,
     }

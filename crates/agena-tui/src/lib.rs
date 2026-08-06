@@ -21,6 +21,7 @@ pub mod model_chooser;
 pub mod notice;
 pub mod path_browser;
 pub mod permission_prompt;
+pub mod plan_viewer;
 pub mod presentation_config;
 pub mod prompt_history;
 pub mod selection_picker;

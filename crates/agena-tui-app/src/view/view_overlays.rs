@@ -3,3 +3,4 @@
 mod overlay_core;
 mod overlay_studio;
 mod view_activities;
+mod view_plan;

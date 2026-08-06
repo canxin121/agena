@@ -65,6 +65,7 @@ impl App {
             }
             CommandId::Usage => self.open_usage_dashboard(),
             CommandId::Activities => self.open_activities_panel(),
+            CommandId::Plan => self.open_plan_viewer(),
             CommandId::Btw => self.handle_btw_command(args),
         }
     }
@@ -336,6 +337,7 @@ fn command_opens_interactive_surface_without_arguments(id: CommandId) -> bool {
             | CommandId::Image
             | CommandId::Usage
             | CommandId::Activities
+            | CommandId::Plan
     )
 }
 use crate::{

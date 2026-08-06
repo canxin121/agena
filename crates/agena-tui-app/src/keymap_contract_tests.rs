@@ -14,6 +14,7 @@ fn visible_shortcut_hints_track_the_central_keymap() {
     let model_catalog_footer = ui_text::t(&english, "overlay-model-catalog-footer");
     let permission_footer = ui_text::t(&english, "overlay-permission-studio-footer-nested");
     let permission_rule_footer = ui_text::t(&english, "overlay-permission-rule-studio-footer");
+    let plan_viewer_footer = ui_text::t(&english, "plan-viewer-footer");
 
     assert!(transcript.contains("i insert"));
     assert!(composer.contains("Esc view"));
@@ -67,4 +68,7 @@ fn visible_shortcut_hints_track_the_central_keymap() {
         assert!(permission_rule_footer.contains(shortcut));
     }
     assert!(!permission_rule_footer.contains("field or action"));
+    for shortcut in ["r refresh", "a autorun", "q close"] {
+        assert!(plan_viewer_footer.contains(shortcut));
+    }
 }

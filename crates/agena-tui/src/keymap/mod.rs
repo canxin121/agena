@@ -90,6 +90,7 @@ pub enum KeyContext {
     UserInputReview,
     Usage,
     Activities,
+    PlanViewer,
     SettingsStudio,
     PermissionStudio,
     PermissionRuleStudio,
@@ -127,6 +128,7 @@ pub enum KeyAction {
     New,
     Continue,
     OpenUsage,
+    OpenPlan,
     ModeAll,
     ModeRoots,
     ModeSubtree,
@@ -201,6 +203,7 @@ pub enum KeyAction {
     PreviousTab,
     Clear,
     Refresh,
+    PlanToggleAutorun,
     ProviderRefreshModels,
     ProviderAddModel,
     ProviderSaveAdapter,
@@ -251,7 +254,8 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::Confirm
         | KeyContext::PermissionPrompt
         | KeyContext::UserInputQuestion
-        | KeyContext::UserInputReview => core::resolve(context, key),
+        | KeyContext::UserInputReview
+        | KeyContext::PlanViewer => core::resolve(context, key),
                 KeyContext::Usage => usage::resolve(key),
         KeyContext::Activities => activities::resolve(key),
         KeyContext::SettingsStudio
@@ -1456,5 +1460,67 @@ mod tests {
                 Some(KeyAction::CancelRequest)
             );
         }
+    }
+
+    #[test]
+    fn plan_viewer_context_registers_navigation_refresh_autorun_and_close() {
+        for (code, action) in [
+            (KeyCode::Esc, KeyAction::Close),
+            (KeyCode::Char('q'), KeyAction::Close),
+            (KeyCode::Up, KeyAction::MoveUp),
+            (KeyCode::Char('k'), KeyAction::MoveUp),
+            (KeyCode::Down, KeyAction::MoveDown),
+            (KeyCode::Char('j'), KeyAction::MoveDown),
+            (KeyCode::PageUp, KeyAction::PageUp),
+            (KeyCode::PageDown, KeyAction::PageDown),
+            (KeyCode::Char('r'), KeyAction::Refresh),
+            (KeyCode::Char('a'), KeyAction::PlanToggleAutorun),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::PlanViewer, key(code, KeyModifiers::NONE)),
+                Some(action),
+                "{code:?} must resolve in PlanViewer context",
+            );
+        }
+        for (code, modifiers, action) in [
+            (KeyCode::Char('r'), KeyModifiers::SHIFT, KeyAction::Refresh),
+            (KeyCode::Char('r'), KeyModifiers::CONTROL, KeyAction::Refresh),
+            (KeyCode::Char('a'), KeyModifiers::CONTROL, KeyAction::PlanToggleAutorun),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::PlanViewer, key(code, modifiers)),
+                Some(action),
+                "{code:?} with {modifiers:?} must resolve in PlanViewer context",
+            );
+        }
+        for event in [
+            key(KeyCode::Char('a'), KeyModifiers::ALT),
+            key(KeyCode::Char('p'), KeyModifiers::NONE),
+        ] {
+            assert_eq!(
+                resolve(KeyContext::PlanViewer, event),
+                None,
+                "{event:?} must not resolve in PlanViewer context",
+            );
+        }
+    }
+
+    #[test]
+    fn main_context_ctrl_p_opens_the_plan_viewer() {
+        assert_eq!(
+            resolve(
+                KeyContext::Main,
+                key(KeyCode::Char('p'), KeyModifiers::CONTROL)
+            ),
+            Some(KeyAction::OpenPlan)
+        );
+        assert_eq!(
+            resolve(KeyContext::Main, key(KeyCode::Char('p'), KeyModifiers::NONE)),
+            None
+        );
+        assert_eq!(
+            resolve(KeyContext::Main, key(KeyCode::Char('p'), KeyModifiers::ALT)),
+            None
+        );
     }
 }

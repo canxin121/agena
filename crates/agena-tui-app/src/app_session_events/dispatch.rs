@@ -36,6 +36,12 @@ impl App {
                 }
                 self.handle_activities_cleared(result.map_or(false, |ok| ok));
             }
+            AppMessage::PlanViewerLoaded { request_id, result } => {
+                self.handle_plan_viewer_loaded(request_id, result)
+            }
+            AppMessage::PlanAutorunToggled { request_id, result } => {
+                self.handle_plan_autorun_toggled(request_id, result)
+            }
             AppMessage::UsageStatsLoaded { request_id, result } => {
                 self.handle_usage_stats_loaded(request_id, result)
             }

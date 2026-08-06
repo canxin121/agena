@@ -159,6 +159,7 @@ impl App {
                 | Route::SelectionPicker(_)
                 | Route::SessionModelChooser(_)
                 | Route::Timeline(_)
+                | Route::PlanViewer(_)
         ) {
             return 0;
         }

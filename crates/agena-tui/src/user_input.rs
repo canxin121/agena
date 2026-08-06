@@ -16,11 +16,12 @@ use tui_markdown::from_str as markdown_to_text;
 use crate::i18n::I18n;
 use crate::keymap::{KeyAction, KeyContext, resolve};
 use agena_tui_components::{
-    Editor, ListPanelSection, ListPanelSpec, ParagraphSection, QuestionFlowCustomInputSpec,
-    QuestionFlowDialogMode, QuestionFlowDialogSpec, QuestionFlowScreen, QuestionFlowState,
-    StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, SurfaceMode,
-    TextPanelSection, TextPanelSpec, build_detail_two_line_list_item, list_panel_height,
-    render_question_flow_dialog, render_stacked_dialog, wrapped_text_height_for_text,
+    Editor, EditorPanelSpec, EditorSection, ListPanelSection, ListPanelSpec, ParagraphSection,
+    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
+    QuestionFlowScreen, QuestionFlowState, StackedDialogSection, StackedDialogSectionHeight,
+    StackedDialogSpec, SurfaceMode, TextPanelSection, TextPanelSpec,
+    build_detail_two_line_list_item, list_panel_height, render_question_flow_dialog,
+    render_stacked_dialog, wrapped_text_height_for_text,
 };
 
 /// A display-only option in an interactive question. Domain request mapping,
@@ -65,10 +66,12 @@ pub struct UserInputAnswerDraft {
 }
 
 /// Presentation-only state for a single-question review decision.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct UserInputReviewPresentation {
     selected_option: usize,
     scroll: u16,
+    custom_input: Editor,
+    editing_custom: bool,
 }
 
 impl UserInputReviewPresentation {
@@ -78,6 +81,19 @@ impl UserInputReviewPresentation {
 
     pub fn scroll(&self) -> u16 {
         self.scroll
+    }
+
+    pub fn custom_input(&self) -> &Editor {
+        &self.custom_input
+    }
+
+    pub fn is_editing_custom(&self) -> bool {
+        self.editing_custom
+    }
+
+    /// The trimmed free-text feedback the user typed, empty when none.
+    pub fn custom_text(&self) -> String {
+        self.custom_input.text().trim().to_string()
     }
 }
 
@@ -200,14 +216,28 @@ impl UserInputPresentation {
     }
 
     fn handle_review_decision_key(&mut self, key: KeyEvent, page_size: usize) -> UserInputEffect {
+        if self.review.editing_custom {
+            return self.handle_review_custom_key(key);
+        }
         let option_count = self
             .questions
             .first()
-            .map(|question| question.options.len())
+            .map(|question| question.options.len() + usize::from(question.allow_custom))
             .unwrap_or(0);
         match resolve(KeyContext::UserInputReview, key) {
             Some(KeyAction::Close) => UserInputEffect::Close,
-            Some(KeyAction::Accept) => UserInputEffect::Submit,
+            Some(KeyAction::Accept) => {
+                if self.review_selected_row_is_custom() {
+                    if self.review.custom_text().is_empty() {
+                        self.begin_review_custom_edit();
+                        UserInputEffect::KeepOpen
+                    } else {
+                        UserInputEffect::Submit
+                    }
+                } else {
+                    UserInputEffect::Submit
+                }
+            }
             Some(KeyAction::CancelRequest) => UserInputEffect::Cancel,
             Some(KeyAction::MoveUp) => {
                 move_selected_index(&mut self.review.selected_option, option_count, -1);
@@ -225,7 +255,58 @@ impl UserInputPresentation {
                 self.review.scroll = self.review.scroll.saturating_add(page_size.max(1) as u16);
                 UserInputEffect::KeepOpen
             }
+            Some(KeyAction::Edit) => {
+                if self.review_selected_row_is_custom() {
+                    self.begin_review_custom_edit();
+                }
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::Clear) => {
+                self.review.custom_input.clear();
+                UserInputEffect::KeepOpen
+            }
             _ => UserInputEffect::KeepOpen,
+        }
+    }
+
+    fn review_selected_row_is_custom(&self) -> bool {
+        let Some(question) = self.questions.first() else {
+            return false;
+        };
+        question.allow_custom && self.review.selected_option >= question.options.len()
+    }
+
+    fn begin_review_custom_edit(&mut self) {
+        let Some(question) = self.questions.first() else {
+            return;
+        };
+        if !question.allow_custom {
+            return;
+        }
+        self.review.selected_option = question.options.len();
+        self.review.editing_custom = true;
+    }
+
+    fn handle_review_custom_key(&mut self, key: KeyEvent) -> UserInputEffect {
+        match resolve(KeyContext::UserInputQuestion, key) {
+            Some(KeyAction::Close) => {
+                self.review.editing_custom = false;
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::Accept) => {
+                let has_text = !self.review.custom_input.text().trim().is_empty();
+                self.review.editing_custom = false;
+                if has_text {
+                    UserInputEffect::Submit
+                } else {
+                    UserInputEffect::KeepOpen
+                }
+            }
+            Some(KeyAction::CancelRequest) => UserInputEffect::Cancel,
+            _ => {
+                self.review.custom_input.handle_line_input_key(key);
+                UserInputEffect::KeepOpen
+            }
         }
     }
 
@@ -877,7 +958,7 @@ fn review_decision_layout(
     area: Rect,
 ) -> ReviewDecisionLayout {
     let overlay = presentation.overlay();
-    let content_width = SurfaceMode::Route
+    let content_width = SurfaceMode::Overlay
         .content_width(area, area.width)
         .saturating_sub(2)
         .max(1);
@@ -906,17 +987,19 @@ fn review_decision_layout(
         presentation
             .questions()
             .first()
-            .map(|question| question.options.len())
+            .map(|question| question.options.len() + usize::from(question.allow_custom))
             .unwrap_or(0),
         2,
         4,
         10,
     );
+    let editor_height = if presentation.review().is_editing_custom() { 3 } else { 0 };
     let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
     let body_height = area
         .height
-        .saturating_sub(2)
+        .saturating_sub(4)
         .saturating_sub(decision_height)
+        .saturating_sub(editor_height)
         .saturating_sub(footer_height)
         .max(1);
     ReviewDecisionLayout {
@@ -950,7 +1033,7 @@ fn render_review_decision(
         return;
     };
     let plan_body = Text::from(markdown_lines(overlay.body_markdown.as_str()));
-    let items = question
+    let mut items = question
         .options
         .iter()
         .map(|option| {
@@ -962,6 +1045,18 @@ fn render_review_decision(
             )
         })
         .collect::<Vec<ListItem<'static>>>();
+    if question.allow_custom {
+        let feedback = presentation.review().custom_text();
+        items.push(build_detail_two_line_list_item(
+            i18n.text("overlay-user-input-review-feedback").into(),
+            if feedback.is_empty() {
+                Some(i18n.text("overlay-user-input-review-feedback-empty").into())
+            } else {
+                Some(sanitize_display_text(feedback.as_str()).into())
+            },
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        ));
+    }
     let footer = Text::from(vec![
         Line::from(Span::styled(
             format!(
@@ -986,50 +1081,65 @@ fn render_review_decision(
             .natural_height
             .saturating_sub(layout.body_height.saturating_sub(2)),
     );
-    render_stacked_dialog(
+    let mut sections = Vec::with_capacity(3);
+    if presentation.review().is_editing_custom() {
+        sections.push(StackedDialogSection::EditorPanel(EditorSection {
+            height: StackedDialogSectionHeight::AutoEditor { multiline: false },
+            spec: EditorPanelSpec {
+                title: Some(i18n.text("overlay-user-input-review-feedback").into()),
+                borders: Borders::ALL,
+            },
+            input: presentation.review().custom_input(),
+            set_cursor: true,
+        }));
+    } else {
+        sections.push(StackedDialogSection::ListPanel(ListPanelSection {
+            height: StackedDialogSectionHeight::AutoList {
+                lines_per_item: 2,
+                min_body: 4,
+                max_body: 10,
+            },
+            spec: ListPanelSpec::new(
+                Some("Decisions".into()),
+                items.as_slice(),
+                Some(presentation.review().selected_option()),
+                selection_style(),
+                ">> ".into(),
+            ),
+        }));
+    }
+    sections.push(StackedDialogSection::TextPanel(TextPanelSection {
+        height: StackedDialogSectionHeight::Fixed(layout.body_height),
+        spec: TextPanelSpec {
+            title: Some("Plan".into()),
+            body: &plan_body,
+            wrap: true,
+            scroll: Some((scroll, 0)),
+            alignment: None,
+        },
+    }));
+    sections.push(StackedDialogSection::Paragraph(ParagraphSection {
+        height: StackedDialogSectionHeight::AutoText { min: 1, max: 2 },
+        title: None,
+        borders: Borders::NONE,
+        body: footer,
+        wrap: true,
+        scroll: None,
+        alignment: None,
+    }));
+    let result = render_stacked_dialog(
         frame,
         area,
-        SurfaceMode::Route,
+        SurfaceMode::Overlay,
         &StackedDialogSpec {
             title: display_title(overlay, i18n).into(),
             target_width: area.width,
-            sections: vec![
-                StackedDialogSection::ListPanel(ListPanelSection {
-                    height: StackedDialogSectionHeight::AutoList {
-                        lines_per_item: 2,
-                        min_body: 4,
-                        max_body: 10,
-                    },
-                    spec: ListPanelSpec::new(
-                        Some("Decisions".into()),
-                        items.as_slice(),
-                        Some(presentation.review().selected_option()),
-                        selection_style(),
-                        ">> ".into(),
-                    ),
-                }),
-                StackedDialogSection::TextPanel(TextPanelSection {
-                    height: StackedDialogSectionHeight::Fixed(layout.body_height),
-                    spec: TextPanelSpec {
-                        title: Some("Plan".into()),
-                        body: &plan_body,
-                        wrap: true,
-                        scroll: Some((scroll, 0)),
-                        alignment: None,
-                    },
-                }),
-                StackedDialogSection::Paragraph(ParagraphSection {
-                    height: StackedDialogSectionHeight::AutoText { min: 1, max: 2 },
-                    title: None,
-                    borders: Borders::NONE,
-                    body: footer,
-                    wrap: true,
-                    scroll: None,
-                    alignment: None,
-                }),
-            ],
+            sections,
         },
     );
+    if let Some(cursor) = result.cursor {
+        frame.set_cursor_position(cursor);
+    }
 }
 
 fn navigation_body(presentation: &UserInputPresentation, i18n: &I18n) -> Text<'static> {
@@ -1190,7 +1300,7 @@ fn answer_preview(values: &[String], i18n: &I18n) -> String {
     }
 }
 
-fn markdown_lines(markdown: &str) -> Vec<Line<'static>> {
+pub(crate) fn markdown_lines(markdown: &str) -> Vec<Line<'static>> {
     let markdown = markdown.trim();
     if markdown.is_empty() {
         return vec![Line::from("")];
@@ -1357,5 +1467,65 @@ mod tests {
         assert_eq!(presentation.review().scroll(), 10);
         presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
         assert_eq!(presentation.review().scroll(), 0);
+    }
+
+    #[test]
+    fn review_decision_feedback_row_edits_and_submits_text() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, true)]);
+
+        presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().selected_option(), 1);
+
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::KeepOpen
+        );
+        assert!(presentation.review().is_editing_custom());
+
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().custom_text(), "hi");
+
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::Submit
+        );
+        assert_eq!(presentation.review().custom_text(), "hi");
+    }
+
+    #[test]
+    fn review_decision_feedback_esc_exits_editor_without_submitting() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, true)]);
+
+        presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10);
+        assert!(presentation.review().is_editing_custom());
+
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 10),
+            UserInputEffect::KeepOpen
+        );
+        assert!(!presentation.review().is_editing_custom());
+        assert_eq!(presentation.review().selected_option(), 1);
+    }
+
+    #[test]
+    fn review_decision_enter_on_filled_feedback_row_submits() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, true)]);
+
+        presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().custom_text(), "o");
+        assert!(!presentation.review().is_editing_custom());
+
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::Submit
+        );
     }
 }

@@ -75,15 +75,16 @@ impl App {
     }
 
     fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
-        if purpose == SessionModelChooserPurpose::RuntimeOverride {
-            let Some(session_id) = self.transcript.session_id else {
-                self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-                return;
-            };
-            if self.session_is_busy(session_id) {
-                self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
-                return;
-            }
+        // The runtime override (`/model`) must work without an open session:
+        // with no session it edits the run-options model stack used by the
+        // next created session. When a session exists, keep the busy guard so
+        // a running session cannot be re-targeted mid-flight.
+        if purpose == SessionModelChooserPurpose::RuntimeOverride
+            && let Some(session_id) = self.transcript.session_id
+            && self.session_is_busy(session_id)
+        {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-session-busy"));
+            return;
         }
         let mut dialog = self.build_session_model_chooser_overlay(purpose);
         dialog.set_loading(false);

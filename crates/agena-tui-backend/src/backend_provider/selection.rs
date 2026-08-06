@@ -196,6 +196,37 @@ impl Backend {
             .ok_or_else(|| anyhow!("no providers configured"))
     }
 
+    /// Resolve the default think/speed mode selectors for the model implied
+    /// by `request`, matching the defaults the runtime applies when a session
+    /// starts. Returns `(None, None)` when the model cannot be resolved or
+    /// exposes no default mode.
+    pub fn resolved_model_default_modes(
+        &self,
+        request: &RunOptions,
+    ) -> (Option<String>, Option<String>) {
+        let Ok(model) = self.resolved_model_for_run_options(request) else {
+            return (None, None);
+        };
+        let Ok(options) = self
+            .application
+            .provider_catalog()
+            .model_execution_options(&model)
+        else {
+            return (None, None);
+        };
+        let thinking = options
+            .thinking_modes
+            .iter()
+            .find(|mode| mode.is_default)
+            .and_then(|mode| mode.selector().map(|selector| selector.into_owned()));
+        let speed = options
+            .speed_modes
+            .iter()
+            .find(|(_, mode)| mode.is_default)
+            .map(|(name, _)| name.clone());
+        (thinking, speed)
+    }
+
     pub fn runtime_thinking_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
         let model = self.resolved_model_for_run_options(request)?;
         self.model_thinking_mode_rows(&model)

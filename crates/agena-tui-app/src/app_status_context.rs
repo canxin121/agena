@@ -235,12 +235,11 @@ impl App {
                 execution.usage.projected_tokens,
                 execution.usage.model_context_window_tokens,
             );
-            let mut parts = Vec::new();
-            parts.extend(agena_tui::session_status::session_summary_status_parts(
-                model_part,
-                None,
-                Some(token_usage),
-            ));
+            // Order: model, think, speed, then the context percentage at the
+            // far right — think/speed stay directly adjacent to the model
+            // name instead of having the usage percentage between them.
+            let mut parts =
+                agena_tui::session_status::session_summary_status_parts(model_part, None, None);
             if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
                 && !thinking_mode.trim().is_empty()
             {
@@ -257,11 +256,15 @@ impl App {
                     &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
                 ));
             }
+            parts.push(token_usage.label());
             if !parts.is_empty() {
                 return parts;
             }
         }
 
+        // No session is open: show the run-options model stack (which the
+        // model chooser edits even before a session exists), falling back to
+        // the resolved default model and its default think/speed modes.
         let mut parts = agena_tui::session_status::session_summary_status_parts(
             self.run_options
                 .model
@@ -271,17 +274,26 @@ impl App {
             None,
             None,
         );
-        if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
-            && !thinking_mode.trim().is_empty()
-        {
+        let (default_thinking, default_speed) = self
+            .backend
+            .resolved_model_default_modes(&self.run_options.to_request());
+        let thinking_mode = self
+            .run_options
+            .thinking_mode
+            .as_deref()
+            .or(default_thinking.as_deref());
+        if let Some(thinking_mode) = thinking_mode.filter(|value| !value.trim().is_empty()) {
             parts.push(self.i18n.text_args(
                 "session-status-thinking",
                 &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
             ));
         }
-        if let Some(speed_mode) = self.run_options.speed_mode.as_deref()
-            && !speed_mode.trim().is_empty()
-        {
+        let speed_mode = self
+            .run_options
+            .speed_mode
+            .as_deref()
+            .or(default_speed.as_deref());
+        if let Some(speed_mode) = speed_mode.filter(|value| !value.trim().is_empty()) {
             parts.push(self.i18n.text_args(
                 "session-status-speed",
                 &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),

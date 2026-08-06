@@ -1367,7 +1367,7 @@ status-part-user-input = input={$count}
 session-status-plan = plan {$slug}
 session-status-plan-with-steps = plan {$slug} · {$steps} steps
 session-status-thinking = {$value}
-session-status-speed = speed {$value}
+session-status-speed = {$value}
 inline-fact-provider = provider
 inline-fact-adapter = adapter
 inline-fact-model = model

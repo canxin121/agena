@@ -186,8 +186,11 @@ impl App {
 
     pub(crate) fn persist_current_session_model_stack(&mut self) -> bool {
         let Some(session_id) = self.transcript.session_id else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-            return false;
+            // No session is open: the run-options model stack is already
+            // updated in memory and will be applied to the next session
+            // created. Nothing to persist, and this must not be reported as
+            // an error so model switching works before a session exists.
+            return true;
         };
         let options = self.run_options.model_stack_request();
         match self.block_on_async(self.backend.update_session_selection(session_id, options)) {

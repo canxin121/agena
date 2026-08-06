@@ -186,9 +186,9 @@ impl UserInputPresentation {
         true
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> UserInputEffect {
+    pub fn handle_key(&mut self, key: KeyEvent, page_size: usize) -> UserInputEffect {
         if self.review_decision {
-            return self.handle_review_decision_key(key);
+            return self.handle_review_decision_key(key, page_size);
         }
         if self.editing_custom {
             return self.handle_custom_input_key(key);
@@ -199,7 +199,7 @@ impl UserInputPresentation {
         }
     }
 
-    fn handle_review_decision_key(&mut self, key: KeyEvent) -> UserInputEffect {
+    fn handle_review_decision_key(&mut self, key: KeyEvent, page_size: usize) -> UserInputEffect {
         let option_count = self
             .questions
             .first()
@@ -218,11 +218,11 @@ impl UserInputPresentation {
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::PageUp) => {
-                self.review.scroll = self.review.scroll.saturating_sub(12);
+                self.review.scroll = self.review.scroll.saturating_sub(page_size.max(1) as u16);
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::PageDown) => {
-                self.review.scroll = self.review.scroll.saturating_add(12);
+                self.review.scroll = self.review.scroll.saturating_add(page_size.max(1) as u16);
                 UserInputEffect::KeepOpen
             }
             _ => UserInputEffect::KeepOpen,
@@ -862,6 +862,83 @@ pub fn render_overlay(
     }
 }
 
+/// Layout metrics of the review-decision overlay, shared by the renderer and
+/// the paging logic so PageUp/PageDown step by exactly one visible screen
+/// instead of a hard-coded number of lines.
+#[derive(Debug, Clone, Copy)]
+struct ReviewDecisionLayout {
+    natural_height: u16,
+    body_height: u16,
+}
+
+fn review_decision_layout(
+    presentation: &UserInputPresentation,
+    i18n: &I18n,
+    area: Rect,
+) -> ReviewDecisionLayout {
+    let overlay = presentation.overlay();
+    let content_width = SurfaceMode::Route
+        .content_width(area, area.width)
+        .saturating_sub(2)
+        .max(1);
+    let plan_body = Text::from(markdown_lines(overlay.body_markdown.as_str()));
+    let natural_height =
+        wrapped_text_height_for_text(&plan_body, content_width.saturating_sub(2).max(1));
+    let footer = Text::from(vec![
+        Line::from(Span::styled(
+            format!(
+                "Enter {} · Ctrl+X {} · ↑/↓ choose · PgUp/PgDn scroll",
+                submit_label(overlay, i18n),
+                cancel_label(overlay, i18n)
+            ),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )),
+        timeout_text(overlay, i18n)
+            .map(|text| {
+                Line::from(Span::styled(
+                    format!("◷ {text}"),
+                    Style::default().fg(agena_tui_components::theme::warning_color()),
+                ))
+            })
+            .unwrap_or_default(),
+    ]);
+    let decision_height = list_panel_height(
+        presentation
+            .questions()
+            .first()
+            .map(|question| question.options.len())
+            .unwrap_or(0),
+        2,
+        4,
+        10,
+    );
+    let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
+    let body_height = area
+        .height
+        .saturating_sub(2)
+        .saturating_sub(decision_height)
+        .saturating_sub(footer_height)
+        .max(1);
+    ReviewDecisionLayout {
+        natural_height,
+        body_height,
+    }
+}
+
+/// The number of lines one PageUp/PageDown moves the review-decision Plan
+/// panel, matching the panel's visible height.
+pub fn review_decision_page_size(
+    presentation: &UserInputPresentation,
+    i18n: &I18n,
+    area: Rect,
+) -> usize {
+    usize::from(
+        review_decision_layout(presentation, i18n, area)
+            .body_height
+            .max(1),
+    )
+}
+
 fn render_review_decision(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -872,13 +949,7 @@ fn render_review_decision(
     let Some(question) = presentation.questions().first() else {
         return;
     };
-    let content_width = SurfaceMode::Route
-        .content_width(area, area.width)
-        .saturating_sub(2)
-        .max(1);
     let plan_body = Text::from(markdown_lines(overlay.body_markdown.as_str()));
-    let natural_height =
-        wrapped_text_height_for_text(&plan_body, content_width.saturating_sub(2).max(1));
     let items = question
         .options
         .iter()
@@ -909,18 +980,12 @@ fn render_review_decision(
             })
             .unwrap_or_default(),
     ]);
-    let decision_height = list_panel_height(question.options.len(), 2, 4, 10);
-    let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
-    let body_height = area
-        .height
-        .saturating_sub(2)
-        .saturating_sub(decision_height)
-        .saturating_sub(footer_height)
-        .max(1);
-    let scroll = presentation
-        .review()
-        .scroll()
-        .min(natural_height.saturating_sub(body_height.saturating_sub(2)));
+    let layout = review_decision_layout(presentation, i18n, area);
+    let scroll = presentation.review().scroll().min(
+        layout
+            .natural_height
+            .saturating_sub(layout.body_height.saturating_sub(2)),
+    );
     render_stacked_dialog(
         frame,
         area,
@@ -944,7 +1009,7 @@ fn render_review_decision(
                     ),
                 }),
                 StackedDialogSection::TextPanel(TextPanelSection {
-                    height: StackedDialogSectionHeight::Fixed(body_height),
+                    height: StackedDialogSectionHeight::Fixed(layout.body_height),
                     spec: TextPanelSpec {
                         title: Some("Plan".into()),
                         body: &plan_body,
@@ -1234,7 +1299,7 @@ mod tests {
             UserInputPresentation::new(overlay(false), vec![question(false, false)]);
 
         assert_eq!(
-            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
             UserInputEffect::Submit
         );
         assert!(
@@ -1251,7 +1316,7 @@ mod tests {
 
         assert!(presentation.insert_custom_text("custom value"));
         assert_eq!(
-            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
             UserInputEffect::Submit
         );
         assert_eq!(
@@ -1269,13 +1334,28 @@ mod tests {
             UserInputPresentation::new(overlay(true), vec![question(false, false)]);
 
         assert_eq!(
-            presentation.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            presentation.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 10),
             UserInputEffect::KeepOpen
         );
         assert_eq!(presentation.review().selected_option(), 0);
         assert_eq!(
-            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
             UserInputEffect::Submit
         );
+    }
+
+    #[test]
+    fn review_decision_page_keys_step_by_page_size() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, false)]);
+
+        presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().scroll(), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 7);
+        assert_eq!(presentation.review().scroll(), 17);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 7);
+        assert_eq!(presentation.review().scroll(), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().scroll(), 0);
     }
 }

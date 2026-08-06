@@ -63,6 +63,9 @@ impl App {
             self.render_search_picker_route_background(frame, area);
             self.render_route(frame, area);
             self.render_context_help(frame, area);
+            // The search-picker background renderer resets the layout cache
+            // for non-main parents; keep the live frame area for handlers.
+            self.layout.overlay_area = area;
             return;
         }
         if !matches!(self.current_route, Route::Main) {
@@ -80,6 +83,7 @@ impl App {
                 (area, None)
             };
             self.layout = LayoutCache::default();
+            self.layout.overlay_area = body;
             self.render_route(frame, body);
             if let Some(footer) = footer {
                 self.render_transcript_footer_row(frame, footer);
@@ -89,6 +93,7 @@ impl App {
         }
 
         self.render_main_content(frame, area);
+        self.layout.overlay_area = area;
         self.render_overlay(frame, area);
         self.render_context_help(frame, area);
     }
@@ -131,6 +136,7 @@ impl App {
                 transcript_host_area,
                 transcript_layout.body,
             ),
+            overlay_area: area,
         };
 
         self.transcript.clamp_scroll(

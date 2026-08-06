@@ -1,6 +1,7 @@
 //! Application adapter for the unified background-activities panel.
 
 use agena_api::resource::BackgroundActivityResource;
+use crossterm::event::KeyCode;
 
 use super::{ActivitiesState, App, AppMessage, KeyEvent, Route};
 use agena_tui::activities::{
@@ -225,16 +226,23 @@ impl App {
         match resolve_tui_key(KeyContext::Activities, key) {
             Some(KeyAction::Close) => return true,
             Some(KeyAction::MoveUp) => {
-                let count =
-                    agena_tui::activities::visible_rows(state.rows.as_slice(), &state.presentation)
-                        .len();
+                let (count, offsets, viewport_lines) = self.activities_navigation(state);
                 state.presentation.move_selection(count, -1);
+                state.presentation.reveal_selected(&offsets, viewport_lines);
             }
             Some(KeyAction::MoveDown) => {
-                let count =
-                    agena_tui::activities::visible_rows(state.rows.as_slice(), &state.presentation)
-                        .len();
+                let (count, offsets, viewport_lines) = self.activities_navigation(state);
                 state.presentation.move_selection(count, 1);
+                state.presentation.reveal_selected(&offsets, viewport_lines);
+            }
+            Some(KeyAction::PageUp) | Some(KeyAction::PageDown) => {
+                let (count, offsets, viewport_lines) = self.activities_navigation(state);
+                let delta = if key.code == KeyCode::PageUp { -1 } else { 1 };
+                let page = viewport_lines.max(1) as isize;
+                state.presentation.move_selection(count, delta * page);
+                state
+                    .presentation
+                    .reveal_selected(&offsets, viewport_lines.max(1));
             }
             Some(KeyAction::Open) => {
                 self.activate_activities_control(state, ActivitiesControl::ToggleDetail);
@@ -263,6 +271,19 @@ impl App {
             Some(_) | None => {}
         }
         false
+    }
+
+    /// Row count, per-row rendered line offsets, and list viewport height for
+    /// the active activities panel. Used by selection movement and paging.
+    fn activities_navigation(&self, state: &ActivitiesState) -> (usize, Vec<usize>, usize) {
+        let visible =
+            agena_tui::activities::visible_rows(state.rows.as_slice(), &state.presentation);
+        let viewport_lines = self.layout.overlay_area.height.saturating_sub(2) as usize;
+        (
+            visible.len(),
+            agena_tui::activities::row_line_offsets(&visible),
+            viewport_lines,
+        )
     }
 
     fn activate_activities_control(

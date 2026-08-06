@@ -132,6 +132,29 @@ pub fn visible_rows<'a>(rows: &'a [ActivitiesRow], filter: &ActivitiesPresentati
         .collect()
 }
 
+/// Line offset of each visible row in the rendered list, mirroring the
+/// renderer's section-header layout exactly. Used to keep the selected row
+/// visible while scrolling and to page by whole screens.
+pub fn row_line_offsets(visible: &[&ActivitiesRow]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(visible.len());
+    let mut line = 0;
+    let mut last_section: Option<&'static str> = None;
+    for row in visible {
+        let section = if row.is_active() {
+            "Active"
+        } else {
+            "Finished"
+        };
+        if last_section != Some(section) {
+            line += 2;
+            last_section = Some(section);
+        }
+        offsets.push(line);
+        line += 1;
+    }
+    offsets
+}
+
 impl ActivitiesPresentation {
     pub fn move_selection(&mut self, row_count: usize, delta: isize) {
         if row_count == 0 {
@@ -149,6 +172,36 @@ impl ActivitiesPresentation {
             self.scroll = 0;
         } else {
             self.selected = self.selected.min(row_count - 1);
+        }
+    }
+
+    /// Scroll the panel so the selected row's rendered line is inside the
+    /// viewport. `offsets` comes from [`row_line_offsets`]; `viewport_lines` is
+    /// the visible list height in rendered lines. `scroll` is kept in row
+    /// units, matching the first visible row.
+    pub fn reveal_selected(&mut self, offsets: &[usize], viewport_lines: usize) {
+        if offsets.is_empty() {
+            self.selected = 0;
+            self.scroll = 0;
+            return;
+        }
+        self.selected = self.selected.min(offsets.len().saturating_sub(1));
+        self.scroll = self.scroll.min(offsets.len().saturating_sub(1));
+        let viewport = viewport_lines.max(1);
+        let target = offsets[self.selected];
+        let current = offsets[self.scroll];
+        if target < current {
+            // The selected row moved above the viewport; put it at the top.
+            self.scroll = self.selected;
+        } else if target >= current.saturating_add(viewport) {
+            // The selected row moved below the viewport; scroll down just
+            // enough to bring its line into view.
+            let min_visible = target.saturating_sub(viewport).saturating_add(1);
+            let mut row = self.scroll;
+            while row + 1 < offsets.len() && offsets[row] < min_visible {
+                row += 1;
+            }
+            self.scroll = row;
         }
     }
 
@@ -297,7 +350,7 @@ fn render_list_pane(
         .border_style(muted_style())
         .title(Line::from(Span::styled(title, Style::default().add_modifier(Modifier::BOLD))))
         .title_bottom(Line::from(format!(
-            " {active_count} active · {finished_count} finished | ↑↓ select  ↵ detail  s stop  d dismiss  x clear  r refresh  q close "
+            " {active_count} active · {finished_count} finished | ↑↓ select  PgUp/PgDn page  ↵ detail  s stop  d dismiss  x clear  r refresh  q close "
         )));
 
     let inner = block.inner(area);
@@ -337,10 +390,16 @@ fn render_list_pane(
         }
     }
 
-    let scroll = presentation.scroll.min(lines.len().saturating_sub(inner.height as usize));
+    let offsets = row_line_offsets(&visible);
+    let scroll_row = presentation.scroll.min(offsets.len().saturating_sub(1));
+    let scroll_line = offsets
+        .get(scroll_row)
+        .copied()
+        .unwrap_or(0)
+        .min(lines.len().saturating_sub(inner.height as usize));
     let visible_lines: Vec<Line<'static>> = lines
         .iter()
-        .skip(scroll)
+        .skip(scroll_line)
         .take(inner.height as usize)
         .cloned()
         .collect();
@@ -497,5 +556,69 @@ fn filter_suffix(presentation: &ActivitiesPresentation) -> String {
         String::new()
     } else {
         format!(" [{}]", chips.join(" · "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ActivitiesPresentation, ActivitiesRow, row_line_offsets};
+
+    fn row(kind: &str, status: &str) -> ActivitiesRow {
+        ActivitiesRow {
+            id: format!("id-{kind}-{status}"),
+            kind: kind.to_owned(),
+            status: status.to_owned(),
+            title: format!("{kind} {status}"),
+            description: String::new(),
+            command: None,
+            session_id: None,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            exit_code: None,
+            message: None,
+            cancellable: true,
+            dismissible: true,
+        }
+    }
+
+    #[test]
+    fn row_line_offsets_counts_section_headers() {
+        let rows = [
+            row("shell", "running"),
+            row("task", "running"),
+            row("shell", "succeeded"),
+        ];
+        let visible: Vec<&ActivitiesRow> = rows.iter().collect();
+        // The Active section header sits at line 2 (blank + " Active"); the
+        // Finished header adds another blank + header before its first row.
+        assert_eq!(row_line_offsets(&visible), vec![2, 3, 6]);
+    }
+
+    #[test]
+    fn reveal_selected_scrolls_down_and_resets_empty() {
+        let rows = [
+            row("shell", "running"),
+            row("task", "running"),
+            row("shell", "succeeded"),
+        ];
+        let visible: Vec<&ActivitiesRow> = rows.iter().collect();
+        let offsets = row_line_offsets(&visible);
+
+        // The last row is at line 6; a 2-line viewport must scroll it into view.
+        let mut p1 = ActivitiesPresentation {
+            selected: 2,
+            ..ActivitiesPresentation::default()
+        };
+        p1.reveal_selected(&offsets, 2);
+        assert_eq!(p1.scroll, 2);
+
+        // An empty list resets both selection and scroll.
+        let mut p2 = ActivitiesPresentation {
+            selected: 5,
+            scroll: 3,
+            ..ActivitiesPresentation::default()
+        };
+        p2.reveal_selected(&[], 10);
+        assert_eq!((p2.selected, p2.scroll), (0, 0));
     }
 }

@@ -1,12 +1,16 @@
 use crossterm::event::{KeyCode as K, KeyEvent};
 
-use super::{KeyAction as A, unmodified};
+use super::{KeyAction as A, only_ctrl, unmodified};
 
 pub(super) fn resolve(key: KeyEvent) -> Option<A> {
     match key.code {
         K::Esc if unmodified(key) => Some(A::Close),
         K::Up if unmodified(key) => Some(A::MoveUp),
         K::Down if unmodified(key) => Some(A::MoveDown),
+        K::PageUp if unmodified(key) => Some(A::PageUp),
+        K::PageDown if unmodified(key) => Some(A::PageDown),
+        K::Char('b') if only_ctrl(key) => Some(A::PageUp),
+        K::Char('f') if only_ctrl(key) => Some(A::PageDown),
         K::Enter if unmodified(key) => Some(A::Open),
         K::Char('r') if unmodified(key) => Some(A::Refresh),
         K::Char('s') if unmodified(key) => Some(A::ActivitiesStop),

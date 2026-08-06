@@ -368,6 +368,9 @@ pub enum TranscriptMoveDirection {
 pub struct LayoutCache {
     pub transcript_body: Rect,
     pub transcript_scrollbar: Rect,
+    /// Full terminal area of the most recent frame. Route and overlay key
+    /// handlers use it to compute height-aware page steps for their dialogs.
+    pub overlay_area: Rect,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -41,7 +41,12 @@ impl App {
         key: KeyEvent,
         dialog: &mut UserInputOverlay,
     ) -> bool {
-        match dialog.presentation.handle_key(key) {
+        let page_size = agena_tui::user_input::review_decision_page_size(
+            &dialog.presentation,
+            &self.i18n,
+            self.layout.overlay_area,
+        );
+        match dialog.presentation.handle_key(key, page_size) {
             agena_tui::user_input::UserInputEffect::Close => true,
             agena_tui::user_input::UserInputEffect::Submit => {
                 self.submit_user_input_overlay(dialog)

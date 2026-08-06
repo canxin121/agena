@@ -1,5 +1,10 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{Frame, layout::Rect, style::Style};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::Style,
+    text::{Line, Span, Text},
+};
 use serde_json::Value;
 
 use crate::{
@@ -11,6 +16,7 @@ use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::selection_picker::SelectionPickerItem;
 use agena_tui_components::{
     LineTextDialogSpec, SurfaceMode, TextDialogLine, render_editor_dialog, render_line_text_dialog,
+    wrapped_text_height_for_text,
 };
 
 const SKILL_STUDIO_PAGE_SIZE: usize = 100;
@@ -179,14 +185,16 @@ impl App {
                     return false;
                 }
                 KeyCode::PageUp => {
+                    let page_size = self.skill_studio_detail_page_size(dialog);
                     if let Some(detail) = dialog.detail.as_mut() {
-                        detail.scroll = detail.scroll.saturating_sub(12);
+                        detail.scroll = detail.scroll.saturating_sub(page_size as u16);
                     }
                     return false;
                 }
                 KeyCode::PageDown => {
+                    let page_size = self.skill_studio_detail_page_size(dialog);
                     if let Some(detail) = dialog.detail.as_mut() {
-                        detail.scroll = detail.scroll.saturating_add(12);
+                        detail.scroll = detail.scroll.saturating_add(page_size as u16);
                     }
                     return false;
                 }
@@ -402,6 +410,26 @@ impl App {
             })
     }
 
+    /// The number of lines one PageUp/PageDown moves the Skill detail body,
+    /// matching the dialog's actual body height instead of a hard-coded 12.
+    fn skill_studio_detail_page_size(&self, dialog: &SkillStudioOverlay) -> usize {
+        let Some(detail) = dialog.detail.as_ref() else {
+            return 12;
+        };
+        let content_width = SurfaceMode::Overlay.content_width(self.layout.overlay_area, 104);
+        let body = Text::from(
+            skill_studio_detail_lines(detail)
+                .iter()
+                .map(|line| Line::from(Span::styled(line.text.clone(), line.style)))
+                .collect::<Vec<_>>(),
+        );
+        usize::from(
+            wrapped_text_height_for_text(&body, content_width)
+                .clamp(8, 26)
+                .max(1),
+        )
+    }
+
     pub(crate) fn render_skill_studio(
         &self,
         frame: &mut Frame,
@@ -411,32 +439,7 @@ impl App {
         agena_tui::selection_picker::render_overlay(frame, area, &dialog.presentation, &self.i18n);
 
         if let Some(detail) = dialog.detail.as_ref() {
-            let access = if detail.item.editable {
-                "workspace-managed"
-            } else {
-                "read-only"
-            };
-            let mut lines = vec![
-                TextDialogLine::plain(format!("Name: {}", detail.item.name)),
-                TextDialogLine::plain(format!("Summary: {}", detail.item.summary)),
-                TextDialogLine::plain(format!("Source: {} · {access}", detail.item.source)),
-                TextDialogLine::plain(format!(
-                    "Aliases: {}",
-                    if detail.item.aliases.is_empty() {
-                        "none".to_owned()
-                    } else {
-                        detail.item.aliases.join(", ")
-                    }
-                )),
-                TextDialogLine::plain(String::new()),
-                TextDialogLine::plain("SKILL.md:"),
-            ];
-            lines.extend(
-                detail
-                    .document
-                    .lines()
-                    .map(|line| TextDialogLine::plain(line.to_owned())),
-            );
+            let lines = skill_studio_detail_lines(detail);
             let footer = if detail.item.editable {
                 ui_text::t(&self.i18n, "overlay-skill-studio-detail-footer-editable")
             } else {
@@ -481,6 +484,36 @@ impl App {
             );
         }
     }
+}
+
+fn skill_studio_detail_lines(detail: &SkillStudioDetail) -> Vec<TextDialogLine<'static>> {
+    let access = if detail.item.editable {
+        "workspace-managed"
+    } else {
+        "read-only"
+    };
+    let mut lines = vec![
+        TextDialogLine::plain(format!("Name: {}", detail.item.name)),
+        TextDialogLine::plain(format!("Summary: {}", detail.item.summary)),
+        TextDialogLine::plain(format!("Source: {} · {access}", detail.item.source)),
+        TextDialogLine::plain(format!(
+            "Aliases: {}",
+            if detail.item.aliases.is_empty() {
+                "none".to_owned()
+            } else {
+                detail.item.aliases.join(", ")
+            }
+        )),
+        TextDialogLine::plain(String::new()),
+        TextDialogLine::plain("SKILL.md:"),
+    ];
+    lines.extend(
+        detail
+            .document
+            .lines()
+            .map(|line| TextDialogLine::plain(line.to_owned())),
+    );
+    lines
 }
 
 #[derive(Debug)]

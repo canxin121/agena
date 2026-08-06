@@ -218,6 +218,114 @@ describe('canonical transcript projection', () => {
     })
     expect(operationParts.some((part) => part.content?.type === 'request')).toBe(false)
   })
+
+  test('operation parts headline with the composed operation title when present', () => {
+    const transcript: TranscriptSnapshot = {
+      session_id: 7,
+      seq_session: 4,
+      turns: [
+        {
+          id: '00000000-0000-0000-0000-000000000031',
+          session_id: 7,
+          sequence: 1,
+          input: [],
+          reply: {
+            id: '00000000-0000-0000-0000-000000000032',
+            turn_id: '00000000-0000-0000-0000-000000000031',
+            status: 'completed',
+            content: [
+              {
+                type: 'activity',
+                activity: {
+                  id: '00000000-0000-0000-0000-000000000033',
+                  owner: {
+                    type: 'assistant_reply',
+                    reply_id: '00000000-0000-0000-0000-000000000032',
+                  },
+                  actor: 'tool',
+                  state: 'completed',
+                  position: { index: 0 },
+                  revision_seq: 1,
+                  lifecycle: {
+                    started_at_ms: 1_800_000_000_001,
+                    finished_at_ms: 1_800_000_000_002,
+                  },
+                  payload: {
+                    activity_type: 'operation',
+                    call_id: 'call-fs-read',
+                    invocation: { name: 'fs.read', input: { path: 'README.md' } },
+                    title: 'Read README.md',
+                    summary: '42 lines',
+                  },
+                },
+              },
+            ],
+            revision_seq: 1,
+            created_at_ms: 1_800_000_000_001,
+          },
+          created_at_ms: 1_800_000_000_000,
+        },
+      ],
+    }
+
+    const messages = transcriptMessages(transcript)
+    const operationPart = messages[1]?.parts?.[0]
+    expect(operationPart?.name).toBe('Read README.md')
+  })
+
+  test('operation parts fall back to the invocation name when title is empty', () => {
+    const transcript: TranscriptSnapshot = {
+      session_id: 7,
+      seq_session: 5,
+      turns: [
+        {
+          id: '00000000-0000-0000-0000-000000000041',
+          session_id: 7,
+          sequence: 1,
+          input: [],
+          reply: {
+            id: '00000000-0000-0000-0000-000000000042',
+            turn_id: '00000000-0000-0000-0000-000000000041',
+            status: 'completed',
+            content: [
+              {
+                type: 'activity',
+                activity: {
+                  id: '00000000-0000-0000-0000-000000000043',
+                  owner: {
+                    type: 'assistant_reply',
+                    reply_id: '00000000-0000-0000-0000-000000000042',
+                  },
+                  actor: 'tool',
+                  state: 'completed',
+                  position: { index: 0 },
+                  revision_seq: 1,
+                  lifecycle: {
+                    started_at_ms: 1_800_000_000_001,
+                    finished_at_ms: 1_800_000_000_002,
+                  },
+                  payload: {
+                    activity_type: 'operation',
+                    call_id: 'call-repo-status',
+                    invocation: { name: 'repo.status', input: {} },
+                    title: '',
+                    summary: 'clean',
+                  },
+                },
+              },
+            ],
+            revision_seq: 1,
+            created_at_ms: 1_800_000_000_001,
+          },
+          created_at_ms: 1_800_000_000_000,
+        },
+      ],
+    }
+
+    const messages = transcriptMessages(transcript)
+    const operationPart = messages[1]?.parts?.[0]
+    expect(operationPart?.name).toBe('repo.status')
+  })
 })
 
 describe('Skill reference rendering', () => {

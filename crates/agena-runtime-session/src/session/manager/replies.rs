@@ -1397,7 +1397,7 @@ use super::{
     StreamingToolExecution, TimeRange, ToolCallCompleted, ToolError, ToolInvocation,
     ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title, build_message,
     build_request_part, completed_lifecycle, custom_payload_value, execution_control_to_app_error,
-    host_user_input_response, merge_system_prompts, mpsc, operation_blocks_from_tool_output,
+    host_user_input_response, mpsc, operation_blocks_from_tool_output,
     payload_tool_name_for_invocation, permission_action_key, permission_scope_label,
     persisted_rules_for_reply, resolve_pending_tool, run_abort_reason, text_result_blocks,
     tool_call_id_for, tool_name, user_input_execution,

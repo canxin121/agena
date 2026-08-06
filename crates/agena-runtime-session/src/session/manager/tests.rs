@@ -2673,7 +2673,7 @@ mod tests {
         .expect("build lazy-interrupted-tool operation message");
         message.parts[0].operation_id = Some("lazy-interrupted-tool-operation".to_owned());
         session.messages.push(message.clone());
-        session = manager
+        manager
             .persist_session_changes(
                 session,
                 vec![MessageCheckpoint::all(&message)],

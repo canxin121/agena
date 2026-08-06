@@ -803,7 +803,7 @@ status-part-user-input = 输入={$count}
 session-status-plan = 计划 {$slug}
 session-status-plan-with-steps = 计划 {$slug} · {$steps} 步
 session-status-thinking = {$value}
-session-status-speed = speed {$value}
+session-status-speed = {$value}
 inline-fact-provider = provider
 inline-fact-adapter = adapter
 inline-fact-model = model

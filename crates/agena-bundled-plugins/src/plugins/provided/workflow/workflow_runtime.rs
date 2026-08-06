@@ -194,6 +194,20 @@ impl WorkflowPlugin {
             previous.as_ref(),
         )?;
         self.save_active_plan(&plan).await?;
+        if self.config()?.plan.require_approval_on_create {
+            // Creating a plan must pass through user approval before the plan
+            // may become active. The review keeps the plan in planning when the
+            // user rejects or leaves feedback, so the agent can revise it.
+            return self
+                .review_plan_status_transition(
+                    plan,
+                    WorkflowPlanPhase::Active,
+                    input.autorun,
+                    None,
+                    PlanReviewKind::Creation,
+                )
+                .await;
+        }
         let payload = Self::plan_payload(&plan)?;
         Ok(ToolInvokeOutput::from_parts(
             "plan",
@@ -232,6 +246,7 @@ impl WorkflowPlugin {
                                 phase,
                                 input.autorun,
                                 completion_summary,
+                                PlanReviewKind::StatusChange,
                             )
                             .await;
                     }
@@ -1052,14 +1067,14 @@ impl WorkflowPlugin {
 use super::{
     AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
     CommandBeforeInput, EnterSnapshotCommandInput, ExitSnapshotCommandInput, HashMap, HashSet,
-    HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput, PlanSetInput,
-    PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskAccess, RunSubtaskModelSelection,
-    RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess, TaskToolInput, ToolApiHelpInput,
-    ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput, ToolBeforeInput, ToolDescriptor,
-    ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution, ToolPayloadOutput, ToolTag,
-    ToolTagRecord, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepStatus,
-    WorkflowPlugin, ask_user, compact_tool_summary, search_tools, snapshot_enter_permission_paths,
-    tags_summary,
+    HostEnterSnapshotRequest, HostExitSnapshotRequest, PathRequest, PlanGetInput, PlanReviewKind,
+    PlanSetInput, PlanUpdateInput, PlanUpdateTarget, PluginError, RunSubtaskAccess,
+    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, SdkResult, TaskAccess,
+    TaskToolInput, ToolApiHelpInput, ToolApiListInput, ToolApiSearchInput, ToolApiTagsInput,
+    ToolBeforeInput, ToolDescriptor, ToolExecutionView, ToolInvokeOutput, ToolPayloadExecution,
+    ToolPayloadOutput, ToolTag, ToolTagRecord, WorkflowPlan, WorkflowPlanPhase, WorkflowPlanStep,
+    WorkflowPlanStepStatus, WorkflowPlugin, ask_user, compact_tool_summary, search_tools,
+    snapshot_enter_permission_paths, tags_summary,
 };
 
 fn append_discovery_page_hint(

@@ -1,5 +1,5 @@
 use super::{AppError, StructuredObject, ToolInvocation};
-use agena_domain::{ToolApiCall, ToolApiFunction};
+use agena_domain::{ToolApiCall, ToolApiFunction, TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD};
 use agena_provider::ToolApiDefinition;
 
 pub(crate) fn tool_execution_title(name: Option<&str>) -> String {
@@ -86,8 +86,99 @@ pub(crate) fn parse_tool_invocation_lossy(
                 arguments_len = arguments_json.len(),
                 "tool arguments could not be parsed; falling back to empty input for tool-failure handling"
             );
+            if name == ToolApiFunction::Call.function_name()
+                && let Some(diagnostic) = tools_call_arguments_diagnostic(arguments_json)
+            {
+                return Ok(tool_invocation_with_gateway_diagnostic(diagnostic));
+            }
             Ok(placeholder_tool_invocation(Some(name), available_tools))
         }
+    }
+}
+
+/// Build a `tools_call` placeholder that carries a precise corrective message
+/// for the executor's gateway rejection. The message is stamped into the
+/// provider envelope's arguments under
+/// [`TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD`] so the executor can surface it
+/// instead of the generic missing-`tool` text.
+fn tool_invocation_with_gateway_diagnostic(message: String) -> ToolInvocation {
+    let arguments = StructuredObject::try_from(serde_json::json!({
+        TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD: message,
+    }))
+    .expect("single text field is a valid structured object");
+    ToolInvocation {
+        tool_api_call: Some(ToolApiCall {
+            function: ToolApiFunction::Call,
+            arguments,
+        }),
+        name: ToolApiFunction::Call.function_name().to_owned(),
+        plugin_name: None,
+        input: StructuredObject::default(),
+    }
+}
+
+/// Produce a precise corrective message for malformed `tools_call` arguments,
+/// or `None` when the executor's generic missing-`tool` rejection is the right
+/// feedback (a parseable object that simply lacks a usable `tool` target).
+fn tools_call_arguments_diagnostic(arguments_json: &str) -> Option<String> {
+    match parse_json_body::<serde_json::Value>(arguments_json) {
+        // The arguments parsed but were not the required object - for example
+        // a JSON-encoded string. The model must pass the `{ tool, input }`
+        // object itself, never a string that merely contains that JSON.
+        Ok(value) if !value.is_object() => {
+            let type_name = json_value_type_name(&value);
+            let raw = bounded_json_preview(&value);
+            if value.is_string() {
+                Some(format!(
+                    "tools_call arguments must be a JSON object, not a JSON {type_name}: pass \
+                     `{{\"tool\": \"<execution-tool-name>\", \"input\": {{...}}}}` directly and \
+                     never JSON-encode or stringify the arguments. Received: {raw}"
+                ))
+            } else {
+                Some(format!(
+                    "tools_call arguments must be a JSON object with a string `tool` field and an \
+                     `input` object; received a JSON {type_name} instead of an object: {raw}"
+                ))
+            }
+        }
+        // The arguments did not parse as JSON at all (invalid escapes such as
+        // `\|`, truncation, trailing content, ...). Surface the actual parse
+        // error instead of the generic missing-`tool` message.
+        Err(parse_error) => Some(format!(
+            "tools_call arguments did not parse as valid JSON ({parse_error}). Arguments must be \
+             one JSON object `{{\"tool\": \"<execution-tool-name>\", \"input\": {{...}}}}` with \
+             correct quoting and escapes - never a JSON-encoded string, no invalid escapes (such \
+             as \\|), no truncation. Received: {raw}",
+            raw = bounded_text_preview(arguments_json)
+        )),
+        // A parseable object falls through to the executor's generic
+        // missing-`tool` rejection.
+        Ok(_) => None,
+    }
+}
+
+fn json_value_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+fn bounded_json_preview(value: &serde_json::Value) -> String {
+    bounded_text_preview(&serde_json::to_string(value).unwrap_or_default())
+}
+
+fn bounded_text_preview(text: &str) -> String {
+    const MAX: usize = 160;
+    if text.chars().count() <= MAX {
+        text.to_owned()
+    } else {
+        let truncated: String = text.chars().take(MAX).collect();
+        format!("{truncated}...")
     }
 }
 
@@ -288,5 +379,72 @@ mod tests {
             let call = invocation.tool_api_call.expect("provider envelope");
             assert_eq!(call.function, ToolApiFunction::Call);
         }
+    }
+
+    #[test]
+    fn tools_call_with_string_arguments_carries_a_shape_diagnostic() {
+        let available = vec![tools_call()];
+        // The model passed a JSON-encoded string instead of the { tool, input }
+        // object itself.
+        let arguments_json = r#""{\"tool\":\"fs.read\",\"input\":{\"path\":\"README.md\"}}""#;
+        let invocation = parse_tool_invocation_lossy(13, "tools_call", arguments_json, &available)
+            .expect("string arguments must produce a diagnostic invocation");
+        assert_eq!(invocation.name, "tools_call");
+        let call = invocation.tool_api_call.expect("provider envelope");
+        let diagnostic = call
+            .arguments
+            .get(agena_domain::TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD)
+            .and_then(|value| value.as_text())
+            .expect("shape diagnostic must be stamped");
+        assert!(
+            diagnostic.contains("JSON string"),
+            "expected string-shape diagnostic, got: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("never JSON-encode"),
+            "expected stringify guidance, got: {diagnostic}"
+        );
+    }
+
+    #[test]
+    fn tools_call_with_invalid_json_arguments_carries_a_parse_diagnostic() {
+        let available = vec![tools_call()];
+        // Session 66 regression: `\|` is an invalid JSON escape inside the
+        // command string, so the whole arguments value fails to parse.
+        let arguments_json = r#"{"tool":"shell.run","input":{"command":"grep -rn 'a\|b' src"}}"#;
+        let invocation = parse_tool_invocation_lossy(13, "tools_call", arguments_json, &available)
+            .expect("malformed arguments must produce a diagnostic invocation");
+        assert_eq!(invocation.name, "tools_call");
+        let call = invocation.tool_api_call.expect("provider envelope");
+        let diagnostic = call
+            .arguments
+            .get(agena_domain::TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD)
+            .and_then(|value| value.as_text())
+            .expect("parse diagnostic must be stamped");
+        assert!(
+            diagnostic.contains("did not parse as valid JSON"),
+            "expected parse diagnostic, got: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("invalid escape"),
+            "expected the serde escape detail, got: {diagnostic}"
+        );
+    }
+
+    #[test]
+    fn tools_call_with_array_arguments_carries_a_shape_diagnostic() {
+        let available = vec![tools_call()];
+        let invocation = parse_tool_invocation_lossy(13, "tools_call", "[1,2,3]", &available)
+            .expect("non-object arguments must produce a diagnostic invocation");
+        let call = invocation.tool_api_call.expect("provider envelope");
+        let diagnostic = call
+            .arguments
+            .get(agena_domain::TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD)
+            .and_then(|value| value.as_text())
+            .expect("shape diagnostic must be stamped");
+        assert!(
+            diagnostic.contains("array"),
+            "expected array-shape diagnostic, got: {diagnostic}"
+        );
     }
 }

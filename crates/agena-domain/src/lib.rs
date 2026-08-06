@@ -184,7 +184,7 @@ pub use stream_error::StreamErrorEvent;
 pub use structured::{StructuredField, StructuredObject, StructuredValue};
 pub use thinking::{ReasoningEffort, ThinkingDisplay, ThinkingRequest};
 pub use time_range::TimeRange;
-pub use tool_api::ToolApiFunction;
+pub use tool_api::{TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD, ToolApiFunction};
 pub use tool_effects::{FilesystemAccess, FilesystemEffect, FilesystemEffects, NetworkEffect};
 pub use tool_invocation::{ToolApiCall, ToolInvocation};
 pub use tool_output::{ToolManagedOutput, ToolOutput};

@@ -920,20 +920,26 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
     ) -> String {
         let (completed_steps, total_steps, _, _) = Self::plan_progress_counts(plan);
-        if total_steps == 0 {
-            return format!(
-                "plan:{} autorun:{}",
-                Self::plan_phase_label(plan.phase),
-                if plan.autorun { "on" } else { "off" }
-            );
+        let mut parts = vec![Self::plan_phase_symbol(plan.phase).to_string()];
+        if total_steps > 0 {
+            parts.push(format!("{completed_steps}/{total_steps}"));
         }
-        format!(
-            "plan:{} steps:{}/{} autorun:{}",
-            Self::plan_phase_label(plan.phase),
-            completed_steps,
-            total_steps,
-            if plan.autorun { "on" } else { "off" }
-        )
+        if plan.autorun {
+            parts.push("↻".to_string());
+        }
+        parts.join(" ")
+    }
+
+    pub(in crate::plugins::provided::workflow) fn plan_phase_symbol(
+        phase: WorkflowPlanPhase,
+    ) -> &'static str {
+        match phase {
+            WorkflowPlanPhase::Planning => "⏳",
+            WorkflowPlanPhase::Active => "▶",
+            WorkflowPlanPhase::Blocked => "⚠",
+            WorkflowPlanPhase::Completed => "✓",
+            WorkflowPlanPhase::Cancelled => "✕",
+        }
     }
 
     pub(in crate::plugins::provided::workflow) fn next_actionable_step(
@@ -1342,13 +1348,22 @@ impl WorkflowPlugin {
         phase: WorkflowPlanPhase,
         requested_autorun: Option<bool>,
         completion_summary: Option<&str>,
+        review_kind: PlanReviewKind,
     ) -> String {
         let effective_autorun = requested_autorun.unwrap_or(plan.autorun);
-        let mut sections = vec![
-            "## Requested Status Change".to_string(),
-            String::new(),
-            Self::phase_review_transition_summary(phase, effective_autorun),
-        ];
+        let mut sections = match review_kind {
+            PlanReviewKind::Creation => vec![
+                "## Proposed Plan".to_string(),
+                String::new(),
+                "The agent prepared a new plan and is waiting for your approval before it becomes active."
+                    .to_string(),
+            ],
+            PlanReviewKind::StatusChange => vec![
+                "## Requested Status Change".to_string(),
+                String::new(),
+                Self::phase_review_transition_summary(phase, effective_autorun),
+            ],
+        };
         if phase == WorkflowPlanPhase::Completed
             && let Some(summary) = completion_summary
                 .map(str::trim)
@@ -1369,6 +1384,7 @@ impl WorkflowPlugin {
         phase: WorkflowPlanPhase,
         requested_autorun: Option<bool>,
         completion_summary: Option<&str>,
+        review_kind: PlanReviewKind,
     ) -> AskUserRequest {
         let requested_auto = requested_autorun.unwrap_or(plan.autorun);
         let mut options = if phase == WorkflowPlanPhase::Active {
@@ -1426,12 +1442,16 @@ impl WorkflowPlugin {
             },
         ]);
         AskUserRequest {
-            title: "Review Plan Status Change".to_string(),
+            title: match review_kind {
+                PlanReviewKind::Creation => "Approve New Plan".to_string(),
+                PlanReviewKind::StatusChange => "Review Plan Status Change".to_string(),
+            },
             body_markdown: Self::phase_review_body_markdown(
                 plan,
                 phase,
                 requested_autorun,
                 completion_summary,
+                review_kind,
             ),
             kind: "review".to_string(),
             submit_label: "Submit decision".to_string(),
@@ -1441,16 +1461,16 @@ impl WorkflowPlugin {
                 id: "decision".to_string(),
                 header: "Decision".to_string(),
                 question: format!(
-                    "Choose whether this plan should move to {}.",
+                    "Choose whether this plan should move to {}, or type feedback for the agent to revise the plan.",
                     Self::plan_phase_label(phase)
                 ),
                 options,
                 multiple: false,
-                allow_custom: false,
+                allow_custom: true,
             }],
             prompt: String::new(),
             options: Vec::new(),
-            allow_free_text: false,
+            allow_free_text: true,
         }
     }
 
@@ -1460,6 +1480,7 @@ impl WorkflowPlugin {
         phase: WorkflowPlanPhase,
         requested_autorun: Option<bool>,
         completion_summary: Option<&str>,
+        review_kind: PlanReviewKind,
     ) -> SdkResult<ToolInvokeOutput> {
         Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Planning, None)?;
         self.save_active_plan(&plan).await?;
@@ -1471,6 +1492,7 @@ impl WorkflowPlugin {
                 phase,
                 requested_autorun,
                 completion_summary,
+                review_kind,
             ))
             .await?;
 
@@ -1506,8 +1528,20 @@ impl WorkflowPlugin {
         }
         self.save_active_plan(&plan).await?;
 
-        let output_text =
-            Self::plan_output_text(format!("Plan review decision: {decision}.").as_str(), &plan);
+        let output_text = if Self::is_review_feedback_decision(&decision) {
+            Self::plan_output_text(
+                format!(
+                    "Plan review decision: {decision}. The user left feedback instead of picking an option; revise the plan to address it (for example with plan.set or plan.update) and propose it again."
+                )
+                .as_str(),
+                &plan,
+            )
+        } else {
+            Self::plan_output_text(
+                format!("Plan review decision: {decision}.").as_str(),
+                &plan,
+            )
+        };
         let payload = serde_json::json!({
             "plan": Self::plan_without_legacy_ids(&plan),
             "decision": decision,
@@ -1521,6 +1555,22 @@ impl WorkflowPlugin {
             Vec::new(),
         ))
     }
+
+    pub(in crate::plugins::provided::workflow) fn is_review_feedback_decision(
+        decision: &str,
+    ) -> bool {
+        !matches!(
+            decision,
+            PLAN_REVIEW_DECISION_APPROVE
+                | PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON
+                | PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF
+                | PLAN_REVIEW_DECISION_APPROVE_REQUESTED
+                | PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE
+                | PLAN_REVIEW_DECISION_KEEP_PLANNING
+                | PLAN_REVIEW_DECISION_REJECT
+                | PLAN_REVIEW_DECISION_CANCELLED
+        )
+    }
 }
 use super::{
     Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
@@ -1528,7 +1578,7 @@ use super::{
     HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
     HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
+    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE, PlanReviewKind,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,

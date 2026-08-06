@@ -928,6 +928,37 @@ pub(crate) fn unknown_field_from_error_detail(detail: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+pub(crate) fn missing_field_from_error_detail(detail: &str) -> Option<String> {
+    let prefix = "missing field `";
+    let start = detail.find(prefix)? + prefix.len();
+    let rest = &detail[start..];
+    let end = rest.find('`')?;
+    Some(rest[..end].to_string())
+}
+
+pub(crate) fn schema_field_description(schema: &Value, field: &str) -> Option<String> {
+    let object = schema.as_object()?;
+    if let Some(properties) = object.get("properties").and_then(Value::as_object)
+        && let Some(property_schema) = properties.get(field)
+        && let Some(description) = property_schema.get("description").and_then(Value::as_str)
+    {
+        return Some(description.to_string());
+    }
+    for key in ["oneOf", "anyOf", "allOf"] {
+        if let Some(Value::Array(items)) = object.get(key) {
+            for item in items {
+                if let Some(found) = schema_field_description(item, field) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    if let Some(items) = object.get("items") {
+        return schema_field_description(items, field);
+    }
+    None
+}
+
 pub(crate) fn schema_field_candidates(schema: &Value) -> Vec<String> {
     let mut candidates = Vec::new();
     collect_schema_field_candidates(schema, &mut candidates);

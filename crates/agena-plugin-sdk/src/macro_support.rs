@@ -15,7 +15,8 @@ mod validation_paths;
 
 use validation_paths::{
     compare_json_numbers, invalid_json_data_error, invalid_json_syntax_error, json_error_data,
-    reject_unknown_object_fields, schema_field_candidates, unknown_field_from_error_detail,
+    missing_field_from_error_detail, reject_unknown_object_fields, schema_field_candidates,
+    schema_field_description, unknown_field_from_error_detail,
 };
 
 pub use validation_paths::{
@@ -205,6 +206,15 @@ where
                     ));
                 }
             }
+            if let Some(field) = missing_field_from_error_detail(&inner.to_string())
+                && let Some(description) = schema_field_description(schema, &field)
+            {
+                let message = format!("missing required field `{field}`: {description}");
+                return Err(PluginError::invalid_params_with_data(
+                    message,
+                    json_error_data(inner, "value", Some(path)),
+                ));
+            }
             Err(invalid_json_data_error(inner, "value", Some(path)))
         }
     }
@@ -346,4 +356,66 @@ where
         serde_json::to_value(value).map_err(|err| PluginError::invalid_params(err.to_string()))?;
     normalize(&mut json);
     parse_typed_json_value(json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[allow(dead_code)]
+    #[derive(Debug, serde::Deserialize)]
+    struct EffectsInput {
+        command: String,
+        filesystem_effects: serde_json::Value,
+    }
+
+    fn effects_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "filesystem_effects": {
+                    "type": "object",
+                    "description": "Declared filesystem effects (read/write paths) or empty list"
+                }
+            },
+            "required": ["command", "filesystem_effects"],
+            "additionalProperties": false
+        })
+    }
+
+    #[test]
+    fn missing_field_error_names_field_with_description() {
+        let input = serde_json::json!({"command": "ls"});
+        let result: Result<EffectsInput> =
+            parse_typed_json_value_with_field_suggestions(input, &effects_schema(), "value");
+        let err = result.expect_err("missing field should fail");
+        let diagnostic = err.diagnostic_message();
+        assert!(
+            diagnostic.contains("missing required field `filesystem_effects`"),
+            "diagnostic: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("Declared filesystem effects"),
+            "diagnostic: {diagnostic}"
+        );
+        assert!(
+            err.failure.user.fallback.contains("filesystem_effects"),
+            "fallback: {}",
+            err.failure.user.fallback
+        );
+    }
+
+    #[test]
+    fn unknown_field_suggestion_still_precedes_missing_field() {
+        let input = serde_json::json!({"commnd": "ls", "filesystem_effects": {}});
+        let result: Result<EffectsInput> =
+            parse_typed_json_value_with_field_suggestions(input, &effects_schema(), "value");
+        let err = result.expect_err("unknown field should fail");
+        let diagnostic = err.diagnostic_message();
+        assert!(
+            diagnostic.contains("unknown") && diagnostic.contains("commnd"),
+            "diagnostic: {diagnostic}"
+        );
+    }
 }

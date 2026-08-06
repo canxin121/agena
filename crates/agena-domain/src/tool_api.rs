@@ -27,6 +27,15 @@ pub enum ToolApiFunction {
     PluginsTags,
 }
 
+/// Well-known field name inside [`ToolApiCall::arguments`] that carries a
+/// corrective shape diagnostic when a provider's `tools_call` arguments could
+/// not be interpreted as the required `{ tool, input }` object (for example
+/// the arguments were a JSON-encoded string, a non-object value, or malformed
+/// JSON). The session processor stamps this field onto the gateway invocation
+/// and the executor surfaces its text in the rejection instead of a generic
+/// missing-`tool` message.
+pub const TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD: &str = "__tools_call_arguments_diagnostic";
+
 impl ToolApiFunction {
     pub const ALL: [Self; 8] = [
         Self::List,

@@ -7510,6 +7510,11 @@ Shell command execution and background process tools.
     "network": {
       "default": [],
       "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
+      "examples": [
+        [
+          "<target>"
+        ]
+      ],
       "items": {
         "type": "string"
       },
@@ -7519,6 +7524,11 @@ Shell command execution and background process tools.
     "reads": {
       "default": [],
       "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "examples": [
+        [
+          "src/lib.rs"
+        ]
+      ],
       "items": {
         "type": "string"
       },
@@ -7549,6 +7559,11 @@ Shell command execution and background process tools.
     "writes": {
       "default": [],
       "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "examples": [
+        [
+          "target/out.txt"
+        ]
+      ],
       "items": {
         "type": "string"
       },

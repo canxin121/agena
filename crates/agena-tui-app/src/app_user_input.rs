@@ -87,11 +87,20 @@ impl App {
         dialog: &mut UserInputOverlay,
     ) -> std::result::Result<UserInputReply, String> {
         if let Some(question) = Self::user_input_review_question(&dialog.request) {
+            let custom_text = dialog.presentation.review().custom_text();
+            if !custom_text.is_empty() {
+                return Ok(UserInputReply {
+                    request_id: dialog.request.request_id.clone(),
+                    kind: UserInputReplyKind::Submit,
+                    answers: BTreeMap::from([(question.id.clone(), vec![custom_text])]),
+                    reason: None,
+                });
+            }
             let Some(option) = question
                 .options
                 .get(dialog.presentation.review().selected_option())
             else {
-                return Err(ui_text::t(i18n, "overlay-user-input-no-questions"));
+                return Err(ui_text::t(i18n, "overlay-user-input-review-feedback-empty"));
             };
             return Ok(UserInputReply {
                 request_id: dialog.request.request_id.clone(),

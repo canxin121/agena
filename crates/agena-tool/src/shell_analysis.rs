@@ -187,6 +187,10 @@ fn is_command_wrapper(token: &str) -> bool {
 }
 
 /// Detect a shell output-redirection operator outside quotes.
+///
+/// Redirects whose target is `/dev/null` (for example `2>/dev/null` or
+/// `&>/dev/null`) are treated as discards, not file writes: the standard
+/// pattern of silencing output must not require a declared filesystem effect.
 pub fn contains_write_redirection(command: &str) -> bool {
     let mut single_quote = false;
     let mut double_quote = false;
@@ -202,14 +206,86 @@ pub fn contains_write_redirection(command: &str) -> bool {
             '\\' if !single_quote => escape = true,
             '\'' if !double_quote => single_quote = !single_quote,
             '"' if !single_quote => double_quote = !double_quote,
-            '>' if !single_quote && !double_quote && chars.peek() != Some(&'&') => return true,
+            '>' if !single_quote && !double_quote && chars.peek() != Some(&'&') => {
+                if redirect_target_is_dev_null(&mut chars) {
+                    continue;
+                }
+                return true;
+            }
             _ => {}
         }
     }
     false
 }
 
-/// Detect a shell input-redirection operator outside quotes.
+/// Return the first output-redirection target that is not `/dev/null`, or
+/// `None` when every redirection discards to `/dev/null`.
+pub fn first_write_redirection_target(command: &str) -> Option<String> {
+    let mut single_quote = false;
+    let mut double_quote = false;
+    let mut escape = false;
+    let mut chars = command.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' if !single_quote => escape = true,
+            '\'' if !double_quote => single_quote = !single_quote,
+            '"' if !single_quote => double_quote = !double_quote,
+            '>' if !single_quote && !double_quote && chars.peek() != Some(&'&') => {
+                skip_redirect_whitespace(&mut chars);
+                if chars.peek() == Some(&'>') {
+                    chars.next();
+                    skip_redirect_whitespace(&mut chars);
+                }
+                let target = redirect_target(&mut chars);
+                if !target.is_empty() && target != "/dev/null" {
+                    return Some(target);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Consume a redirection target (`2>`, `>`, `>>`, `&>`, `2>>` handled by the
+/// caller's `>` matching) and return whether the target is `/dev/null`.
+fn redirect_target_is_dev_null(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
+    skip_redirect_whitespace(chars);
+    if chars.peek() == Some(&'>') {
+        // `>>` append redirect; keep scanning past the second `>`.
+        chars.next();
+        skip_redirect_whitespace(chars);
+    }
+    redirect_target(chars) == "/dev/null"
+}
+
+fn skip_redirect_whitespace(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    while chars.peek().is_some_and(|ch| ch.is_whitespace()) {
+        chars.next();
+    }
+}
+
+/// Collect the redirect destination after an already-consumed `>` (or `>>`).
+fn redirect_target(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
+    let mut target = String::new();
+    while let Some(&ch) = chars.peek() {
+        if ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '<' | '>') {
+            break;
+        }
+        target.push(ch);
+        chars.next();
+    }
+    target
+}
+
+/// Detect a shell input-redirection operator outside quotes. Reading from
+/// `/dev/null` is treated as no file read: `< /dev/null` must not require a
+/// declared filesystem effect.
 pub fn contains_input_redirection(command: &str) -> bool {
     let mut single_quote = false;
     let mut double_quote = false;
@@ -228,9 +304,12 @@ pub fn contains_input_redirection(command: &str) -> bool {
             '<' if !single_quote && !double_quote => {
                 if chars.peek() == Some(&'<') {
                     chars.next();
-                } else {
-                    return true;
+                    continue;
                 }
+                if redirect_target_is_dev_null(&mut chars) {
+                    continue;
+                }
+                return true;
             }
             _ => {}
         }
@@ -450,7 +529,12 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
         let arg = args[index].as_str();
         match arg {
             "-o" | "--output" if args.get(index + 1).is_none_or(|value| value != "-") => {
-                return Some("invokes curl output option that writes a local file".to_string());
+                return Some(match args.get(index + 1) {
+                    Some(target) if target != "-" => format!(
+                        "invokes curl output option that writes a local file '{target}'"
+                    ),
+                    _ => "invokes curl output option that writes a local file".to_string(),
+                });
             }
             "-O" | "--remote-name" => {
                 return Some(
@@ -459,18 +543,34 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                 );
             }
             "-T" | "--upload-file" => {
-                return Some("invokes curl upload option that reads a local file".to_string());
+                return Some(match args.get(index + 1) {
+                    Some(target) => {
+                        format!("invokes curl upload option that reads a local file '{target}'")
+                    }
+                    None => "invokes curl upload option that reads a local file".to_string(),
+                });
             }
             "-K" | "--config" => {
-                return Some("invokes curl config option that reads a local file".to_string());
+                return Some(match args.get(index + 1) {
+                    Some(target) => format!("invokes curl config option that reads a local file '{target}'"),
+                    None => "invokes curl config option that reads a local file".to_string(),
+                });
             }
             "-c" | "--cookie-jar" => {
-                return Some("invokes curl cookie-jar option that writes a local file".to_string());
+                return Some(match args.get(index + 1) {
+                    Some(target) => format!(
+                        "invokes curl cookie-jar option that writes a local file '{target}'"
+                    ),
+                    None => "invokes curl cookie-jar option that writes a local file".to_string(),
+                });
             }
             "--cacert" | "--cert" | "--key" => {
-                return Some(format!(
-                    "invokes curl option '{arg}' that reads a local file"
-                ));
+                return Some(match args.get(index + 1) {
+                    Some(target) => format!(
+                        "invokes curl option '{arg}' that reads a local file '{target}'"
+                    ),
+                    None => format!("invokes curl option '{arg}' that reads a local file"),
+                });
             }
             "-b" | "--cookie"
                 if args
@@ -499,25 +599,36 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                 if (arg.starts_with("-o") && arg.len() > 2 && &arg[2..] != "-")
                     || (arg.starts_with("--output=") && arg != "--output=-")
                 {
-                    return Some("invokes curl output option that writes a local file".to_string());
+                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    return Some(format!(
+                        "invokes curl output option that writes a local file '{target}'"
+                    ));
                 }
                 if (arg.starts_with("-T") && arg.len() > 2) || arg.starts_with("--upload-file=") {
-                    return Some("invokes curl upload option that reads a local file".to_string());
+                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    return Some(format!(
+                        "invokes curl upload option that reads a local file '{target}'"
+                    ));
                 }
                 if (arg.starts_with("-K") && arg.len() > 2) || arg.starts_with("--config=") {
-                    return Some("invokes curl config option that reads a local file".to_string());
+                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    return Some(format!(
+                        "invokes curl config option that reads a local file '{target}'"
+                    ));
                 }
                 if (arg.starts_with("-c") && arg.len() > 2) || arg.starts_with("--cookie-jar=") {
-                    return Some(
-                        "invokes curl cookie-jar option that writes a local file".to_string(),
-                    );
+                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    return Some(format!(
+                        "invokes curl cookie-jar option that writes a local file '{target}'"
+                    ));
                 }
                 if arg.starts_with("--cacert=")
                     || arg.starts_with("--cert=")
                     || arg.starts_with("--key=")
                 {
+                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or("");
                     return Some(format!(
-                        "invokes curl option '{arg}' that reads a local file"
+                        "invokes curl option '{arg}' that reads a local file '{target}'"
                     ));
                 }
                 if (arg.starts_with("-b")
@@ -560,8 +671,13 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
 
 fn classify_command(command: &str, tokens: &[String]) -> CommandClassification {
     if contains_write_redirection(command) {
+        let target = first_write_redirection_target(command);
+        let reason = match target {
+            Some(path) => format!("uses shell output redirection writing '{path}'"),
+            None => "uses shell output redirection".to_string(),
+        };
         return CommandClassification::Mutating {
-            reason: "uses shell output redirection".to_string(),
+            reason,
         };
     }
     let segments = command_segments(tokens);
@@ -815,5 +931,51 @@ mod tests {
         assert!(filesystem_effects_required_reason("cargo build").is_none());
         assert!(filesystem_effects_required_reason("ls -la").is_none());
         assert!(filesystem_effects_required_reason("git status").is_none());
+    }
+
+    #[test]
+    fn dev_null_redirects_do_not_require_declared_effects() {
+        assert!(contains_write_redirection("cat a.txt > /tmp/out"));
+        assert!(!contains_write_redirection("cmd 2>/dev/null"));
+        assert!(!contains_write_redirection("cmd > /dev/null"));
+        assert!(!contains_write_redirection("cmd &>/dev/null"));
+        assert!(!contains_write_redirection("cmd >>/dev/null 2>&1"));
+        assert!(contains_input_redirection("cat < /etc/passwd"));
+        assert!(!contains_input_redirection("cat < /dev/null"));
+
+        assert!(filesystem_effects_required_reason(
+            "which lldb && lldb --version 2>/dev/null | head -2"
+        )
+        .is_none());
+        assert!(filesystem_effects_required_reason(
+            "pkill -f lldb 2>/dev/null; pkill -f debugserver 2>/dev/null; echo done"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn required_reason_names_the_detected_path() {
+        let reason = filesystem_effects_required_reason("cat a.txt > /tmp/out")
+            .expect("redirect to real file requires declaration");
+        assert!(
+            reason.contains("/tmp/out"),
+            "reason should name the redirect target: {reason}"
+        );
+
+        let reason = filesystem_effects_required_reason("curl -o /tmp/out https://example.com")
+            .expect("curl output requires declaration");
+        assert!(
+            reason.contains("/tmp/out"),
+            "reason should name the curl output target: {reason}"
+        );
+
+        let reason = filesystem_effects_required_reason(
+            "curl --cookie-jar /tmp/cookies.txt https://example.com",
+        )
+        .expect("curl cookie jar requires declaration");
+        assert!(
+            reason.contains("/tmp/cookies.txt"),
+            "reason should name the cookie jar: {reason}"
+        );
     }
 }

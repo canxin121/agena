@@ -80,10 +80,20 @@ impl ToolExecutor {
             .is_some_and(|call| call.function == ToolApiFunction::Call)
             && invocation.name == ToolApiFunction::Call.function_name()
         {
+            // Prefer a precise shape diagnostic stamped by the session
+            // processor (string-encoded or malformed arguments) over the
+            // generic missing-`tool` message.
+            let diagnostic = invocation
+                .tool_api_call
+                .as_ref()
+                .and_then(|call| call.arguments.get(TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD))
+                .and_then(StructuredValue::as_text);
             return Err(ToolError::invalid_field(
                 "tool",
                 agena_failure::FieldIssueKind::Required,
-                "tools_call requires a string `tool` field naming an execution tool",
+                diagnostic.unwrap_or(
+                    "tools_call requires a string `tool` field naming an execution tool",
+                ),
             ));
         }
         let model_tool_name = invocation_name(invocation).to_owned();
@@ -477,7 +487,10 @@ impl ToolExecutor {
         )
     }
 }
-use agena_domain::{PluginInvocation, StructuredObject, ToolApiFunction};
+use agena_domain::{
+    PluginInvocation, StructuredObject, StructuredValue, ToolApiFunction,
+    TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD,
+};
 
 use super::{
     PluginToolBeforeInput, PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation,

@@ -104,6 +104,7 @@ impl Default for ToolTagsConfig {
 pub(crate) struct WorkflowPlanConfig {
     pub(crate) default_autorun: bool,
     pub(crate) allow_direct_approval: bool,
+    pub(crate) require_approval_on_create: bool,
 }
 
 impl Default for WorkflowPlanConfig {
@@ -111,6 +112,7 @@ impl Default for WorkflowPlanConfig {
         Self {
             default_autorun: true,
             allow_direct_approval: true,
+            require_approval_on_create: true,
         }
     }
 }
@@ -216,6 +218,11 @@ pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
             "Allow Direct Approval",
             "When enabled, plan.update may move a planning or cancelled plan directly into active, blocked, or completed. Disable this to make plan.update automatically request review before those transitions.",
         ),
+        (
+            "/properties/require_approval_on_create",
+            "Require Approval on Create",
+            "When enabled, plan.set asks the user to approve the new plan before it can become active. Disable to save new plans silently in planning.",
+        ),
     ] {
         crate::tool::definition::set_schema_metadata(
             &mut schema,
@@ -270,6 +277,17 @@ enum PlanUpdateTarget {
         step_index: usize,
         check_index: usize,
     },
+}
+
+/// What kind of review a plan approval request is for. Plan creation and
+/// later phase transitions present slightly different titles and bodies, but
+/// share the same decision flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlanReviewKind {
+    /// The agent just created/replaced the plan and asks for approval to start.
+    Creation,
+    /// The plan already exists and a status change (active/blocked/completed/...) is being reviewed.
+    StatusChange,
 }
 
 pub(crate) struct WorkflowPlugin {
@@ -899,6 +917,126 @@ mod tests {
                 check_index: 2
             }
         ));
+    }
+
+    #[test]
+    fn plan_config_requires_approval_on_create_by_default() {
+        use super::WorkflowPlanConfig;
+
+        assert!(WorkflowPlanConfig::default().require_approval_on_create);
+    }
+
+    #[test]
+    fn plan_statusline_content_uses_compact_symbols() {
+        let plan = sample_plan();
+        assert_eq!(WorkflowPlugin::plan_statusline_content(&plan), "⏳ 0/2");
+
+        let mut active = sample_plan();
+        active.phase = WorkflowPlanPhase::Active;
+        active.autorun = true;
+        assert_eq!(WorkflowPlugin::plan_statusline_content(&active), "▶ 0/2 ↻");
+
+        let mut blocked = sample_plan();
+        blocked.phase = WorkflowPlanPhase::Blocked;
+        assert_eq!(WorkflowPlugin::plan_statusline_content(&blocked), "⚠ 0/2");
+
+        let mut completed = sample_plan();
+        completed.phase = WorkflowPlanPhase::Completed;
+        completed.steps[0].status = WorkflowPlanStepStatus::Completed;
+        assert_eq!(WorkflowPlugin::plan_statusline_content(&completed), "✓ 1/2");
+
+        let mut cancelled = sample_plan();
+        cancelled.phase = WorkflowPlanPhase::Cancelled;
+        assert_eq!(WorkflowPlugin::plan_statusline_content(&cancelled), "✕ 0/2");
+
+        let mut empty = sample_plan();
+        empty.steps.clear();
+        assert_eq!(WorkflowPlugin::plan_statusline_content(&empty), "⏳");
+
+        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Planning), "⏳");
+        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Active), "▶");
+        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Blocked), "⚠");
+        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Completed), "✓");
+        assert_eq!(WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Cancelled), "✕");
+    }
+
+    #[test]
+    fn creation_review_request_allows_free_text_feedback() {
+        use super::PlanReviewKind;
+
+        let plan = sample_plan();
+        let request = WorkflowPlugin::phase_review_request(
+            &plan,
+            WorkflowPlanPhase::Active,
+            None,
+            None,
+            PlanReviewKind::Creation,
+        );
+        assert_eq!(request.title, "Approve New Plan");
+        assert!(request.allow_free_text);
+        assert!(request.body_markdown.contains("Proposed Plan"));
+        assert!(request.body_markdown.contains("waiting for your approval"));
+        let question = request.questions.first().expect("one decision question");
+        assert_eq!(question.id, "decision");
+        assert!(question.allow_custom);
+    }
+
+    #[test]
+    fn status_change_review_request_keeps_previous_title() {
+        use super::PlanReviewKind;
+
+        let plan = sample_plan();
+        let request = WorkflowPlugin::phase_review_request(
+            &plan,
+            WorkflowPlanPhase::Active,
+            None,
+            None,
+            PlanReviewKind::StatusChange,
+        );
+        assert_eq!(request.title, "Review Plan Status Change");
+    }
+
+    #[test]
+    fn review_feedback_decision_classifies_known_labels_and_free_text() {
+        for label in [
+            super::PLAN_REVIEW_DECISION_APPROVE,
+            super::PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON,
+            super::PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
+            super::PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
+            super::PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE,
+            super::PLAN_REVIEW_DECISION_KEEP_PLANNING,
+            super::PLAN_REVIEW_DECISION_REJECT,
+            super::PLAN_REVIEW_DECISION_CANCELLED,
+        ] {
+            assert!(
+                !WorkflowPlugin::is_review_feedback_decision(label),
+                "known label must not be treated as feedback: {label}"
+            );
+        }
+        assert!(WorkflowPlugin::is_review_feedback_decision(
+            "Please split step 1 into two smaller steps"
+        ));
+    }
+
+    #[test]
+    fn review_decision_extracts_free_text_answer() {
+        use std::collections::BTreeMap;
+
+        use agena_plugin_host::sdk::host_api::AskUserResponse;
+
+        let response = AskUserResponse {
+            reply: String::new(),
+            cancelled: false,
+            timed_out: false,
+            answers: BTreeMap::from([(
+                "decision".to_string(),
+                vec!["Make the second step less vague".to_string()],
+            )]),
+        };
+        assert_eq!(
+            WorkflowPlugin::review_decision(&response).as_deref(),
+            Some("Make the second step less vague")
+        );
     }
 
     #[test]

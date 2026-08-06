@@ -54,6 +54,9 @@ pub(crate) struct SurfaceLayout {
     pub(crate) header_title: Rect,
     pub(crate) header_subtitle: Rect,
     pub(crate) composer_status: Rect,
+    /// Outer rect of the composer border box; used to project the centered
+    /// status chip back to its exact cells for copy and highlight.
+    pub(crate) composer_outer: Rect,
     pub(crate) composer_editor: Rect,
 }
 
@@ -304,6 +307,7 @@ mod tests {
             header_subtitle: Rect::new(1, 2, 60, 1),
             composer_status: Rect::new(1, 20, 60, 1),
             composer_editor: Rect::new(2, 22, 58, 3),
+            ..Default::default()
         };
         assert_eq!(
             layout.kind_at(10, 1),

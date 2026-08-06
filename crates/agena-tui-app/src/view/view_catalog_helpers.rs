@@ -1,12 +1,5 @@
 use agena_tui::model_catalog::{ModelCatalogDetail, ModelCatalogItem};
 
-/// Composer items are represented only by their atomic inline placeholders.
-/// A separate summary row duplicates attachments (and makes the input look
-/// like it contains two copies of the same file), so no item gets a chip.
-pub(crate) fn composer_item_needs_summary_chip(_: &ComposerItem) -> bool {
-    false
-}
-
 pub(crate) fn model_catalog_list_subtitle(i18n: &I18n, entry: &CatalogModelResource) -> String {
     let mut parts = Vec::new();
     if let Some(display_name) = entry
@@ -586,7 +579,7 @@ pub(crate) fn model_catalog_source_summary(entry: &CatalogModelResource) -> Stri
         .unwrap_or_else(|| format!("{:?}", entry.source).to_ascii_lowercase())
 }
 use super::{
-    CatalogModelResource, ComposerItem, DetailTextLine, I18n, Style, format_key_value_segment,
+    CatalogModelResource, DetailTextLine, I18n, Style, format_key_value_segment,
     join_inline_segments, sanitize_display_text,
 };
 use crate::ui_text;

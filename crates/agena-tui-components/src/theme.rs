@@ -333,6 +333,16 @@ pub fn modal_border_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// Style for a small status chip embedded in a panel border: muted text on an
+/// elevated surface. The background is what lets the chip cover the border
+/// line behind it instead of reading as a blank gap.
+pub fn status_chip_style() -> Style {
+    let palette = active_palette();
+    let background = rgb_color(palette.modal_bg);
+    let foreground = readable_text_color(palette.muted, background);
+    Style::default().fg(foreground).bg(palette.modal_bg)
+}
+
 pub fn parse_color(value: &str) -> Option<Color> {
     let value = value.trim();
     match value {

@@ -358,34 +358,65 @@ impl App {
     }
 
     pub(crate) fn render_composer(&mut self, frame: &mut Frame, area: Rect) {
-        let status_rows = u16::from(!self.composer_status_parts().is_empty());
-        let item_rows = u16::from(self.has_composer_item_summary_row());
-        let layout = layout_composer_surface(area, status_rows, item_rows, 0);
-        self.surface_layout.composer_status = layout
+        // Status chips live on the border rows: the main status is centered in
+        // the top border, the top-right corner holds history/approval, the
+        // bottom-left corner holds background activity, and the bottom-right
+        // corner holds plan progress. The layout gets no dedicated row.
+        let layout = layout_composer_surface(area);
+        let texts = self.composer_chip_texts();
+        let placements = composer_chip_placements(layout.outer, &texts);
+        self.surface_layout.composer_status = placements
             .status
-            .map(|status_area| inset_rect(status_area, 1, 0))
+            .as_ref()
+            .map(|placement| Rect {
+                x: placement.column,
+                y: layout.outer.y,
+                width: placement.chip_width,
+                height: 1,
+            })
             .unwrap_or_default();
+        self.surface_layout.composer_outer = layout.outer;
         self.surface_layout.composer_editor = Rect {
             x: layout.editor.x.saturating_add(1),
             y: layout.editor.y,
             width: layout.editor.width.saturating_sub(2).max(1),
             height: layout.editor.height,
         };
+        let chip = |placement: &agena_tui_components::ComposerStatusPlacement| {
+            Line::from(Span::styled(
+                placement.text.clone(),
+                agena_tui_components::theme::status_chip_style(),
+            ))
+        };
+        let status = placements.status.as_ref().map(chip);
+        let status_top_right = placements.top_right.as_ref().map(chip);
+        let status_bottom_left = placements.bottom_left.as_ref().map(chip);
+        let status_bottom_right = placements.bottom_right.as_ref().map(chip);
 
+        // The border and its chips are drawn by the surface renderer even
+        // when the composer is too small to host editor content, so render
+        // the empty surface first and bail out.
         if layout.inner.width == 0 || layout.inner.height == 0 {
-            if let Some(status_area) = layout.status {
-                self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
-                self.render_surface_selection_highlight(
-                    frame,
-                    crate::SurfaceSelectionKind::ComposerStatus,
-                );
-            }
+            render_composer_editor_surface(
+                frame,
+                layout,
+                &ComposerEditorSurfaceSpec {
+                    editor_lines: Text::default(),
+                    placeholder: None,
+                    cursor: None,
+                    status,
+                    status_top_right,
+                    status_bottom_left,
+                    status_bottom_right,
+                },
+            );
+            self.render_surface_selection_highlight(
+                frame,
+                crate::SurfaceSelectionKind::ComposerStatus,
+            );
             return;
         }
 
-        if let Some(item_row) = layout.items {
-            self.render_composer_items_row(frame, item_row);
-        }
         let editor_view = self.composer.render_wrapped_view(
             layout.editor.width.saturating_sub(2).max(1),
             layout.editor.height.max(1),
@@ -412,12 +443,13 @@ impl App {
                 editor_lines: Text::from(editor_view.lines.clone()),
                 placeholder,
                 cursor,
+                status,
+                status_top_right,
+                status_bottom_left,
+                status_bottom_right,
             },
         );
 
-        if let Some(status_area) = layout.status {
-            self.render_composer_status_row(frame, inset_rect(status_area, 1, 0));
-        }
         self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::ComposerEditor);
         self.render_surface_selection_highlight(frame, crate::SurfaceSelectionKind::ComposerStatus);
         if let Some(search) = self.prompt_history_search.as_ref() {
@@ -431,38 +463,6 @@ impl App {
         if let Some(state) = self.file_mention_suggestions.as_ref() {
             agena_tui::file_mentions::render_overlay(frame, frame.area(), state, &self.i18n);
         }
-    }
-
-    pub(crate) fn render_composer_items_row(&self, frame: &mut Frame, area: Rect) {
-        if area.width == 0 || area.height == 0 {
-            return;
-        }
-
-        let mut spans = Vec::new();
-        let mut visible_items = 0;
-        for (index, item) in self.composer_items.iter().enumerate() {
-            if !composer_item_needs_summary_chip(item) {
-                continue;
-            }
-            if visible_items > 0 {
-                spans.push(Span::styled(
-                    "  ",
-                    Style::default().fg(agena_tui_components::theme::muted_color()),
-                ));
-            }
-            let style = if self.composer_item_selection.is_selected(index) {
-                selection_highlight_style().add_modifier(Modifier::BOLD)
-            } else {
-                self.composer_item_style(item)
-            };
-            spans.push(Span::styled(format!("[{}]", item.short_label()), style));
-            visible_items += 1;
-        }
-
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
-            area,
-        );
     }
 
     pub(crate) fn render_transcript_footer_row(&self, frame: &mut Frame, area: Rect) {
@@ -557,33 +557,6 @@ impl App {
         }
     }
 
-    pub(crate) fn composer_item_style(&self, item: &ComposerItem) -> Style {
-        match item.payload() {
-            agena_domain::ActivityPayload::Resource(_) => Style::default()
-                .fg(agena_tui_components::theme::info_color())
-                .add_modifier(Modifier::BOLD),
-            agena_domain::ActivityPayload::TextArtifact(_) => Style::default()
-                .fg(agena_tui_components::theme::warning_color())
-                .add_modifier(Modifier::BOLD),
-            agena_domain::ActivityPayload::SkillReference(_) => Style::default()
-                .fg(agena_tui_components::theme::accent_color())
-                .add_modifier(Modifier::BOLD),
-            _ => Style::default()
-                .fg(agena_tui_components::theme::accent_color())
-                .add_modifier(Modifier::BOLD),
-        }
-    }
-
-    /// Large pastes are already represented by an inline, atomic editor
-    /// element. Rendering another chip above the editor repeats the same
-    /// character count on a second line, so reserve the summary row for file
-    /// attachments only.
-    pub(crate) fn has_composer_item_summary_row(&self) -> bool {
-        self.composer_items
-            .iter()
-            .any(composer_item_needs_summary_chip)
-    }
-
     pub(crate) fn notice_style(&self, severity: NoticeSeverity) -> Style {
         match severity {
             NoticeSeverity::Success => {
@@ -599,28 +572,8 @@ impl App {
         }
     }
 
-    pub(crate) fn render_composer_status_row(&self, frame: &mut Frame, area: Rect) {
-        let text = self.composer_status_parts().join("  |  ");
-        if text.trim().is_empty() {
-            return;
-        }
-        render_wrapped_text(
-            frame,
-            area,
-            &WrappedTextSpec {
-                text: sanitize_display_text(text.as_str()).into(),
-                style: Style::default().fg(agena_tui_components::theme::muted_color()),
-            },
-        );
-    }
-
     pub(crate) fn composer_status_parts(&self) -> Vec<String> {
         let mut parts = Vec::new();
-        if let Some((count, _)) = self.background_activity_summary
-            && count > 0
-        {
-            parts.push(format!("● {count} background"));
-        }
         parts.extend(self.current_session_status_parts());
         if self.transcript.state_loading {
             parts.push(ui_text::t(&self.i18n, "transcript-header-loading"));
@@ -647,28 +600,7 @@ impl App {
                 ),
             ));
         }
-        if let Some(search) = self.prompt_history_search.as_ref() {
-            let query = search.input.text().trim();
-            let selection = min(search.selected + 1, search.row_count().max(1));
-            parts.push(if query.is_empty() {
-                self.i18n.text_args(
-                    "composer-status-history",
-                    &agena_tui::fl_args!(
-                        "current" => selection as i64,
-                        "total" => search.result_count() as i64,
-                    ),
-                )
-            } else {
-                self.i18n.text_args(
-                    "composer-status-history-query",
-                    &agena_tui::fl_args!(
-                        "current" => selection as i64,
-                        "total" => search.result_count() as i64,
-                        "query" => query,
-                    ),
-                )
-            });
-        } else if let Some(state) = self.file_mention_suggestions.as_ref() {
+        if let Some(state) = self.file_mention_suggestions.as_ref() {
             parts.push(self.i18n.text_args(
                 "composer-status-mention",
                 &agena_tui::fl_args!("query" => ui_text::prefixed_query("@", state.input.text())),
@@ -680,21 +612,12 @@ impl App {
             ));
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
-            let (permission_count, user_input_count) =
-                pending_interactive_counts_for_execution(execution);
+            let (_, user_input_count) = pending_interactive_counts_for_execution(execution);
             if user_input_count > 0 {
                 parts.push(self.i18n.text_args(
                     "composer-status-pending-user-input",
                     &agena_tui::fl_args!(
                         "count" => user_input_count as i64,
-                    ),
-                ));
-            }
-            if permission_count > 0 {
-                parts.push(self.i18n.text_args(
-                    "composer-status-pending-approval",
-                    &agena_tui::fl_args!(
-                        "count" => permission_count as i64,
                     ),
                 ));
             }
@@ -706,6 +629,81 @@ impl App {
             ));
         }
         parts
+    }
+
+    /// Text for the composer's bottom-left chip: background-activity count.
+    fn composer_background_activity_part(&self) -> Option<String> {
+        self.background_activity_summary
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, _)| format!("● {count} background"))
+    }
+
+    /// Text for the composer's top-right chip while history search is active.
+    fn composer_history_search_part(&self) -> Option<String> {
+        let search = self.prompt_history_search.as_ref()?;
+        let query = search.input.text().trim();
+        let selection = min(search.selected + 1, search.row_count().max(1));
+        Some(if query.is_empty() {
+            self.i18n.text_args(
+                "composer-status-history",
+                &agena_tui::fl_args!(
+                    "current" => selection as i64,
+                    "total" => search.result_count() as i64,
+                ),
+            )
+        } else {
+            self.i18n.text_args(
+                "composer-status-history-query",
+                &agena_tui::fl_args!(
+                    "current" => selection as i64,
+                    "total" => search.result_count() as i64,
+                    "query" => query,
+                ),
+            )
+        })
+    }
+
+    /// Text for the composer's top-right chip while executions await approval.
+    fn composer_pending_approval_part(&self) -> Option<String> {
+        let execution = self.transcript.execution.as_ref()?;
+        let (permission_count, _) = pending_interactive_counts_for_execution(execution);
+        (permission_count > 0).then(|| {
+            self.i18n.text_args(
+                "composer-status-pending-approval",
+                &agena_tui::fl_args!("count" => permission_count as i64),
+            )
+        })
+    }
+
+    /// Text for the composer's bottom-right chip: plan progress contributed
+    /// by the planning plugin's statusline segment.
+    fn composer_plan_progress_part(&self) -> Option<String> {
+        self.backend
+            .plugin_statusline_segments()
+            .into_iter()
+            .find(|segment| segment.segment_id == "plan")
+            .map(|segment| segment.content.trim().to_string())
+            .filter(|content| !content.is_empty())
+    }
+
+    /// The four status-chip texts for the current frame. The centered top
+    /// border chip keeps the remaining session status parts; the corner chips
+    /// carry background activity (bottom-left), history search or pending
+    /// approval (top-right), and plan progress (bottom-right).
+    fn composer_chip_texts(&self) -> ComposerChipTexts {
+        ComposerChipTexts {
+            status: sanitize_display_text(self.composer_status_parts().join("  |  ").as_str()),
+            top_right: self
+                .composer_history_search_part()
+                .or_else(|| self.composer_pending_approval_part())
+                .map(|text| sanitize_display_text(text.as_str())),
+            bottom_left: self
+                .composer_background_activity_part()
+                .map(|text| sanitize_display_text(text.as_str())),
+            bottom_right: self
+                .composer_plan_progress_part()
+                .map(|text| sanitize_display_text(text.as_str())),
+        }
     }
 
     /// Project the currently displayed text of a selectable chat surface into
@@ -739,22 +737,17 @@ impl App {
                 }]
             }
             crate::SurfaceSelectionKind::ComposerStatus => {
-                let area = layout.composer_status;
-                let text =
-                    sanitize_display_text(self.composer_status_parts().join("  |  ").as_str());
-                let spec = WrappedTextSpec {
-                    text: text.into(),
-                    style: Style::default(),
-                };
-                build_wrapped_text_lines(&spec, area.width)
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, line)| crate::SurfaceDisplayLine {
-                        text: line_plain_text(&line),
-                        row: area.y.saturating_add(index as u16),
-                        column: area.x,
+                let texts = self.composer_chip_texts();
+                composer_chip_placements(layout.composer_outer, &texts)
+                    .status
+                    .map(|placement| {
+                        vec![crate::SurfaceDisplayLine {
+                            text: placement.text,
+                            row: layout.composer_outer.y,
+                            column: placement.text_column,
+                        }]
                     })
-                    .collect()
+                    .unwrap_or_default()
             }
             crate::SurfaceSelectionKind::ComposerEditor => {
                 let area = layout.composer_editor;
@@ -828,7 +821,7 @@ impl App {
             crate::SurfaceSelectionKind::ComposerStatus => {
                 let lines = self.surface_display_lines(kind);
                 let ranges = crate::surface_selection_ranges(&lines, &selection);
-                let base_style = Style::default().fg(agena_tui_components::theme::muted_color());
+                let base_style = agena_tui_components::theme::status_chip_style();
                 for (line, range) in lines.iter().zip(ranges) {
                     if let Some(range) = range {
                         let rendered = crate::apply_cell_range_highlight(
@@ -838,9 +831,9 @@ impl App {
                         frame.render_widget(
                             Paragraph::new(rendered),
                             Rect {
-                                x: area.x,
+                                x: line.column,
                                 y: line.row,
-                                width: area.width,
+                                width: line.width(),
                                 height: 1,
                             },
                         );
@@ -887,6 +880,61 @@ impl App {
             "surface-mode-navigate"
         };
         ui_text::t(&self.i18n, key)
+    }
+}
+
+/// The four status-chip texts for the current composer frame. The centered
+/// top-border chip keeps the session-status parts; the corner chips carry
+/// background activity (bottom-left), history search or pending approval
+/// (top-right), and plan progress (bottom-right).
+#[derive(Debug, Clone, Default)]
+struct ComposerChipTexts {
+    status: String,
+    top_right: Option<String>,
+    bottom_left: Option<String>,
+    bottom_right: Option<String>,
+}
+
+/// Geometry of the four composer chips for the current frame. Produced by
+/// [`composer_chip_placements`] with the same placement functions the surface
+/// renderer uses, so the selection/copy projection matches the drawn pixels.
+#[derive(Debug, Clone, Default)]
+struct ComposerChipPlacements {
+    status: Option<ComposerStatusPlacement>,
+    top_right: Option<ComposerStatusPlacement>,
+    bottom_left: Option<ComposerStatusPlacement>,
+    bottom_right: Option<ComposerStatusPlacement>,
+}
+
+/// Computes where each composer chip sits on its border row. Order matters:
+/// the top-right chip is placed first so the centered status chip can reserve
+/// its width, mirroring `render_composer_editor_surface`.
+fn composer_chip_placements(outer: Rect, texts: &ComposerChipTexts) -> ComposerChipPlacements {
+    let top_right = texts
+        .top_right
+        .as_deref()
+        .and_then(|text| composer_corner_placement_right(outer, text));
+    let status = composer_status_placement_reserving(
+        outer,
+        texts.status.as_str(),
+        top_right
+            .as_ref()
+            .map(|placement| placement.chip_width)
+            .unwrap_or(0),
+    );
+    let bottom_left = texts
+        .bottom_left
+        .as_deref()
+        .and_then(|text| composer_corner_placement_left(outer, text));
+    let bottom_right = texts
+        .bottom_right
+        .as_deref()
+        .and_then(|text| composer_corner_placement_right(outer, text));
+    ComposerChipPlacements {
+        status,
+        top_right,
+        bottom_left,
+        bottom_right,
     }
 }
 
@@ -988,14 +1036,16 @@ mod tests {
     }
 }
 use super::{
-    App, ComposerEditorSurfaceSpec, ComposerItem, Frame, HeaderBodyFooterTextSurfaceSpec,
-    LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span, Style, Text, VerticalSectionSize,
-    Wrap, WrappedTextSpec, apply_block_highlight, apply_cursor_cell_highlight,
-    apply_line_cell_highlight, build_wrapped_text_lines, composer_item_needs_summary_chip,
-    find_search_ranges, inset_rect, layout_composer_surface, layout_header_body_footer_surface,
-    min, pane_header_height, pending_interactive_counts_for_execution,
-    render_composer_editor_surface, render_header_body_footer_text_surface, render_wrapped_text,
-    sanitize_display_text, selection_highlight_style, split_vertical_sections,
+    App, ComposerEditorSurfaceSpec, ComposerStatusPlacement, Frame,
+    HeaderBodyFooterTextSurfaceSpec, LayoutCache, Line, Modifier, Paragraph, Rect, Route, Span,
+    Style, Text, VerticalSectionSize, WrappedTextSpec, apply_block_highlight,
+    apply_cursor_cell_highlight, apply_line_cell_highlight, build_wrapped_text_lines,
+    composer_corner_placement_left, composer_corner_placement_right,
+    composer_status_placement_reserving, find_search_ranges, inset_rect, layout_composer_surface,
+    layout_header_body_footer_surface, min, pane_header_height,
+    pending_interactive_counts_for_execution, render_composer_editor_surface,
+    render_header_body_footer_text_surface, render_wrapped_text, sanitize_display_text,
+    split_vertical_sections,
 };
 use crate::NoticeSeverity;
 use crate::ui_text;

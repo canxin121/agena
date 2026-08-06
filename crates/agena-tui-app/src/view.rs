@@ -1,5 +1,6 @@
 use agena_tui_components::{
-    BoundedListPanelHeight, ComposerEditorSurfaceSpec, DashboardDetailOverlaySpec,
+    BoundedListPanelHeight, ComposerEditorSurfaceSpec, ComposerStatusPlacement,
+    DashboardDetailOverlaySpec,
     DashboardLeadPanelSpec, DashboardListPanelHeight, DashboardListPanelState,
     DashboardSplitPanelsSpec, DashboardTextPanelHeight, DashboardTextSection,
     DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DetailTextDialogSpec, DetailTextLine,
@@ -7,9 +8,11 @@ use agena_tui_components::{
     ListWorkbenchPanelState, SectionedWorkbenchDialogSpec, SurfaceMode, VerticalSectionSize,
     WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec,
     build_accented_two_line_list_item, build_detail_two_line_list_item, build_wrapped_text_lines,
-    format_fixed_columns, format_key_value_segment, inset_rect, join_inline_segments,
-    layout_composer_surface, layout_header_body_footer_surface, pane_header_height,
-    panel_highlight_style, render_composer_editor_surface, render_confirm_dialog,
+    composer_corner_placement_left, composer_corner_placement_right,
+    composer_status_placement_reserving, format_fixed_columns, format_key_value_segment,
+    inset_rect, join_inline_segments, layout_composer_surface,
+    layout_header_body_footer_surface, pane_header_height, panel_highlight_style,
+    render_composer_editor_surface, render_confirm_dialog,
     render_dashboard_workbench_dialog, render_header_body_footer_text_surface, render_help_dialog,
     render_list_workbench_dialog, render_overlay_line_input_dialog,
     render_sectioned_workbench_dialog, render_wrapped_text, split_vertical_sections,
@@ -18,13 +21,13 @@ use agena_tui_components::{
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Paragraph, Wrap},
+    widgets::Paragraph,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 #[cfg(test)]
 use crate::permission_prompt_content;
-use crate::{ComposerItem, I18n};
+use crate::I18n;
 
 mod view_catalog_helpers;
 mod view_help;
@@ -39,33 +42,6 @@ mod view_usage;
 pub(super) use self::view_catalog_helpers::*;
 pub(super) use self::view_permission_helpers::*;
 pub(super) use self::view_settings_helpers::*;
-
-#[cfg(test)]
-mod composer_item_summary_tests {
-    use super::{ComposerItem, composer_item_needs_summary_chip};
-    use agena_domain::{ActivityId, ActivityPayload, ComposerActivity, SkillReferenceActivity};
-
-    #[test]
-    fn composer_items_are_shown_only_by_their_inline_placeholders() {
-        let skill = ComposerItem {
-            placeholder: "[Skill: review]".to_string(),
-            label: "Skill: review".to_string(),
-            activity: ComposerActivity {
-                id: ActivityId::new(),
-                payload: ActivityPayload::SkillReference(SkillReferenceActivity {
-                    name: "review".to_string(),
-                    description: "Review changes".to_string(),
-                    instructions: "Inspect the diff.".to_string(),
-                    content_hash: "abc123".to_string(),
-                    source: "workspace".to_string(),
-                    aliases: vec![],
-                }),
-                provenance: Default::default(),
-            },
-        };
-        assert!(!composer_item_needs_summary_chip(&skill));
-    }
-}
 
 #[cfg(test)]
 mod permission_path_display_tests {

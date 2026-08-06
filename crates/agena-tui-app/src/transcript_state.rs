@@ -5,8 +5,6 @@ enum TranscriptRevealPolicy {
     Minimal,
     /// Keep the cursor at the same terminal row while content flows past it.
     PreserveScreenRow(usize),
-    /// Large directional jumps expose the content ahead of the cursor.
-    DirectionalEdge(TranscriptMoveDirection),
     /// Explicit location jumps such as search results deserve centering.
     Center,
 }
@@ -2096,32 +2094,68 @@ impl TranscriptState {
         self.sync_follow_tail(width, height);
     }
 
+    /// Move the viewport by `distance` rendered rows and place the cursor on
+    /// the directional edge of the new viewport.
+    ///
+    /// The page is anchored to the viewport top rather than the cursor line.
+    /// Anchoring to the cursor makes the jump size depend on the cursor's
+    /// screen row: paging from the bottom of the window skips up to two
+    /// pages per keypress, which is especially visible when an expanded
+    /// Activity fills the viewport and the cursor sits deep inside it.
     fn move_cursor_by_distance(&mut self, width: u16, height: u16, distance: usize, forward: bool) {
         self.push_jump_mark(width);
         self.ensure_visual_focus(width, height);
-        let Some(cursor) = self.interaction.cursor.clone() else {
+        let total_lines = self.rendered(width).lines.len();
+        if total_lines == 0 {
             return;
-        };
-        let line = cursor.line;
+        }
+        let visible = usize::from(height.max(1));
+        let max_scroll = total_lines.saturating_sub(visible);
         let direction = if forward {
             TranscriptMoveDirection::Down
         } else {
             TranscriptMoveDirection::Up
         };
-        let target = if forward {
-            line.saturating_add(distance)
+        let new_top = if forward {
+            self.viewport.top.saturating_add(distance).min(max_scroll)
         } else {
-            line.saturating_sub(distance)
+            self.viewport.top.saturating_sub(distance)
         };
-        let target = self.focusable_line_near(width, target, forward);
-        self.set_cursor_position_with_reveal(
-            width,
-            height,
-            target,
-            cursor.preferred_column,
-            cursor.preferred_column,
-            TranscriptRevealPolicy::DirectionalEdge(direction),
-        );
+        if new_top == self.viewport.top {
+            return;
+        }
+
+        // Pick the directional edge of the new page. Landing on the final
+        // (or first) focusable row when the page reaches the end (or start)
+        // resumes tail-following instead of stranding the cursor at a
+        // partially filled edge page.
+        let line = if forward && new_top == max_scroll {
+            self.focusable_line_near(width, total_lines.saturating_sub(1), false)
+        } else if !forward && new_top == 0 {
+            self.focusable_line_near(width, 0, true)
+        } else {
+            let inset = usize::from(visible > 2);
+            let raw_line = match direction {
+                TranscriptMoveDirection::Down => new_top.saturating_add(inset),
+                TranscriptMoveDirection::Up => new_top
+                    .saturating_add(visible.saturating_sub(1).saturating_sub(inset))
+                    .min(total_lines.saturating_sub(1)),
+            };
+            self.focusable_line_in_viewport(width, new_top, visible, raw_line, direction)
+        };
+        let column = self
+            .interaction
+            .cursor
+            .as_ref()
+            .map(|cursor| cursor.preferred_column)
+            .unwrap_or(0);
+
+        let visual = self.visual_selection_state();
+        self.install_cursor_at_column(width, height, line, column, column, None, true);
+        self.viewport.top = new_top;
+        self.refresh_cursor_screen_row(height);
+        self.restore_visual_selection(width, visual);
+        self.sync_follow_tail(width, height);
     }
 
     pub(crate) fn max_scroll(&mut self, width: u16, height: u16) -> usize {
@@ -2453,15 +2487,6 @@ impl TranscriptState {
             }
             TranscriptRevealPolicy::Minimal => self.viewport.top,
             TranscriptRevealPolicy::PreserveScreenRow(row) => line.saturating_sub(row),
-            TranscriptRevealPolicy::DirectionalEdge(direction) => {
-                let inset = usize::from(visible > 2);
-                match direction {
-                    TranscriptMoveDirection::Down => line.saturating_sub(inset),
-                    TranscriptMoveDirection::Up => {
-                        line.saturating_sub(visible.saturating_sub(1).saturating_sub(inset))
-                    }
-                }
-            }
             TranscriptRevealPolicy::Center => line.saturating_sub(visible / 2),
         };
         self.viewport.top = target_top.min(max_scroll);

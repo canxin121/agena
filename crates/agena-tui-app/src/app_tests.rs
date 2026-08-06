@@ -1515,6 +1515,243 @@ mod transcript_mouse_scroll_tests {
 }
 
 #[cfg(test)]
+mod transcript_paging_tests {
+    use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus, ReasoningPart};
+
+    use super::super::{
+        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptNodeKey,
+        TranscriptState, TranscriptTextPosition, Utc,
+    };
+
+    fn pending_document(text: String) -> ComposerDocument {
+        ComposerDocument(vec![ComposerNode::Text { text }])
+    }
+
+    fn line_is_focusable(transcript: &mut TranscriptState, line: usize) -> bool {
+        transcript
+            .rendered(40)
+            .lines
+            .get(line)
+            .is_some_and(|line| line.navigation_unit.is_some() || !line.copy_text.is_empty())
+    }
+
+    #[test]
+    fn page_down_advances_exactly_one_page_regardless_of_cursor_row() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            document: pending_document(
+                (0..80)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
+            confirmed: false,
+        });
+
+        transcript.scroll_to_top(40, 10);
+        assert!(transcript.max_scroll(40, 10) > 30);
+
+        // Park the cursor on the bottom focusable row of the first viewport.
+        let bottom_line = (0..10)
+            .rev()
+            .find(|line| line_is_focusable(&mut transcript, *line))
+            .expect("first viewport has a focusable row");
+        transcript.select_pointer_line(
+            40,
+            10,
+            TranscriptTextPosition {
+                line: bottom_line,
+                column: 0,
+            },
+        );
+        assert_eq!(transcript.viewport.top, 0);
+
+        transcript.move_cursor_by_page(40, 10, true);
+        assert_eq!(
+            transcript.viewport.top, 10,
+            "PageDown must advance exactly one viewport, not 1.5-2 pages, from any cursor row"
+        );
+        let cursor = transcript
+            .navigation_cursor_line()
+            .expect("page-down keeps a semantic cursor");
+        assert!(cursor >= transcript.viewport.top);
+        assert!(cursor < transcript.viewport.top + 10);
+        assert!(
+            cursor.saturating_sub(transcript.viewport.top) <= 2,
+            "the cursor should sit at the top edge of the new page"
+        );
+
+        transcript.move_cursor_by_page(40, 10, false);
+        assert_eq!(
+            transcript.viewport.top, 0,
+            "PageUp must restore the previous viewport exactly"
+        );
+    }
+
+    #[test]
+    fn half_page_advances_half_a_viewport_from_the_bottom_row() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            document: pending_document(
+                (0..80)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
+            confirmed: false,
+        });
+
+        transcript.scroll_to_top(40, 10);
+        let bottom_line = (0..10)
+            .rev()
+            .find(|line| line_is_focusable(&mut transcript, *line))
+            .expect("first viewport has a focusable row");
+        transcript.select_pointer_line(
+            40,
+            10,
+            TranscriptTextPosition {
+                line: bottom_line,
+                column: 0,
+            },
+        );
+
+        transcript.move_cursor_by_half_page(40, 10, true);
+        assert_eq!(transcript.viewport.top, 5);
+        let cursor = transcript
+            .navigation_cursor_line()
+            .expect("half-page keeps a semantic cursor");
+        assert!(cursor >= transcript.viewport.top);
+        assert!(cursor < transcript.viewport.top + 10);
+    }
+
+    #[test]
+    fn page_down_to_the_tail_resumes_following() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            document: pending_document(
+                (0..80)
+                    .map(|line| format!("line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
+            confirmed: false,
+        });
+
+        transcript.scroll_to_top(40, 10);
+        assert!(!transcript.viewport.follow_tail);
+        let max_scroll = transcript.max_scroll(40, 10);
+        // Page down until the last page; the final press should land on the
+        // last focusable row and re-enable tail following.
+        while transcript.viewport.top < max_scroll {
+            transcript.move_cursor_by_page(40, 10, true);
+        }
+        assert_eq!(transcript.viewport.top, max_scroll);
+        assert!(
+            transcript.viewport.follow_tail,
+            "landing on the final page must resume tail-following"
+        );
+    }
+
+    #[test]
+    fn paging_inside_a_tall_expanded_activity_advances_one_page() {
+        let now = Utc::now();
+        let activity = api_message_part!(
+            24,
+            18,
+            now,
+            ExecutionStatus::Completed,
+            PartContent::Reasoning(ReasoningPart {
+                summary: vec![
+                    (0..40)
+                        .map(|line| format!("deep thought line {line}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            }),
+        );
+        let activity_key = TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(18),
+            content_id: agena_tui_transcript::TranscriptContentId::Activity(
+                activity.activity_id.expect("reasoning activity identity"),
+            ),
+        };
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 18,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: now,
+                updated_at: now,
+                metadata: Default::default(),
+                usage: None,
+                part_count: 1,
+                parts: Some(vec![activity]),
+            }],
+            ..TranscriptState::default()
+        };
+
+        let (node_start, node_end, expanded) = {
+            let node = transcript
+                .rendered(40)
+                .nodes
+                .iter()
+                .find(|node| node.key == activity_key)
+                .expect("expanded reasoning activity");
+            (node.start_line, node.end_line, node.expanded)
+        };
+        assert!(expanded);
+        assert!(node_end.saturating_sub(node_start) > 20);
+
+        // Scroll to the bottom, then move the cursor back to the top edge of
+        // the viewport while staying inside the tall expanded activity.
+        transcript.scroll_to_bottom(40, 10);
+        let max_scroll = transcript.viewport.top;
+        assert_eq!(max_scroll, transcript.max_scroll(40, 10));
+        transcript.move_cursor_by_visual_lines(
+            40,
+            10,
+            agena_tui_transcript::TranscriptMoveDirection::Up,
+            9,
+        );
+        let cursor_line = transcript
+            .navigation_cursor_line()
+            .expect("cursor inside the expanded activity");
+        assert!(cursor_line >= node_start);
+
+        transcript.move_cursor_by_page(40, 10, false);
+        assert_eq!(
+            transcript.viewport.top,
+            max_scroll.saturating_sub(10),
+            "PageUp inside an expanded activity must advance exactly one page"
+        );
+        let page_cursor = transcript
+            .navigation_cursor_line()
+            .expect("page-up keeps a semantic cursor");
+        assert!(
+            page_cursor >= node_start,
+            "one page up must stay inside the expanded activity, not skip past it"
+        );
+        assert!(page_cursor < node_end);
+    }
+}
+
+#[cfg(test)]
 mod transcript_expansion_tests {
     use agena_domain::{
         ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,

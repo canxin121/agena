@@ -800,7 +800,7 @@ impl SessionManager {
         runs: Vec<agena_plugin_host::AgentStopHookRun>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let ids = self.store.reserve_message_ids(1).await?;
+        let ids = self.store.reserve_message_ids(runs.len()).await?;
         let parts = runs
             .into_iter()
             .map(|run| {

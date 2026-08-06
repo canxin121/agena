@@ -111,6 +111,17 @@ pub struct SessionProjectedOperationPart {
     pub lifecycle: agena_domain::TimeRange,
 }
 
+/// A stable, runtime-owned projection of a recorded hook run. Hook activity
+/// (for example the workflow plan's `agent.stop` autorun continuation) rides
+/// the same transcript pipeline as tool calls.
+#[derive(Debug, Clone)]
+pub struct SessionProjectedHookPart {
+    pub hook: String,
+    pub plugin_id: Option<String>,
+    pub summary: String,
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SessionProjectedModelVisibleOutput {
     pub text: String,
@@ -247,6 +258,7 @@ pub enum SessionProjectedPartDetail {
         reply: Option<agena_domain::UserInputReply>,
     },
     Operation(Box<SessionProjectedOperationPart>),
+    Hook(Box<SessionProjectedHookPart>),
     Opaque(serde_json::Value),
 }
 

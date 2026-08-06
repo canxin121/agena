@@ -219,6 +219,9 @@ fn name_from_content(content: &PartContent) -> Option<String> {
         PartContent::Activity(RuntimeActivity::Interaction(RequestPart::UserInput(_))) => {
             Some("user_input".to_string())
         }
+        PartContent::Activity(RuntimeActivity::Hook(hook)) => {
+            Some(format!("hook:{}", hook.hook))
+        }
     }
 }
 
@@ -245,6 +248,7 @@ fn summary_from_content(content: &PartContent) -> Option<String> {
         PartContent::Activity(RuntimeActivity::Interaction(request)) => {
             truncate_summary(request.summary_text().as_str())
         }
+        PartContent::Activity(RuntimeActivity::Hook(hook)) => truncate_summary(&hook.summary),
     }
 }
 

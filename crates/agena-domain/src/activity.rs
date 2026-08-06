@@ -358,6 +358,7 @@ pub enum ActivityPayload {
     FileChanges(FileChangesActivity),
     NestedTask(NestedTaskActivity),
     Maintenance(MaintenanceActivity),
+    Hook(HookActivity),
     Error(ErrorActivity),
     Custom(CustomActivity),
 }
@@ -650,6 +651,28 @@ pub enum MaintenanceActivity {
     Process {
         process: ProcessSummary,
     },
+}
+
+/// One observed plugin hook run, recorded as a first-class transcript
+/// activity so hook execution (for example the workflow plan's `agent.stop`
+/// autorun hook) is as visible as a tool call. It extends the existing
+/// ActivityPayload family rather than introducing a parallel presentation
+/// channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HookActivity {
+    /// The hook identifier that ran, for example `agent.stop`.
+    pub hook: String,
+    /// The plugin that ran the hook, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Short human-facing summary of the hook outcome, for example
+    /// `blocked stop with reason "workflow plan autorun"` or `no continuation`.
+    pub summary: String,
+    /// Optional human-facing detail (for example the injected continuation
+    /// message) rendered when the activity is expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

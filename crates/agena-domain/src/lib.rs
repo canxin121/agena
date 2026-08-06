@@ -85,7 +85,7 @@ pub use activity::{
     ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,
     CancellationResult, ChecklistActivity, ComposerActivity, ComposerDocument, ComposerNode,
     ContentDocument, ContentNode, ContentPosition, CustomActivity, ErrorActivity, ExecutionTarget,
-    FileChangesActivity, InteractionActivity, MaintenanceActivity, NestedTaskActivity,
+    FileChangesActivity, HookActivity, InteractionActivity, MaintenanceActivity, NestedTaskActivity,
     OperationActivity, OperationActivityError, OperationAuthorization, OperationPermission,
     ProgressActivity, ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference,
     SearchActivity, SkillExecutionActivity, SkillReferenceActivity, TextArtifactActivity,

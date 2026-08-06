@@ -180,7 +180,8 @@ pub fn project_persisted(message: &Message) -> Vec<WirePart> {
                     }
                 }
                 RuntimeActivity::Interaction(_)
-                | RuntimeActivity::Error(_) => {}
+                | RuntimeActivity::Error(_)
+                | RuntimeActivity::Hook(_) => {}
             },
         }
     }

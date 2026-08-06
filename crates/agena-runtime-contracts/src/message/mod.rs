@@ -11,7 +11,7 @@ pub use part::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentItem, AttachmentKind, AttachmentSource,
     CronCreateToolInput, CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput,
     CronListToolInput, CronMisfirePolicyInput, CronRetryPolicyInput, CronUpdateToolInput,
-    EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput, GrepToolInput,
+    EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput, GrepToolInput, HookPart,
     InteractionNotifyToolInput, InteractiveRequestPart, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MessagePart,
     ModelVisibleOutput, OperationBlock, OperationCompletion, OperationPart, PartContent,

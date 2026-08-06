@@ -21,11 +21,11 @@ pub use config::{
 };
 pub use error::{HostError, TransportError};
 pub use host::{
-    LoadedPlugin, PluginCommandCatalogItem, PluginHost, PluginHostBuildConfig, PluginInspect,
-    PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
-    PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiCatalog,
-    PluginUiToolInvokeResponse, PluginUiToolInvokeStatus, StaticPluginRegistration,
-    ToolInvokeStream,
+    AgentStopDispatch, AgentStopHookRun, LoadedPlugin, PluginCommandCatalogItem, PluginHost,
+    PluginHostBuildConfig, PluginInspect, PluginStudioControlCatalogItem, PluginStudioUiCatalog,
+    PluginStudioViewCatalogItem, PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog,
+    PluginUiCatalog, PluginUiToolInvokeResponse, PluginUiToolInvokeStatus,
+    StaticPluginRegistration, ToolInvokeStream,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};

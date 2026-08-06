@@ -65,6 +65,41 @@ mod host_scoped_client;
 mod plugin_host_build;
 mod plugin_host_core;
 
+/// One plugin's observed run of the `agent.stop` hook. Callers (for example
+/// the session runtime) use these to surface hook execution as transcript
+/// activity, so users can see whether a stop hook such as the workflow plan's
+/// autorun continuation actually fired.
+#[derive(Debug, Clone)]
+pub struct AgentStopHookRun {
+    pub plugin_id: String,
+    /// The hook identifier that ran, for example `agent.stop`.
+    pub hook: String,
+    /// The injected continuation message when the plugin blocked stop.
+    pub continue_with_message: Option<String>,
+    /// Human-readable reason the plugin recorded when blocking stop.
+    pub reason: Option<String>,
+}
+
+impl AgentStopHookRun {
+    /// A run that completed without blocking stop.
+    pub fn ran(plugin_id: String, hook: &str) -> Self {
+        Self {
+            plugin_id,
+            hook: hook.to_string(),
+            continue_with_message: None,
+            reason: None,
+        }
+    }
+}
+
+/// Result of dispatching `agent.stop` across plugins: the aggregate patch plus
+/// per-plugin observations so callers can record hook activity.
+#[derive(Debug, Clone)]
+pub struct AgentStopDispatch {
+    pub patch: AgentStopPatch,
+    pub runs: Vec<AgentStopHookRun>,
+}
+
 pub struct LoadedPlugin {
     pub kind: &'static str,
     pub configured_plugin: crate::config::ConfiguredPlugin,

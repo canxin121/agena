@@ -561,6 +561,12 @@ pub(crate) fn activity_presentation(
             error.problem.user.fallback.clone(),
             Some(error.problem.clone()),
         ),
+        ActivityPayload::Hook(hook) => (
+            "hook".to_owned(),
+            format!("Hook: {}", hook.hook),
+            hook.summary.clone(),
+            None,
+        ),
         ActivityPayload::Custom(custom) => (
             custom.schema.clone(),
             custom
@@ -1830,6 +1836,83 @@ mod tests {
             "{expanded_text}"
         );
         assert_eq!(node.copy_text.matches(full_error).count(), 1);
+    }
+
+    #[test]
+    fn canonical_hook_activity_renders_headline_summary_and_expanded_detail() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Runtime,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Hook(agena_domain::HookActivity {
+                hook: "agent.stop".to_owned(),
+                plugin_id: Some("agena_workflow_plan".to_owned()),
+                summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
+                detail: Some("Continue: next plan step".to_owned()),
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let defaults = crate::TranscriptDetailDefaults {
+            activity_expanded: false,
+        };
+
+        // Collapsed: the row carries the hook headline and human summary; the
+        // detail body stays folded.
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &Default::default(),
+        );
+        let collapsed_text = collapsed
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(collapsed_text.contains("Hook: agent.stop"), "{collapsed_text}");
+        assert!(
+            collapsed_text.contains("agent.stop hook blocked stop: workflow plan autorun"),
+            "{collapsed_text}"
+        );
+        assert!(!collapsed_text.contains("Continue: next plan step"), "{collapsed_text}");
+
+        // Expanded: the plugin and detail render in the Hook section.
+        let expanded = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &std::collections::BTreeMap::from([(key, true)]),
+        );
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(expanded_text.contains("Plugin: agena_workflow_plan"), "{expanded_text}");
+        assert!(expanded_text.contains("Continue: next plan step"), "{expanded_text}");
     }
 
     #[test]

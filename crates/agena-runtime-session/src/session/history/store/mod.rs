@@ -1171,7 +1171,7 @@ pub(crate) fn activity_payload(
     role: Role,
 ) -> Option<agena_domain::ActivityPayload> {
     use agena_domain::{
-        ActivityPayload, ErrorActivity, InteractionActivity, OperationActivity,
+        ActivityPayload, ErrorActivity, HookActivity, InteractionActivity, OperationActivity,
         OperationActivityError, ReasoningActivity, ResourceActivity, ResourceKind,
         ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
         ToolCallId,
@@ -1287,6 +1287,14 @@ pub(crate) fn activity_payload(
         PartContent::Activity(crate::message::RuntimeActivity::Error(error)) => {
             Some(ActivityPayload::Error(ErrorActivity {
                 problem: error.problem.clone(),
+            }))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Hook(hook)) => {
+            Some(ActivityPayload::Hook(HookActivity {
+                hook: hook.hook.clone(),
+                plugin_id: hook.plugin_id.clone(),
+                summary: hook.summary.clone(),
+                detail: hook.detail.clone(),
             }))
         }
     }

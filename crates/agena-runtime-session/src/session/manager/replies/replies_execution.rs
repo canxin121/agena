@@ -482,20 +482,30 @@ impl SessionManager {
                     .dispatch_agent_stop_cancellable(stop_input, Some(control.cancel.clone()))
                     .await
                 {
-                    Ok(patch) if patch.continue_with_message.is_some() => {
-                        let follow_up = patch.continue_with_message.unwrap_or_default();
-                        session = self
-                            .inject_continuation_message(
-                                session,
-                                &current_options,
-                                follow_up,
-                                state.clone(),
-                            )
-                            .await?;
-                        model_requested = true;
-                        continue;
+                    Ok(dispatch) => {
+                        // Surface every observed hook run as first-class
+                        // transcript activity so users can see whether a stop
+                        // hook (for example the workflow plan autorun
+                        // continuation) actually fired.
+                        if !dispatch.runs.is_empty() {
+                            session = self
+                                .record_agent_stop_hook_runs(session, dispatch.runs, state.clone())
+                                .await?;
+                        }
+                        if dispatch.patch.continue_with_message.is_some() {
+                            let follow_up = dispatch.patch.continue_with_message.unwrap_or_default();
+                            session = self
+                                .inject_continuation_message(
+                                    session,
+                                    &current_options,
+                                    follow_up,
+                                    state.clone(),
+                                )
+                                .await?;
+                            model_requested = true;
+                            continue;
+                        }
                     }
-                    Ok(_) => {}
                     Err(err) => {
                         if control.cancel.is_cancelled() {
                             return Err(AppError::Cancelled);
@@ -776,6 +786,60 @@ impl SessionManager {
         );
         session.messages.push(user_message.clone());
         let checkpoint = MessageCheckpoint::all(&user_message);
+        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
+            .await
+    }
+
+    /// Record one System-originated Assistant message with a `Hook` part per
+    /// observed `agent.stop` hook run. This makes hook execution visible in
+    /// the same transcript activity pipeline as tool calls and is persisted
+    /// so a restart keeps the record.
+    async fn record_agent_stop_hook_runs(
+        &self,
+        mut session: Session,
+        runs: Vec<agena_plugin_host::AgentStopHookRun>,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let ids = self.store.reserve_message_ids(1).await?;
+        let parts = runs
+            .into_iter()
+            .map(|run| {
+                let summary = match (&run.continue_with_message, &run.reason) {
+                    (Some(_), Some(reason)) => format!("agent.stop hook blocked stop: {reason}"),
+                    (Some(_), None) => "agent.stop hook blocked stop".to_string(),
+                    (None, Some(reason)) => format!("agent.stop hook ran: {reason}"),
+                    (None, None) => "agent.stop hook ran (no continuation)".to_string(),
+                };
+                let detail = run.continue_with_message.or(run.reason);
+                PartContent::hook(crate::message::HookPart {
+                    hook: run.hook,
+                    plugin_id: Some(run.plugin_id),
+                    summary,
+                    detail,
+                })
+            })
+            .collect();
+        let message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::Completed,
+            parts,
+            MessageMetadata {
+                source: MessageSource::System,
+                idempotency_key: None,
+                model_turn_id: None,
+                parent_message_id: session.last_conversation_message().map(|m| m.id),
+                generated_by_call_id: None,
+                externally_initiated_tool: false,
+                model_provider_id: String::new(),
+                model_adapter_id: None,
+                model_id: String::new(),
+                model_thinking_mode: None,
+                model_speed_mode: None,
+            },
+        );
+        session.messages.push(message.clone());
+        let checkpoint = MessageCheckpoint::all(&message);
         self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
             .await
     }

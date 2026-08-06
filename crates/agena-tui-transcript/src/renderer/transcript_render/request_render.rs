@@ -188,6 +188,9 @@ pub(crate) fn preview_for_part(part: &TranscriptEntryPart, i18n: &I18n) -> Optio
         TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
             Some(error.problem.user.fallback.clone())
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Hook(hook)) => {
+            Some(hook.summary.clone())
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
         )) => Some(match status {

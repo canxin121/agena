@@ -603,6 +603,25 @@ fn canonical_activity_details(
                 .into_iter()
                 .collect()
         }
+        agena_domain::ActivityPayload::Hook(hook) => {
+            let mut details = Vec::new();
+            if let Some(plugin_id) = hook.plugin_id.as_ref() {
+                details.push(format!("Plugin: {plugin_id}"));
+            }
+            if let Some(detail) = hook.detail.as_ref() {
+                details.push(detail.clone());
+            }
+            (!details.is_empty())
+                .then(|| {
+                    CanonicalActivityDetail::section(
+                        "Hook",
+                        details.join("\n"),
+                        CanonicalActivityDetailFormat::Plain,
+                    )
+                })
+                .into_iter()
+                .collect()
+        }
         agena_domain::ActivityPayload::Reasoning(_)
         | agena_domain::ActivityPayload::TextSegment(_) => Vec::new(),
     }
@@ -1024,6 +1043,14 @@ pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Opt
         TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
             Some(error.problem.user.fallback.clone())
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Hook(hook)) => {
+            let mut text = format!("Hook: {}\n{}", hook.hook, hook.summary);
+            if let Some(detail) = hook.detail.as_ref() {
+                text.push('\n');
+                text.push_str(detail);
+            }
+            Some(text)
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
             status,
         )) => Some(match status {
@@ -1437,6 +1464,24 @@ pub(crate) fn render_part_node(
                 part,
                 &agena_domain::ActivityPayload::Error(agena_domain::ErrorActivity {
                     problem: error.problem.clone(),
+                }),
+                None,
+                out,
+                width,
+                i18n,
+                defaults,
+                expansions,
+            )
+        }
+        TranscriptPartContent::Activity(TranscriptActivityContent::Hook(hook)) => {
+            render_activity_canonical(
+                message,
+                part,
+                &agena_domain::ActivityPayload::Hook(agena_domain::HookActivity {
+                    hook: hook.hook.clone(),
+                    plugin_id: hook.plugin_id.clone(),
+                    summary: hook.summary.clone(),
+                    detail: hook.detail.clone(),
                 }),
                 None,
                 out,

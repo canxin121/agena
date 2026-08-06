@@ -79,6 +79,7 @@ pub enum MessagePartDetailResource {
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
     Request(Box<MessageRequestPartResource>),
+    Hook(MessageHookPartResource),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -128,6 +129,23 @@ pub struct MessageSkillReferencePartResource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessageErrorPartResource {
     pub problem: agena_failure::UserProblem,
+}
+
+/// One observed plugin hook run recorded as a first-class transcript part.
+/// Hook activity (for example the workflow plan's `agent.stop` autorun
+/// continuation) rides the same activity pipeline as tool calls.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MessageHookPartResource {
+    /// The hook identifier that ran, for example `agent.stop`.
+    pub hook: String,
+    /// The plugin that ran the hook, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    /// Short human-facing summary of the hook outcome.
+    pub summary: String,
+    /// Optional human-facing detail rendered when the activity is expanded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// An interactive request recorded in the conversation. The concrete request

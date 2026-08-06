@@ -1497,6 +1497,16 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
                 value,
             )))
         }
+        PartContent::Activity(crate::message::RuntimeActivity::Hook(value)) => {
+            agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
+                agena_runtime::SessionProjectedHookPart {
+                    hook: value.hook.clone(),
+                    plugin_id: value.plugin_id.clone(),
+                    summary: value.summary.clone(),
+                    detail: value.detail.clone(),
+                },
+            ))
+        }
     }
 }
 

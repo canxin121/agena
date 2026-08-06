@@ -1231,25 +1231,27 @@ impl PluginHost {
         &self,
         input: AgentStopInput,
     ) -> Result<AgentStopPatch, PluginError> {
-        self.dispatch_agent_stop_cancellable(input, None).await
+        Ok(self.dispatch_agent_stop_cancellable(input, None).await?.patch)
     }
 
     pub async fn dispatch_agent_stop_cancellable(
         &self,
         input: AgentStopInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
-    ) -> Result<AgentStopPatch, PluginError> {
+    ) -> Result<AgentStopDispatch, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(30));
         let mut continue_with_message = None;
         let mut reason = None;
+        let mut runs = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::AGENT_STOP) {
                 continue;
             }
+            let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             let context = HostCallbackContext {
-                plugin_id: Some(plugin.key().to_string()),
+                plugin_id: Some(plugin_id.clone()),
                 session_id: Some(input.session_id),
                 ..Default::default()
             };
@@ -1263,22 +1265,34 @@ impl PluginHost {
             .await
             .map_err(transport_to_plugin_error)?;
             if matches!(&v, serde_json::Value::Null) {
+                runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
                 continue;
             }
             let patch: Option<AgentStopPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            if let Some(p) = patch
-                && p.continue_with_message.is_some()
-            {
-                continue_with_message = p.continue_with_message;
-                reason = p.reason;
-                // First plugin that wants to block stop wins.
-                break;
+            if let Some(p) = patch {
+                runs.push(AgentStopHookRun {
+                    plugin_id,
+                    hook: "agent.stop".to_string(),
+                    continue_with_message: p.continue_with_message.clone(),
+                    reason: p.reason.clone(),
+                });
+                if p.continue_with_message.is_some() {
+                    continue_with_message = p.continue_with_message;
+                    reason = p.reason;
+                    // First plugin that wants to block stop wins.
+                    break;
+                }
+            } else {
+                runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
             }
         }
-        Ok(AgentStopPatch {
-            continue_with_message,
-            reason,
+        Ok(AgentStopDispatch {
+            patch: AgentStopPatch {
+                continue_with_message,
+                reason,
+            },
+            runs,
         })
     }
 
@@ -1600,8 +1614,9 @@ where
     }
 }
 use super::{
-    AgentStopInput, AgentStopPatch, Arc, AuthInput, AuthOutput, BTreeMap, ChatHeadersInput,
-    ChatHeadersPatch, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
+    AgentStopDispatch, AgentStopHookRun, AgentStopInput, AgentStopPatch, Arc, AuthInput,
+    AuthOutput, BTreeMap, ChatHeadersInput, ChatHeadersPatch, ChatMessageInput, ChatMessagePatch,
+    ChatMessagesTransformInput,
     ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch, ChatSystemTransformInput,
     ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch, CommandBeforeInput,
     CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch, Duration, EventEnvelope,

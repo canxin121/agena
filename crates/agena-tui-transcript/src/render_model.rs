@@ -1,7 +1,7 @@
 use agena_api::{
     message_part::{
-        MessageAttachmentPartResource, MessageErrorPartResource, MessagePartDetailResource,
-        MessageReasoningPartResource, MessageRequestPartResource,
+        MessageAttachmentPartResource, MessageErrorPartResource, MessageHookPartResource,
+        MessagePartDetailResource, MessageReasoningPartResource, MessageRequestPartResource,
         MessageSkillReferencePartResource, MessageTextPartResource, OperationPartResource,
         PartExecutionStatusResource,
     },
@@ -86,6 +86,7 @@ pub enum TranscriptActivityContent<'a> {
     SkillReference(MessageSkillReferencePartResource),
     Error(MessageErrorPartResource),
     Operation(Box<OperationPartResource>),
+    Hook(Box<MessageHookPartResource>),
     AssistantReplyLifecycle(TranscriptAssistantReplyLifecycle),
     Request(Box<MessageRequestPartResource>),
 }
@@ -167,6 +168,9 @@ impl From<MessagePartDetailResource> for TranscriptPartContent<'static> {
             }
             MessagePartDetailResource::Operation(value) => {
                 Self::Activity(TranscriptActivityContent::Operation(value))
+            }
+            MessagePartDetailResource::Hook(value) => {
+                Self::Activity(TranscriptActivityContent::Hook(Box::new(value)))
             }
             MessagePartDetailResource::Request(value) => {
                 Self::Activity(TranscriptActivityContent::Request(value))

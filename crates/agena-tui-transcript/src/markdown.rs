@@ -905,6 +905,13 @@ pub fn strip_terminal_ansi_sequences(text: &str) -> String {
                 index += 1;
                 while index < bytes.len() {
                     let byte = bytes[index];
+                    // Escape sequences may only contain ASCII parameter bytes.
+                    // A non-ASCII byte means the sequence was truncated and the
+                    // rest is real text: stop so it is emitted below and we
+                    // never land mid-way through a multi-byte char.
+                    if !byte.is_ascii() {
+                        break;
+                    }
                     index += 1;
                     if (0x40..=0x7e).contains(&byte) {
                         break;
@@ -923,12 +930,18 @@ pub fn strip_terminal_ansi_sequences(text: &str) -> String {
                             index += 2;
                             break;
                         }
+                        byte if !byte.is_ascii() => break,
                         _ => index += 1,
                     }
                 }
             }
             _ => {
-                index += 1;
+                // Single-char escape (e.g. ESC M). Skip it only when it is a
+                // plain ASCII byte; a non-ASCII leading byte is the start of a
+                // multi-byte char and must be emitted as text.
+                if bytes[index].is_ascii() {
+                    index += 1;
+                }
             }
         }
     }
@@ -970,3 +983,52 @@ pub fn truncate_display_width(text: &str, max_width: usize) -> String {
     }
 }
 use unicode_segmentation::UnicodeSegmentation;
+
+#[cfg(test)]
+mod tests {
+    use super::{sanitize_terminal_text, strip_terminal_ansi_sequences};
+
+    #[test]
+    fn ansi_sequences_are_stripped() {
+        assert_eq!(
+            strip_terminal_ansi_sequences("\x1b[31mred\x1b[0m"),
+            "red"
+        );
+        assert_eq!(
+            strip_terminal_ansi_sequences("\x1b]0;title\x07body"),
+            "body"
+        );
+        assert_eq!(
+            strip_terminal_ansi_sequences("\x1b]0;title\x1b\\body"),
+            "body"
+        );
+        // A lone single-char escape is consumed as a sequence.
+        assert_eq!(strip_terminal_ansi_sequences("\x1bMx"), "x");
+    }
+
+    #[test]
+    fn escape_followed_by_multibyte_char_does_not_panic() {
+        // ESC directly before a multi-byte char used to land mid-character and
+        // panic slicing at a non-char boundary; the char must be preserved.
+        let text = "\x1b中\x1b文";
+        assert_eq!(strip_terminal_ansi_sequences(text), "中文");
+        assert_eq!(sanitize_terminal_text(text), "中文");
+    }
+
+    #[test]
+    fn truncated_sequence_with_multibyte_char_does_not_panic() {
+        // A truncated CSI/OSC sequence whose "payload" is a multi-byte char:
+        // the non-ASCII byte ends the scan and is emitted as real text.
+        assert_eq!(strip_terminal_ansi_sequences("\x1b[31中"), "中");
+        assert_eq!(strip_terminal_ansi_sequences("\x1b]0;文"), "文");
+        assert_eq!(sanitize_terminal_text("a\x1b[中b"), "a中b");
+    }
+
+    #[test]
+    fn real_terminal_output_survives_round_trip() {
+        let text = "nix 2.28.0\n  └───╼ a\n\x1b[1m~\x1b[0m\n中\x1b[31m文\x1b[0m";
+        let stripped = strip_terminal_ansi_sequences(text);
+        assert!(!stripped.contains('\x1b'));
+        assert_eq!(stripped, "nix 2.28.0\n  └───╼ a\n~\n中文");
+    }
+}

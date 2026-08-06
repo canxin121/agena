@@ -211,7 +211,10 @@ impl App {
         parts
     }
 
-    pub(crate) fn current_session_status_parts(&self) -> Vec<String> {
+    /// Display label parts for the current session's model and its configured
+    /// modes (thinking, speed). Shown in the transcript header's top-left
+    /// corner; the composer's status chip keeps only token usage.
+    pub(crate) fn current_session_model_label_parts(&self) -> Vec<String> {
         let model_label = |model: &crate::ModelRef| {
             self.backend
                 .model_display_name(model)
@@ -223,55 +226,29 @@ impl App {
                 .ok()
                 .map(|model| model_label(&model))
         };
-
-        if let Some(execution) = self.transcript.execution.as_ref() {
-            let model_part = self
-                .current_session_model_ref()
+        let mut parts = Vec::new();
+        let model_part = if let Some(execution) = self.transcript.execution.as_ref() {
+            self.current_session_model_ref()
                 .map(|model| model_label(&model))
                 .or_else(|| execution_model_name_status_label(&execution.execution))
-                .or_else(fallback_model);
-            let token_usage = agena_tui::session_status::token_usage_status(
-                execution.usage.current_tokens,
-                execution.usage.projected_tokens,
-                execution.usage.model_context_window_tokens,
-            );
-            let mut parts = Vec::new();
-            parts.extend(agena_tui::session_status::session_summary_status_parts(
-                model_part,
-                None,
-                Some(token_usage),
-            ));
-            if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
-                && !thinking_mode.trim().is_empty()
-            {
-                parts.push(self.i18n.text_args(
-                    "session-status-thinking",
-                    &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
-                ));
-            }
-            if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
-                && !speed_mode.trim().is_empty()
-            {
-                parts.push(self.i18n.text_args(
-                    "session-status-speed",
-                    &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
-                ));
-            }
-            if !parts.is_empty() {
-                return parts;
-            }
-        }
-
-        let mut parts = agena_tui::session_status::session_summary_status_parts(
+                .or_else(fallback_model)
+        } else {
             self.run_options
                 .model
                 .as_ref()
                 .map(model_label)
-                .or_else(fallback_model),
-            None,
-            None,
-        );
-        if let Some(thinking_mode) = self.run_options.thinking_mode.as_deref()
+                .or_else(fallback_model)
+        };
+        if let Some(model_part) = model_part {
+            parts.push(model_part);
+        }
+        let thinking_mode = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.execution.model_thinking_mode.as_deref())
+            .or(self.run_options.thinking_mode.as_deref());
+        if let Some(thinking_mode) = thinking_mode
             && !thinking_mode.trim().is_empty()
         {
             parts.push(self.i18n.text_args(
@@ -279,12 +256,35 @@ impl App {
                 &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
             ));
         }
-        if let Some(speed_mode) = self.run_options.speed_mode.as_deref()
+        let speed_mode = self
+            .transcript
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.execution.model_speed_mode.as_deref())
+            .or(self.run_options.speed_mode.as_deref());
+        if let Some(speed_mode) = speed_mode
             && !speed_mode.trim().is_empty()
         {
             parts.push(self.i18n.text_args(
                 "session-status-speed",
                 &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
+            ));
+        }
+        parts
+    }
+
+    pub(crate) fn current_session_status_parts(&self) -> Vec<String> {
+        let mut parts = Vec::new();
+        if let Some(execution) = self.transcript.execution.as_ref() {
+            let token_usage = agena_tui::session_status::token_usage_status(
+                execution.usage.current_tokens,
+                execution.usage.projected_tokens,
+                execution.usage.model_context_window_tokens,
+            );
+            parts.extend(agena_tui::session_status::session_summary_status_parts(
+                None,
+                None,
+                Some(token_usage),
             ));
         }
         parts

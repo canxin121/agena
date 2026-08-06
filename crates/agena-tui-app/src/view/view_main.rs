@@ -350,11 +350,21 @@ impl App {
     }
 
     pub(crate) fn transcript_surface_title(&self) -> String {
-        ui_text::transcript_header_title(
+        let session_part = ui_text::transcript_header_title(
             &self.i18n,
             self.transcript.session_id,
             self.transcript.session_title.as_str(),
-        )
+        );
+        let model_parts = self.current_session_model_label_parts();
+        if model_parts.is_empty() {
+            session_part
+        } else {
+            format!(
+                "{}  ·  {}",
+                model_parts.join("  ·  "),
+                session_part.trim()
+            )
+        }
     }
 
     pub(crate) fn render_composer(&mut self, frame: &mut Frame, area: Rect) {

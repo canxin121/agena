@@ -1346,19 +1346,11 @@ impl SessionManager {
             .store
             .load_session(session_id, state.cache_policy())
             .await?;
-        let pending_tool = session
-            .pending_tools()
-            .into_iter()
-            .find(|tool| {
-                session
-                    .pending_tool_execution(tool)
-                    .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
-            })
-            .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "pending tool not found for host user input: session={session_id}, call={call_id}"
-                ))
-            })?;
+        let pending_tool = session.pending_tool_by_call_id(call_id).ok_or_else(|| {
+            AppError::Internal(format!(
+                "pending tool not found for host user input: session={session_id}, call={call_id}"
+            ))
+        })?;
         let resolved_pending = resolve_pending_tool(&session, &pending_tool)?;
         let sequence_index = self.next_host_user_input_sequence(session_id, call_id);
         if let Some(existing) = session.user_input_request_for_operation(
@@ -1433,11 +1425,7 @@ impl SessionManager {
         // A host callback may execute the same pending operation that was
         // originally created by the model. Reuse that operation's correlation
         // ids so shell output remains attached to the visible Activity.
-        let outer_pending_tool = session.pending_tools().into_iter().find(|tool| {
-            session
-                .pending_tool_execution(tool)
-                .is_some_and(|(pending_call_id, _, _)| pending_call_id == call_id)
-        });
+        let outer_pending_tool = session.pending_tool_by_call_id(call_id);
         let command_event_sink = outer_pending_tool
             .as_ref()
             .and_then(|pending| resolve_pending_tool(&session, pending).ok())

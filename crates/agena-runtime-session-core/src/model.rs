@@ -1269,6 +1269,42 @@ impl Session {
             .collect()
     }
 
+    /// Finds the tool part (Pending or InProgress) whose operation call id
+    /// matches `call_id`.
+    ///
+    /// `pending_tools()` only derives from `Pending` parts, but a tool is
+    /// moved to `InProgress` before it executes. Interactive host callbacks
+    /// that run during execution (`ask`, plan review) must therefore look up
+    /// the executing part directly by call id instead of relying on the
+    /// pending-operation projection.
+    pub fn pending_tool_by_call_id(&self, call_id: i64) -> Option<SessionPendingTool> {
+        for (message_index, message) in self.messages.iter().enumerate() {
+            if message.role != Role::Assistant {
+                continue;
+            }
+            for (part_index, part) in message.parts.iter().enumerate() {
+                if !matches!(
+                    part.status,
+                    ExecutionStatus::Pending | ExecutionStatus::InProgress
+                ) {
+                    continue;
+                }
+                let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
+                    part.content.as_ref()
+                else {
+                    continue;
+                };
+                if operation.call_id != call_id {
+                    continue;
+                }
+                return Some(SessionPendingTool {
+                    part: SessionPartRef::new(message_index, message, part_index, part),
+                });
+            }
+        }
+        None
+    }
+
     pub fn resolve_part_ref(&self, part_ref: &SessionPartRef) -> Option<SessionPartRef> {
         if let Some(message) = self.messages.get(part_ref.message_index)
             && message.id == part_ref.message_id

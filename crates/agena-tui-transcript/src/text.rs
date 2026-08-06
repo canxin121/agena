@@ -58,20 +58,27 @@ mod tests {
     }
 
     #[test]
-    fn text_artifact_label_truncates_long_persisted_summaries() {
-        let long = "x".repeat(240);
-        let label = text_artifact_display_label("ignored", Some(long.as_str()));
-        assert_eq!(label, "xxxxxxxxxxxxxxxxxxxxxxxx…");
-        assert_eq!(label.chars().count(), 25);
+    fn text_artifact_label_uses_text_prefix_and_remaining_count() {
+        assert_eq!(
+            text_artifact_display_label("abcdefghijklmnopqrstuvwxyz", Some("paste 26 chars")),
+            "abcdefghijkl… +14 chars"
+        );
     }
 
     #[test]
-    fn text_artifact_label_keeps_short_labels_and_derives_paste_count() {
+    fn text_artifact_label_keeps_short_text_as_is() {
         assert_eq!(
-            text_artifact_display_label("abcdef", Some("paste 1000 chars")),
-            "paste 1000 chars"
+            text_artifact_display_label("hello", Some("paste 5 chars")),
+            "hello"
         );
-        assert_eq!(text_artifact_display_label("abcdef", None), "paste 6 chars");
+    }
+
+    #[test]
+    fn text_artifact_label_falls_back_to_label_for_empty_text() {
+        assert_eq!(
+            text_artifact_display_label("", Some("paste 0 chars")),
+            "paste 0 chars"
+        );
     }
 }
 
@@ -498,15 +505,26 @@ pub fn attachment_chip_label(
 /// Maximum length of a pasted-text artifact's inline placeholder. Large
 /// pastes can carry a long persisted summary (the message-part summary is
 /// truncated to 240 chars); showing that whole string as the inline
-/// `[placeholder]` overflows the composer and transcript rows. Display only a
-/// compact prefix instead.
+/// `[placeholder]` overflows the composer and transcript rows. Display a
+/// compact prefix of the actual pasted text plus the remaining character
+/// count (e.g. `abc… +997 chars`) so the placeholder identifies the content
+/// instead of a generic `paste N chars` label.
 pub fn text_artifact_display_label(text: &str, label: Option<&str>) -> String {
     const MAX_PLACEHOLDER_CHARS: usize = 24;
+    const TEXT_PREFIX_CHARS: usize = 12;
+    let count = text.chars().count();
+    if count > TEXT_PREFIX_CHARS {
+        let prefix: String = text.chars().take(TEXT_PREFIX_CHARS).collect();
+        return format!("{prefix}… +{} chars", count - TEXT_PREFIX_CHARS);
+    }
+    if count > 0 {
+        return text.to_owned();
+    }
     let base = label
         .map(str::trim)
         .filter(|label| !label.is_empty())
         .map(str::to_owned)
-        .unwrap_or_else(|| format!("paste {} chars", text.chars().count()));
+        .unwrap_or_else(|| "pasted text".to_owned());
     let mut chars = base.chars();
     let mut truncated: String = chars.by_ref().take(MAX_PLACEHOLDER_CHARS).collect();
     if chars.next().is_some() {

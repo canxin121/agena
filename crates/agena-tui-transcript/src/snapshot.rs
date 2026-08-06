@@ -460,7 +460,10 @@ pub(crate) fn activity_presentation(
                 .label
                 .clone()
                 .unwrap_or_else(|| "Pasted text".to_owned()),
-            bounded_presentation_summary(artifact.text.as_str()),
+            // The full pasted text is the expandable body; the collapsed
+            // headline is width-bounded by the renderer, so the expanded
+            // activity shows every character with no truncation marker.
+            artifact.text.clone(),
             None,
         ),
         ActivityPayload::Reasoning(reasoning) => (
@@ -584,12 +587,6 @@ pub(crate) fn activity_presentation(
     }
 }
 
-/// Bound headline/summary text so the collapsed row, copy text and export
-/// never carry arbitrarily large user pastes or reasoning bodies. The full
-/// content remains reachable through the expanded detail sections, which are
-/// rendered lazily.
-const PRESENTATION_SUMMARY_CHAR_LIMIT: usize = 512;
-
 /// Collapsed preview for a reasoning Activity. Uses the first non-empty line
 /// so the headline is a natural preview and the full reasoning body is never
 /// marked as truncated — the expanded detail renders it verbatim.
@@ -599,18 +596,6 @@ fn reasoning_first_line(text: &str) -> String {
         .find(|line| !line.is_empty())
         .unwrap_or("Thinking")
         .to_owned()
-}
-
-fn bounded_presentation_summary(text: &str) -> String {
-    // Early-exit with `char_indices().nth()`: arbitrarily large pastes or
-    // reasoning bodies never require a full scan merely to build the
-    // collapsed headline. O(limit) instead of O(len).
-    let Some((boundary, _)) = text.char_indices().nth(PRESENTATION_SUMMARY_CHAR_LIMIT) else {
-        return text.to_owned();
-    };
-    let mut bounded = text[..boundary].to_owned();
-    bounded.push_str("\n... truncated ...");
-    bounded
 }
 
 fn operation_activity_title(operation: &agena_domain::OperationActivity) -> String {
@@ -674,6 +659,101 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn text_artifact_expansion_does_not_mutate_user_document_body() {
+        let turn_id = agena_domain::TurnId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let pasted = format!(
+            "The quick brown fox jumps over the lazy dog. {}",
+            "x".repeat(2_000)
+        );
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::TurnInput { turn_id },
+            actor: ActivityActor::User,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
+                text: pasted.clone(),
+                language: None,
+                label: Some(format!("paste {} chars", pasted.chars().count())),
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry = user_document_entry(turn_id, 1, &document);
+        let defaults = crate::TranscriptDetailDefaults {
+            activity_expanded: false,
+        };
+        let activity_key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::TurnInput(turn_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            80,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &Default::default(),
+        );
+        let expanded = crate::render_entry_detailed(
+            &entry,
+            80,
+            &agena_tui::i18n::I18n::english(),
+            defaults,
+            &std::collections::BTreeMap::from([(activity_key, true)]),
+        );
+        let body_of = |rendered: &crate::renderer::RenderedMessageBlock| -> Vec<String> {
+            rendered
+                .lines
+                .iter()
+                .filter(|line| !line.text.starts_with("user"))
+                .map(|line| line.text.clone())
+                .collect::<Vec<_>>()
+        };
+        let collapsed_body = body_of(&collapsed);
+        let expanded_body = body_of(&expanded);
+        let placeholder_line = |lines: &[String]| -> String {
+            lines
+                .iter()
+                .find(|line| line.contains('[') && line.contains("chars]"))
+                .cloned()
+                .expect("user document placeholder body row must render")
+        };
+        let collapsed_placeholder = placeholder_line(&collapsed_body);
+        let expanded_placeholder = placeholder_line(&expanded_body);
+        assert_eq!(
+            collapsed_placeholder, expanded_placeholder,
+            "expanding a TextArtifact must not change the user message body"
+        );
+        // The placeholder is the first 12 chars of the pasted text plus the
+        // remaining character count, never a generic `paste N chars` label.
+        let placeholder = format!("[The quick br\u{2026} +{} chars]", pasted.chars().count() - 12);
+        assert!(
+            collapsed_placeholder.contains(placeholder.as_str()),
+            "placeholder should be `{placeholder}` but was `{collapsed_placeholder}`"
+        );
+
+        // The expanded activity renders the complete pasted content with no
+        // truncation marker, while the collapsed row keeps it hidden.
+        let expanded_text = expanded_body.join("\n");
+        assert!(
+            expanded_text.contains("The quick brown fox jumps over the lazy dog.")
+                && expanded_text.contains(&"x".repeat(2_000)),
+            "expanded activity must contain the complete pasted content"
+        );
+        assert!(
+            !expanded_text.contains("truncated"),
+            "expanded activity must not be truncated"
+        );
+        let collapsed_text = collapsed_body.join("\n");
+        assert!(
+            !collapsed_text.contains(&"x".repeat(2_000)),
+            "collapsed activity must not leak the full pasted content"
+        );
+    }
 
     fn invalid_tool_input_error(message: &str) -> OperationActivityError {
         OperationActivityError {
@@ -2395,26 +2475,28 @@ mod tests {
     }
 
     #[test]
-    fn text_artifact_inline_placeholder_uses_a_compact_label() {
-        let long = "x".repeat(240);
-        let payload = ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
-            text: "pasted body".to_owned(),
-            language: None,
-            label: Some(long.clone()),
-        });
-        // The persisted message summary can reach 240 chars; the inline
-        // placeholder must stay short enough for one row.
-        let placeholder = user_activity_placeholder(&payload);
-        assert_eq!(placeholder, "[xxxxxxxxxxxxxxxxxxxxxxxx…]");
-        assert!(placeholder.chars().count() < 40);
-
-        // A label without a long summary is kept as-is.
+    fn text_artifact_inline_placeholder_uses_text_prefix_and_remaining_count() {
+        // Short pasted text is shown verbatim; the persisted label is ignored
+        // because the content itself fits the row.
         let short = ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
             text: "pasted body".to_owned(),
             language: None,
             label: Some("paste 1000 chars".to_owned()),
         });
-        assert_eq!(user_activity_placeholder(&short), "[paste 1000 chars]");
+        assert_eq!(user_activity_placeholder(&short), "[pasted body]");
+
+        // Long pasted text keeps the first 12 chars plus the remaining count,
+        // never a generic `paste N chars` label.
+        let long = ActivityPayload::TextArtifact(agena_domain::TextArtifactActivity {
+            text: "abcdefghijklmnopqrstuvwxyz".to_owned(),
+            language: None,
+            label: Some("paste 26 chars".to_owned()),
+        });
+        assert_eq!(
+            user_activity_placeholder(&long),
+            "[abcdefghijkl… +14 chars]"
+        );
+        assert!(user_activity_placeholder(&long).chars().count() < 40);
     }
 
     #[test]

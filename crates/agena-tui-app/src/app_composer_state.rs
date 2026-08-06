@@ -219,23 +219,7 @@ impl App {
             .map(|item| item.placeholder().to_string())
             .collect::<HashSet<_>>();
         existing.extend(self.composer.element_texts());
-        if !existing.contains(base.as_str()) {
-            return base;
-        }
-
-        let stem = base.strip_suffix(']').unwrap_or(base.as_str());
-        for index in 2.. {
-            let candidate = if base.ends_with(']') {
-                format!("{stem} #{index}]")
-            } else {
-                format!("{stem} #{index}")
-            };
-            if !existing.contains(candidate.as_str()) {
-                return candidate;
-            }
-        }
-
-        base
+        unique_composer_placeholder_text(base.as_str(), &mut existing)
     }
 
     pub(crate) fn sync_composer_items_with_editor(&mut self) {
@@ -423,28 +407,7 @@ impl App {
 
     pub(crate) fn restore_composer_draft(&mut self, draft: ComposerDraft) {
         if self.composer.text().trim().is_empty() && self.composer_items.is_empty() {
-            let mut text = String::new();
-            let mut items = Vec::new();
-            let mut elements = Vec::new();
-            for node in draft.document.0 {
-                match node {
-                    agena_domain::ComposerNode::Text { text: value } => text.push_str(&value),
-                    agena_domain::ComposerNode::Activity { activity } => {
-                        let (placeholder, label) =
-                            crate::composer_state_impls::composer_activity_presentation(
-                                &activity.payload,
-                            );
-                        let start = text.len();
-                        text.push_str(&placeholder);
-                        elements.push(start..text.len());
-                        items.push(ComposerItem {
-                            activity: *activity,
-                            placeholder,
-                            label,
-                        });
-                    }
-                }
-            }
+            let (text, elements, items) = rebuild_placeholders(draft.document);
             self.composer.set_text(text);
             self.composer.set_elements(elements);
             self.composer_items = items;
@@ -648,14 +611,74 @@ fn composer_document_from_editor(
     agena_domain::ComposerDocument(nodes)
 }
 
+/// Rebuild the editor projection (text, element ranges, composer items) from a
+/// saved draft document. Placeholders are regenerated from activity payloads,
+/// so identical activities (e.g. the same large block pasted twice) must be
+/// disambiguated here — otherwise `sync_composer_items_with_editor` would match
+/// both elements to one item and the second placeholder would degrade into
+/// literal body text on send.
+fn rebuild_placeholders(
+    document: agena_domain::ComposerDocument,
+) -> (String, Vec<std::ops::Range<usize>>, Vec<ComposerItem>) {
+    let mut text = String::new();
+    let mut items = Vec::new();
+    let mut elements = Vec::new();
+    let mut used = std::collections::HashSet::new();
+    for node in document.0 {
+        match node {
+            agena_domain::ComposerNode::Text { text: value } => text.push_str(&value),
+            agena_domain::ComposerNode::Activity { activity } => {
+                let (base_placeholder, label) =
+                    crate::composer_state_impls::composer_activity_presentation(&activity.payload);
+                let placeholder = unique_composer_placeholder_text(&base_placeholder, &mut used);
+                let start = text.len();
+                text.push_str(&placeholder);
+                elements.push(start..text.len());
+                items.push(ComposerItem {
+                    activity: *activity,
+                    placeholder,
+                    label,
+                });
+            }
+        }
+    }
+    (text, elements, items)
+}
+
+/// Pick `base` unless it is already taken, then `stem #2]`, `stem #3]`, …
+/// matching `make_unique_composer_placeholder`'s suffix scheme.
+fn unique_composer_placeholder_text(
+    base: &str,
+    used: &mut std::collections::HashSet<String>,
+) -> String {
+    if used.insert(base.to_owned()) {
+        return base.to_owned();
+    }
+    let stem = base.strip_suffix(']').unwrap_or(base);
+    for index in 2.. {
+        let candidate = if base.ends_with(']') {
+            format!("{stem} #{index}]")
+        } else {
+            format!("{stem} #{index}")
+        };
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("at least one numbered suffix is always available")
+}
+
 #[cfg(test)]
 mod tests {
     use agena_domain::{
-        ActivityId, ActivityPayload, ComposerActivity, ComposerNode, ResourceActivity,
-        ResourceKind, ResourceReference, SkillReferenceActivity,
+        ActivityId, ActivityPayload, ComposerActivity, ComposerDocument, ComposerNode,
+        ResourceActivity, ResourceKind, ResourceReference, SkillReferenceActivity,
     };
 
-    use super::{ComposerItem, composer_document_from_editor, text_artifact_composer_activity};
+    use super::{
+        ComposerItem, composer_document_from_editor, rebuild_placeholders,
+        text_artifact_composer_activity,
+    };
 
     #[test]
     fn large_paste_is_a_stable_text_artifact_not_placeholder_text() {
@@ -763,6 +786,42 @@ mod tests {
                     )
         ));
         assert_eq!(document.text(), "hi  hi ");
+    }
+
+    #[test]
+    fn restoring_duplicate_activities_keeps_unique_placeholders_and_no_body_text() {
+        let first = text_artifact_composer_activity("x".repeat(1_000));
+        let second = text_artifact_composer_activity("x".repeat(1_000));
+        let document = ComposerDocument(vec![
+            ComposerNode::activity(first.clone()),
+            ComposerNode::activity(second.clone()),
+        ]);
+
+        let (text, elements, items) = rebuild_placeholders(document);
+        // Both artifacts survive with distinct placeholders so the editor never
+        // degrades one of them into literal body text.
+        assert_eq!(items.len(), 2);
+        assert_eq!(elements.len(), 2);
+        assert_ne!(items[0].placeholder(), items[1].placeholder());
+        assert!(items[1].placeholder().contains(" #2"));
+
+        // Round-tripping the rebuilt projection keeps two Activities and zero
+        // literal placeholder text in the message body.
+        let rebuilt =
+            composer_document_from_editor(text.as_str(), elements.as_slice(), items.as_slice());
+        assert!(matches!(
+            rebuilt.0.as_slice(),
+            [
+                ComposerNode::Activity { activity: first_activity },
+                ComposerNode::Activity { activity: second_activity },
+            ] if first_activity.id == first.id && second_activity.id == second.id
+        ));
+        assert!(rebuilt.text().is_empty());
+        let json = serde_json::to_string(&rebuilt).unwrap();
+        // The serialized document must carry the two full artifacts and no
+        // literal placeholder text (a placeholder ends with `… +N chars]`).
+        assert!(!json.contains("chars]"), "body must not leak a placeholder literal");
+        assert_eq!(json.matches("x".repeat(1_000).as_str()).count(), 2);
     }
 }
 

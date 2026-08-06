@@ -204,6 +204,9 @@ pub struct TerminalCapabilities {
     pub keyboard_disambiguation: Capability,
     pub keyboard_alternate_keys: Capability,
     pub keyboard_event_types: Capability,
+    /// Kitty protocol flag 4 (`REPORT_ALL_KEYS_AS_ESCAPE_CODES`). iTerm2 only
+    /// reports Option as Alt when every key is reported through CSI u.
+    pub keyboard_report_all_keys: Capability,
     pub default_color_query: Capability,
     pub clipboard_write_native: Capability,
     pub clipboard_write_osc52: Capability,
@@ -242,6 +245,7 @@ impl TerminalCapabilities {
             keyboard_disambiguation: self.keyboard_disambiguation.is_operational(),
             keyboard_alternate_keys: self.keyboard_alternate_keys.is_operational(),
             keyboard_event_types: self.keyboard_event_types.is_operational(),
+            keyboard_report_all_keys: self.keyboard_report_all_keys.is_operational(),
         }
     }
 }
@@ -263,6 +267,7 @@ mod tests {
             keyboard_disambiguation: capability,
             keyboard_alternate_keys: capability,
             keyboard_event_types: capability,
+            keyboard_report_all_keys: capability,
             default_color_query: capability,
             clipboard_write_native: capability,
             clipboard_write_osc52: capability,
@@ -302,12 +307,15 @@ mod tests {
         let mut capabilities = supported_capabilities();
         capabilities.keyboard_event_types =
             Capability::unsupported(CapabilitySource::TerminalProfile);
+        capabilities.keyboard_report_all_keys =
+            Capability::unsupported(CapabilitySource::TerminalProfile);
         capabilities.mouse_capture =
             Capability::profiled(CapabilitySource::TerminalProfile).with_provider(false);
 
         let lifecycle = capabilities.lifecycle_capabilities();
         assert!(lifecycle.alternate_screen);
         assert!(!lifecycle.keyboard_event_types);
+        assert!(!lifecycle.keyboard_report_all_keys);
         assert!(!lifecycle.mouse_capture);
         assert_eq!(capabilities.alternate_screen.support, Support::Supported);
     }

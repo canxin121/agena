@@ -171,6 +171,25 @@ pub mod profile {
             _ => ProfileSupport::Unknown,
         }
     }
+    /// Whether the family should push the Kitty protocol flag that reports
+    /// every key through CSI u (`REPORT_ALL_KEYS_AS_ESCAPE_CODES`).
+    ///
+    /// iTerm2 treats Option as Alt only while this flag is active. With the
+    /// default "Option Key Sends = Normal" profile it otherwise drops the
+    /// Option modifier and sends Option+Backspace as a plain DEL, so Option
+    /// word-deletion on macOS is indistinguishable from a normal backspace.
+    /// The other CSI-u families already report Option/Alt natively and do not
+    /// need it.
+    pub const fn keyboard_all_keys(f: TerminalFamily) -> ProfileSupport {
+        match f {
+            TerminalFamily::Iterm2 => ProfileSupport::Available,
+            TerminalFamily::Dumb
+            | TerminalFamily::LinuxConsole
+            | TerminalFamily::AppleTerminal
+            | TerminalFamily::XtermCompatible => ProfileSupport::Unsupported,
+            _ => ProfileSupport::Unknown,
+        }
+    }
     pub const fn osc52_write(f: TerminalFamily) -> ProfileSupport {
         match f {
             TerminalFamily::Iterm2
@@ -751,6 +770,38 @@ mod tests {
             profile::keyboard(TerminalFamily::Unknown),
             ProfileSupport::Unknown
         );
+    }
+
+    #[test]
+    fn keyboard_all_keys_is_scoped_to_iterm2_option_quirk() {
+        use profile::ProfileSupport;
+        assert_eq!(
+            profile::keyboard_all_keys(TerminalFamily::Iterm2),
+            ProfileSupport::Available
+        );
+        for family in [
+            TerminalFamily::Kitty,
+            TerminalFamily::Ghostty,
+            TerminalFamily::Foot,
+            TerminalFamily::WezTerm,
+            TerminalFamily::WindowsTerminal,
+            TerminalFamily::VsCode,
+            TerminalFamily::JetBrains,
+            TerminalFamily::Alacritty,
+            TerminalFamily::Vte,
+            TerminalFamily::Konsole,
+            TerminalFamily::Warp,
+            TerminalFamily::Rio,
+            TerminalFamily::Contour,
+            TerminalFamily::Unknown,
+        ] {
+            assert_ne!(
+                profile::keyboard_all_keys(family),
+                ProfileSupport::Available,
+                "{} must not report every key through CSI u",
+                family.label()
+            );
+        }
     }
 
     #[test]

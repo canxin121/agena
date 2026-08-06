@@ -28,6 +28,9 @@ pub struct LifecycleCapabilities {
     pub keyboard_disambiguation: bool,
     pub keyboard_alternate_keys: bool,
     pub keyboard_event_types: bool,
+    /// Kitty protocol flag 4: report every key through CSI u. iTerm2 needs it
+    /// to treat Option as Alt (Option+Backspace word deletion on macOS).
+    pub keyboard_report_all_keys: bool,
 }
 
 /// Process-wide mode ownership is shared with the process panic hook so a
@@ -445,6 +448,9 @@ fn keyboard_enhancement_flags(capabilities: &LifecycleCapabilities) -> KeyboardE
     if capabilities.keyboard_event_types {
         flags |= KeyboardEnhancementFlags::REPORT_EVENT_TYPES;
     }
+    if capabilities.keyboard_report_all_keys {
+        flags |= KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES;
+    }
     flags
 }
 
@@ -578,6 +584,7 @@ mod tests {
             keyboard_disambiguation: true,
             keyboard_alternate_keys: true,
             keyboard_event_types: false,
+            keyboard_report_all_keys: true,
         }
     }
 
@@ -585,6 +592,12 @@ mod tests {
     fn keyboard_flags_never_include_release_events_by_default() {
         let flags = keyboard_enhancement_flags(&fully_enabled_capabilities());
         assert!(!flags.contains(KeyboardEnhancementFlags::REPORT_EVENT_TYPES));
+    }
+
+    #[test]
+    fn keyboard_flags_include_all_keys_for_iterm2_option_quirk() {
+        let flags = keyboard_enhancement_flags(&fully_enabled_capabilities());
+        assert!(flags.contains(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES));
     }
 
     #[cfg(unix)]

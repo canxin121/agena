@@ -101,6 +101,16 @@ impl TerminalContext {
             }
             None => profile_keyboard,
         };
+        let profile_keyboard_all_keys =
+            profile_capability(profiles::keyboard_all_keys(identity.family));
+        let keyboard_all_keys = match keyboard_override {
+            Some(true) => Capability::forced(user),
+            Some(false) => Capability::unsupported(user),
+            None if protocol_barrier && profile_keyboard_all_keys.is_supported() => {
+                profile_keyboard_all_keys.with_path(protocol_path)
+            }
+            None => profile_keyboard_all_keys,
+        };
 
         // TerminalRuntime owns a dedicated bounded color transaction before
         // runtime input starts, then promotes this evidence only when an OSC
@@ -251,6 +261,7 @@ impl TerminalContext {
             keyboard_disambiguation: keyboard,
             keyboard_alternate_keys: keyboard,
             keyboard_event_types: Capability::unsupported(conservative),
+            keyboard_report_all_keys: keyboard_all_keys,
             default_color_query,
             clipboard_write_native,
             clipboard_write_osc52,

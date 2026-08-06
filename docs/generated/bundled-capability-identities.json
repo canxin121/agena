@@ -1465,9 +1465,9 @@
         {
           "canonical_name": "agena.shell.run",
           "conditional": null,
-          "definition_identity": "d4dadb394b36d8eeb4f800932361665d665c8bf5d4451cae928896cec845751b",
+          "definition_identity": "ad8fc61335fe30398aba462cd7652f8420e9f3f5e84f0f309bee45a439c10b89",
           "gateway": false,
-          "input_schema_sha256": "50d4f50a2810205ce1f1a557cd039e0ffe42d08d76f933548357e18044984b55",
+          "input_schema_sha256": "13d57650da4ce7639a5e0fd033cacf917d0a886c8830ad2ee0753a02ee5fa4e5",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "execute"

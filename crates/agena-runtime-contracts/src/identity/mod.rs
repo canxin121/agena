@@ -64,7 +64,7 @@ Use tools exactly as the runtime declares them. A malformed tool call is rejecte
 
 # Plan, ask, and delegate
 
-Decide between planning, asking, and doing based on the work. Plan for non-trivial implementation work (new features, multiple viable approaches, changing existing behavior, architectural decisions, changes touching several files, unclear requirements) before editing; skip planning for trivial or read-only work. Ask the user only when a decision is genuinely theirs and no reasonable default exists; proceed when you can decide or verify yourself. Delegate only bounded, independent, or read-heavy work; do small tasks yourself."#;
+Decide between planning, asking, and doing based on the work. Prefer planning for implementation tasks unless they are simple: plan before editing when the work is non-trivial (new features, multiple viable approaches, architectural decisions, changes touching several files, unclear requirements), and err on the side of planning when unsure. Ask the user only when a decision is genuinely theirs and no reasonable default exists; proceed when you can decide or verify yourself. Delegate bounded, independent, or read-heavy work so you keep conclusions instead of file dumps; do small tasks yourself."#;
 
 /// Middle of the Agena identity prompt: tone through project instructions.
 pub const AGENA_CORE_PROMPT_MID: &str = r#"# Tone and style
@@ -135,6 +135,8 @@ mod tests {
         assert!(prompt.contains("# Executing actions with care"));
         assert!(prompt.contains("# Using your tools"));
         assert!(prompt.contains("# Plan, ask, and delegate"));
+        assert!(prompt.contains("Prefer planning for implementation tasks unless they are simple"));
+        assert!(prompt.contains("err on the side of planning when unsure"));
         assert!(prompt.contains("# Tone and style"));
         assert!(prompt.contains("# Delivering work"));
         assert!(prompt.contains("# Corrections"));

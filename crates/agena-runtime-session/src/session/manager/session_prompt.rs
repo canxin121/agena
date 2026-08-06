@@ -9,6 +9,11 @@
 //! matching sections, which `crate::identity::system_prompt_with_sections`
 //! inserts immediately after `# Plan, ask, and delegate`.
 //!
+//! The sections mirror Claude Code decision semantics: a strong default
+//! toward planning and delegation with explicit exceptions, rather than a
+//! neutral when-to-use list, because models respond more reliably to a
+//! prefer-unless-simple anchor.
+//!
 //! Environment facts are intentionally not injected here: they are served on
 //! demand by the `context.environment` tool because they can change
 //! mid-session.
@@ -23,9 +28,18 @@ use super::SessionManager;
 pub(crate) fn render_planning_section() -> String {
     r#"# Planning
 
-Use `plan.set` for non-trivial implementation work: new features, multiple viable approaches, changing existing behavior or structure, architectural decisions, changes touching 2-3 or more files, unclear requirements, or when user preference affects the direction. Skip planning for single-line fixes, clearly scoped single-function changes, or pure research/read-only work.
+Prefer using `plan.set` for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply:
+- New feature implementation
+- Multiple valid approaches exist
+- Changes affect existing behavior or structure
+- An architectural decision is needed
+- The change will likely touch more than 2-3 files
+- Requirements are unclear and need exploration
+- You would otherwise ask the user to clarify the approach — use `plan.set` instead
 
-While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools, clarify requirements with `ask`, and refine the plan. When the plan is complete, present it for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`."#
+Only skip planning for simple tasks: single-line or few-line fixes, adding a single function with clear requirements, tasks with very specific detailed instructions, or pure research/read-only work. If unsure whether to plan, err on the side of planning.
+
+While the current plan is in the `planning` phase, mutating tools are blocked by the runtime. Explore with read-only tools — delegating parallel exploration to `tasks.run` when the scope spans multiple areas — clarify requirements with `ask`, and refine the plan. When the plan is complete, present it for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`."#
         .to_string()
 }
 
@@ -37,11 +51,14 @@ Use `ask` only when you are blocked on a decision that is genuinely the user's t
         .to_string()
 }
 
-/// Delegation restraint semantics injected when the `agena.tasks` tools are available.
+/// Delegation decision semantics injected when the `agena.tasks` tools are
+/// available: an active trigger paired with restraint, mirroring Claude Code.
 pub(crate) fn render_delegating_section() -> String {
     r#"# Delegating work
 
-Use `tasks.run` only for work that is genuinely parallel, independent, or read-heavy across many files. Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated; keep the number of concurrent subtasks low."#
+Reach for `tasks.run` when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. Attach `skills` that match the task (for example an explore skill for exploration, a read-only review skill for review). For a single-fact lookup where you already know the file, symbol, or value, search directly. Once you have delegated a search, do not also run it yourself — wait for the result.
+
+Do small tasks yourself instead of delegating them; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; keep the number of concurrent subtasks low. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result."#
         .to_string()
 }
 
@@ -91,10 +108,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn planning_section_carries_decision_criteria() {
+    fn planning_section_anchors_on_prefer_unless_simple() {
         let section = render_planning_section();
         assert!(section.contains("# Planning"));
-        assert!(section.contains("plan.set"));
+        assert!(section.contains("Prefer using `plan.set`"));
+        assert!(section.contains("unless they are simple"));
+        assert!(section.contains("err on the side of planning"));
+        assert!(section.contains("use `plan.set` instead"));
         assert!(section.contains("never ask whether the plan is acceptable"));
     }
 
@@ -107,9 +127,13 @@ mod tests {
     }
 
     #[test]
-    fn delegating_section_carries_restraint() {
+    fn delegating_section_reaches_for_parallel_work_and_keeps_conclusions() {
         let section = render_delegating_section();
         assert!(section.contains("# Delegating work"));
+        assert!(section.contains("Reach for `tasks.run`"));
+        assert!(section.contains("keep the conclusion, not the file dumps"));
+        assert!(section.contains("wait for the result"));
         assert!(section.contains("Do small tasks yourself"));
+        assert!(section.contains("Never delegate understanding"));
     }
 }

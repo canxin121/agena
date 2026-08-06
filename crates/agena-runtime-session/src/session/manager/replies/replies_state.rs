@@ -511,7 +511,7 @@ impl SessionManager {
                     model_thinking_mode: options.thinking_mode.clone(),
                     model_speed_mode: options.speed_mode.clone(),
                 },
-            );
+            )?;
             session.messages.push(user_message.clone());
             let checkpoint = MessageCheckpoint::all(&user_message);
             session = self

@@ -65,7 +65,19 @@ pub(super) fn build_message(
     message_state: ExecutionStatus,
     parts: Vec<PartContent>,
     metadata: MessageMetadata,
-) -> Message {
+) -> Result<Message, AppError> {
+    // Every part needs a reserved id; a caller that reserves fewer than it
+    // builds used to index past the end of `part_ids` and abort the process.
+    // Enforce the invariant here so a mismatch surfaces as an internal error
+    // instead of a crash.
+    if ids.part_ids.len() < parts.len() {
+        return Err(AppError::Internal(format!(
+            "reserved {} part ids for {} parts (message {})",
+            ids.part_ids.len(),
+            parts.len(),
+            ids.message_id
+        )));
+    }
     let created_at = Utc::now();
     let parts = parts
         .into_iter()
@@ -81,7 +93,7 @@ pub(super) fn build_message(
             )
         })
         .collect();
-    Message {
+    Ok(Message {
         id: ids.message_id,
         role,
         state: message_state,
@@ -90,7 +102,7 @@ pub(super) fn build_message(
         metadata,
         provider_state: None,
         usage: None,
-    }
+    })
 }
 
 pub(super) fn tool_call_id_for(resolved: &ResolvedPendingTool) -> HistoryToolCallId {
@@ -919,6 +931,51 @@ mod tests {
 
     fn output(payload: ToolPayloadOutput) -> ToolOutput {
         payload.into_tool_output()
+    }
+
+    #[test]
+    fn build_message_rejects_fewer_reserved_part_ids_than_parts() {
+        // The original crash: indexing past the end of part_ids aborted the
+        // process. The guard must turn the mismatch into a clean error.
+        let ids = ReservedMessageIds {
+            message_id: 7,
+            part_ids: vec![100],
+        };
+        let err = build_message(
+            ids,
+            Role::User,
+            ExecutionStatus::Completed,
+            vec![PartContent::text("one"), PartContent::text("two")],
+            MessageMetadata::default(),
+        )
+        .expect_err("fewer reserved ids than parts must error");
+        match err {
+            AppError::Internal(message) => {
+                assert!(message.contains("1 part ids"), "got: {message}");
+                assert!(message.contains("2 parts"), "got: {message}");
+            }
+            other => panic!("expected internal error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_message_succeeds_with_exactly_matching_ids() {
+        let ids = ReservedMessageIds {
+            message_id: 8,
+            part_ids: vec![200, 201],
+        };
+        let message = build_message(
+            ids,
+            Role::User,
+            ExecutionStatus::Completed,
+            vec![PartContent::text("one"), PartContent::text("two")],
+            MessageMetadata::default(),
+        )
+        .expect("matching ids build cleanly");
+        assert_eq!(message.id, 8);
+        assert_eq!(message.parts.len(), 2);
+        assert_eq!(message.parts[0].id, 200);
+        assert_eq!(message.parts[1].id, 201);
     }
 
     #[test]

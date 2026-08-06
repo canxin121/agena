@@ -711,7 +711,7 @@ impl SessionManager {
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
             },
-        );
+        )?;
         session.messages.push(user_message.clone());
         let checkpoint = MessageCheckpoint::all(&user_message);
         self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
@@ -765,7 +765,7 @@ impl SessionManager {
                 model_thinking_mode: None,
                 model_speed_mode: None,
             },
-        );
+        )?;
         session.messages.push(message.clone());
         let checkpoint = MessageCheckpoint::all(&message);
         self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)

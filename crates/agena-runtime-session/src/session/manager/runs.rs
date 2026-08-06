@@ -269,7 +269,7 @@ impl SessionManager {
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
             },
-        );
+        )?;
         for (part, activity_id) in user_message.parts.iter_mut().zip(activity_ids) {
             if let Some(activity_id) = activity_id {
                 part.bind_activity(activity_id);

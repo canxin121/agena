@@ -79,8 +79,8 @@ impl Editor {
         let mut normalized = elements
             .into_iter()
             .filter_map(|range| {
-                let start = min(range.start, self.text.len());
-                let end = min(range.end, self.text.len());
+                let start = snap_to_char_boundary(&self.text, range.start);
+                let end = snap_to_char_boundary(&self.text, range.end);
                 (start < end).then_some(EditorElement { range: start..end })
             })
             .collect::<Vec<_>>();
@@ -1057,6 +1057,17 @@ fn wrapped_editor_lines(text: &str, width: u16) -> Vec<WrappedEditorLine> {
     lines
 }
 
+/// Back the byte index off to the nearest UTF-8 char boundary (0 when it
+/// lands inside a multi-byte char). Guards every `text[a..b]` slice in the
+/// editor against the "not a char boundary" panic.
+fn snap_to_char_boundary(text: &str, mut index: usize) -> usize {
+    index = min(index, text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
 fn previous_grapheme_boundary(text: &str, index: usize) -> usize {
     text[..index]
         .grapheme_indices(true)
@@ -1321,6 +1332,23 @@ mod tests {
         assert_eq!(editor.cursor(), 2);
         editor.set_cursor(usize::MAX);
         assert_eq!(editor.cursor(), editor.text().len());
+    }
+
+    #[test]
+    fn set_elements_snaps_byte_ranges_to_utf8_boundaries() {
+        // A range cut through the middle of a multi-byte char used to produce
+        // a non-boundary element, which later panicked text[range] slicing.
+        // Boundaries must snap back to the previous char boundary.
+        let mut editor = Editor::from_text("ab中文".to_string());
+        // "ab中文" = a(0) b(1) 中(2..5) 文(5..8); byte 3 is inside 中 and
+        // byte 6 inside 文, both must snap back to 2 and 5.
+        editor.set_elements(vec![3..6]);
+
+        assert_eq!(editor.draft_elements(), vec![2..5]);
+        assert_eq!(
+            editor.element_texts().into_iter().collect::<Vec<_>>(),
+            vec!["中".to_string()]
+        );
     }
 
     #[test]

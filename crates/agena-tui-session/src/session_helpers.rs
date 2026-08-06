@@ -135,6 +135,10 @@ pub fn find_search_ranges(text: &str, query: &str) -> Vec<Range<usize>> {
 }
 
 pub fn find_query_match_from(text: &str, query: &str, start_at: usize) -> Option<(usize, usize)> {
+    // start_at is normally a char boundary (the caller advances by matched
+    // ranges or grapheme boundaries), but never slice mid-character if a
+    // future caller passes a raw byte offset.
+    let start_at = snap_to_char_boundary(text, start_at);
     if query.is_ascii() {
         let mut starts = text[start_at..]
             .char_indices()
@@ -166,6 +170,16 @@ pub fn next_grapheme_boundary(text: &str, index: usize) -> usize {
     }
     let grapheme = text[index..].graphemes(true).next().unwrap_or_default();
     index + grapheme.len()
+}
+
+/// Back the byte index off to the nearest UTF-8 char boundary (0 when it
+/// lands inside a multi-byte char), so text slicing never panics.
+fn snap_to_char_boundary(text: &str, mut index: usize) -> usize {
+    index = index.min(text.len());
+    while index > 0 && !text.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 #[cfg(test)]

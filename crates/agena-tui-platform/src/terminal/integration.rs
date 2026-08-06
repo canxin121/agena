@@ -109,7 +109,16 @@ pub fn notification_method(family: TerminalFamily) -> Option<NotificationMethod>
 
 fn notification_text(text: &str) -> String {
     let mut out = sanitize_osc_text(text);
-    out.truncate(MAX_NOTIFICATION_TEXT_BYTES);
+    // String::truncate panics when the byte index falls inside a multi-byte
+    // char, so back off to the previous char boundary when the hard cap cuts
+    // through one. At most four bytes are dropped (a UTF-8 char is ≤4 bytes).
+    if out.len() > MAX_NOTIFICATION_TEXT_BYTES {
+        let mut end = MAX_NOTIFICATION_TEXT_BYTES;
+        while !out.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.truncate(end);
+    }
     out
 }
 
@@ -276,6 +285,29 @@ mod tests {
                 b"\x1b]1337;RequestAttention=yes\x07".to_vec(),
             ]
         );
+    }
+
+    #[test]
+    fn notification_text_capped_at_byte_limit_never_splits_a_multibyte_char() {
+        // A cap landing inside a multi-byte char used to make String::truncate
+        // panic; the text must be cut at the nearest char boundary instead.
+        let wide = "中".repeat(300);
+        let out = notification_text(&wide);
+        assert!(out.len() <= MAX_NOTIFICATION_TEXT_BYTES);
+        assert!(out.is_char_boundary(out.len()));
+        assert_eq!(out.chars().next(), Some('中'));
+
+        // Byte-length cap may still exceed the char boundary requirement.
+        let mixed = format!("{}a{}b", "中".repeat(200), "文".repeat(200));
+        let out = notification_text(&mixed);
+        assert!(out.len() <= MAX_NOTIFICATION_TEXT_BYTES);
+        assert!(out.is_char_boundary(out.len()));
+    }
+
+    #[test]
+    fn short_notification_text_is_untouched() {
+        assert_eq!(notification_text("done"), "done");
+        assert_eq!(notification_text("中"), "中");
     }
 
     #[test]

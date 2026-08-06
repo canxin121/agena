@@ -972,7 +972,8 @@ mod tests {
                 model_id: options.model.model_id.to_string(),
                 ..MessageMetadata::default()
             },
-        );
+        )
+        .expect("build approved-failure operation message");
         message.parts[0].operation_id = Some(operation_id.to_owned());
         session.messages.push(message.clone());
         session = manager
@@ -1150,7 +1151,8 @@ mod tests {
                 model_id: options.model.model_id.to_string(),
                 ..Default::default()
             },
-        );
+        )
+        .expect("build active-permission operation message");
         message.parts[0].operation_id = Some(operation_id.to_owned());
         session.messages.push(message.clone());
         session = manager
@@ -1296,7 +1298,8 @@ mod tests {
                 PartContent::text("third"),
             ],
             MessageMetadata::default(),
-        );
+        )
+        .expect("build steer user message");
         let message_id = message.id;
         let changed_part_id = message.parts[1].id;
         session.messages.push(message.clone());
@@ -1430,7 +1433,8 @@ mod tests {
                 model_id: options.model.model_id.to_string(),
                 ..MessageMetadata::default()
             },
-        );
+        )
+        .expect("build approved-continuation operation message");
         message.parts[0].operation_id = Some(operation_id.to_owned());
         session.messages.push(message.clone());
         session = manager
@@ -1685,7 +1689,8 @@ mod tests {
                 model_id: "reply-test-model".to_owned(),
                 ..MessageMetadata::default()
             },
-        );
+        )
+        .expect("build batch assistant message");
         message.parts[0].operation_id = Some("batch-fast".to_owned());
         message.parts[1].operation_id = Some("batch-slow".to_owned());
         session.messages.push(message.clone());
@@ -1819,7 +1824,8 @@ mod tests {
                 model_id: "reply-test-model".to_owned(),
                 ..MessageMetadata::default()
             },
-        );
+        )
+        .expect("build permission-batch assistant message");
         message.parts[0].operation_id = Some("permission-batch-fast".to_owned());
         message.parts[1].operation_id = Some("permission-batch-slow".to_owned());
         session.messages.push(message.clone());
@@ -2126,7 +2132,8 @@ mod tests {
                 model_id: options.model.model_id.to_string(),
                 ..MessageMetadata::default()
             },
-        );
+        )
+        .expect("build approved-response operation message");
         message.parts[0].operation_id = Some(operation_id.to_owned());
         session.messages.push(message.clone());
         session = manager
@@ -2358,7 +2365,8 @@ mod tests {
                 parent_message_id,
                 ..Default::default()
             },
-        );
+        )
+        .expect("build assistant message");
         session.messages.push(message.clone());
         let session = manager
             .persist_session_changes(
@@ -2477,7 +2485,8 @@ mod tests {
                 model_id: "reply-test-model".to_owned(),
                 ..MessageMetadata::default()
             },
-        );
+        )
+        .expect("build interrupted-tool operation message");
         message.parts[0].operation_id = Some("interrupted-tool-operation".to_owned());
         session.messages.push(message.clone());
         session = manager
@@ -2660,7 +2669,8 @@ mod tests {
                 model_id: "reply-test-model".to_owned(),
                 ..MessageMetadata::default()
             },
-        );
+        )
+        .expect("build lazy-interrupted-tool operation message");
         message.parts[0].operation_id = Some("lazy-interrupted-tool-operation".to_owned());
         session.messages.push(message.clone());
         session = manager
@@ -3103,7 +3113,8 @@ mod tests {
             ExecutionStatus::InProgress,
             vec![PartContent::operation(operation)],
             metadata,
-        );
+        )
+        .expect("build reply-lock operation message");
         message.parts[0].operation_id = Some("reply-lock-operation".to_string());
         session.messages.push(message.clone());
         session = manager

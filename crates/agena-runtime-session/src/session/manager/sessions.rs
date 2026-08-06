@@ -196,7 +196,7 @@ impl SessionManager {
                     model_thinking_mode: None,
                     model_speed_mode: None,
                 },
-            );
+            )?;
             session.messages.push(system_message.clone());
             injected_messages.push(system_message);
         }
@@ -223,7 +223,7 @@ impl SessionManager {
                     model_thinking_mode: None,
                     model_speed_mode: None,
                 },
-            );
+            )?;
             session.messages.push(user_message.clone());
             injected_messages.push(user_message);
         }

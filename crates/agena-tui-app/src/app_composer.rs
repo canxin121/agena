@@ -697,8 +697,12 @@ impl App {
             .into_iter()
             .filter(|entry| plugin_command_matches_slash_query(entry, &query))
         {
-            let slash_name = plugin_command_slash_name(&entry)
-                .expect("plugin slash commands have a normalized slash name");
+            let Some(slash_name) = plugin_command_slash_name(&entry) else {
+                // A plugin may legally declare a command without a slash
+                // name; skip rather than assume the suggestion source
+                // pre-filtered it out.
+                continue;
+            };
             let key = format!("plugin-command:{}:{}", entry.plugin_id, entry.command.id);
             actions.insert(
                 key.clone(),

@@ -528,8 +528,10 @@ impl App {
                 continue;
             }
             // Plan progress has a dedicated composer bottom-right chip; keeping
-            // it in the footer would duplicate it above the input box.
-            if segment.segment_id == "plan" {
+            // it in the footer would duplicate it above the input box. The plan
+            // segment is qualified by its contributing session (`plan:{id}`) so
+            // stale segments from other sessions are never rendered either.
+            if segment.segment_id == "plan" || segment.segment_id.starts_with("plan:") {
                 continue;
             }
             if segment.content.trim().is_empty() {
@@ -684,10 +686,12 @@ impl App {
     /// Text for the composer's bottom-right chip: plan progress contributed
     /// by the planning plugin's statusline segment.
     fn composer_plan_progress_part(&self) -> Option<String> {
+        let session_id = self.transcript.session_id?;
+        let expected_segment = format!("plan:{session_id}");
         self.backend
             .plugin_statusline_segments()
             .into_iter()
-            .find(|segment| segment.segment_id == "plan")
+            .find(|segment| segment.segment_id == expected_segment)
             .map(|segment| segment.content.trim().to_string())
             .filter(|content| !content.is_empty())
     }

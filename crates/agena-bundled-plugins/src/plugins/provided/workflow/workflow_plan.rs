@@ -567,10 +567,18 @@ impl WorkflowPlugin {
         plan: Option<&WorkflowPlan>,
     ) -> SdkResult<()> {
         let host = self.host()?;
+        let session_id = host
+            .get_session(HostGetSessionRequest::default())
+            .await?
+            .session
+            .id;
+        // The plan segment is qualified by the contributing session so the UI
+        // never renders one session's plan while another session is active.
+        let segment_id = format!("{PLAN_STATUSLINE_SEGMENT_ID}:{session_id}");
         match plan {
             Some(plan) => {
                 host.ui_statusline_contribute(HostStatuslineContributeRequest {
-                    segment_id: PLAN_STATUSLINE_SEGMENT_ID.to_string(),
+                    segment_id,
                     content: Self::plan_statusline_content(plan),
                     priority: 120,
                     color: None,
@@ -580,7 +588,7 @@ impl WorkflowPlugin {
             None => {
                 let _ = host
                     .ui_statusline_remove(HostStatuslineRemoveRequest {
-                        segment_id: PLAN_STATUSLINE_SEGMENT_ID.to_string(),
+                        segment_id,
                     })
                     .await?;
             }

@@ -5,21 +5,46 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::activity::ActivitySourceAdapter;
 use crate::attachment::AttachmentItem;
 use crate::error::{PluginError, Result};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::{PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
+use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 
 #[async_trait]
 pub trait HostClient: Send + Sync + 'static {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value);
 
     async fn publish_event(&self, env: EventEnvelope) -> Result<()>;
+
+    /// Publish (create or update) a background-activity record directly into
+    /// the host's unified activity registry. Plugins that own long-running
+    /// work should use this instead of publishing raw `plugin_event` records
+    /// with a serialized activity payload.
+    async fn publish_activity(&self, activity: BackgroundActivity) -> Result<()> {
+        let _ = activity;
+        Err(unavailable())
+    }
+
+    /// Register a source adapter so the host can route log reads and stop
+    /// requests for activities of `kind` back to this plugin. Returns
+    /// `HostUnavailable` on hosts without activity-source support.
+    async fn register_activity_source(
+        &self,
+        kind: BackgroundActivityKind,
+        adapter: Arc<dyn ActivitySourceAdapter>,
+    ) -> Result<()> {
+        let _ = kind;
+        let _ = adapter;
+        Err(unavailable())
+    }
 
     async fn subscribe_events(&self, filter: EventFilter) -> Result<EventSubscription>;
 

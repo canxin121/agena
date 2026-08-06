@@ -12,6 +12,7 @@ use agena_domain::{
     BackgroundActivityLogRead, BackgroundActivityStatus, ProcessStatus, ProcessSummary,
     SubtaskStatusChangedEvent,
 };
+use agena_plugin_sdk::activity::ActivitySourceAdapter;
 use agena_runtime_session::SessionManager;
 
 use super::registry::ActivityRegistry;
@@ -25,6 +26,10 @@ use crate::{
 pub(crate) struct ActivityRuntimeState {
     pub(crate) registry: ActivityRegistry,
     pub(crate) monitor: Option<Arc<dyn crate::MonitorService>>,
+    /// Adapters registered by plugins for activity kinds they own. When an
+    /// adapter exists for a kind, log reads and stop requests dispatch to it
+    /// instead of the built-in per-kind behavior.
+    sources: Arc<parking_lot::Mutex<Vec<(BackgroundActivityKind, Arc<dyn ActivitySourceAdapter>)>>>,
 }
 
 impl ActivityRuntimeState {
@@ -32,7 +37,37 @@ impl ActivityRuntimeState {
         registry: ActivityRegistry,
         monitor: Option<Arc<dyn crate::MonitorService>>,
     ) -> Self {
-        Self { registry, monitor }
+        Self {
+            registry,
+            monitor,
+            sources: Arc::new(parking_lot::Mutex::new(Vec::new())),
+        }
+    }
+
+    /// Register (or replace) the plugin adapter that owns one activity kind.
+    pub(crate) fn register_source(
+        &self,
+        kind: BackgroundActivityKind,
+        adapter: Arc<dyn ActivitySourceAdapter>,
+    ) {
+        let mut sources = self.sources.lock();
+        if let Some(entry) = sources.iter_mut().find(|(existing, _)| *existing == kind) {
+            entry.1 = adapter;
+        } else {
+            sources.push((kind, adapter));
+        }
+    }
+
+    /// Look up the adapter registered for a kind, if any.
+    pub(crate) fn source_for(
+        &self,
+        kind: BackgroundActivityKind,
+    ) -> Option<Arc<dyn ActivitySourceAdapter>> {
+        self.sources
+            .lock()
+            .iter()
+            .find(|(existing, _)| *existing == kind)
+            .map(|(_, adapter)| Arc::clone(adapter))
     }
 }
 

@@ -188,7 +188,7 @@ impl AgenaRuntime {
 
                 runtime.apply_tracing_filter(initial_snapshot.tracing_config());
         runtime.spawn_background_tasks();
-        runtime.spawn_task_activity_bridge();
+        runtime.spawn_subtask_activity_bridge();
         Ok(runtime)
     }
 }
@@ -196,59 +196,34 @@ impl AgenaRuntime {
 impl AgenaRuntime {
     /// Subscribe to delegated-task status events and project them into the
     /// unified background-activity registry.
-    fn spawn_task_activity_bridge(&self) {
+    fn spawn_subtask_activity_bridge(&self) {
         let Some(manager) = self.current_snapshot().session_manager() else {
             return;
         };
         let stream = manager.clone() as Arc<dyn agena_runtime::RuntimeEventStreamService>;
         let registry = self.activities.registry.clone();
         tokio::spawn(async move {
-                        let filter = agena_domain::EventFilter {
+            let filter = agena_domain::EventFilter {
                 scope: agena_domain::EventScope::Global,
                 kinds: Some(
-                    [
-                        agena_domain::EventKindTag::from("subtask_status_changed"),
-                        agena_domain::EventKindTag::from("plugin_event"),
-                    ]
-                    .into_iter()
-                    .collect(),
+                    [agena_domain::EventKindTag::from("subtask_status_changed")]
+                        .into_iter()
+                        .collect(),
                 ),
                 since_seq_global: None,
             };
-                        let mut subscription = stream.subscribe_events(filter);
+            let mut subscription = stream.subscribe_events(filter);
             while let Some(item) = subscription.recv().await {
                 let event = match item {
                     agena_runtime::RuntimeLiveEventSubscriptionItem::Event(event) => event,
                     agena_runtime::RuntimeLiveEventSubscriptionItem::Lagged(_) => continue,
                 };
-                match event.kind.as_str() {
-                    "subtask_status_changed" => {
-                        if let Ok(event) = serde_json::from_value::<
-                            agena_domain::SubtaskStatusChangedEvent,
-                        >(event.payload)
-                        {
-                            crate::activity::upsert_task_activity(&registry, &event);
-                        }
-                    }
-                    "plugin_event" => {
-                        if let Ok(payload) =
-                            serde_json::from_value::<crate::event::PluginEventPayload>(event.payload)
-                            && payload.kind_label == "activity"
-                        {
-                            // Extension point: plugins can publish rich
-                            // activity records (description, prompt excerpt)
-                            // as `PluginEvent { kind_label: "activity" }`
-                            // whose payload is a serialized
-                            // `BackgroundActivity`.
-                            if let Ok(activity) = serde_json::from_value::<
-                                agena_domain::BackgroundActivity,
-                            >(payload.payload)
-                            {
-                                registry.upsert(activity);
-                            }
-                        }
-                    }
-                    _ => {}
+                if event.kind.as_str() == "subtask_status_changed"
+                    && let Ok(event) = serde_json::from_value::<
+                        agena_domain::SubtaskStatusChangedEvent,
+                    >(event.payload)
+                {
+                    crate::activity::upsert_task_activity(&registry, &event);
                 }
             }
         });
@@ -282,6 +257,16 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         wait_ms: u64,
     ) -> Result<agena_domain::BackgroundActivityLogRead, agena_runtime::ActivityControlError> {
         let activity = self.get_activity(activity_id)?;
+        // Plugin-registered activity sources own their log stream; dispatch
+        // to them before any built-in behavior.
+        if let Some(adapter) = self.activities.source_for(activity.kind) {
+            return adapter
+                .read_logs(activity_id, since_seq, limit, wait_ms)
+                .await
+                .map_err(|error| {
+                    agena_runtime::ActivityControlError::internal(error.to_string())
+                });
+        }
         match activity.kind {
             agena_domain::BackgroundActivityKind::Shell => {
                 let Some(monitor) = self.activities.monitor.as_ref() else {
@@ -311,6 +296,9 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                 )
                 .await)
             }
+            // Kinds without a registered source adapter (runtime maintenance
+            // tasks today, browser sessions before the web plugin registers
+            // its adapter) have no incremental log stream.
             agena_domain::BackgroundActivityKind::Runtime
             | agena_domain::BackgroundActivityKind::Browser => Ok(
                 agena_domain::BackgroundActivityLogRead {
@@ -327,7 +315,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         }
     }
 
-        async fn stop_activity(
+    async fn stop_activity(
         &self,
         activity_id: &str,
     ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
@@ -337,6 +325,18 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         }
         if !activity.cancellable {
             return Err(agena_runtime::ActivityControlError::not_stoppable(activity_id));
+        }
+        // Plugin-registered activity sources implement stop themselves (e.g.
+        // the web plugin closes the matching browser session); the adapter
+        // publishes the terminal record so the refreshed activity reflects it.
+        if let Some(adapter) = self.activities.source_for(activity.kind) {
+            adapter
+                .stop(activity_id)
+                .await
+                .map_err(|error| {
+                    agena_runtime::ActivityControlError::internal(error.to_string())
+                })?;
+            return self.get_activity(activity_id);
         }
         match activity.kind {
             agena_domain::BackgroundActivityKind::Shell => {
@@ -369,6 +369,8 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     .await
                     .map_err(|err| agena_runtime::ActivityControlError::internal(err.to_string()))?;
             }
+            // Without a registered source adapter there is nothing to stop;
+            // the record's `cancellable` flag is the source's responsibility.
             agena_domain::BackgroundActivityKind::Browser => {
                 return Err(agena_runtime::ActivityControlError::not_stoppable(activity_id));
             }

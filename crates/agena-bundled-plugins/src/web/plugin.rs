@@ -19,10 +19,16 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
+use agena_domain::{
+    BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
+    BackgroundActivityLogRead, BackgroundActivityStatus,
+};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::host_api::HostClient;
-use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{
+    ActivitySourceAdapter, Result as SdkResult, ToolInvokeOutput, async_trait,
+};
 
 fn json_schema_for_default_with_metadata<T>(
     default: T,
@@ -486,7 +492,10 @@ pub(crate) struct WebPlugin {
     state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,
     sync_lock: Mutex<()>,
-    browser_clients: Mutex<BTreeMap<String, CdpClient>>,
+    /// Shared interactive-browser session state. Owned by the plugin and by
+    /// the registered [`BrowserActivitySource`] so log reads and stop requests
+    /// can reach live sessions without going through a tool invocation.
+    browser_state: Arc<BrowserActivityState>,
     user_agent: String,
 }
 
@@ -496,13 +505,232 @@ impl Default for WebPlugin {
     }
 }
 
+/// Human-facing details for an interactive browser session, retained so the
+/// terminal activity record reuses the same title/URL/start time.
+#[derive(Debug, Clone)]
+struct BrowserSessionMeta {
+    title: String,
+    url: String,
+    started_at_ms: i64,
+}
+
+/// A CDP notification forwarded from a target session's connection.
+#[derive(Debug, Clone)]
+struct CdpEvent {
+    method: String,
+    params: serde_json::Value,
+}
+
+/// Bounded per-session log buffer implementing the unified `since_seq` cursor
+/// protocol so the activities panel can tail browser output like any other
+/// activity.
+#[derive(Debug, Clone)]
+struct BrowserSessionLog {
+    lines: VecDeque<BackgroundActivityLogLine>,
+    next_seq: u64,
+    dropped: u64,
+}
+
+const BROWSER_LOG_CAPACITY: usize = 500;
+
+impl BrowserSessionLog {
+    fn new() -> Self {
+        Self {
+            lines: VecDeque::new(),
+            // Seq numbering follows the unified cursor protocol used by the
+            // shell monitor and plugin host logs: 0 means "no events yet" and
+            // the first line gets seq 1, so a fresh read with `since_seq = 0`
+            // (`seq > since_seq`) returns every line including the first.
+            next_seq: 1,
+            dropped: 0,
+        }
+    }
+
+    fn append(&mut self, stream: &str, text: impl Into<String>) {
+        let line = BackgroundActivityLogLine {
+            seq: self.next_seq,
+            stream: stream.to_string(),
+            ts_ms: chrono::Utc::now().timestamp_millis(),
+            text: text.into(),
+        };
+        self.next_seq = self.next_seq.saturating_add(1);
+        if self.lines.len() >= BROWSER_LOG_CAPACITY {
+            self.lines.pop_front();
+            self.dropped = self.dropped.saturating_add(1);
+        }
+        self.lines.push_back(line);
+    }
+
+    fn read(&self, activity_id: &str, since_seq: u64, limit: Option<u32>) -> BackgroundActivityLogRead {
+        let mut lines = self
+            .lines
+            .iter()
+            .filter(|line| line.seq > since_seq)
+            .cloned()
+            .collect::<Vec<_>>();
+        let has_more = limit.is_some_and(|limit| lines.len() as u32 > limit);
+        if let Some(limit) = limit {
+            lines.truncate(limit as usize);
+        }
+        let last_seq = lines
+            .last()
+            .map(|line| line.seq)
+            .unwrap_or(since_seq);
+        BackgroundActivityLogRead {
+            activity_id: activity_id.to_string(),
+            status: BackgroundActivityStatus::Running,
+            lines,
+            last_seq,
+            has_more,
+            dropped_lines: self.dropped,
+            exit_code: None,
+            completion_reason: None,
+        }
+    }
+}
+
+/// Shared interactive-browser session state: live CDP clients, activity
+/// metadata, per-session log buffers, and the browser-level (root) client used
+/// to close targets. Both [`WebPlugin`] and [`BrowserActivitySource`] hold an
+/// `Arc` to this so control requests can reach the live sessions.
+#[derive(Clone)]
+struct BrowserActivityState {
+    clients: Arc<tokio::sync::Mutex<BTreeMap<String, CdpClient>>>,
+    meta: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionMeta>>>,
+    logs: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionLog>>>,
+    root: Arc<tokio::sync::Mutex<Option<CdpClient>>>,
+}
+
+impl BrowserActivityState {
+    fn new() -> Self {
+        Self {
+            clients: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            meta: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            logs: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            root: Arc::new(tokio::sync::Mutex::new(None)),
+        }
+    }
+
+    async fn append_log(&self, target_id: &str, stream: &str, text: impl Into<String>) {
+        self.logs
+            .lock()
+            .await
+            .entry(target_id.to_string())
+            .or_insert_with(BrowserSessionLog::new)
+            .append(stream, text);
+    }
+
+    /// Close one target: ask the browser to close it over CDP, drop the local
+    /// client and metadata, append a log line, and publish the terminal
+    /// activity record. Returns whether the CDP close was acknowledged.
+    async fn close_session(
+        &self,
+        target_id: &str,
+        message: &str,
+        host: &dyn HostClient,
+    ) -> SdkResult<bool> {
+        let closed = match self.root.lock().await.as_ref() {
+            Some(root) => root
+                .command(
+                    "Target.closeTarget",
+                    serde_json::json!({ "targetId": target_id }),
+                )
+                .await
+                .map(|value| {
+                    value
+                        .get("success")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .unwrap_or(false),
+            None => false,
+        };
+        self.clients.lock().await.remove(target_id);
+        let finished_at_ms = chrono::Utc::now().timestamp_millis();
+        let meta = self.meta.lock().await.remove(target_id);
+        self.append_log(target_id, "event", format!("Closed browser session {target_id}."))
+            .await;
+        let now = chrono::Utc::now().timestamp_millis();
+        let activity = browser_activity(
+            format!("browser_{target_id}"),
+            meta.as_ref()
+                .map(|meta| meta.title.clone())
+                .unwrap_or_else(|| "Browser session".to_string()),
+            meta.as_ref()
+                .map(|meta| meta.url.clone())
+                .unwrap_or_else(|| format!("session {target_id}")),
+            BackgroundActivityStatus::Stopped,
+            Some(meta.as_ref().map(|meta| meta.started_at_ms).unwrap_or(now)),
+            Some(finished_at_ms),
+            Some(message.to_string()),
+        );
+        let _ = host.publish_activity(activity).await;
+        self.logs.lock().await.remove(target_id);
+        Ok(closed)
+    }
+}
+
+/// `ActivitySourceAdapter` the web plugin registers for the `Browser` kind so
+/// the host can route log reads and stop requests to the live sessions.
+struct BrowserActivitySource {
+    state: Arc<BrowserActivityState>,
+    host: Arc<dyn HostClient>,
+}
+
+#[async_trait]
+impl ActivitySourceAdapter for BrowserActivitySource {
+    async fn read_logs(
+        &self,
+        activity_id: &str,
+        since_seq: u64,
+        limit: Option<u32>,
+        _wait_ms: u64,
+    ) -> SdkResult<BackgroundActivityLogRead> {
+        let target_id = activity_id.strip_prefix("browser_").unwrap_or(activity_id);
+        let running = self.state.meta.lock().await.contains_key(target_id);
+        let mut read = self
+            .state
+            .logs
+            .lock()
+            .await
+            .get(target_id)
+            .map(|log| log.read(activity_id, since_seq, limit))
+            .unwrap_or_else(|| {
+                agena_plugin_host::sdk::activity::empty_log_read(activity_id)
+            });
+        read.status = if running {
+            BackgroundActivityStatus::Running
+        } else {
+            BackgroundActivityStatus::Stopped
+        };
+        Ok(read)
+    }
+
+    async fn stop(&self, activity_id: &str) -> SdkResult<()> {
+        let target_id = activity_id
+            .strip_prefix("browser_")
+            .unwrap_or(activity_id)
+            .to_string();
+        let _ = self
+            .state
+            .close_session(
+                &target_id,
+                "Stopped from the activities panel.",
+                self.host.as_ref(),
+            )
+            .await?;
+        Ok(())
+    }
+}
+
 struct WebPluginState {
     config: WebConfig,
     fetch_coordinator: WebFetchCoordinator,
+    host: Arc<dyn HostClient>,
 }
 
 impl WebPluginState {
-    fn new(config: WebConfig) -> Self {
+    fn new(config: WebConfig, host: Arc<dyn HostClient>) -> Self {
         Self {
             fetch_coordinator: WebFetchCoordinator::new(WebFetchCoordinatorConfig {
                 cache_ttl: Duration::from_secs(config.fetch.cache.ttl_secs),
@@ -510,7 +738,65 @@ impl WebPluginState {
                 per_host_delay: Duration::from_millis(config.fetch.request.delay_ms),
             }),
             config,
+            host,
         }
+    }
+}
+
+fn browser_activity(
+    id: String,
+    title: String,
+    description: String,
+    status: BackgroundActivityStatus,
+    started_at_ms: Option<i64>,
+    finished_at_ms: Option<i64>,
+    message: Option<String>,
+) -> BackgroundActivity {
+    let now = chrono::Utc::now().timestamp_millis();
+    BackgroundActivity {
+        id,
+        kind: BackgroundActivityKind::Browser,
+        status,
+        title,
+        description,
+        command: None,
+        workdir: None,
+        session_id: None,
+        parent_session_id: None,
+        created_at_ms: started_at_ms.unwrap_or(now),
+        started_at_ms: started_at_ms.unwrap_or(now),
+        finished_at_ms,
+        exit_code: None,
+        message,
+        failure: None,
+        last_seq: 0,
+        has_more: false,
+        dropped_lines: 0,
+        cancellable: status.is_active(),
+        dismissible: status.is_terminal(),
+    }
+}
+
+/// Human-facing title segment for a URL: host plus the non-root path.
+fn browser_title_target(url: &url::Url) -> String {
+    let mut title = url.host_str().unwrap_or(url.as_str()).to_owned();
+    let path = url.path().trim_end_matches('/');
+    if !path.is_empty() {
+        title.push_str(path);
+    }
+    title
+}
+
+/// Human-readable text for a CDP `RemoteObject` in `Runtime.consoleAPICalled`
+/// args: prefer the structured value, fall back to the inspector description.
+fn cdp_remote_object_text(value: &serde_json::Value) -> String {
+    if let Some(description) = value.get("description").and_then(serde_json::Value::as_str) {
+        return description.to_string();
+    }
+    match value.get("value") {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
     }
 }
 
@@ -718,7 +1004,7 @@ impl WebPlugin {
             state: OnceLock::new(),
             workspace_root: OnceLock::new(),
             sync_lock: Mutex::new(()),
-            browser_clients: Mutex::new(BTreeMap::new()),
+            browser_state: Arc::new(BrowserActivityState::new()),
             user_agent: "agena-web".to_owned(),
         }
     }
@@ -727,14 +1013,26 @@ impl WebPlugin {
     async fn init(
         &self,
         ctx: agena_plugin_host::sdk::InitContext,
-        _host: Arc<dyn HostClient>,
+        host: Arc<dyn HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.state
-            .set(WebPluginState::new(parse_web_config(ctx.config)?))
+            .set(WebPluginState::new(parse_web_config(ctx.config)?, host.clone()))
             .map_err(|_| PluginError::internal("web plugin initialized more than once"))?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("web plugin workspace root initialized more than once")
         })?;
+        // First-class activity source: the host dispatches browser log reads
+        // and stop requests back to this plugin, so the activities panel can
+        // tail and stop sessions like any other background work. Registration
+        // is best-effort: older hosts simply keep the empty/not-stoppable
+        // fallbacks for the Browser kind.
+        let source = BrowserActivitySource {
+            state: Arc::clone(&self.browser_state),
+            host: host.clone(),
+        };
+        let _ = host
+            .register_activity_source(BackgroundActivityKind::Browser, Arc::new(source))
+            .await;
         Ok(agena_plugin_host::sdk::InitOutcome::ack(
             agena_plugin_host::sdk::Plugin::manifest(self),
         ))
@@ -743,7 +1041,25 @@ impl WebPlugin {
     #[hook(shutdown)]
     async fn shutdown(&self) -> SdkResult<()> {
         // Drop CDP sockets before killing the underlying browser process.
-        self.browser_clients.lock().await.clear();
+        self.browser_state.clients.lock().await.clear();
+        *self.browser_state.root.lock().await = None;
+        let finished_at_ms = chrono::Utc::now().timestamp_millis();
+        let sessions = std::mem::take(&mut *self.browser_state.meta.lock().await)
+            .into_iter()
+            .collect::<Vec<_>>();
+        for (session_id, meta) in sessions {
+            self.browser_state
+                .append_log(&session_id, "event", "Plugin shutdown closed the managed browser.")
+                .await;
+            self.publish_browser_terminal(
+                &session_id,
+                Some(&meta),
+                finished_at_ms,
+                "Plugin shutdown closed the managed browser.".to_string(),
+            )
+            .await;
+        }
+        self.browser_state.logs.lock().await.clear();
         tokio::task::spawn_blocking(shutdown_local_browser)
             .await
             .map_err(|error| {
@@ -768,6 +1084,54 @@ impl WebPlugin {
             .get()
             .map(PathBuf::as_path)
             .ok_or_else(|| PluginError::internal("web plugin invoked before init"))
+    }
+
+    /// Publish a browser session as a unified background activity so the TUI
+    /// `/activities` panel and web `/activities` page can list and follow it.
+    /// Records go straight into the host's activity registry through the
+    /// first-class `HostClient::publish_activity` capability.
+    async fn publish_browser_activity(&self, activity: BackgroundActivity) -> SdkResult<()> {
+        let host = self.state()?.host.clone();
+        host.publish_activity(activity)
+            .await
+            .map_err(|error| PluginError::internal(format!("publish browser activity: {error}")))
+    }
+
+    async fn publish_browser_running(&self, session_id: &str, meta: &BrowserSessionMeta) {
+        let _ = self
+            .publish_browser_activity(browser_activity(
+                format!("browser_{session_id}"),
+                meta.title.clone(),
+                meta.url.clone(),
+                BackgroundActivityStatus::Running,
+                Some(meta.started_at_ms),
+                None,
+                None,
+            ))
+            .await;
+    }
+
+    async fn publish_browser_terminal(
+        &self,
+        session_id: &str,
+        meta: Option<&BrowserSessionMeta>,
+        finished_at_ms: i64,
+        message: String,
+    ) {
+        let now = chrono::Utc::now().timestamp_millis();
+        let _ = self
+            .publish_browser_activity(browser_activity(
+                format!("browser_{session_id}"),
+                meta.map(|meta| meta.title.clone())
+                    .unwrap_or_else(|| "Browser session".to_string()),
+                meta.map(|meta| meta.url.clone())
+                    .unwrap_or_else(|| format!("session {session_id}")),
+                BackgroundActivityStatus::Stopped,
+                Some(meta.map(|meta| meta.started_at_ms).unwrap_or(now)),
+                Some(finished_at_ms),
+                Some(message),
+            ))
+            .await;
     }
 
     fn store(&self) -> SdkResult<CrawlStore> {
@@ -884,12 +1248,22 @@ impl WebPlugin {
     }
 
     async fn browser_client(&self, target_id: Option<&str>) -> SdkResult<CdpClient> {
+        self.browser_client_with_events(target_id, None).await
+    }
+
+    /// Like [`WebPlugin::browser_client`] but attaches the target session with
+    /// an optional CDP notification sink used for live activity logging.
+    async fn browser_client_with_events(
+        &self,
+        target_id: Option<&str>,
+        events: Option<mpsc::UnboundedSender<CdpEvent>>,
+    ) -> SdkResult<CdpClient> {
         let Some(target_id) = target_id else {
             let endpoint = self.browser_endpoint().await?;
-            return CdpClient::connect(endpoint.as_str(), None).await;
+            return CdpClient::connect(endpoint.as_str(), None, events).await;
         };
 
-        let mut clients = self.browser_clients.lock().await;
+        let mut clients = self.browser_state.clients.lock().await;
         if let Some(client) = clients.get(target_id)
             && !client.is_closed()
         {
@@ -898,14 +1272,138 @@ impl WebPlugin {
         clients.remove(target_id);
 
         let endpoint = self.browser_endpoint().await?;
-        let client = CdpClient::connect(endpoint.as_str(), Some(target_id)).await?;
+        let client = CdpClient::connect(endpoint.as_str(), Some(target_id), events).await?;
         client.enable_navigation_interception().await?;
         clients.insert(target_id.to_string(), client.clone());
         Ok(client)
     }
 
     async fn forget_browser_client(&self, target_id: &str) {
-        self.browser_clients.lock().await.remove(target_id);
+        self.browser_state.clients.lock().await.remove(target_id);
+    }
+
+    /// Consume CDP notifications for one interactive session and project
+    /// main-frame navigations, console output, and browser log entries into
+    /// the shared activity log buffer and the live activity record. Runs
+    /// detached for the session's lifetime; exits when the target connection
+    /// closes and the event channel is dropped.
+    fn spawn_browser_event_task(
+        &self,
+        session_id: &str,
+        mut rx: mpsc::UnboundedReceiver<CdpEvent>,
+    ) -> SdkResult<()> {
+        let state = Arc::clone(&self.browser_state);
+        let host = self.state()?.host.clone();
+        let session_id = session_id.to_string();
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event.method.as_str() {
+                    "Page.frameNavigated" => {
+                        // Only the main frame drives the activity title/URL.
+                        if event.params.pointer("/frame/parentId").is_some() {
+                            continue;
+                        }
+                        let Some(raw_url) = event
+                            .params
+                            .pointer("/frame/url")
+                            .and_then(serde_json::Value::as_str)
+                        else {
+                            continue;
+                        };
+                        let Ok(parsed) = url::Url::parse(raw_url) else {
+                            continue;
+                        };
+                        if !matches!(parsed.scheme(), "http" | "https") {
+                            continue;
+                        }
+                        let title_target = browser_title_target(&parsed);
+                        let title = format!("Browser · {title_target}");
+                        let url_text = parsed.to_string();
+                        let (previous_url, started_at_ms) = {
+                            let mut meta = state.meta.lock().await;
+                            let Some(entry) = meta.get_mut(&session_id) else {
+                                continue;
+                            };
+                            let previous_url = entry.url.clone();
+                            entry.title = title.clone();
+                            entry.url = url_text.clone();
+                            (previous_url, entry.started_at_ms)
+                        };
+                        if previous_url == url_text {
+                            continue;
+                        }
+                        state
+                            .append_log(
+                                &session_id,
+                                "event",
+                                format!("Navigated to {url_text}."),
+                            )
+                            .await;
+                        let _ = host
+                            .publish_activity(browser_activity(
+                                format!("browser_{session_id}"),
+                                title,
+                                url_text,
+                                BackgroundActivityStatus::Running,
+                                Some(started_at_ms),
+                                None,
+                                None,
+                            ))
+                            .await;
+                    }
+                    "Runtime.consoleAPICalled" => {
+                        let level = event
+                            .params
+                            .get("type")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("log");
+                        let text = event
+                            .params
+                            .pointer("/args")
+                            .and_then(serde_json::Value::as_array)
+                            .map(|args| {
+                                args.iter()
+                                    .map(cdp_remote_object_text)
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .unwrap_or_default();
+                        if !text.trim().is_empty() {
+                            state
+                                .append_log(
+                                    &session_id,
+                                    "console",
+                                    format!("[{level}] {text}"),
+                                )
+                                .await;
+                        }
+                    }
+                    "Log.entryAdded" => {
+                        let level = event
+                            .params
+                            .pointer("/entry/level")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("info");
+                        let text = event
+                            .params
+                            .pointer("/entry/text")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
+                        if !text.trim().is_empty() {
+                            state
+                                .append_log(
+                                    &session_id,
+                                    "log",
+                                    format!("[{level}] {text}"),
+                                )
+                                .await;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        Ok(())
     }
 
     async fn browser_snapshot_value(&self, target_id: &str) -> SdkResult<serde_json::Value> {
@@ -1170,6 +1668,7 @@ impl WebPlugin {
         self.validate_network_target(&url).await?;
         let preflight_redirects = self.browser_preflight_redirects(&url).await?;
         let browser = self.browser_client(None).await?;
+        *self.browser_state.root.lock().await = Some(browser.clone());
         let created = browser
             .command(
                 "Target.createTarget",
@@ -1181,7 +1680,11 @@ impl WebPlugin {
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| PluginError::internal("browser did not return a target id"))?
             .to_string();
-        let page = match self.browser_client(Some(target_id.as_str())).await {
+        let (event_tx, event_rx) = mpsc::unbounded_channel::<CdpEvent>();
+        let page = match self
+            .browser_client_with_events(Some(target_id.as_str()), Some(event_tx))
+            .await
+        {
             Ok(page) => page,
             Err(error) => {
                 let _ = browser
@@ -1194,11 +1697,47 @@ impl WebPlugin {
             }
         };
         page.command("Page.enable", serde_json::json!({})).await?;
+        page.command("Runtime.enable", serde_json::json!({})).await?;
+        page.command("Log.enable", serde_json::json!({})).await?;
+        let title_target = browser_title_target(&url);
+        let started_at_ms = chrono::Utc::now().timestamp_millis();
+        let meta = BrowserSessionMeta {
+            title: format!("Browser · {title_target}"),
+            url: url.to_string(),
+            started_at_ms,
+        };
+        // Register the session before navigation so CDP notifications for the
+        // initial load and any redirects land in the activity log and update
+        // the live record's title/URL.
+        self.browser_state
+            .meta
+            .lock()
+            .await
+            .insert(target_id.clone(), meta.clone());
+        self.browser_state
+            .append_log(&target_id, "event", format!("Opened {url}."))
+            .await;
+        self.publish_browser_running(&target_id, &meta).await;
+        self.spawn_browser_event_task(&target_id, event_rx)?;
         if let Err(error) = page
             .command("Page.navigate", serde_json::json!({ "url": url.as_str() }))
             .await
         {
             self.forget_browser_client(target_id.as_str()).await;
+            self.browser_state.meta.lock().await.remove(&target_id);
+            self.browser_state.logs.lock().await.remove(&target_id);
+            let finished_at_ms = chrono::Utc::now().timestamp_millis();
+            let _ = self
+                .publish_browser_activity(browser_activity(
+                    format!("browser_{target_id}"),
+                    meta.title.clone(),
+                    meta.url.clone(),
+                    BackgroundActivityStatus::Failed,
+                    Some(started_at_ms),
+                    Some(finished_at_ms),
+                    Some(format!("Navigation to {url} failed.")),
+                ))
+                .await;
             let _ = browser
                 .command(
                     "Target.closeTarget",
@@ -1210,11 +1749,6 @@ impl WebPlugin {
         self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
             .await?;
         let snapshot = self.ensure_browser_final_url(target_id.as_str()).await?;
-        let mut title_target = url.host_str().unwrap_or(url.as_str()).to_owned();
-        let path = url.path().trim_end_matches('/');
-        if !path.is_empty() {
-            title_target.push_str(path);
-        }
         Ok(ToolInvokeOutput::from_parts(
             format!("Open browser · {title_target}"),
             browser_snapshot_summary(&snapshot),
@@ -1306,20 +1840,21 @@ impl WebPlugin {
         display = detailed
     )]
     async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
-        let browser = self.browser_client(None).await?;
-        let result = browser
-            .command(
-                "Target.closeTarget",
-                serde_json::json!({ "targetId": input.session_id }),
+        let host = self.state()?.host.clone();
+        let closed = self
+            .browser_state
+            .close_session(
+                &input.session_id,
+                &format!("Closed browser session {}.", input.session_id),
+                host.as_ref(),
             )
             .await?;
-        if result.get("success").and_then(serde_json::Value::as_bool) != Some(true) {
+        if !closed {
             return Err(PluginError::invalid_params(format!(
                 "browser session '{}' could not be closed",
                 input.session_id
             )));
         }
-        self.forget_browser_client(input.session_id.as_str()).await;
         Ok(ToolInvokeOutput::from_parts(
             "Close browser",
             "Closed",
@@ -1338,7 +1873,25 @@ impl WebPlugin {
         display = detailed
     )]
     async fn browser_shutdown(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
-        self.browser_clients.lock().await.clear();
+        let finished_at_ms = chrono::Utc::now().timestamp_millis();
+        let sessions = std::mem::take(&mut *self.browser_state.meta.lock().await)
+            .into_iter()
+            .collect::<Vec<_>>();
+        for (session_id, meta) in sessions {
+            self.browser_state
+                .append_log(&session_id, "event", "Managed browser shut down.")
+                .await;
+            self.publish_browser_terminal(
+                &session_id,
+                Some(&meta),
+                finished_at_ms,
+                "Managed browser shut down.".to_string(),
+            )
+            .await;
+        }
+        self.browser_state.clients.lock().await.clear();
+        *self.browser_state.root.lock().await = None;
+        self.browser_state.logs.lock().await.clear();
         let closed = tokio::task::spawn_blocking(shutdown_local_browser)
             .await
             .map_err(|error| {
@@ -1829,7 +2382,11 @@ struct CdpClient {
 }
 
 impl CdpClient {
-    async fn connect(endpoint: &str, target_id: Option<&str>) -> SdkResult<Self> {
+    async fn connect(
+        endpoint: &str,
+        target_id: Option<&str>,
+        events: Option<mpsc::UnboundedSender<CdpEvent>>,
+    ) -> SdkResult<Self> {
         let (mut socket, _) =
             tokio_tungstenite::connect_async(endpoint)
                 .await
@@ -1860,6 +2417,7 @@ impl CdpClient {
             next_id,
             command_receiver,
             Arc::clone(&navigation_errors),
+            events,
         ));
 
         Ok(Self {
@@ -2029,6 +2587,7 @@ async fn run_cdp_connection(
     mut next_id: u64,
     mut commands: mpsc::Receiver<CdpCommandRequest>,
     navigation_errors: Arc<std::sync::Mutex<VecDeque<String>>>,
+    events: Option<mpsc::UnboundedSender<CdpEvent>>,
 ) {
     let (mut sink, mut source) = socket.split();
     let (decisions, mut decision_receiver) = mpsc::unbounded_channel::<NavigationDecision>();
@@ -2160,6 +2719,21 @@ async fn run_cdp_connection(
                 if let Some(id) = value.get("id").and_then(serde_json::Value::as_u64) {
                     complete_cdp_command(id, value, &mut pending, &navigation_errors);
                     continue;
+                }
+
+                // Forward CDP notifications to the live activity-logging sink
+                // before the navigation-interception branch consumes them.
+                if let Some(events) = &events
+                    && let Some(method) =
+                        value.get("method").and_then(serde_json::Value::as_str)
+                {
+                    let _ = events.send(CdpEvent {
+                        method: method.to_string(),
+                        params: value
+                            .get("params")
+                            .cloned()
+                            .unwrap_or(serde_json::Value::Null),
+                    });
                 }
 
                 if value.get("method").and_then(serde_json::Value::as_str)
@@ -2859,12 +3433,77 @@ fn host_matches(host: &str, pattern: &str) -> bool {
 mod tests {
     use std::net::{Ipv4Addr, Ipv6Addr};
 
+    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
     use agena_plugin_host::sdk::Plugin;
 
     use super::{
-        CdpClient, WebPlugin, browser_element_expression, browser_type_expression,
-        is_public_address, resolve_browser_redirect,
+        BrowserSessionLog, CdpClient, WebPlugin, browser_activity, browser_element_expression,
+        browser_type_expression, is_public_address, resolve_browser_redirect,
     };
+
+    #[test]
+    fn browser_session_log_implements_the_since_seq_cursor_protocol() {
+        let mut log = BrowserSessionLog::new();
+        log.append("event", "Opened https://example.com/.");
+        log.append("console", "[log] hello");
+
+        let first = log.read("browser_t1", 0, None);
+        assert_eq!(first.lines.len(), 2);
+        assert_eq!(first.lines[0].seq, 1);
+        assert_eq!(first.lines[0].stream, "event");
+        assert_eq!(first.lines[1].text, "[log] hello");
+        assert_eq!(first.last_seq, 2);
+        assert!(!first.has_more);
+
+        let incremental = log.read("browser_t1", 1, None);
+        assert_eq!(incremental.lines.len(), 1);
+        assert_eq!(incremental.lines[0].seq, 2);
+
+        let limited = log.read("browser_t1", 0, Some(1));
+        assert_eq!(limited.lines.len(), 1);
+        assert!(limited.has_more);
+        assert_eq!(limited.lines[0].seq, 1);
+
+        // Capacity is bounded; overflow is counted as dropped lines.
+        for index in 0..600 {
+            log.append("console", format!("line {index}"));
+        }
+        let tail = log.read("browser_t1", 0, None);
+        assert_eq!(tail.lines.len(), 500);
+        assert!(tail.dropped_lines > 0);
+        assert_eq!(tail.lines.last().map(|line| line.seq), Some(602));
+    }
+
+    #[test]
+    fn browser_activity_records_are_unified_and_terminal_state_is_dismissible() {
+        let running = browser_activity(
+            "browser_target-1".to_string(),
+            "Browser · example.com".to_string(),
+            "https://example.com/".to_string(),
+            BackgroundActivityStatus::Running,
+            Some(1000),
+            None,
+            None,
+        );
+        assert_eq!(running.id, "browser_target-1");
+        assert_eq!(running.kind, BackgroundActivityKind::Browser);
+        assert_eq!(running.status, BackgroundActivityStatus::Running);
+        assert!(running.cancellable);
+        assert!(!running.dismissible);
+
+        let stopped = browser_activity(
+            "browser_target-1".to_string(),
+            "Browser · example.com".to_string(),
+            "https://example.com/".to_string(),
+            BackgroundActivityStatus::Stopped,
+            Some(1000),
+            Some(2000),
+            Some("Closed by browser_close".to_string()),
+        );
+        assert_eq!(stopped.status, BackgroundActivityStatus::Stopped);
+        assert_eq!(stopped.finished_at_ms, Some(2000));
+        assert!(stopped.dismissible);
+    }
 
     #[test]
     fn public_dns_addresses_do_not_need_a_second_permission_check() {
@@ -2935,7 +3574,7 @@ mod tests {
             // still runs on build hosts without a browser binary.
             return;
         };
-        let root = CdpClient::connect(endpoint.as_str(), None)
+        let root = CdpClient::connect(endpoint.as_str(), None, None)
             .await
             .expect("connect browser");
         let created = root
@@ -2946,7 +3585,7 @@ mod tests {
             .await
             .expect("create target");
         let target = created["targetId"].as_str().expect("target id");
-        let page = CdpClient::connect(endpoint.as_str(), Some(target))
+        let page = CdpClient::connect(endpoint.as_str(), Some(target), None)
             .await
             .expect("attach target");
         let value = page

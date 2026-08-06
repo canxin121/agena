@@ -404,6 +404,23 @@ impl HostClient for RuntimeHostClient {
         Ok(())
     }
 
+    async fn publish_activity(
+        &self,
+        activity: agena_domain::BackgroundActivity,
+    ) -> Result<(), PluginError> {
+        self.runtime.activities.registry.upsert(activity);
+        Ok(())
+    }
+
+    async fn register_activity_source(
+        &self,
+        kind: agena_domain::BackgroundActivityKind,
+        adapter: Arc<dyn agena_plugin_sdk::activity::ActivitySourceAdapter>,
+    ) -> Result<(), PluginError> {
+        self.runtime.activities.register_source(kind, adapter);
+        Ok(())
+    }
+
     async fn subscribe_events(
         &self,
         _: PluginEventFilter,

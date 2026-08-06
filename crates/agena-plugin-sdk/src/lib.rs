@@ -8,6 +8,7 @@ extern crate self as agena_plugin_sdk;
 pub extern crate serde;
 pub extern crate serde_json;
 
+pub mod activity;
 pub mod attachment;
 pub mod error;
 pub mod hooks;
@@ -29,6 +30,7 @@ pub mod drivers;
 
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
+pub use activity::ActivitySourceAdapter;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
 pub use hooks::*;

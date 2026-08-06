@@ -9,7 +9,7 @@ Agena built-in tools create many kinds of long-running background work:
 | `shell.run background` | servers, watchers, builds | `MonitorRegistry` in runtime-tools |
 | `tasks.*` | delegated subagents | plugin storage + `SubtaskStatusChangedEvent` |
 | runtime tasks | marketplace sync/install/reload | `RuntimeBackgroundTaskRegistry` |
-| `web.browser_*` | managed browser sessions | plugin-internal `browser_clients` map |
+| `web.browser_*` | managed browser sessions | web plugin `publish_activity` + registered `Browser` source adapter |
 | `cron.*` | scheduled jobs | scheduler |
 
 The backend, TUI, and web now share one way to **list, inspect, follow, and
@@ -41,7 +41,16 @@ active rows kept when trimming).
   - shell monitors via a new `MonitorListener` hook on `MonitorRegistry`
   - delegated tasks via bus `SubtaskStatusChangedEvent` (bridged to `task_…`)
   - runtime tasks via a new listener on `RuntimeBackgroundTaskRegistry`
-  - plugins can publish rich `PluginEvent(kind_label="activity")` payloads
+  - plugins publish rich `BackgroundActivity` records through the first-class
+    `HostClient::publish_activity` capability and register an
+    `ActivitySourceAdapter` per owned kind (the bundled web plugin publishes
+    one `browser_...` activity per managed browser session on `browser_open`,
+    updates the live record title/URL on main-frame navigations, and publishes
+    a terminal `Stopped` record on `browser_close`, `browser_shutdown`, or
+    plugin shutdown). For kinds with a registered adapter, log reads and stop
+    requests dispatch to the adapter (`read_logs` / `stop`) instead of the
+    built-in per-kind behavior — the web plugin tail streams CDP console and
+    log events and closes the matching browser target on stop.
 - Every mutation publishes `background_activity_changed` on the runtime event
   bus (persistent), which is projected into SSE/WS and the presentation stream
   (`RuntimePresentationEventKind::ActivityChanged`).

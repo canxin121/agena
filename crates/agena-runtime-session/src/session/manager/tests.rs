@@ -3451,6 +3451,12 @@ mod tests {
 
     async fn test_manager_with_two_turn_provider()
     -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        test_manager_with_max_turns(RuntimeSessionManagerConfig::default().max_turns).await
+    }
+
+    async fn test_manager_with_max_turns(
+        max_turns: Option<usize>,
+    ) -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let mut plugins_config = PluginsConfig::default();
         plugins_config.list.insert(
@@ -3509,7 +3515,10 @@ mod tests {
             database,
             processor,
             executor,
-            RuntimeSessionManagerConfig::default(),
+            RuntimeSessionManagerConfig {
+                max_turns,
+                ..RuntimeSessionManagerConfig::default()
+            },
         );
         (manager, calls)
     }
@@ -3582,6 +3591,193 @@ mod tests {
             .expect("load finished session");
         assert!(finished.next_pending_tool().is_none());
         assert!(finished.pending_interactive_requests().is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn max_turns_exhaustion_stops_the_run_and_records_a_notice() {
+        // The end-turn-false provider signals `end_turn=false` on every turn
+        // and would keep looping past the follow-up budget; a model-turn cap
+        // of 2 must stop the run at the budget boundary and surface a visible
+        // Notice instead of stopping silently.
+        let (manager, calls) = test_manager_with_end_turn_false_and_max_turns(true, Some(2)).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "max turns notice".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create max-turns session");
+        manager
+            .update_session_selection(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("end-turn-false-provider", "end-turn-false-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+            )
+            .await
+            .expect("select end-turn-false model");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("end-turn-false-provider", "end-turn-false-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the run must stop once the model-turn budget is exhausted"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+
+        let notice = finished
+            .messages
+            .iter()
+            .find_map(|message| {
+                if message.role != Role::Assistant
+                    || message.metadata.source != agena_domain::MessageSource::System
+                {
+                    return None;
+                }
+                message.parts.iter().find_map(|part| match part.content.as_ref() {
+                    Some(PartContent::Activity(crate::message::RuntimeActivity::Notice(
+                        notice,
+                    ))) => Some((message, notice)),
+                    _ => None,
+                })
+            })
+            .expect("exhaustion must produce an Assistant/System Notice message");
+        assert_eq!(notice.1.kind, "max_turns_exhausted");
+        assert!(!notice.1.summary.is_empty());
+        assert!(notice.1.detail.is_some());
+
+        // The run must not be recorded as failed or cancelled; it simply
+        // stopped at the configured budget.
+        let events = manager
+            .list_session_events(session.id)
+            .await
+            .expect("load lifecycle events");
+        assert!(events.iter().all(|event| match &event.kind {
+            EventKind::ExecutionFinished(finished) => {
+                finished.outcome == agena_domain::ExecutionOutcome::Completed
+            }
+            _ => true,
+        }));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn zero_max_turns_means_unlimited_and_stops_naturally() {
+        // `Some(0)` must disable the cap entirely: the two-turn provider runs
+        // to its natural completion and no System Notice is emitted.
+        let (manager, calls) = test_manager_with_max_turns(Some(0)).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "unlimited max turns".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create unlimited session");
+        manager
+            .update_session_selection(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("two-turn-provider", "two-turn-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+            )
+            .await
+            .expect("select two-turn model");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please work".to_owned(),
+        }]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("two-turn-provider", "two-turn-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the provider stops naturally on its second call"
+        );
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        assert!(finished.next_pending_tool().is_none());
+        assert!(
+            finished.messages.iter().all(|message| {
+                message.parts.iter().all(|part| !matches!(
+                    part.content.as_ref(),
+                    Some(PartContent::Activity(crate::message::RuntimeActivity::Notice(_)))
+                ))
+            }),
+            "no Notice must be emitted when the run ends without exhausting the budget"
+        );
     }
 
     async fn test_manager_with_streaming_no_id_provider()
@@ -3810,6 +4006,13 @@ mod tests {
     async fn test_manager_with_end_turn_false_provider(
         always_false: bool,
     ) -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
+        test_manager_with_end_turn_false_and_max_turns(always_false, None).await
+    }
+
+    async fn test_manager_with_end_turn_false_and_max_turns(
+        always_false: bool,
+        max_turns: Option<usize>,
+    ) -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let plugins = PluginHost::new(PluginHostBuildConfig {
             static_plugins: vec![],
@@ -3858,7 +4061,10 @@ mod tests {
             database,
             processor,
             executor,
-            RuntimeSessionManagerConfig::default(),
+            RuntimeSessionManagerConfig {
+                max_turns,
+                ..RuntimeSessionManagerConfig::default()
+            },
         );
         (manager, calls)
     }

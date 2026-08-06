@@ -72,10 +72,11 @@ const DOOM_LOOP_RECOVERY_PROMPT: &str = "Trusted Agena runtime note: the previou
 const MAX_DOOM_LOOP_RECOVERIES: usize = 2;
 
 /// Fallback for the session agent loop's model-turn cap when no explicit
-/// `max_turns` is configured. Mirrors gemini's MAX_TURNS=100 and the other
-/// reference CLIs' turn budgets; `RuntimeSessionManagerConfig::default` uses
-/// the same value.
-pub(crate) const DEFAULT_MAX_MODEL_TURNS: usize = 100;
+/// `max_turns` is configured. Originally mirrored gemini's MAX_TURNS=100 and
+/// the other reference CLIs' turn budgets; the default has since been raised
+/// to 500 to accommodate longer agentic runs. `RuntimeSessionManagerConfig::default`
+/// uses the same value.
+pub(crate) const DEFAULT_MAX_MODEL_TURNS: usize = 500;
 
 /// Decide whether the stable-run loop should request another model turn after
 /// the given outcome.
@@ -495,8 +496,13 @@ impl SessionManager {
 
             // Bounded soft stop: a run that keeps requesting model turns
             // (tools, follow-ups, truncation) is stopped after the configured
-            // cap instead of looping forever.
-            let max_turns = state.config.max_turns.unwrap_or(DEFAULT_MAX_MODEL_TURNS);
+            // cap instead of looping forever. `Some(0)` means unlimited
+            // (quota.rs precedent); `None` falls back to the default cap.
+            let max_turns = match state.config.max_turns {
+                Some(0) => usize::MAX,
+                Some(n) => n,
+                None => DEFAULT_MAX_MODEL_TURNS,
+            };
             if model_turns_taken >= max_turns {
                 tracing::warn!(
                     target: "agena::session::run_until_stable",
@@ -504,6 +510,12 @@ impl SessionManager {
                     max_turns,
                     "stopping run softly after the model-turn budget was exhausted"
                 );
+                // Surface a user-facing notice in the transcript before the
+                // silent soft stop, so the run does not look like it finished
+                // normally when it was actually cut off by the budget cap.
+                session = self
+                    .record_model_turn_budget_notice(session, max_turns, state.clone())
+                    .await?;
                 return Ok(session);
             }
             model_turns_taken += 1;
@@ -752,6 +764,56 @@ impl SessionManager {
             Role::Assistant,
             ExecutionStatus::Completed,
             parts,
+            MessageMetadata {
+                source: MessageSource::System,
+                idempotency_key: None,
+                model_turn_id: None,
+                parent_message_id: session.last_conversation_message().map(|m| m.id),
+                generated_by_call_id: None,
+                externally_initiated_tool: false,
+                model_provider_id: String::new(),
+                model_adapter_id: None,
+                model_id: String::new(),
+                model_thinking_mode: None,
+                model_speed_mode: None,
+            },
+        )?;
+        session.messages.push(message.clone());
+        let checkpoint = MessageCheckpoint::all(&message);
+        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
+            .await
+    }
+
+    /// Record a System-originated Assistant message with a single `Notice`
+    /// part explaining that the run stopped because the model-turn budget was
+    /// exhausted. Follows the `record_agent_stop_hook_runs` recipe: persisted
+    /// so a restart keeps the record, surfaced as first-class transcript
+    /// activity, and (Assistant + System + `model_turn_id: None`) never
+    /// triggers another model turn. The Notice is user-facing only — the
+    /// provider projection (`wire_message.rs`) skips it, and on a later run
+    /// `normalize_prompt_messages` drops it for having no visible payload.
+    async fn record_model_turn_budget_notice(
+        &self,
+        mut session: Session,
+        max_turns: usize,
+        state: Arc<SessionManagerState>,
+    ) -> Result<Session, AppError> {
+        let ids = self.store.reserve_message_ids(1).await?;
+        const SUMMARY: &str = "Model-turn budget exhausted; the run stopped.";
+        let detail = Some(format!(
+            "The run reached the configured model-turn cap (max_turns={max_turns}) and stopped. \
+             Send a new message to continue, or raise the cap via `session.max_turns` in the \
+             config (`0` means unlimited)."
+        ));
+        let message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::Completed,
+            vec![PartContent::notice(crate::message::NoticePart {
+                kind: "max_turns_exhausted".to_string(),
+                summary: SUMMARY.to_string(),
+                detail,
+            })],
             MessageMetadata {
                 source: MessageSource::System,
                 idempotency_key: None,

@@ -365,7 +365,6 @@ pub(crate) fn push_markdown_code_block(
 ) {
     let source_lines = source.lines().collect::<Vec<_>>();
     let opening = source_lines.first().copied().unwrap_or_default();
-    let language = code_block_language(opening);
     let has_closing_fence = source_lines
         .last()
         .is_some_and(|line| source_lines.len() > 1 && markdown_fence_delimiter(line).is_some());
@@ -374,6 +373,14 @@ pub(crate) fn push_markdown_code_block(
     } else {
         &source_lines[1..]
     };
+    // Unlabeled fences (` ``` ` parses to an empty language and renders as
+    // `text`) fall back to first-line inference so shell scripts, JSON
+    // payloads, and other self-identifying blocks still get syntax
+    // highlighting instead of a plain-text card.
+    let mut language = code_block_language(opening);
+    if matches!(language.as_str(), "code" | "text") {
+        language = infer_fenced_language(code_lines).unwrap_or(language);
+    }
 
     let available = width.max(1) as usize;
     let prefix_width = UnicodeWidthStr::width(prefix);
@@ -516,22 +523,35 @@ pub(crate) fn push_markdown_code_block(
     );
 }
 
-fn syntax_highlight_lines(
+use std::sync::LazyLock;
+
+use syntect::{
+    easy::HighlightLines,
+    highlighting::{FontStyle, ThemeSet},
+    parsing::SyntaxSet,
+};
+
+static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+
+/// Infer a code language for an unlabeled fence from its first non-empty line
+/// (shebangs, XML/HTML declarations, JSON payloads, …). Returns `None` when
+/// the line carries no language hint, so callers keep their plain-text label.
+fn infer_fenced_language(lines: &[&str]) -> Option<String> {
+    let first_line = lines.iter().find(|line| !line.trim().is_empty())?;
+    let syntax = SYNTAXES.find_syntax_by_first_line(first_line)?;
+    syntax
+        .file_extensions
+        .first()
+        .map(|extension| extension.to_string())
+        .or_else(|| Some(syntax.name.clone()))
+}
+
+pub(crate) fn syntax_highlight_lines(
     language: &str,
     lines: &[&str],
     palette: agena_tui_components::ThemePalette,
 ) -> Vec<Vec<Span<'static>>> {
-    use std::sync::LazyLock;
-
-    use syntect::{
-        easy::HighlightLines,
-        highlighting::{FontStyle, ThemeSet},
-        parsing::SyntaxSet,
-    };
-
-    static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
-    static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
-
     let syntax = SYNTAXES
         .find_syntax_by_token(language)
         .or_else(|| SYNTAXES.find_syntax_by_extension(language))

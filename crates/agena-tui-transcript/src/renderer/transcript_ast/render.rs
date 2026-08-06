@@ -1086,6 +1086,7 @@ fn render_rich_table_fallback(
     rows: &[MarkdownTableRow],
     width: u16,
 ) {
+    let border_style = Style::default().fg(agena_tui_components::theme::muted_color());
     for row in rows {
         let navigation_unit = out.len();
         let base = if row.header {
@@ -1095,35 +1096,24 @@ fn render_rich_table_fallback(
         } else {
             Style::default()
         };
+        // Every cell flows onto one horizontally rendered row
+        // (`│ cell1 │ cell2 │ … │`) and wraps at the terminal edge, so a wide
+        // table stays readable instead of stacking one cell per terminal row.
+        // Cells keep their inline Markdown styling (bold, links, code, …).
+        let mut spans = vec![Span::styled("│ ", border_style)];
         for (index, cell) in row.cells.iter().enumerate() {
-            let marker = if index == 0 { "│ " } else { "├ " };
-            let initial_prefix = format!("{prefix}{marker}");
-            let continuation_prefix = format!("{prefix}  ");
-            let logical_lines = rich_inline_lines(cell, base);
-            if logical_lines.is_empty() {
-                push_wrapped_rich_line(
-                    out,
-                    &initial_prefix,
-                    &continuation_prefix,
-                    Line::default(),
-                    width,
-                );
-                continue;
+            if index > 0 {
+                spans.push(Span::styled(" │ ", border_style));
             }
-            for (line_index, line) in logical_lines.into_iter().enumerate() {
-                push_wrapped_rich_line(
-                    out,
-                    if line_index == 0 {
-                        &initial_prefix
-                    } else {
-                        &continuation_prefix
-                    },
-                    &continuation_prefix,
-                    line,
-                    width,
-                );
+            for (line_index, line) in rich_inline_lines(cell, base).into_iter().enumerate() {
+                if line_index > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                spans.extend(line.spans);
             }
         }
+        spans.push(Span::styled(" │", border_style));
+        push_wrapped_rich_line(out, prefix, prefix, Line::from(spans), width);
         let navigation_copy_text = row
             .cells
             .iter()
@@ -1133,6 +1123,11 @@ fn render_rich_table_fallback(
         for line in &mut out[navigation_unit..] {
             line.navigation_unit = Some(navigation_unit);
             line.navigation_copy_text.clone_from(&navigation_copy_text);
+            // Mirror the full-grid projection: a free-form selection of a
+            // fallback row copies tab-separated cells without the border rails.
+            line.copy_text = navigation_copy_text.clone();
+            line.copy_column = UnicodeWidthStr::width(prefix).saturating_add(1);
+            line.copy_segments.clear();
         }
     }
 }

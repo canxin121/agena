@@ -1311,6 +1311,44 @@ mod tests {
     }
 
     #[test]
+    fn unlabeled_code_fences_infer_the_language_from_the_first_line() {
+        let block = markdown_blocks("```\n#!/usr/bin/env bash\necho hello\n```")
+            .pop()
+            .expect("code block");
+        let mut lines = Vec::new();
+        render_markdown_block(&mut lines, "", &block, 48);
+
+        let label = lines
+            .first()
+            .map(|line| line.text.as_str())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            label.contains("┌─ sh") || label.contains("┌─ bash"),
+            "unlabeled shell fence should infer its language: {label}"
+        );
+    }
+
+    #[test]
+    fn prose_fences_without_a_language_hint_stay_plain() {
+        let block = markdown_blocks("```\nJust some prose that is not code.\n```")
+            .pop()
+            .expect("code block");
+        let mut lines = Vec::new();
+        render_markdown_block(&mut lines, "", &block, 48);
+
+        let label = lines
+            .first()
+            .map(|line| line.text.as_str())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            label.contains("┌─ text"),
+            "uninferable fences keep the plain-text label: {label}"
+        );
+    }
+
+    #[test]
     fn transcript_exports_never_materialize_unbounded_terminal_rules() {
         let now = Utc::now();
         let message = entry(
@@ -1468,6 +1506,46 @@ mod tests {
         assert!(
             table.len() < 10,
             "the link destination should not be wrapped inside an artificially narrow column: {table:#?}"
+        );
+    }
+
+    #[test]
+    fn wide_markdown_tables_render_horizontally_instead_of_stacking_cells() {
+        let cells = (0..20).map(|index| format!("c{index}")).collect::<Vec<_>>();
+        let header = format!("| {} |", cells.join(" | "));
+        let separator = format!("| {} |", vec!["---"; 20].join(" | "));
+        let row = format!(
+            "| {} |",
+            (0..20)
+                .map(|index| format!("v{index}"))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
+        let block = markdown_blocks(&format!("{header}\n{separator}\n{row}"))
+            .pop()
+            .expect("table block");
+        let mut table = Vec::new();
+        render_markdown_block(&mut table, "", &block, 60);
+
+        let rendered = table.iter().map(|line| line.text.as_str()).collect::<Vec<_>>();
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.contains("c0") && line.contains("c1") && line.contains("c2")),
+            "cells should be joined on one horizontal row: {rendered:#?}"
+        );
+        assert!(
+            !rendered.iter().any(|line| line.starts_with("├ ")),
+            "cells must not stack vertically: {rendered:#?}"
+        );
+        let header_line = table
+            .iter()
+            .find(|line| line.text.contains("c0"))
+            .expect("header row");
+        assert_eq!(
+            header_line.navigation_copy_text,
+            cells.join("\t"),
+            "copying a fallback row should yield tab-separated cells"
         );
     }
 

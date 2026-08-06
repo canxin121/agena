@@ -767,14 +767,15 @@ mod tests {
             .lines()
             .find(|line| line.contains("Call Tool API function `tools_call`"))
             .expect("direct tools_call recovery route");
-        assert!(route.contains("\"filesystem_effects\""), "{route}");
-        assert!(route.contains("\"network_effects\""), "{route}");
+        assert!(route.contains("\"reads\""), "{route}");
+        assert!(route.contains("\"writes\""), "{route}");
+        assert!(route.contains("\"network\""), "{route}");
         assert!(
-            route.contains(r#""filesystem_effects":{"#)
-                || route.contains(r#""filesystem_effects": {"#),
+            route.contains(r#""reads":["#)
+                || route.contains(r#""reads": ["#),
             "{route}"
         );
-        assert!(route.contains("\"target\":\"<target>\""), "{route}");
+        assert!(route.contains("\"<target>\""), "{route}");
     }
 
     fn sample_plan() -> WorkflowPlan {

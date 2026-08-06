@@ -62,7 +62,7 @@ impl ShellPlugin {
     #[tool(
         tags(execute),
         summary = "Run one shell process.",
-        help = "Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.",
+        help = "Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.",
         mutating,
         shell,
         display = detailed,
@@ -201,28 +201,29 @@ mod tests {
         let example: serde_json::Value =
             serde_json::from_str(examples.first().expect("shell.run generated example"))
                 .expect("shell.run example must be JSON");
-        assert!(example.get("filesystem_effects").is_some());
-        assert!(example.get("network_effects").is_some());
+        assert!(example.get("reads").is_some());
+        assert!(example.get("writes").is_some());
+        assert!(example.get("network").is_some());
         assert!(
             example
-                .pointer("/filesystem_effects/read")
+                .pointer("/reads")
                 .and_then(serde_json::Value::as_array)
                 .is_some(),
-            "filesystem_effects groups read paths"
+            "reads declares read paths"
         );
         assert!(
             example
-                .pointer("/filesystem_effects/write")
+                .pointer("/writes")
                 .and_then(serde_json::Value::as_array)
                 .is_some(),
-            "filesystem_effects groups write paths"
+            "writes declares write paths"
         );
         assert!(
-            example.pointer("/filesystem_effects/read/0").is_some(),
+            example.pointer("/reads/0").is_some(),
             "generated example includes a read path"
         );
         assert_eq!(
-            example.pointer("/network_effects/0/target"),
+            example.pointer("/network/0"),
             Some(&serde_json::json!("<target>"))
         );
     }

@@ -877,6 +877,10 @@ mod tests {
         // The provider emits the compact name `shell.run`; the payload layer
         // must reconstruct the `shell` discriminant from it exactly like it
         // does for the canonical `agena.shell.run` form.
+        // This input intentionally keeps the legacy `filesystem_effects` /
+        // `network_effects` wire shape to pin the read-only compatibility
+        // path that merges them into the flattened `reads`/`writes`/`network`
+        // fields.
         let invocation = ToolInvocation::new(
             "shell.run",
             StructuredObject::try_from(serde_json::json!({

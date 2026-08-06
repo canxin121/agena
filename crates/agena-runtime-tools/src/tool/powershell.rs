@@ -28,10 +28,11 @@ pub(super) fn execute(
             "powershell command must not be empty".to_string(),
         ));
     }
+    let effects = input.filesystem_effects();
     validate_declared_filesystem_effects(
         "powershell",
         input.command.as_str(),
-        &input.filesystem_effects,
+        &effects,
     )?;
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
 

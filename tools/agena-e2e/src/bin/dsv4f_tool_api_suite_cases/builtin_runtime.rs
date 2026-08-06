@@ -35,8 +35,9 @@ pub(crate) async fn run_shell_cases(
                 "command": "printf PROCESS_FG_OK",
                 "description": "dsv4f foreground process",
                 "timeout_ms": 5000,
-                "filesystem_effects": {},
-                "network_effects": [],
+                "reads": [],
+                "writes": [],
+                "network": [],
                 "background": false
             }),
             PendingReply::None,
@@ -55,8 +56,9 @@ pub(crate) async fn run_shell_cases(
                 "command": "printf 'PROCESS_BG_OK\\n'; sleep 300",
                 "description": "dsv4f background process",
                 "timeout_ms": 310000,
-                "filesystem_effects": {},
-                "network_effects": [],
+                "reads": [],
+                "writes": [],
+                "network": [],
                 "background": true
             }),
             PendingReply::None,

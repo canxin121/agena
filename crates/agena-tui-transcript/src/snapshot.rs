@@ -1634,7 +1634,7 @@ mod tests {
     fn failed_canonical_operation_renders_the_real_error_once_without_a_fake_result() {
         let response_id = agena_domain::AssistantReplyId::new();
         let activity_id = agena_domain::ActivityId::new();
-        let full_error = "shell.run filesystem_effects must declare every accessed path because the command provably mutates or reads the filesystem: invokes mutating command 'rm'";
+        let full_error = "shell.run must declare every accessed path in reads/writes because the command provably mutates or reads the filesystem: invokes mutating command 'rm'";
         let truncated_summary = agena_tool::normalize_tool_summary(full_error);
         assert!(truncated_summary.ends_with('…'));
         assert_ne!(truncated_summary, full_error);
@@ -1656,8 +1656,9 @@ mod tests {
                     StructuredObject::try_from(serde_json::json!({
                         "command": "rm -rf /tmp/agena-snapshot-test",
                         "description": "Compute pi with Python",
-                        "filesystem_effects": {},
-                        "network_effects": [],
+                        "reads": [],
+                        "writes": [],
+                        "network": [],
                         "shell": "bash",
                         "timeout_ms": 60_000
                     }))
@@ -1705,7 +1706,7 @@ mod tests {
             .expect("failed shell.run Activity node");
 
         assert!(
-            expanded_text.contains("▸ Input · 6 fields"),
+            expanded_text.contains("▸ Input · 7 fields"),
             "{expanded_text}"
         );
         assert!(!expanded_text.contains("┌─ json"), "{expanded_text}");
@@ -1713,7 +1714,7 @@ mod tests {
         assert!(!expanded_text.contains("Output\n"), "{expanded_text}");
         assert_eq!(
             expanded_text
-                .matches("shell.run filesystem_effects must declare every accessed path")
+                .matches("shell.run must declare every accessed path in reads/writes")
                 .count(),
             1,
             "{expanded_text}"

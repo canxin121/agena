@@ -346,6 +346,25 @@ pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Opti
 pub(super) fn filesystem_effects_from_input(
     input: &serde_json::Value,
 ) -> Result<Option<FilesystemEffects>, ToolError> {
+    let reads = input
+        .get("reads")
+        .or_else(|| input.pointer("/args/reads"));
+    let writes = input
+        .get("writes")
+        .or_else(|| input.pointer("/args/writes"));
+    if reads.is_some() || writes.is_some() {
+        let read = match reads {
+            Some(value) => serde_json::from_value(value.clone())
+                .map_err(|err| ToolError::invalid_input(format!("reads: {err}")))?,
+            None => Vec::new(),
+        };
+        let write = match writes {
+            Some(value) => serde_json::from_value(value.clone())
+                .map_err(|err| ToolError::invalid_input(format!("writes: {err}")))?,
+            None => Vec::new(),
+        };
+        return Ok(Some(FilesystemEffects { read, write }));
+    }
     let Some(value) = input
         .get("filesystem_effects")
         .or_else(|| input.pointer("/args/filesystem_effects"))

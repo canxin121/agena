@@ -7378,7 +7378,7 @@ Shell command execution and background process tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.
+> Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -7386,59 +7386,18 @@ Shell command execution and background process tools.
 | `background` | `boolean` | — | `false` |  |
 | `command` | `string` | ✓ | — |  |
 | `description` | `string` | — | `` |  |
-| `filesystem_effects` | `FilesystemEffects` | ✓ | — | Files and directories the command reads or modifies, grouped by access:<br>a path the command may both read and write appears in both `read` and<br>`write`. Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`, `python`,<br>`uv`, `git`, `cargo`) or their installation directories. Pass an empty<br>object `{}` when the command has no file reads/writes beyond the<br>executables it invokes. |
 | `monitor` | `ShellMonitorInput / null` | — | — |  |
-| `network_effects` | `array<NetworkEffect>` | ✓ | — | Outbound network targets the command may connect to. Pass an empty list<br>when the command has no network effect. |
+| `network` | `array<string>` | — | `[]` | Outbound network targets the command may connect to: host names,<br>`host:port`, or URLs. Pass an empty array `[]` when the command has no<br>network effect. |
+| `reads` | `array<string>` | — | `[]` | Files and directories the command may read. Declare only the actual<br>files/directories affected - never the executables, interpreters, or<br>tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or<br>their installation directories. Pass an empty array `[]` when the<br>command reads nothing beyond its executables. |
 | `shell` | `ProcessShell` | — | `bash` |  |
 | `timeout_ms` | `integer / null` | — | — |  |
 | `workdir` | `string / null` | — | — |  |
+| `writes` | `array<string>` | — | `[]` | Files and directories the command may create, modify, or delete.<br>Declare only the actual files/directories affected - never the<br>executables, interpreters, or tools being invoked (e.g. `node`,<br>`python`, `uv`, `git`, `cargo`) or their installation directories.<br>Pass an empty array `[]` when the command writes nothing. |
 
 **Input schema**:
 ```json
 {
   "$defs": {
-    "FilesystemEffects": {
-      "description": "Files and directories the command reads or modifies, grouped by access:\na path the command may both read and write appears in both `read` and\n`write`. Declare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`, `python`,\n`uv`, `git`, `cargo`) or their installation directories. Pass an empty\nobject `{}` when the command has no file reads/writes beyond the\nexecutables it invokes.",
-      "properties": {
-        "read": {
-          "description": "Paths the command may read.",
-          "examples": [
-            [
-              "src/lib.rs"
-            ]
-          ],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "write": {
-          "description": "Paths the command may write.",
-          "examples": [
-            [
-              "target/out.txt"
-            ]
-          ],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object",
-      "x-agena-order": "000001.000004"
-    },
-    "NetworkEffect": {
-      "properties": {
-        "target": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "target"
-      ],
-      "type": "object"
-    },
     "ProcessShell": {
       "enum": [
         "bash",
@@ -7537,10 +7496,6 @@ Shell command execution and background process tools.
       "type": "string",
       "x-agena-order": "000001.000001"
     },
-    "filesystem_effects": {
-      "$ref": "#/$defs/FilesystemEffects",
-      "description": "Files and directories the command reads or modifies, grouped by access:\na path the command may both read and write appears in both `read` and\n`write`. Declare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`, `python`,\n`uv`, `git`, `cargo`) or their installation directories. Pass an empty\nobject `{}` when the command has no file reads/writes beyond the\nexecutables it invokes."
-    },
     "monitor": {
       "anyOf": [
         {
@@ -7552,13 +7507,23 @@ Shell command execution and background process tools.
       ],
       "x-agena-order": "000003"
     },
-    "network_effects": {
-      "description": "Outbound network targets the command may connect to. Pass an empty list\nwhen the command has no network effect.",
+    "network": {
+      "default": [],
+      "description": "Outbound network targets the command may connect to: host names,\n`host:port`, or URLs. Pass an empty array `[]` when the command has no\nnetwork effect.",
       "items": {
-        "$ref": "#/$defs/NetworkEffect"
+        "type": "string"
       },
       "type": "array",
-      "x-agena-order": "000001.000005"
+      "x-agena-order": "000001.000006"
+    },
+    "reads": {
+      "default": [],
+      "description": "Files and directories the command may read. Declare only the actual\nfiles/directories affected - never the executables, interpreters, or\ntools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or\ntheir installation directories. Pass an empty array `[]` when the\ncommand reads nothing beyond its executables.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000004"
     },
     "shell": {
       "$ref": "#/$defs/ProcessShell",
@@ -7580,12 +7545,19 @@ Shell command execution and background process tools.
       ],
       "x-agena-order": "000001.000000",
       "x-agena-path": "read"
+    },
+    "writes": {
+      "default": [],
+      "description": "Files and directories the command may create, modify, or delete.\nDeclare only the actual files/directories affected - never the\nexecutables, interpreters, or tools being invoked (e.g. `node`,\n`python`, `uv`, `git`, `cargo`) or their installation directories.\nPass an empty array `[]` when the command writes nothing.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array",
+      "x-agena-order": "000001.000005"
     }
   },
   "required": [
-    "command",
-    "filesystem_effects",
-    "network_effects"
+    "command"
   ],
   "type": "object"
 }

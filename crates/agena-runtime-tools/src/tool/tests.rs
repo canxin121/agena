@@ -242,8 +242,9 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
         "shell": "bash",
         "command": "python3 --version",
         "description": "Check Python version",
-        "filesystem_effects": {"read": ["/usr/bin"]},
-        "network_effects": []
+        "reads": ["/usr/bin"],
+        "writes": [],
+        "network": []
     }))
     .expect("valid shell input");
     let shell_invocation = ToolInvocation {
@@ -810,4 +811,74 @@ async fn gateway_tools_call_without_a_target_is_rejected_as_invalid_input() {
         assert_eq!(error.field_issues().len(), 1);
         assert_eq!(error.field_issues()[0].field(), "tool");
     }
+}
+
+#[tokio::test]
+async fn gateway_tools_call_surfaces_the_arguments_shape_diagnostic() {
+    let workspace_root = std::env::current_dir().expect("resolve test workspace");
+    let mut plugins_config = PluginsConfig::default();
+    plugins_config.list.insert(
+        "agena.tools".to_string(),
+        ConfiguredPlugin::static_default(),
+    );
+    let plugins = PluginHost::new(PluginHostBuildConfig {
+        static_plugins: vec![StaticPluginRegistration::new(
+            "agena.tools".parse().expect("valid Tool API plugin key"),
+            ToolApiFixture,
+        )],
+        config: plugins_config,
+        workspace_root: workspace_root.clone(),
+        agena_version: "test".to_string(),
+        callback_base_url: None,
+        host_client: None,
+        previous: None,
+        previous_plugins: HashMap::new(),
+    })
+    .await
+    .expect("build Tool API test plugin host");
+    let executor = ToolExecutor::new(
+        workspace_root,
+        ExecutionPrincipal::new(
+            PermissionPolicy::allow_all(),
+            ToolPermissionPolicy::new(PermissionMode::Ask),
+        ),
+        Arc::clone(&plugins),
+        None,
+        None,
+        None,
+        ToolPresentationConfig::default(),
+    );
+
+    // A diagnostic stamped by the session processor (string-encoded or
+    // malformed arguments) must be surfaced verbatim instead of the
+    // generic missing-`tool` message, so the model learns the real shape
+    // error rather than blindly re-adding a `tool` field.
+    let diagnostic = "tools_call arguments did not parse as valid JSON (serde json error: \
+                      invalid escape at line 1 column 99). Arguments must be one JSON object \
+                      with a string `tool` field and an `input` object.";
+    let invocation = ToolInvocation {
+        tool_api_call: Some(agena_domain::ToolApiCall {
+            function: agena_domain::ToolApiFunction::Call,
+            arguments: StructuredObject::try_from(serde_json::json!({
+                agena_domain::TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD: diagnostic,
+            }))
+            .expect("diagnostic envelope"),
+        }),
+        name: "tools_call".to_owned(),
+        plugin_name: None,
+        input: StructuredObject::default(),
+    };
+
+    let error = executor
+        .prepare_invocation(&invocation, 1, 1)
+        .expect_err("gateway with a shape diagnostic must fail before execution");
+    assert!(
+        matches!(error, ToolError::InvalidInput { .. }),
+        "expected invalid-input rejection, got: {error}"
+    );
+    assert_eq!(
+        error.actionable_message().as_deref(),
+        Some(diagnostic),
+        "shape diagnostic must replace the generic message"
+    );
 }

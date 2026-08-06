@@ -133,10 +133,11 @@ fn execute_background_run(
     context: ToolRuntimeContext,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let registry = process_registry(executor)?;
+    let effects = command.filesystem_effects();
     validate_declared_filesystem_effects(
         "shell.run",
         command.command.as_str(),
-        &command.filesystem_effects,
+        &effects,
     )?;
 
     let cwd = resolve_workdir(executor, command.workdir.as_deref())?;

@@ -15,15 +15,15 @@ use agena_tool::{ReadMode, TaskModelSelection, normalize_tool_summary, normalize
 use super::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_domain::{StructuredValue, TimeRange};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
     trim(
         "command",
         "description",
         "workdir",
-        "filesystem_effects.read[]",
-        "filesystem_effects.write[]",
-        "network_effects[].target"
+        "reads[]",
+        "writes[]",
+        "network[]"
     ),
     non_empty("command")
 )]
@@ -36,17 +36,91 @@ pub struct ShellCommandInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(path.read, fallback = "")]
     pub workdir: Option<String>,
-    /// Files and directories the command reads or modifies, grouped by access:
-    /// a path the command may both read and write appears in both `read` and
-    /// `write`. Declare only the actual files/directories affected - never the
-    /// executables, interpreters, or tools being invoked (e.g. `node`, `python`,
-    /// `uv`, `git`, `cargo`) or their installation directories. Pass an empty
-    /// object `{}` when the command has no file reads/writes beyond the
-    /// executables it invokes.
-    pub filesystem_effects: FilesystemEffects,
-    /// Outbound network targets the command may connect to. Pass an empty list
-    /// when the command has no network effect.
-    pub network_effects: Vec<NetworkEffect>,
+    /// Files and directories the command may read. Declare only the actual
+    /// files/directories affected - never the executables, interpreters, or
+    /// tools being invoked (e.g. `node`, `python`, `uv`, `git`, `cargo`) or
+    /// their installation directories. Pass an empty array `[]` when the
+    /// command reads nothing beyond its executables.
+    #[serde(default)]
+    #[schemars(example = example_reads())]
+    pub reads: Vec<String>,
+    /// Files and directories the command may create, modify, or delete.
+    /// Declare only the actual files/directories affected - never the
+    /// executables, interpreters, or tools being invoked (e.g. `node`,
+    /// `python`, `uv`, `git`, `cargo`) or their installation directories.
+    /// Pass an empty array `[]` when the command writes nothing.
+    #[serde(default)]
+    #[schemars(example = example_writes())]
+    pub writes: Vec<String>,
+    /// Outbound network targets the command may connect to: host names,
+    /// `host:port`, or URLs. Pass an empty array `[]` when the command has no
+    /// network effect.
+    #[serde(default)]
+    #[schemars(example = example_network())]
+    pub network: Vec<String>,
+}
+
+impl ShellCommandInput {
+    /// Project the flattened `reads`/`writes` declarations back into the
+    /// internal grouped `FilesystemEffects` shape consumed by permission checks.
+    pub fn filesystem_effects(&self) -> FilesystemEffects {
+        FilesystemEffects {
+            read: self.reads.clone(),
+            write: self.writes.clone(),
+        }
+    }
+}
+
+fn example_reads() -> Vec<String> {
+    vec!["src/lib.rs".to_string()]
+}
+
+fn example_writes() -> Vec<String> {
+    vec!["target/out.txt".to_string()]
+}
+
+fn example_network() -> Vec<String> {
+    vec!["<target>".to_string()]
+}
+
+impl<'de> Deserialize<'de> for ShellCommandInput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            command: String,
+            #[serde(default)] description: String,
+            #[serde(default)] timeout_ms: Option<u64>,
+            #[serde(default)] workdir: Option<String>,
+            #[serde(default)] reads: Vec<String>,
+            #[serde(default)] writes: Vec<String>,
+            #[serde(default)] network: Vec<String>,
+            #[serde(default)] filesystem_effects: Option<FilesystemEffects>,
+            #[serde(default)] network_effects: Option<Vec<NetworkEffect>>,
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        let mut reads = wire.reads;
+        let mut writes = wire.writes;
+        if let Some(effects) = wire.filesystem_effects {
+            reads.extend(effects.read);
+            writes.extend(effects.write);
+        }
+        let mut network = wire.network;
+        if network.is_empty() && let Some(legacy) = wire.network_effects {
+            network = legacy.into_iter().map(|effect| effect.target).collect();
+        }
+        Ok(Self {
+            command: wire.command,
+            description: wire.description,
+            timeout_ms: wire.timeout_ms,
+            workdir: wire.workdir,
+            reads,
+            writes,
+            network,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Default)]
@@ -231,9 +305,9 @@ pub struct ToolSearchToolInput {
     "command",
     "description",
     "workdir",
-    "filesystem_effects.read[]",
-    "filesystem_effects.write[]",
-    "network_effects[].target",
+    "reads[]",
+    "writes[]",
+    "network[]",
     "process_id"
 ))]
 #[serde(tag = "action", rename_all = "snake_case")]

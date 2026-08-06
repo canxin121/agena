@@ -33,7 +33,7 @@ pub(crate) fn validate_declared_filesystem_effects(
             agena_tool::shell_analysis::filesystem_effects_required_reason(command)
     {
         return Err(ToolError::invalid_input(format!(
-            "{tool_name} filesystem_effects must declare every accessed path because the command provably mutates or reads the filesystem: {reason}"
+            "{tool_name} must declare every accessed path in reads/writes because the command provably mutates or reads the filesystem: {reason}"
         )));
     }
     Ok(())

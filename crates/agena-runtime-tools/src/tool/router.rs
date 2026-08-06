@@ -9,7 +9,6 @@ use serde_json::Value as JsonValue;
 use crate::message::{ApplyPatchToolInput, ShellToolInput};
 use crate::tool::ToolPayloadOutput;
 use crate::tool::result::ToolPayloadExecution;
-use agena_domain::NetworkEffect;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{Result as SdkResult, ToolInput, ToolInvokeOutput};
 
@@ -54,7 +53,7 @@ pub fn permission_network_targets_for(
                 ShellToolInput::Run { command, .. } => declared_shell_network_targets(
                     "shell",
                     command.command.as_str(),
-                    &command.network_effects,
+                    &command.network,
                 ),
                 ShellToolInput::List {}
                 | ShellToolInput::Logs { .. }
@@ -72,16 +71,16 @@ fn parse_shape_input<T: ToolInput>(input: &serde_json::Value) -> SdkResult<T> {
 fn declared_shell_network_targets(
     tool: &str,
     command: &str,
-    effects: &[NetworkEffect],
+    effects: &[String],
 ) -> SdkResult<Vec<String>> {
     if effects.is_empty()
         && let Some(reason) = agena_tool::shell_analysis::network_command_reason(command)
     {
         return Err(PluginError::invalid_params(format!(
-            "{tool} network_effects must declare at least one target because the command appears to use the network: {reason}"
+            "{tool} network must declare at least one target because the command appears to use the network: {reason}"
         )));
     }
-    Ok(effects.iter().map(|effect| effect.target.clone()).collect())
+    Ok(effects.to_vec())
 }
 
 pub fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolInvokeOutput {

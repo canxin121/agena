@@ -108,10 +108,11 @@ pub(super) fn execute(
     }
 
     let analysis = analyze_command(input.command.as_str());
+    let effects = input.filesystem_effects();
     validate_declared_filesystem_effects(
         "bash",
         input.command.as_str(),
-        &input.filesystem_effects,
+        &effects,
     )?;
 
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;

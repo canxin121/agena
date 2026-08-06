@@ -365,11 +365,44 @@ pub type TracingFilterReloadHandle =
 
 /// Production worker-thread stack size used by deep tool and session flows.
 ///
-/// The reply/continuation state machines used to nest tool execution and
-/// permission replies; with the inline async levels boxed, the deepest debug
-/// chain stays below ~1.5 MiB, so 2 MiB (the standard async worker stack) is
-/// comfortable while the old 16 MiB setting was excessive.
+/// Release builds keep the standard 2 MiB async worker stack: optimized
+/// frames are small enough that the deepest reply/continuation chain stays
+/// well under it. Debug builds get 8 MiB because unoptimized state-machine
+/// frames are tens of KiB each: the tool-success path
+/// (`resolve_pending_tool` -> `apply_tool_success` -> `persist` ->
+/// `run_transaction_effects`) measures well over 2 MiB of stack in a debug
+/// binary and previously crashed with `has overflowed its stack` on the
+/// tokio worker.
+#[cfg(debug_assertions)]
+pub const APP_RUNTIME_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+#[cfg(not(debug_assertions))]
 pub const APP_RUNTIME_THREAD_STACK_SIZE: usize = 2 * 1024 * 1024;
+
+/// Raise the default stack for `std::thread` spawns (tokio's blocking pool
+/// and the plugin-host helper threads) to match the async worker stack.
+/// macOS gives freshly spawned threads a 512 KiB default stack, which the
+/// deep plugin/tool dispatch chains exceed in debug builds. No-op in release
+/// builds, which run fine on the platform default.
+///
+/// Must be called from `main` before any runtime thread is spawned.
+pub fn ensure_default_thread_stack() {
+    #[cfg(debug_assertions)]
+    {
+        const WANTED: usize = 8 * 1024 * 1024;
+        let current = std::env::var("RUST_MIN_STACK")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(0);
+        if current < WANTED {
+            // SAFETY: called once from `main` before any thread is spawned,
+            // so no other thread can concurrently read the environment while
+            // it is mutated.
+            unsafe {
+                std::env::set_var("RUST_MIN_STACK", WANTED.to_string());
+            }
+        }
+    }
+}
 
 /// Build the multi-thread Tokio runtime used by Agena binaries.
 pub fn build_app_runtime() -> std::io::Result<tokio::runtime::Runtime> {

@@ -10,6 +10,7 @@ use agena_cli::{AgenaCli, LaunchMode};
 use clap::Parser;
 
 fn main() -> error::Result<()> {
+    agena_runtime::ensure_default_thread_stack();
     agena_runtime::build_app_runtime()?.block_on(async {
         match AgenaCli::parse().into_launch_mode() {
             LaunchMode::Tui(request) => launch::tui::run(request).await,

@@ -37,6 +37,7 @@ struct EditorElement {
 
 impl Editor {
     pub fn from_text(text: String) -> Self {
+        let text = sanitize_editor_text(&text);
         let cursor = text.len();
         Self {
             text,
@@ -69,7 +70,7 @@ impl Editor {
     }
 
     pub fn set_text(&mut self, text: String) {
-        self.text = text;
+        self.text = sanitize_editor_text(&text);
         self.cursor = self.text.len();
         self.preferred_column = None;
         self.elements.clear();
@@ -125,11 +126,12 @@ impl Editor {
     }
 
     pub fn insert_element(&mut self, text: &str) {
+        let text = sanitize_editor_text(text);
         if text.is_empty() {
             return;
         }
         let start = self.clamp_pos_for_insertion(self.cursor);
-        self.insert_str_at(start, text);
+        self.insert_str_at(start, &text);
         let end = start + text.len();
         self.elements.push(EditorElement { range: start..end });
         self.elements.sort_by_key(|element| element.range.start);
@@ -385,6 +387,23 @@ impl Editor {
             } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
                 self.move_word_left();
             }
+            // Alt+B is the classic Emacs/macOS Option-as-Meta encoding for
+            // word-left (the terminal sends ESC b). CSI-u terminals report the
+            // Left cursor key as control code U+0001 (\u001b[1;3u / \u001b[1;5u).
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                self.move_word_left();
+            }
+            KeyEvent {
+                code: KeyCode::Char('\u{0001}'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::ALT || modifiers == KeyModifiers::CONTROL => {
+                self.move_word_left();
+            }
             KeyEvent {
                 code: KeyCode::Char('\u{0005}'),
                 modifiers: KeyModifiers::NONE,
@@ -419,6 +438,21 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == KeyModifiers::CONTROL || modifiers == KeyModifiers::ALT => {
+                self.move_word_right();
+            }
+            // Alt+F and the CSI-u Right-cursor control code U+0002.
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::ALT,
+                ..
+            } => {
+                self.move_word_right();
+            }
+            KeyEvent {
+                code: KeyCode::Char('\u{0002}'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::ALT || modifiers == KeyModifiers::CONTROL => {
                 self.move_word_right();
             }
             KeyEvent {
@@ -498,6 +532,15 @@ impl Editor {
                 modifiers,
                 ..
             } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.delete_backward_word();
+            }
+            // Terminals that send BS (U+0008) instead of DEL for Option/Ctrl
+            // + Backspace (\u001b\b arrives as an ALT-modified 0x08 char).
+            KeyEvent {
+                code: KeyCode::Char('\u{0008}'),
+                modifiers,
+                ..
+            } if modifiers == KeyModifiers::ALT || modifiers == KeyModifiers::CONTROL => {
                 self.delete_backward_word();
             }
             KeyEvent {
@@ -808,7 +851,10 @@ impl Editor {
     }
 
     fn current_display_column(&self) -> usize {
-        UnicodeWidthStr::width(&self.text[self.current_line_start()..self.cursor])
+        self.text[self.current_line_start()..self.cursor]
+            .graphemes(true)
+            .map(grapheme_cell_width)
+            .sum()
     }
 
     fn beginning_of_previous_word(&self) -> usize {
@@ -851,7 +897,11 @@ impl Editor {
 
     pub fn insert_str_at(&mut self, at: usize, text: &str) {
         let at = self.clamp_pos_for_insertion(at);
-        self.text.insert_str(at, text);
+        let text = sanitize_editor_text(text);
+        if text.is_empty() {
+            return;
+        }
+        self.text.insert_str(at, &text);
         self.update_elements_after_replace(at, at, text.len());
         self.cursor = at + text.len();
         self.preferred_column = None;
@@ -1033,7 +1083,7 @@ fn wrapped_editor_lines(text: &str, width: u16) -> Vec<WrappedEditorLine> {
         let mut start_column = 0_usize;
         let mut column = 0_usize;
         for (_, grapheme) in line_text.grapheme_indices(true) {
-            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            let grapheme_width = grapheme_cell_width(grapheme);
             let row_width = column.saturating_sub(start_column);
             if row_width > 0 && row_width.saturating_add(grapheme_width) > width {
                 lines.push(WrappedEditorLine {
@@ -1087,7 +1137,7 @@ fn next_grapheme_boundary(text: &str, index: usize) -> usize {
 fn byte_index_at_display_column(line: &str, offset: usize, target_column: usize) -> usize {
     let mut width = 0_usize;
     for (index, grapheme) in line.grapheme_indices(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        let grapheme_width = grapheme_cell_width(grapheme);
         if width.saturating_add(grapheme_width) > target_column {
             return offset + index;
         }
@@ -1154,7 +1204,7 @@ fn slice_display_window_styled(
     let mut spans = Vec::new();
 
     for (offset, grapheme) in line_text.grapheme_indices(true) {
-        let grapheme_width = UnicodeWidthStr::width(grapheme);
+        let grapheme_width = grapheme_cell_width(grapheme);
         let next_column = current_column.saturating_add(grapheme_width);
         if next_column <= start_column {
             current_column = next_column;
@@ -1200,6 +1250,128 @@ fn slice_display_window_styled(
     } else {
         Line::from(spans)
     }
+}
+
+/// Terminal-safe display text for the editor buffer.
+///
+/// Mirrors the transcript's `sanitize_terminal_text` so the editor never
+/// stores bytes that ratatui's buffer renderer drops or that make the
+/// terminal's visible output disagree with the width math used for cursor
+/// placement. The transcript sanitizes external content before display; the
+/// editor applies the same policy at every mutation entry point (typing,
+/// paste, history recall, attachment insertion) so the stored buffer is
+/// always exactly what is rendered and measured.
+fn sanitize_editor_text(text: &str) -> String {
+    let stripped = strip_ansi_sequences(text);
+    let mut out = String::with_capacity(stripped.len());
+    for ch in stripped.chars() {
+        match ch {
+            '\n' => out.push(ch),
+            '\r' => {}
+            '\t' => {
+                // unicode-width reports tab as width 1 while ratatui drops it
+                // from the buffer (0 cells). Expand tabs to spaces so cursor
+                // math and rendering agree; four columns is the common editor
+                // tab stop.
+                out.push_str("    ");
+            }
+            '\u{200e}' | '\u{200f}' => {}
+            '\u{202a}'..='\u{202e}' => {}
+            '\u{2066}'..='\u{2069}' => {}
+            ch if ch.is_control() => out.push(' '),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// Remove ANSI escape sequences (CSI, OSC, and single-char escapes) from text
+/// that is about to enter the editor buffer. Pasted terminal output frequently
+/// contains color/OSC sequences; leaving them in the buffer would make the
+/// visible output and cursor math disagree.
+fn strip_ansi_sequences(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0_usize;
+    while index < bytes.len() {
+        if bytes[index] != b'\x1b' {
+            let ch = text[index..].chars().next().unwrap_or_default();
+            out.push(ch);
+            index = index.saturating_add(ch.len_utf8());
+            continue;
+        }
+        let Some(&next) = bytes.get(index + 1) else {
+            break;
+        };
+        match next {
+            b'[' => {
+                index = index.saturating_add(2);
+                while index < bytes.len() {
+                    let byte = bytes[index];
+                    // CSI sequences may only contain ASCII parameter bytes; a
+                    // non-ASCII byte means the sequence is truncated and the
+                    // rest is real text (never land mid-char).
+                    if !byte.is_ascii() {
+                        break;
+                    }
+                    index = index.saturating_add(1);
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            b']' => {
+                index = index.saturating_add(2);
+                while index < bytes.len() {
+                    match bytes[index] {
+                        0x07 => {
+                            index = index.saturating_add(1);
+                            break;
+                        }
+                        0x1b if bytes.get(index + 1) == Some(&b'\\') => {
+                            index = index.saturating_add(2);
+                            break;
+                        }
+                        byte if !byte.is_ascii() => break,
+                        _ => index = index.saturating_add(1),
+                    }
+                }
+            }
+            _ => {
+                // Single-char escape (e.g. ESC M). Skip it only when it is a
+                // plain ASCII byte; a non-ASCII leading byte is the start of a
+                // multi-byte char and must be emitted as text.
+                if bytes[index + 1].is_ascii() {
+                    index = index.saturating_add(2);
+                } else {
+                    index = index.saturating_add(1);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Halfwidth Katakana Voiced Sound Mark (dakuten).
+const HALFWIDTH_KATAKANA_VOICED_SOUND_MARK: char = '\u{FF9E}';
+/// Halfwidth Katakana Semi-Voiced Sound Mark (handakuten).
+const HALFWIDTH_KATAKANA_SEMI_VOICED_SOUND_MARK: char = '\u{FF9F}';
+
+/// Display width of one grapheme in terminal cells, matching ratatui's
+/// `CellWidth` (unicode-width plus a +1 adjustment for the halfwidth katakana
+/// dakuten/handakuten that terminals render as standalone halfwidth chars).
+fn grapheme_cell_width(grapheme: &str) -> usize {
+    let width = UnicodeWidthStr::width(grapheme);
+    let marks = grapheme
+        .chars()
+        .filter(|ch| {
+            matches!(
+                *ch,
+                HALFWIDTH_KATAKANA_VOICED_SOUND_MARK | HALFWIDTH_KATAKANA_SEMI_VOICED_SOUND_MARK
+            )
+        })
+        .count();
+    width.saturating_add(marks)
 }
 
 fn is_altgr(modifiers: KeyModifiers) -> bool {
@@ -1470,5 +1642,138 @@ mod tests {
         editor.set_cursor(0);
         editor.handle_line_input_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL));
         assert_eq!(editor.text(), " two three");
+    }
+    #[test]
+    fn alt_b_and_alt_f_move_by_words() {
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 8);
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 4);
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 7);
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 13);
+    }
+
+    #[test]
+    fn csi_u_control_codes_move_by_words() {
+        // CSI u reports the Left cursor key as U+0001 and Right as U+0002,
+        // carrying the Alt (\x1b[1;3u) or Ctrl (\x1b[1;5u) modifier.
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{0001}'), KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 8);
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{0002}'), KeyModifiers::ALT));
+        assert_eq!(editor.cursor(), 13);
+
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(editor.text().len());
+        editor.handle_line_input_key(KeyEvent::new(
+            KeyCode::Char('\u{0001}'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(editor.cursor(), 8);
+        editor.handle_line_input_key(KeyEvent::new(
+            KeyCode::Char('\u{0002}'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(editor.cursor(), 13);
+    }
+
+    #[test]
+    fn esc_bs_word_delete() {
+        // Terminals that send BS instead of DEL for Option/Ctrl+Backspace
+        // surface as an ALT/CONTROL-modified U+0008 char.
+        let mut editor = Editor::from_text("one two three".to_string());
+        editor.set_cursor(editor.text().len());
+
+        editor.handle_line_input_key(KeyEvent::new(KeyCode::Char('\u{0008}'), KeyModifiers::ALT));
+        assert_eq!(editor.text(), "one two ");
+        editor.handle_line_input_key(KeyEvent::new(
+            KeyCode::Char('\u{0008}'),
+            KeyModifiers::CONTROL,
+        ));
+        assert_eq!(editor.text(), "one ");
+    }
+
+    #[test]
+    fn inserted_text_is_sanitized_for_terminal_display() {
+        // ANSI escape sequences are stripped so the terminal output and the
+        // width math used for cursor placement agree.
+        let mut editor = Editor::default();
+        editor.insert_str("\x1b[31mred\x1b[0m");
+        assert_eq!(editor.text(), "red");
+        assert_eq!(editor.cursor(), 3);
+
+        // Tabs expand to spaces: unicode-width reports a tab as width 1 while
+        // ratatui drops it (0 cells), which used to shift the cursor.
+        let mut editor = Editor::default();
+        editor.insert_str("a\tb");
+        assert_eq!(editor.text(), "a    b");
+        assert_eq!(editor.cursor(), 6);
+
+        // Control characters become spaces (transcript sanitize policy).
+        let mut editor = Editor::default();
+        editor.insert_str("x\u{1}y");
+        assert_eq!(editor.text(), "x y");
+
+        // Bidi marks are dropped.
+        let mut editor = Editor::default();
+        editor.insert_str("a\u{200e}b");
+        assert_eq!(editor.text(), "ab");
+
+        // CR is removed.
+        let mut editor = Editor::default();
+        editor.insert_str("a\rb");
+        assert_eq!(editor.text(), "ab");
+
+        // An all-escape insertion is a no-op.
+        let mut editor = Editor::from_text("abc".to_string());
+        editor.insert_str("\x1b[31m");
+        assert_eq!(editor.text(), "abc");
+        assert_eq!(editor.cursor(), 3);
+    }
+
+    #[test]
+    fn set_text_and_from_text_sanitize() {
+        let mut editor = Editor::default();
+        editor.set_text("\x1b[31mred\x1b[0m".to_string());
+        assert_eq!(editor.text(), "red");
+        assert_eq!(editor.cursor(), 3);
+
+        let editor = Editor::from_text("a\u{1}b".to_string());
+        assert_eq!(editor.text(), "a b");
+    }
+
+    #[test]
+    fn insert_element_keeps_ranges_on_sanitized_text() {
+        let mut editor = Editor::default();
+        editor.insert_element("\x1b[31mpath\x1b[0m");
+        assert_eq!(editor.text(), "path");
+        assert_eq!(editor.draft_elements(), vec![0..4]);
+    }
+
+    #[test]
+    fn cursor_math_matches_ratatui_for_halfwidth_katakana_marks() {
+        // unicode-width reports U+FF9E (halfwidth dakuten) as zero width, but
+        // ratatui renders it as one cell; the editor math must agree.
+        let mut editor = Editor::from_text("a\u{FF9E}".to_string());
+        editor.set_cursor(editor.text().len());
+        let view = editor.render_wrapped_view(10, 1);
+        assert_eq!((view.cursor_x, view.cursor_y), (2, 0));
+    }
+
+    #[test]
+    fn pasted_escape_sequences_do_not_shift_the_cursor() {
+        let mut editor = Editor::from_text("prefix".to_string());
+        editor.insert_str("\x1b[31mred\x1b[0m");
+        assert_eq!(editor.text(), "prefixred");
+        let view = editor.render_wrapped_view(20, 1);
+        assert_eq!(view.cursor_x, 9);
     }
 }

@@ -32,12 +32,17 @@ Tools that proxy an official hosted provider service (`chatgpt.*`, `claude.*`, `
 
 Use tools exactly as the runtime declares them. A malformed tool call is rejected by the transport and sent back for repair, so precision keeps the run moving:
 
-- Get exact tool names from `tools_list` / `tools_search`; never invent, guess, or abbreviate a tool name. Execution tools such as `fs.read` or `session.get` are reached only through the `tools_call` gateway - never emit an execution-tool name as a top-level function name.
+- If you already know the exact tool name (for example from this system prompt, a previous discovery, or the conversation), skip discovery and go straight to `tools_help` to learn how to use it, then call it. Do not re-discover a tool whose name is already known.
+- For an unknown tool, discover it in a fixed order before naming or calling anything:
+  1. Start with plugin tags: call `plugins_tags` and use `tag`/`tags` filters to narrow to the capability you need.
+  2. Find the plugin that owns it: `plugins_search` (or `plugins_list` with filters) to choose the plugin.
+  3. Inspect that plugin's tools: call `tools_list` or `tools_search` with the `plugin` filter (for example `agena.fs`) to enumerate exactly the tools that plugin publishes.
+  4. Read the tool's live contract: call `tools_help` on the exact identifier before the first `tools_call` unless the complete contract is already established.
+  5. Broaden only after filters miss: run `tools_search` with a keyword query first, then unfiltered `tools_list` as the last resort. Never invent, guess, or abbreviate a tool name, and never fabricate a tool.
 - Before the first call to a tool, read its live contract with `tools_help` unless the complete current contract is already established; then pass exactly the required arguments with the correct names, types, and values - no missing fields, no wrong types.
 - Emit one complete, well-formed call per function: valid JSON arguments with correct quoting and escapes, no stray control characters, no truncation.
 - Never place a Tool API function name (for example `tools_call`, `tools_help`, `tools_list`, `plugins_list`) inside `tools_call.arguments.tool`; Tool API functions are called directly, execution tools are called through `tools_call`.
 - When a call is rejected, read the transport correction and retry with an exact declared function and valid arguments.
-- For `fs.apply_patch`, the `patch` argument must start with the exact marker line `*** Begin Patch` and end with `*** End Patch`, using `*** Update File:` / `*** Add File:` / `*** Delete File:` directives with `@@` hunks (context lines start with a space, removed lines with `-`, added lines with `+`).
 
 # Care, output, and safety
 
@@ -78,8 +83,12 @@ mod tests {
         );
         assert!(prompt.contains("blast radius"));
         assert!(prompt.contains("# Correct tool usage"));
-        assert!(prompt.contains("*** Begin Patch"));
-        assert!(prompt.contains("`tools_call` gateway"));
+        assert!(prompt.contains("skip discovery and go straight to `tools_help`"));
+        assert!(prompt.contains("Start with plugin tags"));
+        assert!(prompt.contains("the `plugin` filter"));
+        assert!(prompt.contains("Broaden only after filters miss"));
+        assert!(!prompt.contains("*** Begin Patch"));
+        assert!(!prompt.contains("top-level function name"));
         assert!(!prompt.contains("# Tools & Plugins"));
         for obsolete in ["build agent", "explore agent", "verification agent"] {
             assert!(!prompt.to_ascii_lowercase().contains(obsolete));

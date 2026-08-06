@@ -18,7 +18,7 @@ use crate::session::Session;
 use crate::session::prompt_window;
 use agena_domain::UserInputRequest;
 use agena_domain::{
-    DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, ModelRef, PermissionAction,
+    DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionScope,
     PolicySourceKind, Role, RunAbortReason,
 };
@@ -120,25 +120,6 @@ fn should_continue_turn(
         return TurnContinuation::Stop;
     }
     TurnContinuation::Stop
-}
-
-/// Provider error kinds that trigger a one-shot model fallback within the
-/// same provider (mirrors codex `compact_model_fallback` and gemini's
-/// fallback routing). Authentication/Policy errors are excluded; they are
-/// not fixed by switching models.
-fn should_fallback_model_on_error(kind: agena_provider::ProviderErrorKind) -> bool {
-    use agena_provider::ProviderErrorKind::*;
-    matches!(
-        kind,
-        InvalidRequest
-            | ContextOverflow
-            | Unavailable
-            | QuotaExceeded
-            | Timeout
-            | Connection
-            | Misconfiguration
-            | Internal
-    )
 }
 
 /// True for tools whose operation is scoped to concrete paths (filesystem
@@ -297,13 +278,6 @@ impl SessionManager {
         } = context;
         let mut reactive_compaction_attempted = false;
         let mut force_model_retry = false;
-        // Bounded model fallback: one failed model turn may be retried once
-        // with the provider's default model when the primary model fails with
-        // an eligible provider error (mirrors codex `compact_model_fallback`
-        // and gemini's fallback routing). `fallback_model` is applied to the
-        // rebuilt `current_options` on the next loop iteration.
-        let mut model_fallback_attempted = false;
-        let mut fallback_model: Option<ModelRef> = None;
         // Bound on the total number of model turns in one stable run (see
         // `DEFAULT_MAX_MODEL_TURNS`); the run stops softly when reached.
         let mut model_turns_taken: usize = 0;
@@ -331,11 +305,8 @@ impl SessionManager {
             .find(|message| message.role == Role::User)
             .map(|message| message.id);
         loop {
-            let mut current_options =
+            let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
-            if let Some(fallback) = fallback_model.as_ref() {
-                current_options.model = fallback.clone();
-            }
             if control.cancel.is_cancelled() {
                 return Err(AppError::Cancelled);
             }
@@ -359,9 +330,6 @@ impl SessionManager {
 
             let mut current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
-            if let Some(fallback) = fallback_model.as_ref() {
-                current_options.model = fallback.clone();
-            }
             if let Some(budget) = usage_budget.as_ref() {
                 let aggregate_usage = session.aggregate_usage();
                 if let Some(message) = budget.prevents_next_model_turn(&aggregate_usage) {
@@ -704,46 +672,6 @@ impl SessionManager {
                             session = compacted;
                             force_model_retry = true;
                             continue;
-                        }
-                    }
-                    if !model_fallback_attempted
-                        && err
-                            .provider_error_kind()
-                            .is_some_and(should_fallback_model_on_error)
-                    {
-                        let provider_registry = state.processor.provider_registry();
-                        let fallback_provider =
-                            provider_registry.get(current_options.model.provider_id.as_ref());
-                        let fallback_model_id = fallback_provider
-                            .as_ref()
-                            .map(|provider| provider.default_model().clone());
-                        let fallback_adapter = fallback_provider
-                            .as_ref()
-                            .and_then(|provider| provider.default_adapter().cloned());
-                        if fallback_model_id.as_ref() != Some(&current_options.model.model_id) {
-                            model_fallback_attempted = true;
-                            if let Some(fallback_model_id) = fallback_model_id {
-                                tracing::warn!(
-                                    target: "agena::session::fallback",
-                                    session_id,
-                                    from = %current_options.model,
-                                    to = %fallback_model_id,
-                                    error_kind = ?err.provider_error_kind(),
-                                    "provider/model error eligible for fallback; retrying turn with the provider's default model"
-                                );
-                                let reloaded = self
-                                    .store
-                                    .load_session(session_id, state.cache_policy())
-                                    .await?;
-                                session = reloaded;
-                                fallback_model = Some(ModelRef {
-                                    provider_id: current_options.model.provider_id.clone(),
-                                    adapter_id: fallback_adapter,
-                                    model_id: fallback_model_id,
-                                });
-                                force_model_retry = true;
-                                continue;
-                            }
                         }
                     }
                     return Err(err);
@@ -3190,45 +3118,3 @@ mod should_continue_turn_tests {
     }
 }
 
-#[cfg(test)]
-mod should_fallback_model_on_error_tests {
-    use super::should_fallback_model_on_error;
-    use agena_provider::ProviderErrorKind::{
-        Authentication, Connection, ContextOverflow, Internal, InvalidRequest, MalformedResponse,
-        Misconfiguration, QuotaExceeded, RateLimited, Timeout, ToolProtocolViolation, Unavailable,
-    };
-
-    #[test]
-    fn eligible_error_kinds_fall_back() {
-        for kind in [
-            InvalidRequest,
-            ContextOverflow,
-            Unavailable,
-            QuotaExceeded,
-            Timeout,
-            Connection,
-            Misconfiguration,
-            Internal,
-        ] {
-            assert!(
-                should_fallback_model_on_error(kind),
-                "expected fallback for {kind:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn auth_and_policy_kinds_do_not_fall_back() {
-        for kind in [
-            Authentication,
-            RateLimited,
-            MalformedResponse,
-            ToolProtocolViolation,
-        ] {
-            assert!(
-                !should_fallback_model_on_error(kind),
-                "expected no fallback for {kind:?}"
-            );
-        }
-    }
-}

@@ -151,22 +151,54 @@ chip 布局算法（surface.rs）：
 - 输出最终渲染进 transcript footer（view_main.rs line 514）
 - 配置入口：TuiConfig.status_line（presentation_config.rs line 22）
 
-### 4.6 显示位置 ⑤：终端集成（窗口标题 / 铃响 / OSC 9;4 进度）
+### 4.6 显示位置 ⑤：终端集成（窗口标题 / 铃响 / OSC 9;4 进度条）
 
-文件：crates/agena-tui-app/src/app_terminal_integration.rs + crates/agena-bundled-plugins/src/plugins/provided/terminal.rs
+文件：crates/agena-tui-app/src/app_terminal_integration.rs + crates/agena-bundled-plugins/src/plugins/provided/terminal.rs + crates/agena-tui-platform/src/terminal/integration.rs
 
-- TuiConfig 三个开关（presentation_config.rs line 29-36）：terminal_title / terminal_notifications / terminal_progress，取值 Auto / Enabled / Disabled
-- app_terminal_integration.rs：
-  - current_title_text()（line 95）：会话标题 + 活动状态（working / permission / user-input / blocked），按终端是否支持原生进度决定前缀/后缀
-  - notifications_operational()（line 40）决定是否允许铃响；queue_notification(NotificationMethod::Bell)
-  - progress_frames / notification_frames / title_frames（来自 agena_tui_platform::terminal::integration）
-- 内建插件 agena.terminal（terminal.rs line 25）：
-  - 保留 statusline 段 id：agena.terminal.title / agena.terminal.activity / agena.terminal.notify（line 29-33）
-  - notify 优先级 i32::MAX，activity 优先级 i32::MAX - 1（line 40-42）
-  - TerminalNotify：Done / Blocked（line 47）
-  - TerminalActivity：Idle / Running / Blocked（line 62）
-  - TUI 通过 backend.plugin_statusline_segments() 读取这些段重建终端状态（app_terminal_integration.rs line 61-93）
-- 运行循环：app_types.rs TerminalIntegrationState（line 307）——last_title / pending_notifications / last_progress / consumed_notify；每帧排空最多一条通知（burst 合并成一次提醒）
+#### 4.6.1 三套可配置开关（presentation_config.rs line 19-37）
+
+- terminal_title / terminal_notifications / terminal_progress，取值 Auto / Enabled / Disabled（TerminalIntegrationMode，line 42-47）。Auto 遵循终端能力探测；Enabled/Disabled 覆盖探测结果。
+
+#### 4.6.2 窗口/标签标题（OSC 0 / OSC 2）
+
+- title_frames(family, title)（integration.rs line 65）：
+  - 通用帧：\x1b]2;{title}\x07（OSC 2，标签/窗口标题）
+  - iTerm2 / Apple Terminal 额外发 \x1b]0;{title}\x07（OSC 0，window + icon/tab title）；其他家族只发 OSC 2
+  - 空标题回退产品名 agena；按显示宽度截断（MAX_TITLE_DISPLAY_WIDTH），按 UTF-8 边界回退避免切坏字符
+- 标题文案 current_title_text()（app_terminal_integration.rs line 95）：会话标题 + 活动状态（working / permission / user-input / blocked）；无原生进度时状态放前面，有原生进度时状态放后面
+- 变更检测 title_frames_if_changed()（line 123）：标题未变且无待发则不重发；sync_terminal_title()（line 146）写帧并记录 last_title
+
+#### 4.6.3 注意力通知（BEL / OSC 9 / iTerm2 Dock 提醒）
+
+- NotificationMethod（integration.rs line 78）：Bell（0x07）/ Osc9（\x1b]9;{text}\x07）/ Osc9AndItermAttention（OSC 9 + \x1b]1337;RequestAttention=yes\x07）
+- 按终端家族选择（notification_method，line 97）：iTerm2 -> Osc9AndItermAttention；Windows Terminal / WezTerm / Ghostty / foot / Warp -> Osc9；Dumb / LinuxConsole -> None；其余（含 Kitty、xterm 兼容、Unknown）-> Bell
+- 载荷限制（line 110-123）：中和控制字符（sanitize_osc_text），硬上限 MAX_NOTIFICATION_TEXT_BYTES，按 UTF-8 边界截断
+- 通知来源优先级（drain_terminal_notification，app_terminal_integration.rs line 230）：本地排队（权限/用户输入请求、flash 错误）优先；否则消费 agena.terminal.notify 插件段的一次性生命周期通知（run completed / blocked）
+- 仅在 notifications_operational() 时发送（line 40）
+
+#### 4.6.4 OSC 9;4 原生进度条
+
+- ProgressState（integration.rs line 147）：Clear(0) / Working(3) / Awaiting(4) / Blocked(2)，帧 \x1b]9;4;{state}\x07（progress_frames line 173）
+  - 0 = 移除/隐藏；3 = 不确定（终端自己跑脉冲动画）；4 = 暂停/等待（等权限或用户输入）；2 = 错误（运行被阻断）
+- 状态映射 current_progress_state()（app_terminal_integration.rs line 182）：Idle -> Clear；Running -> Working；AwaitingPermission / AwaitingUserInput -> Awaiting；Blocked -> Blocked
+- 仅在能力验证支持时发送（progress_operational line 166），因为不支持 OSC 9;4 的终端可能把 OSC 9;4;* 当作 OSC 9 通知
+- 变更检测 progress_frames_if_changed()（line 195）；sync_terminal_progress()（line 207）写帧并记录 last_progress
+
+#### 4.6.5 内建插件 agena.terminal（crates/agena-bundled-plugins/src/plugins/provided/terminal.rs）
+
+- 插件 id agena.terminal（line 25）；保留 statusline 段 id：agena.terminal.title / agena.terminal.activity / agena.terminal.notify（line 29-33）
+- 段优先级：notify = i32::MAX，activity = i32::MAX - 1（line 40-42），保证 notify 意图排在 activity 之上
+- TerminalNotify：Done / Blocked（line 47）；TerminalActivity：Idle / Running / Blocked（line 62）
+- 插件观察会话生命周期 hooks（run.pre / run.post / agent.stop 等）发布这些段；TUI 读取 backend.plugin_statusline_segments() 重建终端状态（app_terminal_integration.rs line 61-93 effective_terminal_activity）
+- 权限/用户输入等待无法通过 hook 观察：TUI 用本地 pending-interactive 状态覆盖（line 64-69）
+
+#### 4.6.6 每帧执行顺序（app_lifecycle.rs line 234-236）
+
+1. sync_terminal_title(self, terminal)?
+2. sync_terminal_progress(self, terminal)?
+3. drain_terminal_notification(self, terminal)?
+
+状态容器 app_types.rs TerminalIntegrationState（line 307）：last_title / pending_notifications / last_progress / consumed_notify；每帧排空最多一条本地通知（burst 合并）；notify_consumed_once 保证 agena.terminal.notify 段只触发一次（line 362）。
 
 ### 4.7 显示位置 ⑥：transcript 内的 Notice / Progress 活动
 
@@ -210,6 +242,40 @@ chip 布局算法（surface.rs）：
 - 过期清理：app_lifecycle.rs line 307-313 每 tick 检查 is_expired_at，过期置 None
 - UI 刷新节拍：UI_TICK_MS = 100ms（app_types.rs line 63）
 - 通知去重：notify_failure 按 failure.id 去重，超过 512 清空重建
+
+### 4.10 后台活动面板（Background Activities）
+
+文件：crates/agena-tui/src/activities.rs（展示层）+ crates/agena-tui-app/src/app_activities.rs（应用适配）+ crates/agena-tui-app/src/view/view_overlays/view_activities.rs（渲染入口）
+
+#### 4.10.1 打开方式
+
+- 命令：`activities`（别名 background / tasks，commands.rs line 352-358）
+- open_activities_panel()（app_activities.rs line 40）：Route::Activities(state)，立即 refresh_activities_panel()
+
+#### 4.10.2 数据模型（crates/agena-domain/src/background_activity.rs）
+
+- BackgroundActivityKind（line 20）：Shell（shell.run 长期进程）/ Task（tasks.create|run 委派子任务）/ Runtime（marketplace sync、catalog refresh、runtime reload 等维护任务）/ Browser（web.browser_* 交互会话）
+- BackgroundActivityStatus（line 56）：pending / running / succeeded / failed / cancelled / stopped；is_active() = pending|running（line 70）
+- BackgroundActivity（line 92）：id（前缀 proc_ / task_ / rtask_ / browser_）、kind、status、title、description、command、workdir、session_id、parent_session_id、created_at_ms、started_at_ms、finished_at_ms、exit_code、message、failure、last_seq、has_more、dropped_lines、cancellable、dismissible
+
+#### 4.10.3 面板展示（crates/agena-tui/src/activities.rs）
+
+- 布局：左列表 58% + 右详情 42%（render_activities_panel line 306-328）
+- 列表：分组 Active / Finished；每行 kind 图标（⚙ ◈ ↻ ◉ •）+ 状态着色（running/pending accent，succeeded success，failed danger，cancelled/stopped warning）+ 时长（running_seconds，line 71）+ 命令
+- 标题：Background Activities + filter 后缀；底栏显示 N active · M finished 与按键提示（↑↓ select、↵ detail、s stop、d dismiss、x clear、r refresh、q close，line 343-354）
+- 筛选：kind（shell/task/runtime/browser）、status（running/pending/failed/succeeded）、show_finished（cycle_kind_filter line 209、cycle_status_filter line 222）
+- 详情窗：日志尾（ActivitiesLogTail line 237），stderr 前缀 e>（app_activities.rs line 93-95）
+- 操作：stop / dismiss / clear finished / refresh（ActivitiesControl line 23、ActivitiesEffect line 39）
+
+#### 4.10.4 后台活动计数（composer 左下角 chip）
+
+- composer_background_activity_part()（view_main.rs line 644）：background_activity_summary 计数 > 0 时显示 ● N background
+- 数据刷新：refresh_background_activity_summary_if_due()（app_activities.rs line 17，10 秒间隔，active_only 列表请求）
+- 状态字段：app_types.rs line 491 background_activity_summary: Option<(usize, Instant)>；AppMessage::BackgroundActivitySummaryLoaded（line 505）
+
+#### 4.10.5 键盘映射（crates/agena-tui/src/keymap/activities.rs）
+
+s stop / d dismiss / x clear finished / f toggle finished / k cycle kind / t cycle status（line 16-21）；KeyAction 定义 keymap/mod.rs line 217-222；handle_activities_key（app_activities.rs line 221）
 
 ---
 
@@ -350,6 +416,34 @@ App.vue：
 - streamPluginToolRegistryChanges（line 2514-2539）：包装 streamNotifications，kinds=['plugin_tool_registry_changed']
 - sse.ts：normalizeSseBuffer + parseSseEventBlock（event/id/data 字段解析）
 
+### 5.10 Background Activities 页面（Web）
+
+文件：packages/agena-web-ui/src/agena/pages/ActivitiesPage.vue
+
+- 入口：侧边栏 Activities 导航（App.vue line 280-282，/activities 路由）
+- 头部：页面标题 + N active · M finished 摘要 + Refresh / Clear Finished 按钮（line 190-210）
+- 错误横幅：.notice（line 212，error ref，写入方 userErrorMessage）
+- 筛选区：Kind（All/Shell/Task/Runtime/Browser）、Status（All/Running/Pending/Succeeded/Failed/Cancelled/Stopped）、Active only 复选框（line 214-237）
+- 列表（line 239-288）：每行 kind 图标（⚙ ◈ ↻ ◉ •）+ title + description + command + status badge（statusClass 着色）+ 时长（durationLabel，<60s 显示 Ns，否则 Nm Ns）+ Stop/Dismiss 按钮
+- 详情展开（line 277-284）：message、exit code、日志尾（pre.log-tail，limit 300 行）
+- 轮询：每 4 秒 loadActivities + loadLogs（line 176-182）
+- API：fetchActivities（GET /api/v1/activities?kinds&statuses&session_id&active_only，agenaApi.ts line 1312-1327）、fetchActivityLogs（GET /activities/{id}/logs?since_seq&limit&wait_ms，line 1329-1341）、stopActivity（POST /stop，line 1343）、dismissActivity（POST /dismiss，line 1349）、clearFinishedActivities（POST /clear-finished，line 1355）
+
+### 5.11 Runtime 概览页（Web，RuntimeOverviewPanel.vue）
+
+文件：packages/agena-web-ui/src/agena/pages/RuntimeOverviewPanel.vue + useRuntimeDerivedState.ts + runtimePageModel.ts
+
+- Operator Cards（line 332-337）：Generation / Tool Registry / Providers / Plugins / Agent / MCP Servers / LSP Servers / Skills（buildOperatorCards，runtimePageModel.ts line 39-51）
+- Runtime Snapshot（line 340-349）：Generation / Loaded At / Workspace Root / Config Path / Config Found / Auth Store / Tool Registry Generation / Tool Registry Last Event / Providers / Session Runtime / Automation / Scheduled Jobs（buildRuntimeSnapshotFacts line 53-72）
+- Runtime Tasks（line 351-371）：Reload（enabled/interval）、Session GC、Watch Paths
+- Recent Automation（line 374-396）：ScheduledJobResource 列表（kind/id/session/status/triggered/next/expression、last_run.failure.user.fallback）
+- Background Tasks（line 398-432）：RuntimeBackgroundTask 列表（title/id/origin/started/finished/message + status badge + Cancel；taskFailureMessage 取 failure.user.fallback，internal 类加 Reference）
+- Session Cache（line 457-465）：Entries / Total Bytes / Max Bytes / Hits / Misses / Inserts / Evictions / TTL / Max Sessions（buildSessionCacheFacts line 75-87）
+- Model Catalog（line 468-497）：Last Source / Last Refresh / last_failure.user.fallback + Refreshing badge + Refresh Catalog 按钮
+- Catalog Entries（line 499-637）：总数/显示数 + 搜索 + 分页
+- toast 反馈：pushToast（line 84-90）在任务成功/失败/取消时触发（line 254-282），默认 4s、error 7s
+- 数据来源：GET /api/v1/runtime（RuntimeStatus 类型见 agenaApi.ts line 59-122；background_tasks 字段 line 91；automation line 92）
+
 ---
 
 ## 6. HTTP/SSE API 端点（crates/agena-api-server/src/lib.rs）
@@ -390,7 +484,11 @@ App.vue：
 | /api/v1/sessions/tree/{root_id} | GET | list_session_tree | 会话树 |
 | /api/v1/events | GET | list_events | 全局事件列表 |
 | /api/v1/events/stream | GET(SSE) | sse::handler | 全局通知流（notification 事件） |
-| /api/v1/activities* | GET/POST | rest::activities | 后台活动 CRUD/停止/忽略 |
+| /api/v1/activities | GET | list_activities | 后台活动列表（kinds/statuses/session_id/active_only 过滤） |
+| /api/v1/activities/{id}/logs | GET | get_activity_logs | 活动日志尾（since_seq/limit/wait_ms） |
+| /api/v1/activities/{id}/stop | POST | stop_activity | 停止后台活动 |
+| /api/v1/activities/{id}/dismiss | POST | dismiss_activity | 忽略后台活动 |
+| /api/v1/activities/clear-finished | POST | clear_finished_activities | 清空已完成活动 |
 | /api/v1/permission-rules* | GET/POST/PUT/DELETE | rest::permission_rules | 权限规则 |
 | /api/v1/memories* | GET/PUT/DELETE | rest::memories | 记忆 |
 | /api/v1/git* / vcs* | GET/POST | rest::git/vcs | Git 状态/提交/PR |
@@ -415,8 +513,13 @@ App.vue：
 | TUI 窗口标题 / 铃响 / OSC 9;4 | 会话活动状态 | app_terminal_integration.rs | agena.terminal.* 插件段 |
 | TUI transcript 内 Notice 活动 | 系统 #id：kind + 详情 | snapshot.rs 573、message_render.rs 418 | ActivityPayload::Notice |
 | TUI transcript 内 Progress 活动 | current/total | message_render.rs 401 | ActivityPayload::Progress |
+| TUI 后台活动面板（activities 命令） | Shell/Task/Runtime/Browser 列表 + 详情日志 + stop/dismiss/clear | activities.rs 306-410、app_activities.rs 40-390 | list_activities / activity_logs / stop / dismiss / clear_finished |
+| TUI composer 左下角 chip | ● N background 后台活动计数 | view_main.rs 644-648、app_activities.rs 17-38 | list_activities(active_only) 10s 轮询 |
+| TUI 窗口标题 OSC 0/2 + 铃响/OSC 9 + OSC 9;4 进度条 | 会话活动状态 → 终端 chrome | app_terminal_integration.rs 95-249、integration.rs 65-175 | agena.terminal.* 插件段 + 本地 pending-interactive |
 | Web ChatPage 顶部横幅 | 错误 / 操作结果 .notice | ChatPage.vue 580-581 | errorMessage / localCommandNotice |
 | Web RuntimeOverview 右上角 | toast（info/success/error，4s） | RuntimeOverviewPanel.vue 53-89,641-715 | 本地状态 |
+| Web Background Activities 页 | 活动列表 + 日志 + 筛选 + Stop/Dismiss/Clear | ActivitiesPage.vue 190-288 | fetchActivities / fetchActivityLogs / stop / dismiss / clear（4s 轮询） |
+| Web Runtime 概览页 | Operator Cards / Snapshot / Tasks / Automation / Background Tasks / Session Cache / Model Catalog | RuntimeOverviewPanel.vue 330-637 | GET /api/v1/runtime |
 | Web composer | 附件 / Skill / 队列 / slash / 发送状态 | ChatComposerPanel.vue 127-255 | 本地状态 + chatQueueModel |
 | Web ActiveSession | agent/model/access/task/context%/workflow | ChatActiveSessionPanel.vue 39-131 | getSessionState（/state） |
 | Web RunOptions | Provider/Adapter/Model/模式下拉 | ChatRunOptionsPanel.vue 41-114 | listProviders / listProviderModels |
@@ -448,11 +551,18 @@ App.vue：
 - agena.terminal.title / agena.terminal.activity / agena.terminal.notify（agena.terminal 插件）
 - plan:{session_id}（workflow 插件，priority 120，workflow_plan.rs line 565-597）
 
-### 8.5 Web 常量
+### 8.5 后台活动模型（crates/agena-domain/src/background_activity.rs）
+
+- Kind：shell / task / runtime / browser（line 20-48）
+- Status：pending / running / succeeded / failed / cancelled / stopped（line 56-88）
+- id 前缀：proc_（shell）/ task_（委派）/ rtask_（runtime）/ browser_（line 94）
+- RuntimeBackgroundTask（Web，agenaApi.ts line 136-148）：kind = model_catalog_refresh / runtime_reload / marketplace_registry_sync / marketplace_plugin_install / marketplace_plugin_uninstall / marketplace_plugin_upgrade；origin = system / user；status = running / succeeded / failed / cancelled
+
+### 8.6 Web 常量
 
 - MAX_COMPOSER_ATTACHMENT_BYTES=50MB、MAX_COMPOSER_ATTACHMENTS=8、MAX_COMPOSER_ATTACHMENT_TOTAL_BYTES=64MB
 - MAX_COMPOSER_SKILLS=8、SKILL_PICKER_PAGE_SIZE=12
-- 轮询间隔 1800ms；SSE 重连 250ms/1s；toast 默认 4s（error 7s）
+- 轮询间隔：Chat 1800ms；Activities 4000ms；后台活动计数 10s；SSE 重连 250ms/1s；toast 默认 4s（error 7s）
 
 ---
 

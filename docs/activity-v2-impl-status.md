@@ -26,11 +26,17 @@
                        fallback_human_view / for_model（投影，纯函数不落盘）
 ```
 
+## 已完成的接线（P3c ✅ 3998cacb）
+
+- `EventKind::ActivityV2(Box<ActivityLiveEvent>)`：tag_str=`activity_v2`、非持久（is_persistent 排除）、timeline/presentation 投影、event_rewrite 各 id/session 重写 no-op。
+- 流式执行接线：`apply_streaming_tool_execution` 每个流式执行一个 handler（初始标题取 Operation title），text delta → `ToolActivityEvent::Render`（首块 `New` + 后续 `Append` 到 `stream` 块），200ms 广播 `DetailDelta`，2s 用 `refresh_elapsed_title` 刷新 `· Ns` 标题，成功后 `finish` 发布 `Upserted(Completed)`；`ToolHumanRenderer: Send + Sync`。
+- SSE/Web 透传：`project_runtime_event` 泛化序列化，`kind=activity_v2` 经 `event_resource_from_runtime` 直通 SSE（无需改下游）。
+- 验证：runtime-session 158 ✓、agena-runtime 59 ✓、agena-application 11 ✓、agena-api-server 5 ✓。
+
 ## 剩余路线（按依赖顺序，每步可独立合并、测试绿）
 
 | 步骤 | 内容 | 入口 | 风险 |
 |---|---|---|---|
-| P3c 执行流接线 | 把 `ActivityHandler` 接入真实工具执行：改造 `replies_execution.rs` 流式循环（`execute_pending_tools` 流式路径），工具事件流 → handler；先接 shell 一个工具 | `session/manager/replies/replies_execution.rs:2530-2630`（流式循环）、`tool_calls.rs`（Operation 创建） | 高：最大改造；保持旧路径并行输出，验证后切换 |
 | P3d 存储接线 | `data` 列 = `RawOutput`；写路径收敛 `upsert_content_node` + `update_activity_label`（O(1) 列更新）；删除 8 个 INSERT | `session/history/store/mod.rs`、`session/store/history.rs` | 中 |
 | P4 实时通道 | 统一 wire 事件接入 SSE：`sse.rs` 事件形状、`event_projection.rs` 补 `ActivityLiveEvent` 投影（Web 实时展开）、`GET detail?live=1` | `agena-api-server/src/sse.rs`、`agena-application/src/event_projection.rs` | 中 |
 | P5 TUI | `transcript_state.rs` 消费 `ActivityLiveEvent`（替换 `OperationDetailDelta`/`TranscriptPatch` 旧路径）；渲染 `ViewBlock`（统一 `render_activity_block`） | `agena-tui-app/src/transcript_state.rs`、`agena-tui-transcript/src/renderer/*` | 中 |

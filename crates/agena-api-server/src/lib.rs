@@ -328,16 +328,16 @@ pub fn router(state: AppState) -> Router {
                     .put(rest::replace_permission_rule)
                     .delete(rest::delete_permission_rule),
             )
-                        .route(
+            .route(
                 "/api/v1/permission-rules/{rule_id}/revoke",
                 post(rest::revoke_permission_rule),
             )
             .route("/api/v1/activities", get(rest::list_activities))
-            .route("/api/v1/activities/clear-finished", post(rest::clear_finished_activities))
             .route(
-                "/api/v1/activities/{activity_id}",
-                get(rest::get_activity),
+                "/api/v1/activities/clear-finished",
+                post(rest::clear_finished_activities),
             )
+            .route("/api/v1/activities/{activity_id}", get(rest::get_activity))
             .route(
                 "/api/v1/activities/{activity_id}/logs",
                 get(rest::get_activity_logs),
@@ -351,6 +351,15 @@ pub fn router(state: AppState) -> Router {
                 post(rest::dismiss_activity),
             )
             .route("/api/v1/events", get(rest::list_events))
+            .route("/api/v1/notifications", get(rest::list_notifications))
+            .route(
+                "/api/v1/notifications/{notification_id}/dismiss",
+                post(rest::dismiss_notification),
+            )
+            .route(
+                "/api/v1/notifications/{notification_id}/actions/{action_id}",
+                post(rest::resolve_notification_action),
+            )
             .route("/plugin-rpc/{plugin_id}", post(rest::plugin_rpc))
             .layer(middleware::from_fn(count_request))
     };
@@ -362,7 +371,12 @@ pub fn router(state: AppState) -> Router {
     let router = router.route("/api/v1/ws", get(ws::handler));
 
     #[cfg(feature = "sse")]
-    let router = router.route("/api/v1/events/stream", get(sse::handler));
+    let router = router
+        .route("/api/v1/events/stream", get(sse::handler))
+        .route(
+            "/api/v1/notifications/stream",
+            get(sse::notifications_stream),
+        );
 
     router.with_state(state)
 }
@@ -376,7 +390,12 @@ pub fn transport_router(state: AppState) -> Router {
     let router = router.route("/api/v1/ws", get(ws::handler));
 
     #[cfg(feature = "sse")]
-    let router = router.route("/api/v1/events/stream", get(sse::handler));
+    let router = router
+        .route("/api/v1/events/stream", get(sse::handler))
+        .route(
+            "/api/v1/notifications/stream",
+            get(sse::notifications_stream),
+        );
 
     router.with_state(state)
 }
@@ -384,6 +403,7 @@ pub fn transport_router(state: AppState) -> Router {
 #[cfg(test)]
 mod router_contract_tests {
     use agena_application::Application;
+    use agena_notification::NotificationService;
     use agena_runtime::{
         RuntimeBootstrapRequest, RuntimeEventPublishRequest, bootstrap_application_services,
     };
@@ -766,5 +786,231 @@ mod router_contract_tests {
         let _ = socket.close(None).await;
         server.abort();
         let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn notifications_rest_contract_lists_dismisses_and_resolves_actions() {
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(std::env::temp_dir()),
+            database_url: Some("sqlite::memory:".to_owned()),
+            initialize_schema: true,
+            tracing_reload_handle: None,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .expect("build test runtime");
+        let state = AppState::from_application(application_for_test(&runtime));
+        let store = state.notifications().clone();
+        let emitted = store
+            .emit(agena_notification::service::EmitNotificationRequest {
+                kind: agena_notification::model::NotificationKind::Notice {
+                    code: "contract".into(),
+                },
+                severity: agena_notification::model::NotificationSeverity::Warning,
+                scope: agena_notification::model::NotificationScope::Global,
+                source: agena_notification::model::NotificationSource::App,
+                surface: None,
+                summary: "contract summary".into(),
+                detail: Some("contract detail".into()),
+                control: agena_notification::model::NotificationControl::Dismiss,
+                actions: vec![agena_notification::model::NotificationAction {
+                    id: "go".into(),
+                    label: "Go".into(),
+                    target: agena_notification::model::ActionTarget::Navigate {
+                        route: "/settings".into(),
+                    },
+                }],
+                priority: 0,
+                dedup_key: None,
+                ttl_ms: None,
+            })
+            .await
+            .expect("emit contract notification");
+
+        let app = router(state);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/v1/notifications")
+                    .body(axum::body::Body::empty())
+                    .expect("build list notifications request"),
+            )
+            .await
+            .expect("serve list notifications");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read list notifications body");
+        let page: agena_api::pagination::PaginatedResponse<
+            agena_api::resource::NotificationResource,
+        > = serde_json::from_slice(&body).expect("decode notification page");
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].summary, "contract summary");
+        assert_eq!(
+            page.items[0].severity,
+            agena_notification::model::NotificationSeverity::Warning
+        );
+        assert_eq!(
+            page.items[0].actions[0].target,
+            agena_api::resource::NotificationActionTargetResource::Navigate {
+                route: "/settings".into()
+            }
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/api/v1/notifications/{}/dismiss", emitted.id))
+                    .body(axum::body::Body::empty())
+                    .expect("build dismiss request"),
+            )
+            .await
+            .expect("serve dismiss notification");
+        assert_eq!(response.status(), http::StatusCode::NO_CONTENT);
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get("/api/v1/notifications")
+                    .body(axum::body::Body::empty())
+                    .expect("build active list request"),
+            )
+            .await
+            .expect("serve active list");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read active list body");
+        let page: agena_api::pagination::PaginatedResponse<
+            agena_api::resource::NotificationResource,
+        > = serde_json::from_slice(&body).expect("decode active page");
+        assert!(page.items.is_empty());
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(format!("/api/v1/notifications/{}/actions/go", emitted.id))
+                    .body(axum::body::Body::empty())
+                    .expect("build resolve action request"),
+            )
+            .await
+            .expect("serve resolve action");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read resolve action body");
+        let target: agena_api::resource::NotificationActionTargetResource =
+            serde_json::from_slice(&body).expect("decode resolved action target");
+        assert_eq!(
+            target,
+            agena_api::resource::NotificationActionTargetResource::Navigate {
+                route: "/settings".into()
+            }
+        );
+
+        let response = app
+            .oneshot(
+                Request::post("/api/v1/notifications/missing/dismiss")
+                    .body(axum::body::Body::empty())
+                    .expect("build missing dismiss request"),
+            )
+            .await
+            .expect("serve missing dismiss");
+        assert_eq!(response.status(), http::StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn notifications_sse_contract_streams_replay_then_resumed() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(std::env::temp_dir()),
+            database_url: Some("sqlite::memory:".to_owned()),
+            initialize_schema: true,
+            tracing_reload_handle: None,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .expect("build test runtime");
+        let state = AppState::from_application(application_for_test(&runtime));
+        let store = state.notifications().clone();
+        store
+            .emit(agena_notification::service::EmitNotificationRequest {
+                kind: agena_notification::model::NotificationKind::Notice { code: "sse".into() },
+                severity: agena_notification::model::NotificationSeverity::Info,
+                scope: agena_notification::model::NotificationScope::Global,
+                source: agena_notification::model::NotificationSource::Runtime,
+                surface: None,
+                summary: "sse summary".into(),
+                detail: None,
+                control: agena_notification::model::NotificationControl::Dismiss,
+                actions: Vec::new(),
+                priority: 0,
+                dedup_key: None,
+                ttl_ms: None,
+            })
+            .await
+            .expect("emit sse fixture notification");
+
+        let app = router(state);
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind notification sse listener");
+        let address = listener
+            .local_addr()
+            .expect("read notification sse address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve notification sse router");
+        });
+
+        let mut stream = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect notification sse stream");
+        stream
+            .write_all(
+                b"GET /api/v1/notifications/stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .expect("write notification sse request");
+
+        let mut received = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for notification SSE events: {}",
+                String::from_utf8_lossy(&received)
+            );
+            let read =
+                tokio::time::timeout(std::time::Duration::from_secs(1), stream.read(&mut chunk))
+                    .await
+                    .expect("read notification sse chunk")
+                    .expect("notification sse stream read");
+            if read == 0 {
+                break;
+            }
+            received.extend_from_slice(&chunk[..read]);
+            let text = String::from_utf8_lossy(&received);
+            if text.contains("event: notification") && text.contains("event: resumed") {
+                break;
+            }
+        }
+
+        let text = String::from_utf8_lossy(&received);
+        assert!(
+            text.contains("event: notification"),
+            "missing notification event: {text}"
+        );
+        assert!(
+            text.contains("sse summary"),
+            "missing fixture summary: {text}"
+        );
+        assert!(
+            text.contains("event: resumed"),
+            "missing resumed event: {text}"
+        );
+        server.abort();
     }
 }

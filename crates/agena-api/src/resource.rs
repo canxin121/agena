@@ -10,9 +10,11 @@ use std::collections::BTreeMap;
 mod activity;
 mod auth;
 mod interaction;
+mod notification;
 pub use activity::*;
 pub use auth::*;
 pub use interaction::*;
+pub use notification::*;
 
 fn is_false(value: &bool) -> bool {
     !*value

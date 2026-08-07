@@ -114,3 +114,127 @@ impl StreamQuery {
         })
     }
 }
+
+/// Query for the unified notification stream (`/api/v1/notifications/stream`).
+#[derive(Debug, Deserialize, Default)]
+pub struct NotificationStreamQuery {
+    /// Replay notifications with `created_at_ms > since_ms` before attaching live.
+    #[serde(default)]
+    pub since_ms: Option<i64>,
+    #[serde(default)]
+    pub scope_kind: Option<String>,
+    #[serde(default)]
+    pub scope_id: Option<i64>,
+    #[serde(default)]
+    pub scope_key: Option<String>,
+    #[serde(default)]
+    pub severity: Option<agena_notification::model::NotificationSeverity>,
+    #[serde(default)]
+    pub surface: Option<agena_notification::model::NotificationSurface>,
+    #[serde(default)]
+    pub source: Option<agena_notification::model::NotificationSource>,
+    #[serde(default = "default_active_only")]
+    pub active_only: bool,
+}
+
+fn default_active_only() -> bool {
+    true
+}
+
+impl NotificationStreamQuery {
+    fn into_filter(self) -> Result<agena_notification::service::NotificationFilter, ServerError> {
+        agena_api::resource::NotificationFilterParams {
+            scope_kind: self.scope_kind,
+            scope_id: self.scope_id,
+            scope_key: self.scope_key,
+            severity: self.severity,
+            surface: self.surface,
+            source: self.source,
+            active_only: self.active_only,
+            limit: None,
+            cursor: None,
+        }
+        .into_filter()
+        .map_err(|diagnostic| {
+            ServerError::bad_request_with_diagnostic(
+                "The notification filter is invalid.",
+                diagnostic,
+            )
+        })
+    }
+}
+
+/// Unified notification SSE stream. Deterministic event order on connect:
+/// replayed history (`notification` events), then `resumed`, then live events
+/// from the shared store broadcast (`notification` / `lagged` /
+/// `subscription_closed`).
+pub async fn notifications_stream(
+    State(state): State<AppState>,
+    Query(query): Query<NotificationStreamQuery>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ServerError> {
+    use crate::rest::notifications::notification_error;
+    use agena_api::resource::{NotificationResource, NotificationStreamEvent};
+    use agena_notification::NotificationService;
+    use agena_runtime_notifications::store::SubscriptionEvent;
+
+    let store = state.notifications().clone();
+    let since_ms = query.since_ms.unwrap_or(0);
+    let mut filter = query.into_filter()?;
+    filter.limit = Some(1000);
+
+    let replayed = store.list(filter).await.map_err(notification_error)?;
+    let mut watermark = since_ms;
+    for notification in replayed.iter() {
+        if notification.created_at_ms > since_ms {
+            watermark = watermark.max(notification.created_at_ms);
+        }
+    }
+
+    let (tx, rx) = mpsc::channel::<Result<Event, Infallible>>(256);
+    tokio::spawn(async move {
+        for notification in replayed.iter().filter(|n| n.created_at_ms > since_ms) {
+            let message = NotificationStreamEvent::Notification(Box::new(
+                NotificationResource::from(notification),
+            ));
+            let event = Event::default()
+                .event(message.event_name())
+                .data(message.payload().to_string());
+            if tx.send(Ok(event)).await.is_err() {
+                return;
+            }
+        }
+        let resumed = NotificationStreamEvent::Resumed {
+            up_to_ms: watermark,
+        };
+        let event = Event::default()
+            .event(resumed.event_name())
+            .data(resumed.payload().to_string());
+        if tx.send(Ok(event)).await.is_err() {
+            return;
+        }
+
+        let mut events = store.subscribe_events();
+        while let Ok(item) = events.recv().await {
+            let message = match item {
+                SubscriptionEvent::Notification(notification) => {
+                    NotificationStreamEvent::Notification(Box::new(NotificationResource::from(
+                        &notification,
+                    )))
+                }
+                SubscriptionEvent::Lagged(skipped) => NotificationStreamEvent::Lagged { skipped },
+                SubscriptionEvent::Closed => NotificationStreamEvent::SubscriptionClosed {
+                    reason: "notification store closed".into(),
+                },
+            };
+            let event = Event::default()
+                .event(message.event_name())
+                .data(message.payload().to_string());
+            if tx.send(Ok(event)).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    Ok(Sse::new(ReceiverStream::new(rx))
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(25))))
+}

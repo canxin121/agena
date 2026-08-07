@@ -65,6 +65,7 @@ mod git;
 mod marketplace;
 mod memory;
 mod model_catalog;
+pub(crate) mod notifications;
 mod permissions;
 mod plugins;
 mod providers;
@@ -83,6 +84,7 @@ pub use auth::*;
 pub use git::*;
 pub use marketplace::*;
 pub use memory::*;
+pub use notifications::*;
 pub use plugins::*;
 pub use providers::*;
 

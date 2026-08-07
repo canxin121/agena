@@ -25,7 +25,7 @@ const TASK_STORAGE_NAMESPACE: &str = "async_tasks.v1";
 /// Prevent one parent session from filling the runtime with unbounded child
 /// executions. This is deliberately a per-parent admission boundary; global
 /// provider capacity remains owned by the runtime/provider layer.
-const MAX_ACTIVE_TASKS_PER_PARENT: usize = 4;
+const MAX_ACTIVE_TASKS_PER_PARENT: usize = 8;
 
 pub(crate) struct TasksPlugin {
     inner: WorkflowPlugin,

@@ -29,6 +29,7 @@
 | 创建/删除机制 | 创建=part 带 ActivityId + 单表 upsert；更新=revision 守卫 + O(1) title + 增量 patch；删除=ContentRemoved（重试成功删除 live 节点），durable 错误按设计保留；无面向用户的 transcript 删除 API | 见 `03-lifecycle-organization-issues.md` §2 |
 | **是否需要彻底重构** | **不需要推倒重来**；需要有边界的分层重构（表示层收敛 → 边界接通 → 分治 → 补强），见 `04-refactor-assessment.md` | 见 `04-refactor-assessment.md` |
 | **标题/内容不变约束下的重构规划** | 工具调用 activity 的标题/内容由运行时+工具产出、三端只消费不重算；重构须保持 Golden Invariants（标题/摘要/内容字节级不变），见 `05-refactor-plan.md` | 见 `05-refactor-plan.md` |
+| **更灵活的 Activity 体系设计** | 工具活动事件流（实时标题/结构化块/摘要）+ 三层内容显式化（AI 原文 / 人类块 / 标签），显式优先、隐式兜底，见 `06-flexible-activity-stream.md` | 见 `06-flexible-activity-stream.md` |
 
 ## 2. 报告分卷
 
@@ -37,3 +38,4 @@
 - `03-lifecycle-organization-issues.md` — 创建/更新/删除、代码组织与复用评估、问题清单与建议
 - `04-refactor-assessment.md` — 是否需要彻底重构的评估与分层重构路线图
 - `05-refactor-plan.md` — 在“标题与内容不变”约束下的详细重构规划（Golden Invariants、分步实施、验证策略）
+- `06-flexible-activity-stream.md` — 更灵活 Activity 体系设计：工具活动事件流与三层内容显式化

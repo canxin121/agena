@@ -425,22 +425,11 @@ fn project_runtime_presentation_event(
                 activity.clone(),
             ))
         }
-        EventKind::CommandOutputDelta(delta) => {
-            // Streaming tool output is broadcast live (never persisted) so an
-            // expanded terminal can render the growing detail in real time.
-            // The routing key is the tool Activity id, carried on the context.
-            delta
-                .context
-                .activity_id
-                .as_deref()
-                .and_then(|activity_id| uuid::Uuid::parse_str(activity_id).ok())
-                .map(agena_domain::ActivityId)
-                .map(|activity_id| {
-                    agena_runtime::RuntimePresentationEventKind::OperationDetailDelta {
-                        activity_id,
-                        delta: delta.preview_text.clone(),
-                    }
-                })
+        EventKind::CommandOutputDelta(_) => {
+            // Live streaming detail is carried by EventKind::ActivityV2
+            // (DetailDelta) so TUI and Web render the same ViewBlock stream;
+            // the legacy OperationDetailDelta projection is removed.
+            None
         }
         EventKind::ProviderRetry(update) => {
             // A retryable provider failure observed mid-stream. Project a
@@ -459,11 +448,10 @@ fn project_runtime_presentation_event(
                 id: node_id,
                 owner: agena_domain::ActivityOwner::AssistantReply { reply_id },
                 actor: agena_domain::ActivityActor::Runtime,
-                payload: agena_domain::ActivityPayload::Progress(agena_domain::ProgressActivity {
-                    title,
-                    detail: update.message.clone(),
-                    current: Some(update.attempt as u64),
-                    total: Some(update.max_retries as u64),
+                payload: agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
+                    kind: "provider_retry".to_owned(),
+                    summary: title,
+                    detail: Some(update.message.clone()),
                 }),
                 state: agena_domain::ActivityState::InProgress,
                 position: agena_domain::ContentPosition { index: 0 },

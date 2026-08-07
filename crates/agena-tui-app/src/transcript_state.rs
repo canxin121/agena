@@ -228,18 +228,6 @@ impl TranscriptState {
                 self.invalidate_render();
                 false
             }
-            agena_runtime::RuntimePresentationEventKind::OperationDetailDelta {
-                activity_id,
-                delta,
-            } => {
-                // A live slice of a streaming tool's output. Append it to the
-                // matching Operation's derived detail so the expanded Activity
-                // renders the growing output in real time. Collapsed Activities
-                // are unaffected — their detail stays unreferenced.
-                self.append_live_operation_detail(*activity_id, delta);
-                self.invalidate_render();
-                false
-            }
             agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
             agena_runtime::RuntimePresentationEventKind::ActivityChanged { .. } => true,
             agena_runtime::RuntimePresentationEventKind::ActivityV2(_) => {
@@ -261,48 +249,6 @@ impl TranscriptState {
         }
 
         refresh_needed
-    }
-
-    /// Append a live streaming-output delta to an Operation Activity's detail.
-    ///
-    /// The detail is derived at render time; a streaming tool appends raw
-    /// output to the compact result's derived Markdown so the expanded
-    /// Activity shows live progress. Nothing here is persisted — this is pure
-    /// in-memory presentation state.
-    fn append_live_operation_detail(&mut self, activity_id: agena_domain::ActivityId, delta: &str) {
-        // Only expanded Operations receive live detail. Collapsed Activities
-        // (or non-Operations) are untouched — this is what lets expanding
-        // start and collapsing stop detail computation and transfer.
-        if !self.expanded_operation_activity_ids.contains(&activity_id) {
-            return;
-        }
-        let append = |activity: &mut agena_domain::ActivityNode| {
-            if activity.id != activity_id {
-                return false;
-            }
-            if let agena_domain::ActivityPayload::Operation(operation) = &mut activity.payload {
-                operation.markdown.push_str(delta);
-                return true;
-            }
-            false
-        };
-        let mut matched = false;
-        for turn in &mut self.snapshot.turns {
-            for node in &mut turn.input.0 {
-                if let agena_domain::ContentNode::Activity { activity } = node {
-                    matched |= append(activity);
-                }
-            }
-            for node in &mut turn.reply.content.0 {
-                if let agena_domain::ContentNode::Activity { activity } = node {
-                    matched |= append(activity);
-                }
-            }
-        }
-        for activity in &mut self.snapshot.session_activities {
-            matched |= append(activity);
-        }
-        let _ = matched;
     }
 
     /// Apply a live activity-v2 wire event to the in-memory overlay.

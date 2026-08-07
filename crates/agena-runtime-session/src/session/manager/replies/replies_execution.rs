@@ -2536,11 +2536,8 @@ impl SessionManager {
         // refreshes the running title (a tiny UPDATE), so a long stream costs
         // O(delta) writes instead of re-persisting the cumulative output.
         const TITLE_REFRESH_MS: u64 = 2_000;
-        const DETAIL_BROADCAST_MS: u64 = 200;
         let mut last_title_refresh = std::time::Instant::now();
-        let mut last_detail_broadcast = std::time::Instant::now();
         let mut streamed_output = String::new();
-        let mut pending_detail_delta = String::new();
         // Resolve the Activity id once so live detail broadcasts never need a
         // per-tick session load.
         let streaming_activity_id = session
@@ -2636,7 +2633,6 @@ impl SessionManager {
                 continue;
             }
             streamed_output.push_str(delta);
-            pending_detail_delta.push_str(delta);
             if let Some(handler) = &mut activity_handler {
                 let render_event = if stream_block_created {
                     agena_tool::ToolActivityEvent::Render(agena_domain::RenderDelta::append(
@@ -2661,21 +2657,9 @@ impl SessionManager {
                     self.broadcast_activity_v2(session.id, event)?;
                 }
             }
-            // Broadcast the new output as a live, non-persisted detail delta so
-            // an expanded terminal renders the growing detail in real time.
-            if last_detail_broadcast.elapsed()
-                >= std::time::Duration::from_millis(DETAIL_BROADCAST_MS)
-                && !pending_detail_delta.is_empty()
-            {
-                last_detail_broadcast = std::time::Instant::now();
-                self.broadcast_streaming_detail(
-                    session.id,
-                    pending_tool,
-                    &pending_detail_delta,
-                    streaming_activity_id,
-                )?;
-                pending_detail_delta.clear();
-            }
+            // Live streaming detail is carried by ActivityV2 DetailDelta
+            // broadcasts above; the legacy CommandOutputDelta detail path is
+            // removed.
             if last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS) {
                 last_title_refresh = std::time::Instant::now();
                 session = self
@@ -2861,50 +2845,6 @@ impl SessionManager {
     /// consumers as a non-persistent `CommandOutputDelta`. Expanded terminals
     /// render this delta into the Activity's detail in real time; collapsed
     /// terminals drop it. Nothing is written to disk.
-    fn broadcast_streaming_detail(
-        &self,
-        session_id: i64,
-        pending_tool: &SessionPendingTool,
-        delta: &str,
-        activity_id: Option<agena_domain::ActivityId>,
-    ) -> Result<(), AppError> {
-        let event = agena_domain::CommandOutputDeltaEvent {
-            context: agena_domain::CommandContext {
-                session_id,
-                call_id: 0,
-                message_id: Some(pending_tool.part.message_id),
-                part_id: Some(pending_tool.part.part_id),
-                activity_id: activity_id.map(|id| id.to_string()),
-            },
-            stream: agena_domain::CommandOutputStream::Stdout,
-            seq: 0,
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-            chunk: delta.as_bytes().to_vec(),
-            preview_text: delta.to_string(),
-            preview_lossy: false,
-        };
-        let publisher = Arc::clone(&self.publisher);
-        let context = crate::event::PublishContext::for_session(session_id);
-        let handle = tokio::runtime::Handle::current();
-        // Fire-and-forget in-memory broadcast; the bus is in-process and
-        // non-persistent for CommandOutputDelta, so this never blocks the
-        // streaming loop on disk I/O.
-        handle.spawn(async move {
-            if let Err(error) = publisher
-                .publish(context, crate::event::EventKind::CommandOutputDelta(event))
-                .await
-            {
-                tracing::debug!(
-                    target: "agena::session::streaming_detail",
-                    session_id,
-                    error = %error,
-                    "failed to broadcast live streaming detail"
-                );
-            }
-        });
-        Ok(())
-    }
-
     /// Publish one activity v2 live wire event (07 §5.2). In-memory,
     /// non-persistent, fire-and-forget like the legacy detail broadcasts.
     fn broadcast_activity_v2(

@@ -182,16 +182,6 @@ impl CanonicalActivityDetail {
         }
     }
 
-    fn body(body: impl Into<String>, format: CanonicalActivityDetailFormat) -> Self {
-        Self {
-            title: None,
-            body: body.into(),
-            format,
-            stable_section: None,
-            default_expanded: None,
-        }
-    }
-
     fn copy_text(&self) -> String {
         self.title.as_ref().map_or_else(
             || self.body.clone(),
@@ -384,37 +374,6 @@ fn canonical_activity_details(
             ));
             details
         }
-        agena_domain::ActivityPayload::SkillExecution(skill) => {
-            vec![CanonicalActivityDetail::section(
-                "Execution",
-                format!(
-                    "{}{}",
-                    skill.execution_id,
-                    skill
-                        .parent_activity_id
-                        .map(|id| format!(" · parent {id}"))
-                        .unwrap_or_default()
-                ),
-                CanonicalActivityDetailFormat::Plain,
-            )]
-        }
-        agena_domain::ActivityPayload::Progress(progress) => {
-            match (progress.current, progress.total) {
-                (Some(current), Some(total)) => vec![CanonicalActivityDetail::body(
-                    format!("{current}/{total}"),
-                    CanonicalActivityDetailFormat::Plain,
-                )],
-                (Some(current), None) => vec![CanonicalActivityDetail::body(
-                    current.to_string(),
-                    CanonicalActivityDetailFormat::Plain,
-                )],
-                (None, Some(total)) => vec![CanonicalActivityDetail::body(
-                    format!("total {total}"),
-                    CanonicalActivityDetailFormat::Plain,
-                )],
-                (None, None) => Vec::new(),
-            }
-        }
         agena_domain::ActivityPayload::Notice(notice) => notice
             .detail
             .as_ref()
@@ -426,88 +385,6 @@ fn canonical_activity_details(
                 )]
             })
             .unwrap_or_default(),
-        agena_domain::ActivityPayload::Checklist(checklist) => {
-            let body = checklist
-                .items
-                .iter()
-                .map(|item| {
-                    format!(
-                        "- [{checked}] **{:?}** · {}",
-                        item.priority,
-                        item.content,
-                        checked = if format!("{:?}", item.status).eq_ignore_ascii_case("completed")
-                        {
-                            "x"
-                        } else {
-                            " "
-                        }
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!body.is_empty())
-                .then(|| {
-                    CanonicalActivityDetail::section(
-                        "Checklist",
-                        body,
-                        CanonicalActivityDetailFormat::Markdown,
-                    )
-                })
-                .into_iter()
-                .collect()
-        }
-        agena_domain::ActivityPayload::Search(search) => {
-            serde_json::to_string_pretty(&search.results)
-                .ok()
-                .map(|results| {
-                    CanonicalActivityDetail::section(
-                        "Results",
-                        results,
-                        CanonicalActivityDetailFormat::Json,
-                    )
-                })
-                .into_iter()
-                .collect()
-        }
-        agena_domain::ActivityPayload::FileChanges(changes) => {
-            serde_json::to_string_pretty(&changes.changes)
-                .ok()
-                .map(|changes| {
-                    CanonicalActivityDetail::section(
-                        "Changes",
-                        changes,
-                        CanonicalActivityDetailFormat::Json,
-                    )
-                })
-                .into_iter()
-                .collect()
-        }
-        agena_domain::ActivityPayload::NestedTask(task) => {
-            vec![CanonicalActivityDetail::section(
-                "Task",
-                format!(
-                    "{}{}",
-                    task.task_id,
-                    task.session_id
-                        .map(|id| format!(" · session {id}"))
-                        .unwrap_or_default()
-                ),
-                CanonicalActivityDetailFormat::Plain,
-            )]
-        }
-        agena_domain::ActivityPayload::Maintenance(maintenance) => {
-            serde_json::to_string_pretty(maintenance)
-                .ok()
-                .map(|maintenance| {
-                    CanonicalActivityDetail::section(
-                        "Details",
-                        maintenance,
-                        CanonicalActivityDetailFormat::Json,
-                    )
-                })
-                .into_iter()
-                .collect()
-        }
         // The problem is rendered once by the shared red Error section.
         agena_domain::ActivityPayload::Error(error) => {
             let problem = &error.problem;
@@ -552,21 +429,6 @@ fn canonical_activity_details(
                 CanonicalActivityDetailFormat::Plain,
             )]
         }
-        agena_domain::ActivityPayload::Custom(custom) => {
-            let mut details = vec![CanonicalActivityDetail::section(
-                "Schema",
-                format!("{} · version {}", custom.schema, custom.schema_version),
-                CanonicalActivityDetailFormat::Plain,
-            )];
-            if let Ok(data) = serde_json::to_string_pretty(&custom.data) {
-                details.push(CanonicalActivityDetail::section(
-                    "Data",
-                    data,
-                    CanonicalActivityDetailFormat::Json,
-                ));
-            }
-            details
-        }
         agena_domain::ActivityPayload::Resource(resource) => {
             let mut details = Vec::new();
             if let Some(media_type) = resource.media_type.as_ref() {
@@ -609,25 +471,6 @@ fn canonical_activity_details(
                         "Request",
                         interaction,
                         CanonicalActivityDetailFormat::Json,
-                    )
-                })
-                .into_iter()
-                .collect()
-        }
-        agena_domain::ActivityPayload::Hook(hook) => {
-            let mut details = Vec::new();
-            if let Some(plugin_id) = hook.plugin_id.as_ref() {
-                details.push(format!("Plugin: {plugin_id}"));
-            }
-            if let Some(detail) = hook.detail.as_ref() {
-                details.push(detail.clone());
-            }
-            (!details.is_empty())
-                .then(|| {
-                    CanonicalActivityDetail::section(
-                        "Hook",
-                        details.join("\n"),
-                        CanonicalActivityDetailFormat::Plain,
                     )
                 })
                 .into_iter()
@@ -1385,9 +1228,8 @@ pub(crate) fn render_part_node(
             render_activity_canonical(
                 message,
                 part,
-                &agena_domain::ActivityPayload::Hook(agena_domain::HookActivity {
-                    hook: hook.hook.clone(),
-                    plugin_id: hook.plugin_id.clone(),
+                &agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
+                    kind: "hook".to_owned(),
                     summary: hook.summary.clone(),
                     detail: hook.detail.clone(),
                 }),

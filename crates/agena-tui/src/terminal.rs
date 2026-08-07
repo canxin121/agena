@@ -180,11 +180,35 @@ pub mod profile {
     /// input methods (IME): composing and committing Chinese/Japanese text is
     /// no longer delivered as text. Users who want Option word-deletion in
     /// iTerm2 and do not rely on an IME can opt in explicitly with
-    /// `AGENA_TUI_KEYBOARD_REPORT_ALL_KEYS=1`; the safer alternative is the
-    /// iTerm2 profile setting "Option Key Sends = Esc+", which sends ESC DEL
-    /// and is handled by the existing ALT word-delete path without the flag.
+    /// `AGENA_TUI_KEYBOARD_REPORT_ALL_KEYS=1`.
+    ///
+    /// The safer, per-session alternative is [`iterm2_option_alt`]: agena
+    /// switches its own iTerm2 session to a dynamic profile with
+    /// "Option Key Sends = Esc+" via OSC 1337 SetProfile, so Option+Backspace
+    /// is reported as ALT+Backspace (CSI u 127;3u) and word-deletes, without
+    /// the flag and without affecting other sessions or input methods.
     pub const fn keyboard_all_keys(f: TerminalFamily) -> ProfileSupport {
         match f {
+            TerminalFamily::Dumb
+            | TerminalFamily::LinuxConsole
+            | TerminalFamily::AppleTerminal
+            | TerminalFamily::XtermCompatible => ProfileSupport::Unsupported,
+            _ => ProfileSupport::Unknown,
+        }
+    }
+    /// Whether agena may take over the iTerm2 Option key for its own session.
+    ///
+    /// On iTerm2 only: agena emits OSC 1337 SetProfile at startup to switch
+    /// the session to the dynamic profile created by
+    /// `scripts/setup-iterm2-option-alt.sh` ("Option Key Sends = Esc+"), so
+    /// Option+Backspace is reported as ALT+Backspace (CSI u 127;3u) and the
+    /// existing ALT word-delete path handles it. The profile is restored to
+    /// Default on exit, so other sessions and other TUI programs are
+    /// unaffected. Setting the profile takes effect only if the dynamic
+    /// profile exists; without it, SetProfile is a no-op.
+    pub const fn iterm2_option_alt(f: TerminalFamily) -> ProfileSupport {
+        match f {
+            TerminalFamily::Iterm2 => ProfileSupport::Available,
             TerminalFamily::Dumb
             | TerminalFamily::LinuxConsole
             | TerminalFamily::AppleTerminal

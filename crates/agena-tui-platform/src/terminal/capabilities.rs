@@ -116,6 +116,21 @@ impl TerminalContext {
             }
             None => profile_keyboard_all_keys,
         };
+        let profile_iterm2_option_alt =
+            profile_capability(profiles::iterm2_option_alt(identity.family));
+        let iterm2_option_alt_override = overrides::boolean(
+            environment,
+            "AGENA_TUI_ITERM2_OPTION_ALT",
+            &mut override_diagnostics,
+        );
+        let iterm2_option_alt = match iterm2_option_alt_override {
+            Some(true) => Capability::forced(user),
+            Some(false) => Capability::unsupported(user),
+            None if protocol_barrier && profile_iterm2_option_alt.is_supported() => {
+                profile_iterm2_option_alt.with_path(protocol_path)
+            }
+            None => profile_iterm2_option_alt,
+        };
 
         // TerminalRuntime owns a dedicated bounded color transaction before
         // runtime input starts, then promotes this evidence only when an OSC
@@ -267,6 +282,7 @@ impl TerminalContext {
             keyboard_alternate_keys: keyboard,
             keyboard_event_types: Capability::unsupported(conservative),
             keyboard_report_all_keys: keyboard_all_keys,
+            iterm2_option_alt,
             default_color_query,
             clipboard_write_native,
             clipboard_write_osc52,
@@ -693,6 +709,31 @@ mod tests {
                 .keyboard_report_all_keys
                 .is_operational()
         );
+    }
+
+    #[test]
+    fn iterm2_option_alt_is_available_on_iterm2() {
+        let context = detect(&[("TERM_PROGRAM", "iTerm.app")]);
+        assert!(context.capabilities.iterm2_option_alt.is_operational());
+    }
+
+    #[test]
+    fn iterm2_option_alt_is_unavailable_on_other_families() {
+        let context = detect(&[("TERM", "xterm-256color")]);
+        assert!(!context.capabilities.iterm2_option_alt.is_operational());
+    }
+
+    #[test]
+    fn iterm2_option_alt_can_be_disabled_with_an_explicit_override() {
+        let context = detect(&[
+            ("TERM_PROGRAM", "iTerm.app"),
+            ("AGENA_TUI_ITERM2_OPTION_ALT", "0"),
+        ]);
+        assert_eq!(
+            context.capabilities.iterm2_option_alt.support,
+            Support::Unsupported
+        );
+        assert!(!context.capabilities.iterm2_option_alt.is_operational());
     }
 
     #[test]

@@ -103,7 +103,12 @@ impl TerminalContext {
         };
         let profile_keyboard_all_keys =
             profile_capability(profiles::keyboard_all_keys(identity.family));
-        let keyboard_all_keys = match keyboard_override {
+        let all_keys_override = overrides::boolean(
+            environment,
+            "AGENA_TUI_KEYBOARD_REPORT_ALL_KEYS",
+            &mut override_diagnostics,
+        );
+        let keyboard_all_keys = match all_keys_override {
             Some(true) => Capability::forced(user),
             Some(false) => Capability::unsupported(user),
             None if protocol_barrier && profile_keyboard_all_keys.is_supported() => {
@@ -657,6 +662,35 @@ mod tests {
             context
                 .capabilities
                 .keyboard_disambiguation
+                .is_operational()
+        );
+    }
+
+    #[test]
+    fn keyboard_report_all_keys_is_off_by_default_even_on_iterm2() {
+        let context = detect(&[("TERM_PROGRAM", "iTerm.app")]);
+        assert!(
+            !context
+                .capabilities
+                .keyboard_report_all_keys
+                .is_operational()
+        );
+    }
+
+    #[test]
+    fn keyboard_report_all_keys_can_be_forced_with_an_explicit_override() {
+        let context = detect(&[
+            ("TERM_PROGRAM", "iTerm.app"),
+            ("AGENA_TUI_KEYBOARD_REPORT_ALL_KEYS", "1"),
+        ]);
+        assert_eq!(
+            context.capabilities.keyboard_report_all_keys.support,
+            Support::Forced
+        );
+        assert!(
+            context
+                .capabilities
+                .keyboard_report_all_keys
                 .is_operational()
         );
     }

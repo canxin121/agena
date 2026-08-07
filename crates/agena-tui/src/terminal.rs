@@ -174,15 +174,17 @@ pub mod profile {
     /// Whether the family should push the Kitty protocol flag that reports
     /// every key through CSI u (`REPORT_ALL_KEYS_AS_ESCAPE_CODES`).
     ///
-    /// iTerm2 treats Option as Alt only while this flag is active. With the
-    /// default "Option Key Sends = Normal" profile it otherwise drops the
-    /// Option modifier and sends Option+Backspace as a plain DEL, so Option
-    /// word-deletion on macOS is indistinguishable from a normal backspace.
-    /// The other CSI-u families already report Option/Alt natively and do not
-    /// need it.
+    /// Defaults to off for every family. The flag is what makes iTerm2 treat
+    /// Option as Alt (so Option+Backspace can word-delete), but it also makes
+    /// iTerm2 report every key through CSI u, which breaks text entry from
+    /// input methods (IME): composing and committing Chinese/Japanese text is
+    /// no longer delivered as text. Users who want Option word-deletion in
+    /// iTerm2 and do not rely on an IME can opt in explicitly with
+    /// `AGENA_TUI_KEYBOARD_REPORT_ALL_KEYS=1`; the safer alternative is the
+    /// iTerm2 profile setting "Option Key Sends = Esc+", which sends ESC DEL
+    /// and is handled by the existing ALT word-delete path without the flag.
     pub const fn keyboard_all_keys(f: TerminalFamily) -> ProfileSupport {
         match f {
-            TerminalFamily::Iterm2 => ProfileSupport::Available,
             TerminalFamily::Dumb
             | TerminalFamily::LinuxConsole
             | TerminalFamily::AppleTerminal
@@ -773,13 +775,10 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_all_keys_is_scoped_to_iterm2_option_quirk() {
+    fn keyboard_all_keys_is_opt_in_never_auto_available() {
         use profile::ProfileSupport;
-        assert_eq!(
-            profile::keyboard_all_keys(TerminalFamily::Iterm2),
-            ProfileSupport::Available
-        );
         for family in [
+            TerminalFamily::Iterm2,
             TerminalFamily::Kitty,
             TerminalFamily::Ghostty,
             TerminalFamily::Foot,
@@ -798,7 +797,7 @@ mod tests {
             assert_ne!(
                 profile::keyboard_all_keys(family),
                 ProfileSupport::Available,
-                "{} must not report every key through CSI u",
+                "{} must not report every key through CSI u by default",
                 family.label()
             );
         }

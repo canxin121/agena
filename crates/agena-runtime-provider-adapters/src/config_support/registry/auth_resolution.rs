@@ -776,10 +776,7 @@ mod tests {
     use super::*;
     use agena_provider::ProviderProtocolPathsConfig;
 
-    fn api_auth(
-        base_url: &str,
-        protocol_paths: ProviderProtocolPathsConfig,
-    ) -> ProviderAuthConfig {
+    fn api_auth(base_url: &str, protocol_paths: ProviderProtocolPathsConfig) -> ProviderAuthConfig {
         ProviderAuthConfig::Api(ProviderApiAuthConfig::custom(
             Some(base_url.to_owned()),
             protocol_paths,
@@ -789,7 +786,10 @@ mod tests {
 
     #[test]
     fn protocol_path_is_appended_to_bare_base_url() {
-        let auth = api_auth("https://api.example.com", ProviderProtocolPathsConfig::default());
+        let auth = api_auth(
+            "https://api.example.com",
+            ProviderProtocolPathsConfig::default(),
+        );
         assert_eq!(
             resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::OpenAi).unwrap(),
             "https://api.example.com/v1"
@@ -806,8 +806,10 @@ mod tests {
 
     #[test]
     fn protocol_path_is_not_doubled_when_base_url_already_contains_it() {
-        let openai =
-            api_auth("https://api.example.com/v1", ProviderProtocolPathsConfig::default());
+        let openai = api_auth(
+            "https://api.example.com/v1",
+            ProviderProtocolPathsConfig::default(),
+        );
         assert_eq!(
             resolve_http_adapter_base_url("test", &openai, HttpAdapterKind::OpenAi).unwrap(),
             "https://api.example.com/v1"

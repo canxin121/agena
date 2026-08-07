@@ -1171,10 +1171,10 @@ pub(crate) fn activity_payload(
     role: Role,
 ) -> Option<agena_domain::ActivityPayload> {
     use agena_domain::{
-        ActivityPayload, ErrorActivity, HookActivity, InteractionActivity, NoticeActivity,
-        OperationActivity, OperationActivityError, ReasoningActivity, ResourceActivity,
-        ResourceKind, ResourceReference, SkillReferenceActivity, TextArtifactActivity,
-        TextSegmentActivity, ToolCallId,
+        ActivityPayload, ErrorActivity, InteractionActivity, NoticeActivity, OperationActivity,
+        OperationActivityError, ReasoningActivity, ResourceActivity, ResourceKind,
+        ResourceReference, SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
+        ToolCallId,
     };
     match part.content.as_ref()? {
         // Assistant text parts that carry an ActivityId are interstitial body
@@ -1290,9 +1290,8 @@ pub(crate) fn activity_payload(
             }))
         }
         PartContent::Activity(crate::message::RuntimeActivity::Hook(hook)) => {
-            Some(ActivityPayload::Hook(HookActivity {
-                hook: hook.hook.clone(),
-                plugin_id: hook.plugin_id.clone(),
+            Some(ActivityPayload::Notice(NoticeActivity {
+                kind: "hook".to_owned(),
                 summary: hook.summary.clone(),
                 detail: hook.detail.clone(),
             }))
@@ -1519,11 +1518,14 @@ where
         })?;
     let reply_id: String = reply.try_get("", "reply_id")?;
     let position = next_content_position(db, "assistant_reply", reply_id.as_str()).await?;
-    let activity_payload =
-        agena_domain::ActivityPayload::Maintenance(agena_domain::MaintenanceActivity::Compaction {
-            execution_id: payload.execution_id,
-            activity: payload.activity.clone(),
-        });
+    let activity_payload = agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
+        kind: "compaction".to_owned(),
+        summary: "Prompt compaction completed".to_owned(),
+        detail: Some(format!(
+            "compaction of execution {} ({} tokens)",
+            payload.execution_id, payload.activity.after_tokens
+        )),
+    });
     // v10 unified content node mirror for maintenance activities.
     db.execute(Statement::from_sql_and_values(
         db.get_database_backend(),

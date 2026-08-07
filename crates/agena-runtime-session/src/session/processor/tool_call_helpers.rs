@@ -1,5 +1,5 @@
 use super::{AppError, StructuredObject, ToolInvocation};
-use agena_domain::{ToolApiCall, ToolApiFunction, TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD};
+use agena_domain::{TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD, ToolApiCall, ToolApiFunction};
 use agena_provider::ToolApiDefinition;
 
 pub(crate) fn tool_execution_title(name: Option<&str>) -> String {

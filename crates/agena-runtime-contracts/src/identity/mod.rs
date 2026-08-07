@@ -161,9 +161,9 @@ mod tests {
         assert!(prompt.contains("Start with plugin tags"));
         assert!(prompt.contains("the `plugin` filter"));
         assert!(prompt.contains("Broaden only after filters miss"));
-        assert!(prompt.contains(
-            "Execution tools are not injected into your function-calling protocol"
-        ));
+        assert!(
+            prompt.contains("Execution tools are not injected into your function-calling protocol")
+        );
         assert!(!prompt.contains("*** Begin Patch"));
         assert!(!prompt.contains("top-level function name"));
         assert!(!prompt.contains("# Tools & Plugins"));

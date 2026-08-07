@@ -30,12 +30,7 @@ pub enum BackgroundActivityKind {
 }
 
 impl BackgroundActivityKind {
-    pub const ALL: [Self; 4] = [
-        Self::Shell,
-        Self::Task,
-        Self::Runtime,
-        Self::Browser,
-    ];
+    pub const ALL: [Self; 4] = [Self::Shell, Self::Task, Self::Runtime, Self::Browser];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -284,16 +279,20 @@ mod tests {
             active_only: true,
         };
         assert!(filter.matches(&activity));
-        assert!(!BackgroundActivityFilter {
-            session_id: Some(8),
-            ..Default::default()
-        }
-        .matches(&activity));
-        assert!(!BackgroundActivityFilter {
-            statuses: vec![BackgroundActivityStatus::Failed],
-            ..Default::default()
-        }
-        .matches(&activity));
+        assert!(
+            !BackgroundActivityFilter {
+                session_id: Some(8),
+                ..Default::default()
+            }
+            .matches(&activity)
+        );
+        assert!(
+            !BackgroundActivityFilter {
+                statuses: vec![BackgroundActivityStatus::Failed],
+                ..Default::default()
+            }
+            .matches(&activity)
+        );
     }
 
     #[test]

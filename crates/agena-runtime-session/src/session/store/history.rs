@@ -199,9 +199,8 @@ impl SessionStore {
             Arc::clone(&self.permission_rule_transaction_writer);
         let session_for_cache = session.clone();
         let session_runtime = session.runtime.clone();
-        let (updated_session, persisted_rules_for_event) = Box::pin(run_transaction_effects(
-            &self.db,
-            move |txn, effects| {
+        let (updated_session, persisted_rules_for_event) =
+            Box::pin(run_transaction_effects(&self.db, move |txn, effects| {
                 let cache = Arc::clone(&cache);
                 let permission_rule_transaction_writer =
                     Arc::clone(&permission_rule_transaction_writer);

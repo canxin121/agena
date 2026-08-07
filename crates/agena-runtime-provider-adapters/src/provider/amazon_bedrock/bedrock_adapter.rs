@@ -19,11 +19,10 @@ use super::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
     CompletionToolCall, CompletionUsage, Credentials, EVENTSTREAM_CONTENT_TYPE, HashMap,
     JSON_CONTENT_TYPE, ModelId, ModelMetadata, Mutex, OpenAiCompatibleModelList, PROVIDER_ID,
-    ProviderError, ProviderId, Role, Sigv4Request, Stream, Value,
-    bedrock_anthropic_metadata, bedrock_anthropic_thinking_parts, bedrock_wire_tool_name,
-    json_value_to_string, map_bedrock_anthropic_usage, merge_bedrock_anthropic_usage,
-    prefix_bedrock_model, prompt_cache, response_id_metadata, sse, strip_cross_region_prefix,
-    utils, wire_message,
+    ProviderError, ProviderId, Role, Sigv4Request, Stream, Value, bedrock_anthropic_metadata,
+    bedrock_anthropic_thinking_parts, bedrock_wire_tool_name, json_value_to_string,
+    map_bedrock_anthropic_usage, merge_bedrock_anthropic_usage, prefix_bedrock_model, prompt_cache,
+    response_id_metadata, sse, strip_cross_region_prefix, utils, wire_message,
 };
 
 impl AmazonBedrockAdapter {

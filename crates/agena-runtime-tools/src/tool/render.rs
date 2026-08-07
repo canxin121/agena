@@ -749,7 +749,10 @@ mod tests {
         assert!(out.contains("| shell | bash |"), "{out}");
         assert!(out.contains("| exit | 0 |"), "{out}");
         assert!(out.contains("| status | exited |"), "{out}");
-        assert!(out.contains("`$ grep -n 'pub enum ActivityPayload'`"), "{out}");
+        assert!(
+            out.contains("`$ grep -n 'pub enum ActivityPayload'`"),
+            "{out}"
+        );
         assert!(out.contains("pub enum ActivityPayload"), "{out}");
         // Raw JSON must never be dumped inline.
         assert!(!out.contains("\"output\": \""), "{out}");

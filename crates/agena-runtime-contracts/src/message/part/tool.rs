@@ -6,13 +6,12 @@ use serde::{Deserialize, Serialize};
 
 use agena_domain::{
     ArtifactRef, ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, NetworkEffect,
-    OperationAuthorization, OperationError, ProcessShell, SearchResultItem, TableColumn, TodoItem,
-    ToolInvocation, ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay,
-    ToolResultState, UserInputQuestion,
+    OperationAuthorization, OperationError, ProcessShell, ToolInvocation, ToolManagedOutput,
+    ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState, UserInputQuestion,
 };
 use agena_tool::{ReadMode, TaskModelSelection, normalize_tool_summary, normalize_tool_title};
 
-use super::{AttachmentItem, AttachmentKind, AttachmentSource};
+use super::AttachmentItem;
 use agena_domain::{StructuredValue, TimeRange};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, JsonSchema, ToolInput)]
@@ -91,14 +90,22 @@ impl<'de> Deserialize<'de> for ShellCommandInput {
         #[derive(Deserialize)]
         struct Wire {
             command: String,
-            #[serde(default)] description: String,
-            #[serde(default)] timeout_ms: Option<u64>,
-            #[serde(default)] workdir: Option<String>,
-            #[serde(default)] reads: Vec<String>,
-            #[serde(default)] writes: Vec<String>,
-            #[serde(default)] network: Vec<String>,
-            #[serde(default)] filesystem_effects: Option<FilesystemEffects>,
-            #[serde(default)] network_effects: Option<Vec<NetworkEffect>>,
+            #[serde(default)]
+            description: String,
+            #[serde(default)]
+            timeout_ms: Option<u64>,
+            #[serde(default)]
+            workdir: Option<String>,
+            #[serde(default)]
+            reads: Vec<String>,
+            #[serde(default)]
+            writes: Vec<String>,
+            #[serde(default)]
+            network: Vec<String>,
+            #[serde(default)]
+            filesystem_effects: Option<FilesystemEffects>,
+            #[serde(default)]
+            network_effects: Option<Vec<NetworkEffect>>,
         }
         let wire = Wire::deserialize(deserializer)?;
         let mut reads = wire.reads;
@@ -108,7 +115,9 @@ impl<'de> Deserialize<'de> for ShellCommandInput {
             writes.extend(effects.write);
         }
         let mut network = wire.network;
-        if network.is_empty() && let Some(legacy) = wire.network_effects {
+        if network.is_empty()
+            && let Some(legacy) = wire.network_effects
+        {
             network = legacy.into_iter().map(|effect| effect.target).collect();
         }
         Ok(Self {
@@ -656,245 +665,14 @@ pub struct LspDiagnosticsToolInput {
     pub file_path: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OperationBlock {
-    Text {
-        text: String,
-    },
-    Markdown {
-        text: String,
-    },
-    Json {
-        value: serde_json::Value,
-    },
-    Table {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        columns: Vec<TableColumn>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        rows: Vec<Vec<serde_json::Value>>,
-    },
-    Log {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        stream: Option<String>,
-        text: String,
-    },
-    Command {
-        command: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exit_code: Option<i32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        stdout: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        stderr: Option<String>,
-    },
-    Diff {
-        diff: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        language: Option<String>,
-    },
-    FileChanges {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        changes: Vec<agena_domain::FileChangeRecord>,
-    },
-    SearchResults {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        query: Option<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        results: Vec<SearchResultItem>,
-    },
-    Citation {
-        uri: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        snippet: Option<String>,
-    },
-    Image {
-        mime: String,
-        url: String,
-    },
-    Audio {
-        mime: String,
-        url: String,
-    },
-    ResourceLink {
-        uri: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mime_type: Option<String>,
-    },
-    EmbeddedResource {
-        uri: String,
-        mime: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        text: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        base64: Option<String>,
-    },
-    File {
-        url: String,
-        filename: String,
-        mime: String,
-    },
-    Media {
-        mime_type: String,
-        artifact: ArtifactRef,
-    },
-    Checklist {
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        items: Vec<TodoItem>,
-    },
-    NestedTask {
-        task_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-        status: ExecutionStatus,
-    },
-    Progress {
-        message: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        percent: Option<f32>,
-    },
-    Custom {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        schema: Option<String>,
-        value: serde_json::Value,
-    },
-}
-
-impl OperationBlock {
-    pub fn to_attachment_item(&self) -> Option<AttachmentItem> {
-        match self {
-            Self::Text { .. }
-            | Self::Markdown { .. }
-            | Self::Json { .. }
-            | Self::Table { .. }
-            | Self::Log { .. }
-            | Self::Command { .. }
-            | Self::Diff { .. }
-            | Self::FileChanges { .. }
-            | Self::SearchResults { .. }
-            | Self::Citation { .. }
-            | Self::Checklist { .. }
-            | Self::NestedTask { .. }
-            | Self::Progress { .. }
-            | Self::Custom { .. } => None,
-            Self::Image { mime, url } | Self::Audio { mime, url } => Some(AttachmentItem {
-                kind: AttachmentKind::detect(mime.as_str(), Some(url.as_str())),
-                mime: mime.clone(),
-                source: attachment_source_from_location(url.as_str())?,
-                filename: filename_hint(url.as_str()),
-                title: None,
-                size_bytes: None,
-                sha256: None,
-                width: None,
-                height: None,
-                duration_ms: None,
-                page_count: None,
-            }),
-            Self::ResourceLink {
-                uri,
-                title,
-                mime_type,
-            } => Some(AttachmentItem {
-                kind: AttachmentKind::detect(
-                    mime_type.as_deref().unwrap_or(""),
-                    Some(uri.as_str()),
-                ),
-                mime: mime_type.clone().unwrap_or_default(),
-                source: attachment_source_from_location(uri.as_str())?,
-                filename: filename_hint(uri.as_str()),
-                title: title.clone(),
-                size_bytes: None,
-                sha256: None,
-                width: None,
-                height: None,
-                duration_ms: None,
-                page_count: None,
-            }),
-            Self::EmbeddedResource {
-                uri, mime, base64, ..
-            } => {
-                let source = if let Some(base64) = base64.as_ref() {
-                    AttachmentSource::Base64 {
-                        data: base64.clone(),
-                    }
-                } else {
-                    attachment_source_from_location(uri.as_str())?
-                };
-
-                Some(AttachmentItem {
-                    kind: AttachmentKind::detect(mime.as_str(), Some(uri.as_str())),
-                    mime: mime.clone(),
-                    source,
-                    filename: filename_hint(uri.as_str()),
-                    title: None,
-                    size_bytes: None,
-                    sha256: None,
-                    width: None,
-                    height: None,
-                    duration_ms: None,
-                    page_count: None,
-                })
-            }
-            Self::File {
-                url,
-                filename,
-                mime,
-            } => Some(AttachmentItem {
-                kind: AttachmentKind::detect(mime.as_str(), Some(filename.as_str())),
-                mime: mime.clone(),
-                source: attachment_source_from_location(url.as_str())?,
-                filename: non_empty(filename.as_str()),
-                title: None,
-                size_bytes: None,
-                sha256: None,
-                width: None,
-                height: None,
-                duration_ms: None,
-                page_count: None,
-            }),
-            Self::Media {
-                mime_type,
-                artifact,
-            } => Some(AttachmentItem {
-                kind: AttachmentKind::detect(mime_type.as_str(), artifact.name.as_deref()),
-                mime: mime_type.clone(),
-                source: attachment_source_from_location(artifact.uri.as_str())?,
-                filename: artifact
-                    .name
-                    .clone()
-                    .or_else(|| filename_hint(artifact.uri.as_str())),
-                title: artifact.name.clone(),
-                size_bytes: artifact.size_bytes,
-                sha256: artifact.sha256.clone(),
-                width: None,
-                height: None,
-                duration_ms: None,
-                page_count: None,
-            }),
-        }
-    }
-
-    pub fn text_value(&self) -> Option<&str> {
-        match self {
-            Self::Text { text }
-            | Self::Markdown { text }
-            | Self::Log { text, .. }
-            | Self::Diff { diff: text, .. } => Some(text.as_str()),
-            _ => None,
-        }
-    }
-}
-
-/// Interpret an output payload's optional message-presentation blocks.
-/// The output value itself belongs to `agena-domain`; only this conversion
-/// depends on core's message `OperationBlock` representation.
-pub fn tool_output_content_blocks(output: &agena_domain::ToolOutput) -> Vec<OperationBlock> {
+/// Interpret an output payload's optional message-presentation blocks as
+/// unified v2 [`agena_domain::ViewBlock`]s. The output value itself belongs to
+/// `agena-domain`; this adapter parses the legacy `content_blocks` JSON shape
+/// (text/markdown/json/table/log/command/diff/file_changes/search_results/
+/// media/custom) into the single ViewBlock render contract.
+pub fn tool_output_content_blocks(
+    output: &agena_domain::ToolOutput,
+) -> Vec<agena_domain::ViewBlock> {
     let Some(blocks) = output
         .payload
         .get("content_blocks")
@@ -905,8 +683,203 @@ pub fn tool_output_content_blocks(output: &agena_domain::ToolOutput) -> Vec<Oper
 
     blocks
         .iter()
-        .filter_map(|block| serde_json::from_value(serde_json::Value::from(block.clone())).ok())
+        .filter_map(|block| json_block_to_view_block(block).ok())
         .collect()
+}
+
+fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::ViewBlock, String> {
+    let json = serde_json::Value::from(value.clone());
+    let object = json
+        .as_object()
+        .ok_or_else(|| "block must be an object".to_owned())?;
+    let kind = object
+        .get("type")
+        .and_then(|value| value.as_str())
+        .unwrap_or("text");
+    let text = |key: &str| {
+        object
+            .get(key)
+            .and_then(|value| value.as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    Ok(match kind {
+        "markdown" => agena_domain::ViewBlock::Markdown {
+            id: None,
+            text: text("text"),
+        },
+        "json" => agena_domain::ViewBlock::Json {
+            id: None,
+            value: object
+                .get("value")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null),
+        },
+        "log" => agena_domain::ViewBlock::Log {
+            id: None,
+            stream: match object.get("stream").and_then(|value| value.as_str()) {
+                Some("stderr") => agena_domain::CommandOutputStream::Stderr,
+                _ => agena_domain::CommandOutputStream::Stdout,
+            },
+            text: text("text"),
+        },
+        "command" => agena_domain::ViewBlock::Command {
+            id: None,
+            command: text("command"),
+            cwd: object
+                .get("cwd")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+            exit_code: object
+                .get("exit_code")
+                .and_then(|value| value.as_i64())
+                .map(|code| code as i32),
+            stdout: object
+                .get("stdout")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+            stderr: object
+                .get("stderr")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_owned(),
+        },
+        "diff" => agena_domain::ViewBlock::Diff {
+            id: None,
+            diff: text("diff"),
+            language: object
+                .get("language")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
+        },
+        "file_changes" => agena_domain::ViewBlock::FileChanges {
+            id: None,
+            changes: object
+                .get("changes")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default(),
+        },
+        "table" => agena_domain::ViewBlock::Table {
+            id: None,
+            columns: object
+                .get("columns")
+                .and_then(|value| value.as_array())
+                .map(|columns| {
+                    columns
+                        .iter()
+                        .filter_map(|column| {
+                            column.as_str().map(str::to_owned).or_else(|| {
+                                column
+                                    .get("label")
+                                    .and_then(|label| label.as_str())
+                                    .map(str::to_owned)
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            rows: object
+                .get("rows")
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default(),
+        },
+        "search_results" => {
+            let items = object
+                .get("results")
+                .and_then(|value| value.as_array())
+                .map(|results| {
+                    results
+                        .iter()
+                        .filter_map(|item| {
+                            let title = item
+                                .get("title")
+                                .and_then(|value| value.as_str())
+                                .unwrap_or_default()
+                                .to_owned();
+                            let url = item
+                                .get("url")
+                                .and_then(|value| value.as_str())
+                                .or_else(|| item.get("uri").and_then(|value| value.as_str()))
+                                .unwrap_or_default()
+                                .to_owned();
+                            let snippet = item
+                                .get("snippet")
+                                .and_then(|value| value.as_str())
+                                .map(str::to_owned);
+                            (!title.is_empty() || !url.is_empty()).then(|| {
+                                agena_domain::WebSearchResult {
+                                    title,
+                                    url,
+                                    snippet,
+                                }
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            agena_domain::ViewBlock::SearchResults {
+                id: None,
+                items,
+                total: None,
+            }
+        }
+        "media" | "image" | "audio" | "resource_link" | "embedded_resource" | "file" => {
+            let uri = object
+                .get("uri")
+                .and_then(|value| value.as_str())
+                .or_else(|| object.get("url").and_then(|value| value.as_str()))
+                .unwrap_or_default()
+                .to_owned();
+            let mime = object
+                .get("mime")
+                .and_then(|value| value.as_str())
+                .or_else(|| object.get("mime_type").and_then(|value| value.as_str()))
+                .unwrap_or_default()
+                .to_owned();
+            let name = object
+                .get("filename")
+                .and_then(|value| value.as_str())
+                .or_else(|| object.get("title").and_then(|value| value.as_str()))
+                .map(str::to_owned);
+            agena_domain::ViewBlock::Media {
+                id: None,
+                artifact: agena_domain::ArtifactRef {
+                    uri,
+                    mime,
+                    name,
+                    size_bytes: None,
+                    sha256: None,
+                },
+            }
+        }
+        "citation" => agena_domain::ViewBlock::Markdown {
+            id: None,
+            text: {
+                let title = object
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let snippet = object
+                    .get("snippet")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let uri = object
+                    .get("uri")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                format!("{title}\n\n{snippet}\n\n{uri}").trim().to_owned()
+            },
+        },
+        // Legacy checklist/nested_task/progress and arbitrary custom blocks keep
+        // their identity as a Custom ViewBlock.
+        other => agena_domain::ViewBlock::Custom {
+            id: None,
+            kind: other.to_owned(),
+            schema: serde_json::Value::Null,
+            presentation: std::collections::BTreeMap::new(),
+        },
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -945,7 +918,7 @@ pub struct ToolResultEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structured: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content: Vec<OperationBlock>,
+    pub content: Vec<agena_domain::ViewBlock>,
     #[serde(default, skip_serializing_if = "ModelVisibleOutput::is_empty")]
     pub model_preview: ModelVisibleOutput,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -980,7 +953,7 @@ impl ToolResultEnvelope {
         title: String,
         summary: String,
         output_text: String,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         attachments: Vec<AttachmentItem>,
         details: &ToolOutput,
     ) -> Self {
@@ -1009,7 +982,7 @@ impl ToolResultEnvelope {
 
     pub fn failed(
         failure: agena_failure::Failure,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         attachments: Vec<AttachmentItem>,
         details: &ToolOutput,
     ) -> Self {
@@ -1042,7 +1015,7 @@ impl ToolResultEnvelope {
     fn non_execution(
         state: ToolResultState,
         output_text: String,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         details: &ToolOutput,
     ) -> Self {
         debug_assert!(matches!(
@@ -1111,7 +1084,7 @@ pub struct OperationCompletion {
     pub title: String,
     pub summary: String,
     pub output_text: String,
-    pub blocks: Vec<OperationBlock>,
+    pub blocks: Vec<agena_domain::ViewBlock>,
     pub attachments: Vec<AttachmentItem>,
     pub details: ToolOutput,
 }
@@ -1121,7 +1094,7 @@ impl OperationCompletion {
         title: impl Into<String>,
         summary: impl Into<String>,
         output_text: impl Into<String>,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         attachments: Vec<AttachmentItem>,
         details: ToolOutput,
     ) -> Self {
@@ -1207,7 +1180,7 @@ impl OperationPart {
         call_id: i64,
         invocation: ToolInvocation,
         failure: agena_failure::Failure,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         attachments: Vec<AttachmentItem>,
         details: ToolOutput,
         lifecycle: TimeRange,
@@ -1239,7 +1212,7 @@ impl OperationPart {
         call_id: i64,
         invocation: ToolInvocation,
         output_text: impl Into<String>,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
@@ -1258,7 +1231,7 @@ impl OperationPart {
         call_id: i64,
         invocation: ToolInvocation,
         output_text: impl Into<String>,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
@@ -1277,7 +1250,7 @@ impl OperationPart {
         call_id: i64,
         invocation: ToolInvocation,
         output_text: impl Into<String>,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
@@ -1296,7 +1269,7 @@ impl OperationPart {
         call_id: i64,
         invocation: ToolInvocation,
         output_text: impl Into<String>,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
@@ -1316,7 +1289,7 @@ impl OperationPart {
         invocation: ToolInvocation,
         state: ToolResultState,
         output_text: String,
-        blocks: Vec<OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         details: ToolOutput,
         lifecycle: TimeRange,
     ) -> Self {
@@ -1469,58 +1442,6 @@ fn model_visible_failure_text(failure: &agena_failure::Failure) -> String {
         .as_ref()
         .map(agena_failure::ModelFeedback::message)
         .unwrap_or_else(|| "Tool execution failed without diagnostic details.".to_owned())
-}
-
-fn non_empty(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_owned())
-    }
-}
-
-fn filename_hint(value: &str) -> Option<String> {
-    value
-        .trim()
-        .rsplit(['/', '\\'])
-        .next()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn attachment_source_from_location(value: &str) -> Option<AttachmentSource> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    if trimmed.starts_with("data:") {
-        return Some(AttachmentSource::DataUrl {
-            url: trimmed.to_owned(),
-        });
-    }
-
-    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-        return Some(AttachmentSource::Url {
-            url: trimmed.to_owned(),
-        });
-    }
-
-    if trimmed.starts_with("file://")
-        || trimmed.starts_with('/')
-        || trimmed.starts_with("./")
-        || trimmed.starts_with("../")
-    {
-        return Some(AttachmentSource::LocalPath {
-            path: trimmed.to_owned(),
-        });
-    }
-
-    Some(AttachmentSource::Url {
-        url: trimmed.to_owned(),
-    })
 }
 
 #[cfg(test)]

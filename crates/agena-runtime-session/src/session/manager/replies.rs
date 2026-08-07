@@ -1026,9 +1026,7 @@ impl SessionManager {
         &self,
         request: SessionPermissionReplyRequest,
     ) -> Result<Session, AppError> {
-        match Box::pin(self.reply_permission_dispatch(request, ReplyExecutionMode::Await))
-            .await?
-        {
+        match Box::pin(self.reply_permission_dispatch(request, ReplyExecutionMode::Await)).await? {
             ReplyDispatch::Completed(session) => Ok(*session),
             ReplyDispatch::Accepted(_) => Err(AppError::Internal(
                 "awaited permission reply returned an accepted receipt".to_owned(),
@@ -1040,9 +1038,7 @@ impl SessionManager {
         &self,
         request: SessionPermissionReplyRequest,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
-        match Box::pin(self.reply_permission_dispatch(request, ReplyExecutionMode::Start))
-            .await?
-        {
+        match Box::pin(self.reply_permission_dispatch(request, ReplyExecutionMode::Start)).await? {
             ReplyDispatch::Completed(session) => {
                 Ok(crate::SessionExecutionCommandOutcome::completed(session.id))
             }

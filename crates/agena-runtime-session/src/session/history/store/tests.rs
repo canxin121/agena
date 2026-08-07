@@ -1067,9 +1067,8 @@ mod tests {
             Some(20)
         );
         let payload: serde_json::Value = row.try_get("", "payload_json").unwrap();
-        assert_eq!(payload["activity_type"], "maintenance");
-        assert_eq!(payload["maintenance_type"], "compaction");
-        assert_eq!(payload["activity"]["checkpoint_id"], "checkpoint-1");
+        assert_eq!(payload["activity_type"], "notice");
+        assert_eq!(payload["kind"], "compaction");
     }
 
     #[tokio::test]

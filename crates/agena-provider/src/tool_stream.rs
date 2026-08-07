@@ -545,8 +545,7 @@ mod tests {
             .expect("call-id-only done event");
         let finished_key = update_stream_key(&finished[0]);
         assert_eq!(
-            finished_key,
-            "item:fc_abc",
+            finished_key, "item:fc_abc",
             "call-id-only done must join the existing item stream"
         );
         let finished_id = update_id(&finished[0]);
@@ -610,8 +609,7 @@ mod tests {
             "a reused positional index must not merge distinct call ids"
         );
         assert_eq!(
-            second_key,
-            "call:call_two",
+            second_key, "call:call_two",
             "the second call must keep its authoritative key"
         );
     }

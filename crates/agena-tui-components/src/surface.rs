@@ -218,10 +218,7 @@ pub fn composer_status_placement_left(
 /// Computes where a status chip sits against the left corner of a border
 /// (used for the composer's bottom-left corner). The chip starts one cell
 /// after the corner and extends rightward; text is truncated to fit.
-pub fn composer_corner_placement_left(
-    outer: Rect,
-    text: &str,
-) -> Option<ComposerStatusPlacement> {
+pub fn composer_corner_placement_left(outer: Rect, text: &str) -> Option<ComposerStatusPlacement> {
     if outer.width < 4 || text.trim().is_empty() {
         return None;
     }
@@ -252,10 +249,7 @@ pub fn composer_corner_placement_left(
 /// (used for the composer's top-right and bottom-right corners). The chip
 /// ends one cell before the corner and extends leftward; text is truncated
 /// to fit.
-pub fn composer_corner_placement_right(
-    outer: Rect,
-    text: &str,
-) -> Option<ComposerStatusPlacement> {
+pub fn composer_corner_placement_right(outer: Rect, text: &str) -> Option<ComposerStatusPlacement> {
     if outer.width < 4 || text.trim().is_empty() {
         return None;
     }
@@ -429,7 +423,10 @@ pub fn render_composer_editor_surface(
         composer_status_placement_left(
             layout.outer,
             line_plain_text(line).as_str(),
-            top_right_placement.as_ref().map(|p| p.chip_width).unwrap_or(0),
+            top_right_placement
+                .as_ref()
+                .map(|p| p.chip_width)
+                .unwrap_or(0),
         )
     });
     let bottom_left_placement = bottom_left.and_then(|line| {
@@ -463,7 +460,10 @@ pub fn render_composer_editor_surface(
     }
     let bottom_row = Rect {
         x: layout.outer.x,
-        y: layout.outer.y.saturating_add(layout.outer.height.saturating_sub(1)),
+        y: layout
+            .outer
+            .y
+            .saturating_add(layout.outer.height.saturating_sub(1)),
         width: layout.outer.width,
         height: 1,
     };
@@ -530,7 +530,11 @@ fn render_composer_border_row(
                 Style::default(),
             ));
         }
-        let pad_style = line.spans.first().map(|span| span.style).unwrap_or_default();
+        let pad_style = line
+            .spans
+            .first()
+            .map(|span| span.style)
+            .unwrap_or_default();
         spans.push(Span::styled(" ", pad_style));
         spans.extend(line.spans.iter().cloned());
         spans.push(Span::styled(" ", pad_style));

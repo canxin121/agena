@@ -29,11 +29,7 @@ pub(super) fn execute(
         ));
     }
     let effects = input.filesystem_effects();
-    validate_declared_filesystem_effects(
-        "powershell",
-        input.command.as_str(),
-        &effects,
-    )?;
+    validate_declared_filesystem_effects("powershell", input.command.as_str(), &effects)?;
     let cwd = resolve_workdir(executor, input.workdir.as_deref())?;
 
     let mut env = inherited_environment();

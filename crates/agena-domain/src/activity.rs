@@ -1,12 +1,8 @@
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ActivityId, AssistantReplyId, ExecutionId, FileChangeRecord, PermissionReply,
-    PermissionRequest, ProcessSummary, PromptCompactionActivity, ReasoningPart, RunId,
-    SearchResultItem, SubtaskStatus, TextSegmentId, TodoItem, ToolCallId, ToolInvocation, TurnId,
-    UserInputReply, UserInputRequest,
+    ActivityId, AssistantReplyId, ExecutionId, PermissionReply, PermissionRequest, ReasoningPart,
+    RunId, TextSegmentId, ToolCallId, ToolInvocation, TurnId, UserInputReply, UserInputRequest,
 };
 
 /// The only two kinds of content that can appear in a turn input or assistant reply.
@@ -346,21 +342,12 @@ impl ActivityNode {
 pub enum ActivityPayload {
     Resource(ResourceActivity),
     SkillReference(SkillReferenceActivity),
-    SkillExecution(SkillExecutionActivity),
     TextArtifact(TextArtifactActivity),
     Reasoning(ReasoningActivity),
     TextSegment(TextSegmentActivity),
     Operation(OperationActivity),
     Interaction(InteractionActivity),
-    Progress(ProgressActivity),
-    Checklist(ChecklistActivity),
-    Search(SearchActivity),
-    FileChanges(FileChangesActivity),
-    NestedTask(NestedTaskActivity),
-    Maintenance(MaintenanceActivity),
-    Hook(HookActivity),
     Error(ErrorActivity),
-    Custom(CustomActivity),
     Notice(NoticeActivity),
 }
 
@@ -449,15 +436,6 @@ impl SkillReferenceActivity {
             .replace('>', "\\u003e");
         format!("<agena_skill_reference>\n{encoded}\n</agena_skill_reference>")
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct SkillExecutionActivity {
-    pub skill_name: String,
-    pub execution_id: ExecutionId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_activity_id: Option<ActivityId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -601,83 +579,6 @@ pub enum InteractionActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ProgressActivity {
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub detail: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub current: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub total: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ChecklistActivity {
-    pub items: Vec<TodoItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct SearchActivity {
-    pub query: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub results: Vec<SearchResultItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct FileChangesActivity {
-    pub changes: Vec<FileChangeRecord>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct NestedTaskActivity {
-    pub task_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    pub status: SubtaskStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "maintenance_type", rename_all = "snake_case")]
-pub enum MaintenanceActivity {
-    Compaction {
-        execution_id: ExecutionId,
-        activity: PromptCompactionActivity,
-    },
-    Process {
-        process: ProcessSummary,
-    },
-}
-
-/// One observed plugin hook run, recorded as a first-class transcript
-/// activity so hook execution (for example the workflow plan's `agent.stop`
-/// autorun hook) is as visible as a tool call. It extends the existing
-/// ActivityPayload family rather than introducing a parallel presentation
-/// channel.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct HookActivity {
-    /// The hook identifier that ran, for example `agent.stop`.
-    pub hook: String,
-    /// The plugin that ran the hook, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
-    /// Short human-facing summary of the hook outcome, for example
-    /// `blocked stop with reason "workflow plan autorun"` or `no continuation`.
-    pub summary: String,
-    /// Optional human-facing detail (for example the injected continuation
-    /// message) rendered when the activity is expanded.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub detail: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
 pub struct ErrorActivity {
     pub problem: agena_failure::UserProblem,
 }
@@ -708,16 +609,6 @@ pub struct NoticeActivity {
 #[serde(deny_unknown_fields)]
 pub struct TextSegmentActivity {
     pub text: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct CustomActivity {
-    pub schema: String,
-    pub schema_version: u32,
-    pub data: serde_json::Value,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub presentation: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

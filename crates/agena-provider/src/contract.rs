@@ -2408,18 +2408,28 @@ mod completion_finish_reason_tests {
         );
         assert_eq!(
             CompletionFinishReason::normalize_with_tool_calls(
-                Some(CompletionFinishReason::Other("max_output_tokens".to_owned())),
+                Some(CompletionFinishReason::Other(
+                    "max_output_tokens".to_owned()
+                )),
                 true,
             ),
-            Some(CompletionFinishReason::Other("max_output_tokens".to_owned()))
+            Some(CompletionFinishReason::Other(
+                "max_output_tokens".to_owned()
+            ))
         );
     }
 
     #[test]
     fn normalize_with_tool_calls_is_identity_without_tools() {
-        assert_eq!(CompletionFinishReason::normalize_with_tool_calls(None, false), None);
         assert_eq!(
-            CompletionFinishReason::normalize_with_tool_calls(Some(CompletionFinishReason::Stop), false),
+            CompletionFinishReason::normalize_with_tool_calls(None, false),
+            None
+        );
+        assert_eq!(
+            CompletionFinishReason::normalize_with_tool_calls(
+                Some(CompletionFinishReason::Stop),
+                false
+            ),
             Some(CompletionFinishReason::Stop)
         );
         assert_eq!(
@@ -2444,11 +2454,18 @@ mod completion_finish_reason_tests {
             ("tool_calls", Some(CompletionFinishReason::ToolCalls)),
             ("tool_use", Some(CompletionFinishReason::ToolCalls)),
             ("function_call", Some(CompletionFinishReason::ToolCalls)),
-            ("content_filter", Some(CompletionFinishReason::ContentFilter)),
+            (
+                "content_filter",
+                Some(CompletionFinishReason::ContentFilter),
+            ),
             ("MAX_TOKENS", Some(CompletionFinishReason::Length)),
         ];
         for (raw, expected) in cases {
-            assert_eq!(CompletionFinishReason::from_provider(Some(raw)), expected, "raw={raw}");
+            assert_eq!(
+                CompletionFinishReason::from_provider(Some(raw)),
+                expected,
+                "raw={raw}"
+            );
         }
         assert_eq!(CompletionFinishReason::from_provider(None::<&str>), None);
         assert_eq!(CompletionFinishReason::from_provider(Some("")), None);

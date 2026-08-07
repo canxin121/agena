@@ -75,7 +75,7 @@ pub fn auto_fast_path(action: &ActionSpec, managed_project_root: Option<&str>) -
                 }
                 _ => AutoFastPath::Defer,
             }
-        },
+        }
         ActionSpec::Network { .. } => AutoFastPath::Defer,
     }
 }

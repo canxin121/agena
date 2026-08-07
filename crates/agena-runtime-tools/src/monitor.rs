@@ -140,7 +140,7 @@ struct MonitorState {
     /// Latest assigned seq (0 means no events yet).
     last_seq: AtomicU64,
     /// Cumulative count of evicted lines.
-        dropped_lines: AtomicU64,
+    dropped_lines: AtomicU64,
     inner: Mutex<MonitorInner>,
     notify: Notify,
     /// Optional observer notified on start/finish transitions.
@@ -211,7 +211,6 @@ impl MonitorRegistry {
         self.listener = Some(listener);
         self
     }
-
 
     fn require_handle(&self) -> Result<Handle, MonitorError> {
         self.handle.clone().ok_or(MonitorError::RuntimeMissing)
@@ -285,7 +284,7 @@ impl MonitorService for MonitorRegistry {
                 completion_reason: None,
                 abort: Some(abort_tx),
             }),
-                        notify: Notify::new(),
+            notify: Notify::new(),
             listener: self.listener.clone(),
         });
 
@@ -314,7 +313,7 @@ impl MonitorService for MonitorRegistry {
             .await;
         });
 
-                let summary = state.snapshot();
+        let summary = state.snapshot();
         self.monitors
             .lock()
             .unwrap()
@@ -387,7 +386,7 @@ impl MonitorService for MonitorRegistry {
                 }
             }
         }
-                state.notify.notify_waiters();
+        state.notify.notify_waiters();
         if let Some(listener) = state.listener.as_ref() {
             listener.on_finished(&state.snapshot());
         }
@@ -617,7 +616,7 @@ async fn run_monitor(
         if inner.completion_reason.is_none() {
             inner.completion_reason = Some(completion_reason);
         }
-                inner.ended_at_ms = Some(Utc::now().timestamp_millis());
+        inner.ended_at_ms = Some(Utc::now().timestamp_millis());
         inner.abort = None;
     }
     state.notify.notify_waiters();

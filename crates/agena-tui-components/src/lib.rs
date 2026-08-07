@@ -116,9 +116,9 @@ pub use surface::{
     ComposerEditorSurfaceSpec, ComposerStatusPlacement, ComposerSurfaceLayout,
     HeaderBodyFooterLayout, HeaderBodyFooterTextSurfaceSpec, composer_corner_placement_left,
     composer_corner_placement_right, composer_status_placement, composer_status_placement_left,
-    composer_status_placement_reserving,
-    layout_composer_surface, layout_header_body_footer_surface, pane_header_height,
-    render_composer_editor_surface, render_header_body_footer_text_surface,
+    composer_status_placement_reserving, layout_composer_surface,
+    layout_header_body_footer_surface, pane_header_height, render_composer_editor_surface,
+    render_header_body_footer_text_surface,
 };
 pub use text::{
     HeaderRowSpec, WrappedTextSpec, bordered_text_height, build_wrapped_text_lines,

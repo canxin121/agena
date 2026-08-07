@@ -425,9 +425,7 @@ impl OpenAiTransport {
                     // (chat-style) instead of OpenAI's `encrypted_content`, so
                     // replay either carrier for those models. Other models keep
                     // the encrypted-content-only replay.
-                    let replay_content_reasoning = message
-                        .provider_state
-                        .assistant_reasoning_field
+                    let replay_content_reasoning = message.provider_state.assistant_reasoning_field
                         == Some(agena_domain::AssistantReasoningField::ReasoningContent);
                     input.extend(
                         message
@@ -877,10 +875,10 @@ impl OpenAiTransport {
 #[cfg(test)]
 mod tool_api_history_tests {
     use super::{OpenAiTransport, ProviderError, validate_responses_input};
+    use agena_domain::ExecutionStatus;
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
     use agena_domain::{Role, StructuredObject, TimeRange};
-    use agena_domain::ExecutionStatus;
     use agena_runtime_contracts::message::{
         Message, MessagePart, MessageProviderState, OperationPart, PartContent,
     };
@@ -1044,7 +1042,9 @@ mod tool_api_history_tests {
             .find(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning"))
             .expect("encrypted reasoning must be replayed");
         assert_eq!(
-            reasoning.get("encrypted_content").and_then(serde_json::Value::as_str),
+            reasoning
+                .get("encrypted_content")
+                .and_then(serde_json::Value::as_str),
             Some("opaque-state")
         );
         assert!(
@@ -1052,7 +1052,9 @@ mod tool_api_history_tests {
             "encrypted reasoning must not replay plaintext content"
         );
         assert_eq!(
-            reasoning.pointer("/summary/0/text").and_then(serde_json::Value::as_str),
+            reasoning
+                .pointer("/summary/0/text")
+                .and_then(serde_json::Value::as_str),
             Some("summary"),
             "summary metadata should remain available"
         );
@@ -1078,7 +1080,9 @@ mod tool_api_history_tests {
             kind: agena_provider::ProviderErrorKind::InvalidRequest,
             retryable: false,
         };
-        assert!(!OpenAiTransport::is_reasoning_content_array_error(&unrelated));
+        assert!(!OpenAiTransport::is_reasoning_content_array_error(
+            &unrelated
+        ));
 
         assert!(!OpenAiTransport::is_reasoning_content_array_error(
             &ProviderError::Internal("array_above_max_length input[48].content".to_owned())
@@ -1093,7 +1097,7 @@ mod tool_api_history_tests {
         // content-only `openai_reasoning_items` plus inline tool results. The
         // real production path (project -> backfill -> replay gate) must keep
         // that reasoning item so the provider's pass-back requirement is met.
-        use agena_provider::{CompletionRequest};
+        use agena_provider::CompletionRequest;
         use agena_runtime_provider::provider::chat_wire;
 
         // 12001's shape: visible text + reasoning + inline tool results.
@@ -1109,7 +1113,11 @@ mod tool_api_history_tests {
         // Inline operation parts replayed as tool results (tools_search id 12, fs.read id 13).
         for (id, name, input) in [
             (12, "tools_search", serde_json::json!({"query": "session"})),
-            (13, "fs.read", serde_json::json!({"file_path": "../codex/.codex"})),
+            (
+                13,
+                "fs.read",
+                serde_json::json!({"file_path": "../codex/.codex"}),
+            ),
         ] {
             let invocation = ToolInvocation::new(
                 name,
@@ -1135,8 +1143,11 @@ mod tool_api_history_tests {
                     TimeRange::default(),
                 )),
             ));
-            repair.parts.last_mut().expect("operation part").operation_id =
-                Some(format!("call_{name}"));
+            repair
+                .parts
+                .last_mut()
+                .expect("operation part")
+                .operation_id = Some(format!("call_{name}"));
         }
         // Content-only reasoning item as persisted in the DB for message 12001.
         repair.provider_state = Some(MessageProviderState {
@@ -1153,10 +1164,12 @@ mod tool_api_history_tests {
         });
 
         // Replayed transcript: 11994(user) + 11995..11999(assistant) + 12001(repair).
-        let mut messages = vec![crate::provider::project_completion_input(&Message::prompt_text(
-            Role::User,
-            "查看../codex ../claude ../grok ../gemini看看他们是如何实现",
-        ))];
+        let mut messages = vec![crate::provider::project_completion_input(
+            &Message::prompt_text(
+                Role::User,
+                "查看../codex ../claude ../grok ../gemini看看他们是如何实现",
+            ),
+        )];
         for text in [
             "Let me first explore the workspaces",
             "Let me find the correct FS tools first",

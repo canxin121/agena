@@ -110,7 +110,7 @@ impl ToolExecutor {
         self
     }
 
-        pub fn with_permission_inspector(
+    pub fn with_permission_inspector(
         mut self,
         inspector: Option<Arc<dyn crate::tool::ExecutionPermissionInspector>>,
     ) -> Self {
@@ -126,7 +126,6 @@ impl ToolExecutor {
         self.monitor_registry = Some(registry);
         self
     }
-
 
     /// Attach a runtime-owned sink for process command lifecycle/output
     /// events. The sink is intentionally optional and is preserved when the

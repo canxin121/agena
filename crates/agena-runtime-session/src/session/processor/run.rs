@@ -7,14 +7,11 @@ use super::{
     fail_nonterminal_parts, map_finish_reason, message_provider_state_from_provider_metadata,
     pending_tool_call_stream_key, sync_assistant_completion_event,
 };
-use agena_provider::{
-    ProviderNativeToolArtifact, ProviderNativeToolOutputBlock, ProviderNativeToolSearchResult,
-};
+use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
 use futures_util::StreamExt;
 use tracing::Instrument;
 
-use crate::message::OperationBlock;
-use agena_domain::{ArtifactRef, SearchResultItem};
+use agena_domain::{ArtifactRef, ViewBlock, WebSearchResult};
 
 impl SessionProcessor {
     pub fn new(
@@ -683,40 +680,34 @@ impl SessionProcessor {
 
 fn provider_native_output_blocks_to_operation_blocks(
     blocks: Vec<ProviderNativeToolOutputBlock>,
-) -> Vec<OperationBlock> {
+) -> Vec<ViewBlock> {
     blocks
         .into_iter()
         .map(|block| match block {
-            ProviderNativeToolOutputBlock::Text { text } => OperationBlock::Text { text },
-            ProviderNativeToolOutputBlock::SearchResults { query, results } => {
-                OperationBlock::SearchResults {
-                    query,
-                    results: results
+            ProviderNativeToolOutputBlock::Text { text } => ViewBlock::Text { id: None, text },
+            ProviderNativeToolOutputBlock::SearchResults { results, .. } => {
+                ViewBlock::SearchResults {
+                    id: None,
+                    items: results
                         .into_iter()
-                        .map(provider_native_search_result_to_operation_block)
+                        .map(|result| WebSearchResult {
+                            title: result.title,
+                            url: result.uri,
+                            snippet: result.snippet,
+                        })
                         .collect(),
+                    total: None,
                 }
             }
             ProviderNativeToolOutputBlock::Media {
-                mime_type,
+                mime_type: _,
                 artifact,
-            } => OperationBlock::Media {
-                mime_type,
+            } => ViewBlock::Media {
+                id: None,
                 artifact: provider_native_artifact_to_operation_block(artifact),
             },
         })
         .collect()
-}
-
-fn provider_native_search_result_to_operation_block(
-    result: ProviderNativeToolSearchResult,
-) -> SearchResultItem {
-    SearchResultItem {
-        title: result.title,
-        uri: result.uri,
-        snippet: result.snippet,
-        score: result.score,
-    }
 }
 
 fn provider_native_artifact_to_operation_block(

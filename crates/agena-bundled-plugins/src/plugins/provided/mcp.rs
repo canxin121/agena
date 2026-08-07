@@ -19,12 +19,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::message::{AttachmentItem, OperationBlock};
+use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{
     InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch,
     ToolInvokeOutput,
 };
+use base64::Engine as _;
 
 pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
@@ -795,25 +796,28 @@ fn invoke_tool_output(
         )));
     }
 
-    let mut blocks: Vec<OperationBlock> = result
+    let mut blocks: Vec<agena_domain::ViewBlock> = result
         .content
         .iter()
         .filter_map(content_block_to_result_block)
         .collect();
     if let Some(structured) = result.structured_content.clone() {
-        blocks.push(OperationBlock::Json { value: structured });
+        blocks.push(agena_domain::ViewBlock::Json {
+            id: None,
+            value: structured,
+        });
     }
     let output_text = blocks
         .iter()
         .filter_map(|block| match block {
-            OperationBlock::Text { text } => Some(text.as_str()),
+            agena_domain::ViewBlock::Text { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect::<Vec<_>>()
         .join("\n");
     let attachments = blocks
         .iter()
-        .filter_map(OperationBlock::to_attachment_item)
+        .filter_map(view_block_to_attachment_item)
         .collect::<Vec<AttachmentItem>>();
     let payload = serde_json::json!({
         "server": server,
@@ -926,7 +930,7 @@ fn read_resource_output(
         .collect::<Vec<_>>();
     let attachments = blocks
         .iter()
-        .filter_map(OperationBlock::to_attachment_item)
+        .filter_map(view_block_to_attachment_item)
         .collect::<Vec<AttachmentItem>>();
     let output_text = result
         .contents
@@ -1043,39 +1047,112 @@ fn get_prompt_output(
     ))
 }
 
-fn content_block_to_result_block(block: &ContentBlock) -> Option<OperationBlock> {
+fn view_block_to_attachment_item(block: &agena_domain::ViewBlock) -> Option<AttachmentItem> {
+    let agena_domain::ViewBlock::Media { artifact, .. } = block else {
+        return None;
+    };
+    let source = if artifact.uri.starts_with("data:") {
+        AttachmentSource::DataUrl {
+            url: artifact.uri.clone(),
+        }
+    } else {
+        AttachmentSource::Url {
+            url: artifact.uri.clone(),
+        }
+    };
+    Some(AttachmentItem {
+        kind: AttachmentKind::detect(artifact.mime.as_str(), Some(artifact.uri.as_str())),
+        mime: artifact.mime.clone(),
+        source,
+        filename: artifact.name.clone(),
+        title: artifact.name.clone(),
+        size_bytes: artifact.size_bytes,
+        sha256: artifact.sha256.clone(),
+        width: None,
+        height: None,
+        duration_ms: None,
+        page_count: None,
+    })
+}
+
+fn content_block_to_result_block(block: &ContentBlock) -> Option<agena_domain::ViewBlock> {
     match block {
-        ContentBlock::Text { text, .. } => Some(OperationBlock::Text { text: text.clone() }),
+        ContentBlock::Text { text, .. } => Some(agena_domain::ViewBlock::Text {
+            id: None,
+            text: text.clone(),
+        }),
         ContentBlock::Image {
             data, mime_type, ..
-        } => Some(OperationBlock::Image {
-            mime: mime_type.clone(),
-            url: format!("data:{};base64,{}", mime_type, data),
+        } => Some(agena_domain::ViewBlock::Media {
+            id: None,
+            artifact: agena_domain::ArtifactRef {
+                uri: format!("data:{};base64,{}", mime_type, data),
+                mime: mime_type.clone(),
+                name: None,
+                size_bytes: None,
+                sha256: None,
+            },
         }),
         ContentBlock::Audio {
             data, mime_type, ..
-        } => Some(OperationBlock::Audio {
-            mime: mime_type.clone(),
-            url: format!("data:{};base64,{}", mime_type, data),
+        } => Some(agena_domain::ViewBlock::Media {
+            id: None,
+            artifact: agena_domain::ArtifactRef {
+                uri: format!("data:{};base64,{}", mime_type, data),
+                mime: mime_type.clone(),
+                name: None,
+                size_bytes: None,
+                sha256: None,
+            },
         }),
         ContentBlock::Resource { resource, .. } => {
             Some(resource_contents_to_result_block(resource))
         }
-        ContentBlock::ResourceLink { resource } => Some(OperationBlock::ResourceLink {
-            uri: resource.uri.clone(),
-            title: resource.title.clone().or_else(|| resource.name.clone()),
-            mime_type: resource.mime_type.clone(),
+        ContentBlock::ResourceLink { resource } => Some(agena_domain::ViewBlock::Media {
+            id: None,
+            artifact: agena_domain::ArtifactRef {
+                uri: resource.uri.clone(),
+                mime: resource.mime_type.clone().unwrap_or_default(),
+                name: resource.title.clone().or_else(|| resource.name.clone()),
+                size_bytes: None,
+                sha256: None,
+            },
         }),
-        ContentBlock::Unknown { raw } => Some(OperationBlock::Json { value: raw.clone() }),
+        ContentBlock::Unknown { raw } => Some(agena_domain::ViewBlock::Json {
+            id: None,
+            value: raw.clone(),
+        }),
     }
 }
 
-fn resource_contents_to_result_block(resource: &ResourceContents) -> OperationBlock {
-    OperationBlock::EmbeddedResource {
-        uri: resource.uri.clone(),
-        mime: resource.mime_type.clone().unwrap_or_default(),
-        text: resource.text.clone(),
-        base64: resource.blob.clone(),
+fn resource_contents_to_result_block(resource: &ResourceContents) -> agena_domain::ViewBlock {
+    let uri = if let Some(text) = resource.text.as_deref().filter(|value| !value.is_empty()) {
+        format!(
+            "data:{};base64,{}",
+            resource.mime_type.as_deref().unwrap_or("text/plain"),
+            base64::engine::general_purpose::STANDARD.encode(text)
+        )
+    } else if let Some(blob) = resource.blob.as_deref().filter(|value| !value.is_empty()) {
+        format!(
+            "data:{};base64,{}",
+            resource
+                .mime_type
+                .as_deref()
+                .unwrap_or("application/octet-stream"),
+            blob
+        )
+    } else {
+        resource.uri.clone()
+    };
+    agena_domain::ViewBlock::Media {
+        id: None,
+        artifact: agena_domain::ArtifactRef {
+            uri,
+            mime: resource.mime_type.clone().unwrap_or_default(),
+            name: None,
+            size_bytes: None,
+            sha256: None,
+        },
     }
 }
 

@@ -21,8 +21,8 @@
 use crate::session::model::Session;
 use crate::tool::tool_registry::compact_tool_call_name;
 
-use super::merge_system_prompts;
 use super::SessionManager;
+use super::merge_system_prompts;
 
 /// Plan decision semantics injected when the `agena.plan` tools are available.
 pub(crate) fn render_planning_section() -> String {

@@ -483,8 +483,10 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         let finish_reason = CompletionFinishReason::from_provider(raw_finish_reason);
         let text = OpenAiTransport::extract_text(&response);
         let tool_calls = OpenAiTransport::parse_responses_tool_calls(response.output.as_ref())?;
-        let finish_reason =
-            CompletionFinishReason::normalize_with_tool_calls(finish_reason, !tool_calls.is_empty());
+        let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
+            finish_reason,
+            !tool_calls.is_empty(),
+        );
 
         if text.is_empty() && tool_calls.is_empty() && finish_reason.is_none() {
             return self.complete_by_aggregating_stream(request).await;
@@ -606,9 +608,12 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                     .then_some(request.temperature)
                     .flatten(),
                 prompt_cache_key: request.prompt_cache_key.clone(),
-                previous_response_id: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))
-                    .then(|| request.previous_response_id.clone())
-                    .flatten(),
+                previous_response_id: (!matches!(
+                    self.backend,
+                    OpenAiResponsesBackend::ChatgptCodex
+                ))
+                .then(|| request.previous_response_id.clone())
+                .flatten(),
                 store: false,
                 stream: true,
                 top_p: (!matches!(self.backend, OpenAiResponsesBackend::ChatgptCodex))

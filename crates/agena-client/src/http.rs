@@ -2,7 +2,7 @@
 //! into the v2 endpoints.
 
 use agena_api::{
-        commands::{
+    commands::{
         CancelRunParams, Command, CommandResult, ContinueRunParams, CreateSessionParams,
         CreateWorkspaceParams, DeletePermissionRuleParams, DeleteSessionParams,
         DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams, ForkSessionParams,
@@ -12,14 +12,14 @@ use agena_api::{
         UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     notifications::Notification,
-        queries::{
-        ActivityLogsParams, GetActivityParams, GetOperationDetailParams,
-        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListEventsParams,
-        ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
+    queries::{
+        ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
+        GetSessionParams, GetWorkspaceParams, ListEventsParams, ListPermissionRulesParams,
+        ListProviderAdapterModelsParams, ListProviderModelsParams,
         ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
         PaginatedEvents, Query, QueryResult,
     },
-        resource::{
+    resource::{
         BackgroundActivityResource, HealthResponse, PermissionRuleResource,
         ProviderAdapterModelsRequest, ProviderAdapterModelsResponse, RunOptions,
         SavedProviderAdapterModelsRequest, SessionExecutionResource, SessionResource,
@@ -729,7 +729,7 @@ impl AgenaClient {
                     .await?,
                 ))
             }
-                        Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
+            Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
                 let _: PermissionRuleResource = self
                     .delete_json(&format!("/api/v1/permission-rules/{rule_id}"))
                     .await?;
@@ -755,10 +755,7 @@ impl AgenaClient {
             }
             Command::ClearFinishedActivities => {
                 let count: usize = self
-                    .post_json(
-                        "/api/v1/activities/clear-finished",
-                        serde_json::json!({}),
-                    )
+                    .post_json("/api/v1/activities/clear-finished", serde_json::json!({}))
                     .await?;
                 Ok(CommandResult::ActivitiesCleared { count })
             }
@@ -916,7 +913,7 @@ impl AgenaClient {
                     self.parse_json(self.http.get(url).send().await?).await?,
                 ))
             }
-                        Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
+            Query::GetPermissionRule(GetPermissionRuleParams { rule_id }) => {
                 Ok(QueryResult::PermissionRule(
                     self.get_json(&format!("/api/v1/permission-rules/{rule_id}"))
                         .await?,
@@ -929,7 +926,8 @@ impl AgenaClient {
                     if let Some(kinds) = params.kinds.filter(|kinds| !kinds.is_empty()) {
                         q.append_pair("kinds", &kinds);
                     }
-                    if let Some(statuses) = params.statuses.filter(|statuses| !statuses.is_empty()) {
+                    if let Some(statuses) = params.statuses.filter(|statuses| !statuses.is_empty())
+                    {
                         q.append_pair("statuses", &statuses);
                     }
                     if let Some(session_id) = params.session_id {
@@ -943,20 +941,17 @@ impl AgenaClient {
                     self.parse_json(self.http.get(url).send().await?).await?,
                 ))
             }
-            Query::GetActivity(GetActivityParams { activity_id }) => {
-                Ok(QueryResult::Activity(
-                    self.get_json(&format!("/api/v1/activities/{activity_id}"))
-                        .await?,
-                ))
-            }
+            Query::GetActivity(GetActivityParams { activity_id }) => Ok(QueryResult::Activity(
+                self.get_json(&format!("/api/v1/activities/{activity_id}"))
+                    .await?,
+            )),
             Query::ActivityLogs(ActivityLogsParams {
                 activity_id,
                 since_seq,
                 limit,
                 wait_ms,
             }) => {
-                let mut url =
-                    self.endpoint(&format!("/api/v1/activities/{activity_id}/logs"));
+                let mut url = self.endpoint(&format!("/api/v1/activities/{activity_id}/logs"));
                 {
                     let mut q = url.query_pairs_mut();
                     if since_seq > 0 {

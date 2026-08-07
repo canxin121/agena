@@ -94,7 +94,8 @@ impl SessionManager {
         mut options: SessionRunOptions,
     ) -> Result<SessionRunOptions, AppError> {
         self.apply_selection_modes_to_run_options(session, &mut options)?;
-        options.system = Some(self.assemble_session_system_prompt(session, options.system.as_deref()));
+        options.system =
+            Some(self.assemble_session_system_prompt(session, options.system.as_deref()));
         if options.temperature.is_none() {
             let execution = self.execution_state();
             let provider_registry = execution.processor.provider_registry();

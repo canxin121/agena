@@ -990,10 +990,7 @@ mod tests {
 
     #[test]
     fn ansi_sequences_are_stripped() {
-        assert_eq!(
-            strip_terminal_ansi_sequences("\x1b[31mred\x1b[0m"),
-            "red"
-        );
+        assert_eq!(strip_terminal_ansi_sequences("\x1b[31mred\x1b[0m"), "red");
         assert_eq!(
             strip_terminal_ansi_sequences("\x1b]0;title\x07body"),
             "body"

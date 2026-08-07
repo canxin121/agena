@@ -480,11 +480,7 @@ mod tests {
     #[test]
     fn empty_reasoning_content_is_omitted_not_sent_as_an_empty_string() {
         let mut chat_message = ChatMessage::assistant(Some("answer".into()), None);
-        super::apply_assistant_reasoning_field(
-            &mut chat_message,
-            Some("reasoning_content"),
-            "",
-        );
+        super::apply_assistant_reasoning_field(&mut chat_message, Some("reasoning_content"), "");
         assert_eq!(
             chat_message.reasoning_content, None,
             "empty reasoning must omit the field rather than send \"reasoning_content\": \"\""
@@ -588,7 +584,8 @@ fn parse_completion_response_with_tool_parser(
         provider_id,
         response_message.and_then(|m| m.tool_calls.as_ref()),
     )?;
-    let finish_reason = CompletionFinishReason::normalize_with_tool_calls(finish_reason, !tool_calls.is_empty());
+    let finish_reason =
+        CompletionFinishReason::normalize_with_tool_calls(finish_reason, !tool_calls.is_empty());
 
     if text.is_empty()
         && reasoning_text.is_none()

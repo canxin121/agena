@@ -22,6 +22,7 @@ use crate::hooks::{
 use crate::host_api::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription, HostClient,
     HostConfigReloadResponse, HostContextStatusRequest, HostContextStatusResponse,
+    HostDisplayContributeRequest, HostDisplayRemoveRequest, HostDisplayRemoveResponse,
     HostEnterSnapshotRequest, HostExitSnapshotRequest, HostHookListResponse,
     HostImageExecuteRequest, HostImageExecuteResponse, HostLspListDiagnosticsRequest,
     HostLspListDiagnosticsResponse, HostLspListServersResponse, HostMcpAddServerRequest,
@@ -31,10 +32,9 @@ use crate::host_api::{
     HostSchedulerDeleteRequest, HostSchedulerDeleteResponse, HostSchedulerListResponse,
     HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
     HostSecretSetRequest, HostSetSessionModelRequest, HostSetSessionModelResponse,
-    HostSnapshotListResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
-    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostSnapshotListResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
@@ -882,13 +882,13 @@ impl HostClient for StdioHostClient {
         .await
     }
 
-    async fn ui_statusline_contribute(
+    async fn display_contribute(
         &self,
-        req: HostStatuslineContributeRequest,
+        req: HostDisplayContributeRequest,
     ) -> crate::error::Result<()> {
         let _: serde_json::Value = self
             .call(
-                method::HOST_UI_STATUSLINE_CONTRIBUTE,
+                method::HOST_UI_DISPLAY_CONTRIBUTE,
                 serde_json::json!({
                     "request": req,
                     "context": crate::host_api::current_host_callback_context(),
@@ -898,22 +898,12 @@ impl HostClient for StdioHostClient {
         Ok(())
     }
 
-    async fn ui_statusline_list(&self) -> crate::error::Result<HostStatuslineListResponse> {
-        self.call(
-            method::HOST_UI_STATUSLINE_LIST,
-            serde_json::json!({
-                "context": crate::host_api::current_host_callback_context(),
-            }),
-        )
-        .await
-    }
-
-    async fn ui_statusline_remove(
+    async fn display_remove(
         &self,
-        req: HostStatuslineRemoveRequest,
-    ) -> crate::error::Result<HostStatuslineRemoveResponse> {
+        req: HostDisplayRemoveRequest,
+    ) -> crate::error::Result<HostDisplayRemoveResponse> {
         self.call(
-            method::HOST_UI_STATUSLINE_REMOVE,
+            method::HOST_UI_DISPLAY_REMOVE,
             serde_json::json!({
                 "request": req,
                 "context": crate::host_api::current_host_callback_context(),

@@ -1429,8 +1429,8 @@ impl PluginHost {
         Arc::clone(&self._host_handle)
     }
 
-    pub fn statusline_segments(&self) -> Vec<HostStatuslineSegment> {
-        self.ui_catalog().tui.statusline_segments
+    pub fn display_contributions(&self) -> Vec<HostDisplayContribution> {
+        self.ui_catalog().tui.display
     }
 
     pub fn theme_palettes(&self) -> Vec<HostThemePalette> {
@@ -1457,7 +1457,7 @@ impl PluginHost {
     }
 
     pub fn ui_catalog(&self) -> PluginUiCatalog {
-        let mut statusline_by_key = BTreeMap::<(PluginKey, String), HostStatuslineSegment>::new();
+        let mut display_by_key = BTreeMap::<(PluginKey, String), HostDisplayContribution>::new();
         // Theme IDs are scoped by plugin in the manifest. Keep the owner in
         // the catalog key so two plugins cannot silently overwrite one
         // another while building the aggregate UI catalog.
@@ -1467,16 +1467,15 @@ impl PluginHost {
         let mut studio_views = Vec::new();
 
         for plugin in &self.plugins {
-            for segment in &plugin.manifest.ui.tui.statusline_segments {
-                let resolved = HostStatuslineSegment {
+            // Declarative manifest display contributions (Phase 6). Dynamic
+            // runtime contributions arrive through the host-handle channel.
+            for contribution in &plugin.manifest.ui.display {
+                let resolved = HostDisplayContribution {
                     plugin_id: plugin.key(),
-                    segment_id: segment.id.clone(),
-                    content: segment.content.clone(),
-                    priority: segment.priority,
-                    color: segment.color.clone(),
+                    contribution: contribution.clone(),
                 };
-                statusline_by_key.insert(
-                    (resolved.plugin_id.clone(), resolved.segment_id.clone()),
+                display_by_key.insert(
+                    (resolved.plugin_id.clone(), resolved.contribution.id.clone()),
                     resolved,
                 );
             }
@@ -1515,22 +1514,26 @@ impl PluginHost {
             }));
         }
 
-        for segment in self._host_handle.statusline_list_response().segments {
-            statusline_by_key.insert(
-                (segment.plugin_id.clone(), segment.segment_id.clone()),
-                segment,
+        for contribution in self._host_handle.display_list_response() {
+            display_by_key.insert(
+                (
+                    contribution.plugin_id.clone(),
+                    contribution.contribution.id.clone(),
+                ),
+                contribution,
             );
         }
         for theme in self._host_handle.theme_list_response().themes {
             themes_by_key.insert((theme.plugin_id.clone(), theme.id.clone()), theme);
         }
 
-        let mut statusline_segments = statusline_by_key.into_values().collect::<Vec<_>>();
-        statusline_segments.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
+        let mut display = display_by_key.into_values().collect::<Vec<_>>();
+        display.sort_by(|a, b| {
+            b.contribution
+                .priority
+                .cmp(&a.contribution.priority)
                 .then_with(|| a.plugin_id.cmp(&b.plugin_id))
-                .then_with(|| a.segment_id.cmp(&b.segment_id))
+                .then_with(|| a.contribution.id.cmp(&b.contribution.id))
         });
         let themes = themes_by_key.into_values().collect::<Vec<_>>();
         studio_commands.sort_by(|a, b| {
@@ -1557,10 +1560,7 @@ impl PluginHost {
         });
 
         PluginUiCatalog {
-            tui: PluginTuiUiCatalog {
-                statusline_segments,
-                themes,
-            },
+            tui: PluginTuiUiCatalog { display, themes },
             studio: PluginStudioUiCatalog {
                 commands: studio_commands,
                 controls: studio_controls,
@@ -1637,20 +1637,20 @@ use super::{
     ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch,
     ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch,
     CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch,
-    Duration, EventEnvelope, HashMap, HookSubscription, HostCallbackContext, HostHandle,
-    HostNotification, HostStatuslineSegment, HostThemePalette, LoadedPlugin, NoopHostClient,
-    NotificationInput, PluginCommandCatalogItem, PluginCommandInvokeInput, PluginCommandOutput,
-    PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
-    PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
-    PluginToolRegistry, PluginTuiUiCatalog, PluginUiAction, PluginUiCatalog, PostRunInput,
-    PreRunInput, ProviderListInput, ProviderListPatch, RegisteredTool, RwLock, SessionEndInput,
-    SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch, TimeoutsConfig,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStream,
-    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolRegistryChangedEvent,
-    ToolStreamChunk, ToolStreamEnd, TransportError, UserPromptSubmitInput, UserPromptSubmitPatch,
-    block_on_handle_or_thread, block_on_handle_scoped_thread, block_on_new_thread,
-    block_on_runtime_scoped_thread, block_on_scoped_thread, call_with_timeout, dispatcher,
-    hook_registration_for_plugin, host_api, merge_json, method, shutdown_transport,
-    tool_hook_context, transport_to_plugin_error,
+    Duration, EventEnvelope, HashMap, HookSubscription, HostCallbackContext,
+    HostDisplayContribution, HostHandle, HostNotification, HostThemePalette, LoadedPlugin,
+    NoopHostClient, NotificationInput, PluginCommandCatalogItem, PluginCommandInvokeInput,
+    PluginCommandOutput, PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord,
+    PluginLogStore, PluginStudioControlCatalogItem, PluginStudioUiCatalog,
+    PluginStudioViewCatalogItem, PluginToolRegistry, PluginTuiUiCatalog, PluginUiAction,
+    PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
+    RegisteredTool, RwLock, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
+    ShellEnvPatch, TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput,
+    ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput,
+    ToolInvokeOutput, ToolInvokeStream, ToolKey, ToolPermissionNetworksInput,
+    ToolPermissionPathsInput, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd,
+    TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
+    block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
+    block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
+    merge_json, method, shutdown_transport, tool_hook_context, transport_to_plugin_error,
 };

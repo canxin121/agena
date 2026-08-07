@@ -13,11 +13,12 @@ pub use std::sync::Arc;
 pub use crate::error::{PluginError, PluginErrorKind, Result};
 pub use crate::hooks::*;
 pub use crate::host_api::{
-    EventSubscription, HostClient, HostGetSessionRequest, HostGetSessionResponse,
-    HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostImageExecuteRequest,
-    HostImageExecuteResponse, HostImageInput, HostImageOperation, HostLspDiagnostic,
-    HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse, HostLspListServersResponse,
-    HostLspServer, HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
+    EventSubscription, HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest,
+    HostDisplayRemoveResponse, HostGetSessionRequest, HostGetSessionResponse, HostHookDescriptor,
+    HostHookListResponse, HostHookRegistration, HostImageExecuteRequest, HostImageExecuteResponse,
+    HostImageInput, HostImageOperation, HostLspDiagnostic, HostLspListDiagnosticsRequest,
+    HostLspListDiagnosticsResponse, HostLspListServersResponse, HostLspServer,
+    HostMcpAddServerRequest, HostMcpListServersResponse, HostMcpRemoveServerRequest,
     HostMcpRemoveServerResponse, HostMcpServerSpec, HostPluginStatus, HostPluginStatusGetRequest,
     HostPluginStatusGetResponse, HostPluginStatusListResponse, HostRegisteredToolDescriptor,
     HostRegisteredToolListResponse, HostRenameSessionRequest, HostRenameSessionResponse,
@@ -25,15 +26,13 @@ pub use crate::host_api::{
     HostSchedulerDeleteResponse, HostSchedulerJob, HostSchedulerListResponse,
     HostSecretDeleteRequest, HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse,
     HostSecretSetRequest, HostSession, HostSnapshotListResponse, HostSnapshotSummary,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveRequest,
-    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageRecord, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, NoopHostClient, PluginNotifyAction,
-    PluginNotifyActionTarget, PluginNotifyRequest, ToolRegistryChangeKind,
-    ToolRegistryChangedEvent,
+    HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
+    HostStorageListRequest, HostStorageListResponse, HostStorageRecord, HostStorageScope,
+    HostStorageSetRequest, HostStorageVisibility, HostThemeListResponse, HostThemePalette,
+    HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
+    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
+    HostToolUpdateRequest, LogLevel, NoopHostClient, PluginNotifyAction, PluginNotifyActionTarget,
+    PluginNotifyRequest, ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text};
 pub use crate::manifest::{
@@ -41,11 +40,11 @@ pub use crate::manifest::{
     PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition,
     PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginSkillDefinition,
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
-    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiStatuslineSegment,
-    PluginTuiThemeColors, PluginTuiUiContributions, PluginUiAction, PluginUiContributions,
-    PluginUiThemePalette, ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput,
-    ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind,
-    normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
+    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiThemeColors,
+    PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
+    ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput, ToolResultPolicy,
+    ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
+    plugin_workbench_tab_id_is_supported,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};

@@ -467,10 +467,10 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         tools
     }
 
-    fn statusline_segments(&self) -> Vec<agena_plugin_host::HostStatuslineSegment> {
+    fn display_contributions(&self) -> Vec<agena_plugin_host::HostDisplayContribution> {
         self.current_snapshot()
             .plugin_manager()
-            .statusline_segments()
+            .display_contributions()
     }
 
     fn host_notifications(&self) -> Vec<agena_plugin_host::HostNotification> {

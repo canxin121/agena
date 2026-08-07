@@ -46,12 +46,11 @@ pub use manifest::{
     PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition,
     PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginSkillDefinition,
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
-    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiStatuslineSegment,
-    PluginTuiThemeColors, PluginTuiUiContributions, PluginUiAction, PluginUiContributions,
-    PluginUiThemePalette, ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput,
-    ToolPermissionContract, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag,
-    TransportKind, UiTextDisplayMode, normalize_tool_tag_name,
-    plugin_workbench_tab_id_is_supported,
+    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiThemeColors,
+    PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
+    ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput, ToolPermissionContract,
+    ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind,
+    UiTextDisplayMode, normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
 };
 pub use plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use schemars::JsonSchema;

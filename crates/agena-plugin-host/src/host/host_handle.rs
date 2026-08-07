@@ -45,7 +45,7 @@ impl HostHandle {
             tool_registry_event_listener: Arc::new(RwLock::new(None)),
             statuses,
             logs,
-            statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            display: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             host_notifications: Arc::new(RwLock::new(std::collections::VecDeque::new())),
             themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             quotas: Arc::new(crate::quota::QuotaRegistry::default()),
@@ -229,8 +229,8 @@ impl HostHandle {
         if let Ok(mut events) = self.tool_registry_events.write() {
             events.retain(|event| &event.plugin != plugin_id);
         }
-        if let Ok(mut statusline) = self.statusline.write() {
-            statusline.retain(|(owner, _), _| owner != plugin_id);
+        if let Ok(mut display) = self.display.write() {
+            display.retain(|(owner, _), _| owner != plugin_id);
         }
         if let Ok(mut themes) = self.themes.write() {
             themes.retain(|_, theme| &theme.plugin_id != plugin_id);
@@ -765,26 +765,21 @@ impl HostHandle {
                         serde_json::to_value(&out)
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
-                    method::HOST_UI_STATUSLINE_CONTRIBUTE => {
+                    method::HOST_UI_DISPLAY_CONTRIBUTE => {
                         let plugin_id = plugin_id.ok_or_else(|| {
-                            host_unavailable("ui.statusline.contribute requires plugin id")
+                            host_unavailable("ui.display.contribute requires plugin id")
                         })?;
-                        let p: HostStatuslineContributeParams = parse(params)?;
-                        self.statusline_contribute(&plugin_id, p.request);
+                        let p: HostDisplayContributeParams = parse(params)?;
+                        self.display_contribute(&plugin_id, p.request);
                         Ok(serde_json::Value::Object(Default::default()))
                     }
-                    method::HOST_UI_STATUSLINE_LIST => {
-                        let response = self.statusline_list_response();
-                        serde_json::to_value(&response)
-                            .map_err(|e| PluginError::invalid_params(e.to_string()))
-                    }
-                    method::HOST_UI_STATUSLINE_REMOVE => {
+                    method::HOST_UI_DISPLAY_REMOVE => {
                         let plugin_id = plugin_id.ok_or_else(|| {
-                            host_unavailable("ui.statusline.remove requires plugin id")
+                            host_unavailable("ui.display.remove requires plugin id")
                         })?;
-                        let p: HostStatuslineRemoveParams = parse(params)?;
-                        let removed = self.statusline_remove(&plugin_id, &p.request.segment_id);
-                        serde_json::to_value(&HostStatuslineRemoveResponse { removed })
+                        let p: HostDisplayRemoveParams = parse(params)?;
+                        let removed = self.display_remove(&plugin_id, &p.request.contribution_id);
+                        serde_json::to_value(&HostDisplayRemoveResponse { removed })
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
                     method::HOST_NOTIFY => {
@@ -1013,35 +1008,30 @@ impl HostHandle {
         HostHookListResponse { hooks }
     }
 
-    pub(super) fn statusline_contribute(
-        &self,
-        plugin_id: &str,
-        req: HostStatuslineContributeRequest,
-    ) {
+    pub(super) fn display_contribute(&self, plugin_id: &str, req: HostDisplayContributeRequest) {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return;
         };
-        if let Ok(mut guard) = self.statusline.write() {
-            let key = (plugin_id.clone(), req.segment_id.clone());
+        if let Ok(mut guard) = self.display.write() {
+            let key = (plugin_id.clone(), req.contribution.id.clone());
             guard.insert(
                 key,
-                HostStatuslineSegment {
+                HostDisplayContribution {
                     plugin_id,
-                    segment_id: req.segment_id,
-                    content: req.content,
-                    priority: req.priority,
-                    color: req.color,
+                    contribution: req.contribution,
                 },
             );
         }
     }
 
-    pub(super) fn statusline_remove(&self, plugin_id: &str, segment_id: &str) -> bool {
+    pub(super) fn display_remove(&self, plugin_id: &str, contribution_id: &str) -> bool {
         let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
             return false;
         };
-        if let Ok(mut guard) = self.statusline.write() {
-            return guard.remove(&(plugin_id, segment_id.to_string())).is_some();
+        if let Ok(mut guard) = self.display.write() {
+            return guard
+                .remove(&(plugin_id, contribution_id.to_string()))
+                .is_some();
         }
         false
     }
@@ -1078,19 +1068,20 @@ impl HostHandle {
             .unwrap_or_default()
     }
 
-    pub fn statusline_list_response(&self) -> HostStatuslineListResponse {
-        let mut segments: Vec<HostStatuslineSegment> = self
-            .statusline
+    pub fn display_list_response(&self) -> Vec<HostDisplayContribution> {
+        let mut contributions: Vec<HostDisplayContribution> = self
+            .display
             .read()
             .map(|guard| guard.values().cloned().collect())
             .unwrap_or_default();
-        segments.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
+        contributions.sort_by(|a, b| {
+            b.contribution
+                .priority
+                .cmp(&a.contribution.priority)
                 .then_with(|| a.plugin_id.cmp(&b.plugin_id))
-                .then_with(|| a.segment_id.cmp(&b.segment_id))
+                .then_with(|| a.contribution.id.cmp(&b.contribution.id))
         });
-        HostStatuslineListResponse { segments }
+        contributions
     }
 
     pub(super) fn theme_register(
@@ -1143,26 +1134,26 @@ impl HostHandle {
 use super::{
     Arc, BTreeMap, EventEnvelope, EventSubscription, HashMap, HostAskUserParams,
     HostCancelSubtaskParams, HostClient, HostConfigReadParams, HostConfigReloadParams,
-    HostContextStatusParams, HostEnterSnapshotParams, HostExitSnapshotParams, HostHandle,
-    HostHookListResponse, HostHookRegistration, HostImageExecuteParams, HostInvokeToolParams,
-    HostListToolsParams, HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams,
-    HostMcpAddServerParams, HostMcpListServersParams, HostMcpRemoveServerParams,
-    HostMessageSubtaskParams, HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams,
-    HostMonitorStopParams, HostNotification, HostNotifyParams, HostPluginStatusGetParams,
-    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostReadSubtaskOutputParams,
-    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
-    HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
-    HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
-    HostSetSessionModelParams, HostSnapshotListParams, HostStatuslineContributeParams,
-    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveParams,
-    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteParams,
-    HostStorageGetParams, HostStorageListParams, HostStorageSetParams, HostSubscribeParams,
-    HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
-    HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
-    HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
-    PluginError, PluginKey, PluginLogRecord, PluginLogStore, PluginNotifyRequest,
-    PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient, ToolKey,
-    ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,
-    callback_context_from_params, host_api, host_status_from, host_unavailable, method, parse,
-    scoped_context, transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
+    HostContextStatusParams, HostDisplayContributeParams, HostDisplayContributeRequest,
+    HostDisplayContribution, HostDisplayRemoveParams, HostDisplayRemoveResponse,
+    HostEnterSnapshotParams, HostExitSnapshotParams, HostHandle, HostHookListResponse,
+    HostHookRegistration, HostImageExecuteParams, HostInvokeToolParams, HostListToolsParams,
+    HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams, HostMcpAddServerParams,
+    HostMcpListServersParams, HostMcpRemoveServerParams, HostMessageSubtaskParams,
+    HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams, HostMonitorStopParams,
+    HostNotification, HostNotifyParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
+    HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredToolDescriptor,
+    HostRegisteredToolListResponse, HostRunSubtaskParams, HostSchedulerCreateParams,
+    HostSchedulerDeleteParams, HostSchedulerListParams, HostSecretDeleteParams,
+    HostSecretGetParams, HostSecretListParams, HostSecretSetParams, HostSetSessionModelParams,
+    HostSnapshotListParams, HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams,
+    HostStorageSetParams, HostSubscribeParams, HostThemeListResponse, HostThemePalette,
+    HostThemeRegisterParams, HostThemeRegisterRequest, HostThemeRemoveParams,
+    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterParams,
+    HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams, PluginError, PluginKey,
+    PluginLogRecord, PluginLogStore, PluginNotifyRequest, PluginToolRegistry, PluginTransport,
+    RegisteredTool, RwLock, ScopedHostClient, ToolKey, ToolRegistryChangeKind,
+    ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque, callback_context_from_params,
+    host_api, host_status_from, host_unavailable, method, parse, scoped_context,
+    transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
 };

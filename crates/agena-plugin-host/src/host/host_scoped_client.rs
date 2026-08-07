@@ -324,26 +324,22 @@ impl HostClient for ScopedHostClient {
         host_api::run_in_host_callback_context(self.context(), inner.mcp_remove_server(req)).await
     }
 
-    async fn ui_statusline_contribute(
+    async fn display_contribute(
         &self,
-        req: HostStatuslineContributeRequest,
+        req: HostDisplayContributeRequest,
     ) -> crate::sdk::Result<()> {
-        self.handle.statusline_contribute(&self.plugin_id, req);
+        self.handle.display_contribute(&self.plugin_id, req);
         Ok(())
     }
 
-    async fn ui_statusline_list(&self) -> crate::sdk::Result<HostStatuslineListResponse> {
-        Ok(self.handle.statusline_list_response())
-    }
-
-    async fn ui_statusline_remove(
+    async fn display_remove(
         &self,
-        req: HostStatuslineRemoveRequest,
-    ) -> crate::sdk::Result<HostStatuslineRemoveResponse> {
+        req: HostDisplayRemoveRequest,
+    ) -> crate::sdk::Result<HostDisplayRemoveResponse> {
         let removed = self
             .handle
-            .statusline_remove(&self.plugin_id, &req.segment_id);
-        Ok(HostStatuslineRemoveResponse { removed })
+            .display_remove(&self.plugin_id, &req.contribution_id);
+        Ok(HostDisplayRemoveResponse { removed })
     }
 
     async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::sdk::Result<()> {
@@ -365,7 +361,8 @@ impl HostClient for ScopedHostClient {
 use super::{
     AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventEnvelope, EventFilter,
     EventSubscription, HostCallbackContext, HostClient, HostConfigReloadResponse,
-    HostContextStatusRequest, HostContextStatusResponse, HostEnterSnapshotRequest,
+    HostContextStatusRequest, HostContextStatusResponse, HostDisplayContributeRequest,
+    HostDisplayRemoveRequest, HostDisplayRemoveResponse, HostEnterSnapshotRequest,
     HostExitSnapshotRequest, HostHookListResponse, HostImageExecuteRequest,
     HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
@@ -374,10 +371,9 @@ use super::{
     HostSchedulerCreateRequest, HostSchedulerCreateResponse, HostSchedulerDeleteRequest,
     HostSchedulerDeleteResponse, HostSchedulerListResponse, HostSecretDeleteRequest,
     HostSecretGetRequest, HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSnapshotListResponse, HostStatuslineContributeRequest, HostStatuslineListResponse,
-    HostStatuslineRemoveRequest, HostStatuslineRemoveResponse, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
-    HostStorageSetRequest, HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
+    HostSnapshotListResponse, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest,
+    HostThemeListResponse, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,

@@ -20,7 +20,8 @@ use crate::registry::{PluginToolRegistry, RegisteredTool, validate_tool_definiti
 use crate::sdk::host_api::{
     self, AskUserRequest, AskUserResponse, CancelSubtaskRequest, EventSubscription,
     HostCallbackContext, HostClient, HostConfigReloadResponse, HostContextStatusRequest,
-    HostContextStatusResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
+    HostContextStatusResponse, HostDisplayContributeRequest, HostDisplayRemoveRequest,
+    HostDisplayRemoveResponse, HostEnterSnapshotRequest, HostExitSnapshotRequest,
     HostHookDescriptor, HostHookListResponse, HostHookRegistration, HostImageExecuteRequest,
     HostImageExecuteResponse, HostLspListDiagnosticsRequest, HostLspListDiagnosticsResponse,
     HostLspListServersResponse, HostMcpAddServerRequest, HostMcpListServersResponse,
@@ -30,17 +31,16 @@ use crate::sdk::host_api::{
     HostSchedulerCreateResponse, HostSchedulerDeleteRequest, HostSchedulerDeleteResponse,
     HostSchedulerListResponse, HostSecretDeleteRequest, HostSecretGetRequest,
     HostSecretGetResponse, HostSecretListResponse, HostSecretSetRequest,
-    HostSetSessionModelRequest, HostSnapshotListResponse, HostStatuslineContributeRequest,
-    HostStatuslineListResponse, HostStatuslineRemoveRequest, HostStatuslineRemoveResponse,
-    HostStatuslineSegment, HostStorageDeleteRequest, HostStorageGetRequest, HostStorageGetResponse,
-    HostStorageListRequest, HostStorageListResponse, HostStorageSetRequest, HostThemeListResponse,
-    HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest, HostThemeRemoveResponse,
-    HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
-    HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
-    MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    PluginNotifyAction, PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
-    RunSubtaskRequest, RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor,
-    ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    HostSetSessionModelRequest, HostSnapshotListResponse, HostStorageDeleteRequest,
+    HostStorageGetRequest, HostStorageGetResponse, HostStorageListRequest, HostStorageListResponse,
+    HostStorageSetRequest, HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest,
+    HostThemeRemoveRequest, HostThemeRemoveResponse, HostToolMutationResponse,
+    HostToolRegisterRequest, HostToolRemoveRequest, HostToolUpdateRequest, LogLevel,
+    MessageSubtaskRequest, MonitorHandle, MonitorReadRequest, MonitorReadResponse,
+    MonitorStartRequest, MonitorStopRequest, NoopHostClient, PluginNotifyAction,
+    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
+    RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor, ToolRegistryChangeKind,
+    ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -50,12 +50,12 @@ use crate::sdk::{
     CommandAfterInput, CommandAfterPatch, CommandBeforeInput, CommandBeforeOutcome,
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
-    PluginError, PluginErrorKind, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
-    PluginUiAction, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
-    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    PluginDisplayContribution, PluginError, PluginErrorKind, PluginKey, PluginManifest,
+    PluginStudioControl, PluginStudioView, PluginUiAction, PostRunInput, PreRunInput,
+    ProviderListInput, ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch,
+    ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
+    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
@@ -284,7 +284,7 @@ pub struct PluginUiCatalog {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PluginTuiUiCatalog {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub statusline_segments: Vec<HostStatuslineSegment>,
+    pub display: Vec<HostDisplayContribution>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<HostThemePalette>,
 }
@@ -304,6 +304,15 @@ pub struct PluginCommandCatalogItem {
     pub plugin_id: PluginKey,
     #[serde(flatten)]
     pub command: PluginCommandDefinition,
+}
+
+/// Host-resolved declarative display contribution: the contributing plugin
+/// plus its pure content contribution. The host owns placement and priority
+/// ordering; plugins never target a location or color (Phase 6).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostDisplayContribution {
+    pub plugin_id: PluginKey,
+    pub contribution: PluginDisplayContribution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -557,7 +566,7 @@ pub struct HostHandle {
     tool_registry_event_listener: Arc<RwLock<Option<ToolRegistryEventListener>>>,
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
-    statusline: Arc<RwLock<std::collections::BTreeMap<(PluginKey, String), HostStatuslineSegment>>>,
+    display: Arc<RwLock<std::collections::BTreeMap<(PluginKey, String), HostDisplayContribution>>>,
     host_notifications: Arc<RwLock<std::collections::VecDeque<HostNotification>>>,
     themes: Arc<RwLock<BTreeMap<(PluginKey, String), HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
@@ -872,15 +881,15 @@ struct HostMcpRemoveServerParams {
 }
 
 #[derive(serde::Deserialize)]
-struct HostStatuslineContributeParams {
-    request: HostStatuslineContributeRequest,
+struct HostDisplayContributeParams {
+    request: HostDisplayContributeRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }
 
 #[derive(serde::Deserialize)]
-struct HostStatuslineRemoveParams {
-    request: HostStatuslineRemoveRequest,
+struct HostDisplayRemoveParams {
+    request: HostDisplayRemoveRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

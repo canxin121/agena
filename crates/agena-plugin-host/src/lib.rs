@@ -21,17 +21,17 @@ pub use config::{
 };
 pub use error::{HostError, TransportError};
 pub use host::{
-    AgentStopDispatch, AgentStopHookRun, HostNotification, LoadedPlugin, PluginCommandCatalogItem,
-    PluginHost, PluginHostBuildConfig, PluginInspect, PluginStudioControlCatalogItem,
-    PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginTuiUiCatalog, PluginUiCatalog,
-    PluginUiToolInvokeResponse, PluginUiToolInvokeStatus, StaticPluginRegistration,
-    ToolInvokeStream,
+    AgentStopDispatch, AgentStopHookRun, HostDisplayContribution, HostNotification, LoadedPlugin,
+    PluginCommandCatalogItem, PluginHost, PluginHostBuildConfig, PluginInspect,
+    PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
+    PluginTuiUiCatalog, PluginUiCatalog, PluginUiToolInvokeResponse, PluginUiToolInvokeStatus,
+    StaticPluginRegistration, ToolInvokeStream,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
 pub use logs::{PluginLogRecord, PluginLogStore};
 pub use registry::PluginToolRegistry;
-pub use sdk::host_api::{HostStatuslineSegment, HostThemePalette};
+pub use sdk::host_api::HostThemePalette;
 pub use sdk::{
     AgentStopInput, AgentStopPatch, AuthInput, AuthOutput, ChatDirection, ChatHeadersInput,
     ChatHeadersPatch, ChatMessage, ChatMessageInput, ChatMessagePatch, ChatMessagesTransformInput,
@@ -43,12 +43,12 @@ pub use sdk::{
     PluginDisplayContribution, PluginError, PluginKey, PluginKeyParseError, PluginManifest,
     PluginNotifyAction, PluginNotifyActionTarget, PluginNotifyRequest, PluginStudioControl,
     PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
-    PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction, PluginUiContributions,
-    PluginUiThemePalette, PostRunInput, PreRunInput, ProviderDescriptor, ProviderKind,
-    ProviderListInput, ProviderListPatch, SessionEndInput, SessionEndReason, SessionStartInput,
-    SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch, ToolAfterInput,
-    ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinition, ToolDefinitionInput,
-    ToolDefinitionPatch, ToolDescriptionMode, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolKey, ToolKeyParseError, ToolPermissionNetworksInput, ToolPermissionPathsInput,
+    PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
+    PostRunInput, PreRunInput, ProviderDescriptor, ProviderKind, ProviderListInput,
+    ProviderListPatch, SessionEndInput, SessionEndReason, SessionStartInput, SessionStartPatch,
+    SessionStartSource, ShellEnvInput, ShellEnvPatch, ToolAfterInput, ToolAfterPatch,
+    ToolBeforeInput, ToolBeforePatch, ToolDefinition, ToolDefinitionInput, ToolDefinitionPatch,
+    ToolDescriptionMode, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
+    ToolKeyParseError, ToolPermissionNetworksInput, ToolPermissionPathsInput,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };

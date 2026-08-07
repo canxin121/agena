@@ -40,7 +40,7 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn permission_tool_catalog(&self) -> Vec<RuntimePluginToolCatalogItem>;
 
-    fn statusline_segments(&self) -> Vec<agena_plugin_host::HostStatuslineSegment>;
+    fn display_contributions(&self) -> Vec<agena_plugin_host::HostDisplayContribution>;
 
     fn host_notifications(&self) -> Vec<agena_plugin_host::HostNotification>;
 

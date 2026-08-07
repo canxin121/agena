@@ -512,12 +512,12 @@ fn validate_manifest(
         }
     }
 
-    let mut statusline_ids = BTreeSet::new();
-    for segment in &manifest.ui.tui.statusline_segments {
+    let mut display_ids = BTreeSet::new();
+    for contribution in &manifest.ui.display {
         validate_id(
-            segment.id.as_str(),
-            "statusline segment",
-            &mut statusline_ids,
+            contribution.id.as_str(),
+            "display contribution",
+            &mut display_ids,
         )?;
     }
     let mut theme_ids = BTreeSet::new();

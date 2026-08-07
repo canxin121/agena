@@ -15,7 +15,7 @@ use crate::attachment::AttachmentItem;
 use crate::error::{PluginError, Result};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
-use crate::manifest::{PluginTuiColor, PluginTuiThemeColors, ToolDefinition};
+use crate::manifest::{PluginDisplayContribution, PluginTuiThemeColors, ToolDefinition};
 use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 
 #[async_trait]
@@ -317,21 +317,18 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
-    /// UI statusline — contribute or update a segment.
-    async fn ui_statusline_contribute(&self, _req: HostStatuslineContributeRequest) -> Result<()> {
+    /// Declarative display contribution — contribute or update one contribution
+    /// by id. The host decides placement and priority; plugins never target a
+    /// location (Phase 6 unified display model).
+    async fn display_contribute(&self, _req: HostDisplayContributeRequest) -> Result<()> {
         Err(unavailable())
     }
 
-    /// UI statusline — list every contributed segment in priority order.
-    async fn ui_statusline_list(&self) -> Result<HostStatuslineListResponse> {
-        Err(unavailable())
-    }
-
-    /// UI statusline — remove a segment by id.
-    async fn ui_statusline_remove(
+    /// Declarative display contribution — remove a previously contributed id.
+    async fn display_remove(
         &self,
-        _req: HostStatuslineRemoveRequest,
-    ) -> Result<HostStatuslineRemoveResponse> {
+        _req: HostDisplayRemoveRequest,
+    ) -> Result<HostDisplayRemoveResponse> {
         Err(unavailable())
     }
 
@@ -361,8 +358,9 @@ pub trait HostClient: Send + Sync + 'static {
 }
 
 /// Unified imperative notification entry for plugins (Phase 6). Replaces
-/// ad-hoc statusline segment ids as the way a plugin tells the user something
-/// now: the host decides surface, priority, and dedupe.
+/// ad-hoc imperative UI hooks as the way a plugin tells the user something
+/// now: the host decides surface, priority, and dedupe. Persistent display
+/// state uses [`PluginDisplayContribution`] via `host.display_contribute`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct PluginNotifyRequest {
@@ -1421,43 +1419,21 @@ pub struct HostMcpRemoveServerResponse {
     pub removed: bool,
 }
 
-// ---------------- UI: statusline / theme ----------------
+// ---------------- UI: declarative display contribution / theme ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostStatuslineSegment {
-    pub plugin_id: PluginKey,
-    pub segment_id: String,
-    pub content: String,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<PluginTuiColor>,
+pub struct HostDisplayContributeRequest {
+    pub contribution: PluginDisplayContribution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostStatuslineContributeRequest {
-    pub segment_id: String,
-    pub content: String,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<PluginTuiColor>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostStatuslineRemoveRequest {
-    pub segment_id: String,
+pub struct HostDisplayRemoveRequest {
+    pub contribution_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostStatuslineRemoveResponse {
+pub struct HostDisplayRemoveResponse {
     pub removed: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HostStatuslineListResponse {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub segments: Vec<HostStatuslineSegment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

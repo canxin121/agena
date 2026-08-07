@@ -597,14 +597,12 @@ impl PluginUiContributions {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginTuiUiContributions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub statusline_segments: Vec<PluginTuiStatuslineSegment>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<PluginUiThemePalette>,
 }
 
 impl PluginTuiUiContributions {
     pub fn is_empty(&self) -> bool {
-        self.statusline_segments.is_empty() && self.themes.is_empty()
+        self.themes.is_empty()
     }
 }
 
@@ -622,19 +620,6 @@ impl PluginStudioUiContributions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PluginTuiStatuslineSegment {
-    pub id: String,
-    pub content: String,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<PluginTuiColor>,
-}
-
-/// Declarative plugin display contribution (Phase 6). Pure content plus a
-/// kind; the host decides placement and priority. No location/color fields
-/// leak into the plugin contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct PluginDisplayContribution {

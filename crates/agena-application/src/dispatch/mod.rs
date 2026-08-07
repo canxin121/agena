@@ -36,9 +36,9 @@ use agena_api::{
         GetActivityParams, ActivityLogsParams,
     },
     resource::{
-        ModelCatalogResponse, ModelCatalogSourceKind, OperationDetailResource,
-        RuntimeAutomationResource, RuntimeBackgroundTaskResource, RuntimeLspResource,
-        RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
+        DefaultSelectionResource, ModelCatalogResponse, ModelCatalogSourceKind,
+        OperationDetailResource, RuntimeAutomationResource, RuntimeBackgroundTaskResource,
+        RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource, RuntimeMcpServerResource,
         RuntimeOperatorResource, RuntimePluginUiResource, RuntimeSessionCacheResource,
         RuntimeSkillResource, RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
         WorkspaceResource,
@@ -306,6 +306,16 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
             .map(scheduled_job_resource)
             .collect(),
     };
+    let default_selection = {
+        let selection = state.provider_catalog().default_selection();
+        (!selection.is_empty()).then(|| DefaultSelectionResource {
+            provider: selection.provider,
+            adapter: selection.adapter,
+            model: selection.model,
+            thinking_mode: selection.thinking_mode,
+            speed_mode: selection.speed_mode,
+        })
+    };
 
     RuntimeStatusResponse {
         generation: status.generation,
@@ -331,6 +341,7 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
         },
         session_cache,
         model_catalog: Some(model_catalog),
+        default_selection,
         background_tasks,
         automation,
         operator: RuntimeOperatorResource {

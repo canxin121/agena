@@ -193,6 +193,10 @@ impl agena_provider::ProviderCatalog for AgenaRuntime {
             .map_err(|error| agena_provider::ProviderCatalogError::Operation(error.to_string()))
     }
 
+    fn default_selection(&self) -> agena_domain::ExecutionSelection {
+        self.current_snapshot().default_selection()
+    }
+
     fn resolve_model_target(
         &self,
         target: &str,

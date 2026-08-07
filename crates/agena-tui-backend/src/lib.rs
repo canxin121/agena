@@ -9,7 +9,8 @@ use std::{
 use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
-        CreateSessionParams, ReplacePermissionRuleParams, ReplyPermissionParams,
+        CreateSessionParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
+        ReplyPermissionParams,
         ReplyUserInputParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
         UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },

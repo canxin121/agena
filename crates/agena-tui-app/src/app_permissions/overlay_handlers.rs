@@ -5,7 +5,14 @@ impl App {
         dialog: &mut PermissionOverlay,
     ) -> bool {
         match agena_tui::permission_prompt::handle_key(&mut dialog.presentation, key) {
-            PermissionPromptEffect::Close => true,
+            PermissionPromptEffect::Close => {
+                // ESC Close must not permanently lose the request: drop the
+                // local guard so the request auto-popups again on the next
+                // sync (permissions have no persisted presented state).
+                self.seen_permission_request_ids
+                    .remove(&dialog.request.request_id);
+                true
+            }
             PermissionPromptEffect::KeepOpen => false,
             PermissionPromptEffect::Activate { page, selected } => {
                 self.activate_permission_overlay_choice(dialog, page, selected)

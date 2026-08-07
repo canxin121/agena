@@ -47,7 +47,15 @@ impl App {
             self.layout.overlay_area,
         );
         match dialog.presentation.handle_key(key, page_size) {
-            agena_tui::user_input::UserInputEffect::Close => true,
+            agena_tui::user_input::UserInputEffect::Close => {
+                // ESC Close must not permanently lose the request: drop the
+                // local guard so a presented-but-unanswered request stays
+                // reachable through the awaiting-input hint and can be
+                // reopened, and so an unpresented request auto-popups again.
+                self.seen_user_input_request_ids
+                    .remove(&dialog.request.request_id);
+                true
+            }
             agena_tui::user_input::UserInputEffect::Submit => {
                 self.submit_user_input_overlay(dialog)
             }

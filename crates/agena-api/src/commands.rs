@@ -44,6 +44,7 @@ pub enum Command {
     // ── interactive replies ──
     ReplyPermission(ReplyPermissionParams),
     ReplyUserInput(ReplyUserInputParams),
+    MarkInteractiveRequestPresented(MarkInteractiveRequestPresentedParams),
 
     // ── permission rules ──
     UpsertPermissionRule(UpsertPermissionRuleParams),
@@ -222,6 +223,12 @@ pub struct ReplyUserInputParams {
     #[serde(default)]
     pub options: RunOptions,
     pub reply: UserInputReply,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MarkInteractiveRequestPresentedParams {
+    pub session_id: i64,
+    pub request_id: String,
 }
 
 // ─── permission rules ───────────────────────────────────────────────────

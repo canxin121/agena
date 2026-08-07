@@ -703,6 +703,22 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         Ok(outcome)
     }
 
+    async fn mark_interactive_request_presented(
+        &self,
+        session_id: i64,
+        request_id: String,
+    ) -> Result<
+        agena_runtime::SessionExecutionCommandOutcome,
+        agena_runtime::SessionExecutionCommandError,
+    > {
+        let session = SessionManager::mark_interactive_request_presented(self, session_id, request_id)
+            .await
+            .map_err(session_execution_command_error)?;
+        Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
+            session.id,
+        ))
+    }
+
     async fn update_session_selection(
         &self,
         session_id: i64,
@@ -1381,7 +1397,11 @@ impl SessionManager {
         }
 
         let request_id = host_user_input_request_id(session_id, call_id, sequence_index);
-        let auto_resolution_ms = request.auto_resolution_ms;
+        // Every interactive request is bounded: a caller that omits
+        // `auto_resolution_ms` gets the system default and any explicit value
+        // is capped, so a host/plugin `ask_user` can never wedge the session
+        // forever when no client replies.
+        let auto_resolution_ms = effective_user_input_timeout_ms(request.auto_resolution_ms);
         let created_at = Utc::now();
         let response_rx = self
             .install_host_user_input_waiter(session_id, request_id.clone())

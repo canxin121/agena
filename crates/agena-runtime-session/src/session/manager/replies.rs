@@ -1022,6 +1022,77 @@ impl SessionManager {
         .await
     }
 
+    /// Record that an interactive user-input request has been shown to the
+    /// user. This is the durable replacement for a client's volatile "seen"
+    /// set: the acknowledgement survives restarts and is shared across
+    /// clients, so a request that was never presented always auto-popups
+    /// while one that was presented but remains unanswered is surfaced through
+    /// a persistent attention hint instead of a forced modal.
+    ///
+    /// Idempotent: replaying the same `request_id` is a no-op and does not
+    /// rewrite the checkpoint. Presenting an already-resolved request is also
+    /// a no-op (the presentation is moot once the request is answered).
+    pub async fn mark_interactive_request_presented(
+        &self,
+        session_id: i64,
+        request_id: String,
+    ) -> Result<Session, AppError> {
+        let reply_lock = self.reply_session_lock(session_id).await;
+        let reply_guard = reply_lock.lock().await;
+        let (state, mut session) = self.load_reply_session(session_id).await?;
+        let request_parts = matching_request_part_refs(
+            &session,
+            request_id.as_str(),
+            agena_domain::PendingInteractiveRequestKind::UserInput,
+            false,
+        );
+        if request_parts.is_empty() {
+            return Err(pending_reply_part_missing_error(
+                "user input",
+                request_id.as_str(),
+            ));
+        }
+
+        let mut changed_checkpoints = Vec::new();
+        let mut presented = false;
+        for request_part in &request_parts {
+            let part = session.part_mut(request_part).ok_or_else(|| {
+                pending_reply_part_missing_error("user input", request_id.as_str())
+            })?;
+            let Some(PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+                RequestPart::UserInput(request),
+            ))) = part.content.as_mut()
+            else {
+                continue;
+            };
+            if part.status == ExecutionStatus::Pending && request.request.presented_at.is_none() {
+                request.request.presented_at = Some(Utc::now());
+                presented = true;
+                changed_checkpoints.push(MessageCheckpoint::part(
+                    request_part.message_id,
+                    request_part.part_id,
+                ));
+            }
+        }
+
+        if !presented {
+            // Already presented (idempotent replay) or already resolved
+            // (presentation is moot): nothing to persist.
+            return Ok(session);
+        }
+        session = self
+            .persist_session_changes(
+                session,
+                changed_checkpoints,
+                Vec::new(),
+                None,
+                state.clone(),
+            )
+            .await?;
+        drop(reply_guard);
+        Ok(session)
+    }
+
     pub async fn reply_permission(
         &self,
         request: SessionPermissionReplyRequest,

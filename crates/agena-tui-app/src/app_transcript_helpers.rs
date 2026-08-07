@@ -44,6 +44,39 @@ pub(crate) fn first_unseen_pending_interactive_request<'a>(
     })
 }
 
+/// Whether a pending request has already been shown to the user on some
+/// client. User-input requests persist this acknowledgement on the request
+/// part (`presented_at`), so a presented-but-unanswered request is surfaced
+/// through the awaiting-input hint instead of a forced modal. Permission
+/// requests have no durable presentation field: they remain eligible for
+/// auto-open until replied, so closing one can never lose it.
+pub(crate) fn pending_interactive_request_is_presented(
+    request: &PendingInteractiveRequestResource,
+) -> bool {
+    match &request.request {
+        PendingInteractiveRequest::UserInput { request } => request.presented_at.is_some(),
+        PendingInteractiveRequest::Permission { .. } => false,
+    }
+}
+
+/// The auto-open candidate set: outstanding requests that have neither been
+/// presented (durably) nor locally guarded in this session. Never-presented
+/// requests must always pop up; presented-but-unanswered ones stay visible
+/// through the persistent awaiting-input hint and can be reopened manually.
+pub(crate) fn first_auto_open_pending_interactive_request<'a>(
+    requests: &'a [PendingInteractiveRequestResource],
+    seen_permission_request_ids: &BTreeSet<String>,
+    seen_user_input_request_ids: &BTreeSet<String>,
+) -> Option<&'a PendingInteractiveRequestResource> {
+    requests.iter().find(|request| {
+        !pending_interactive_request_is_seen(
+            request,
+            seen_permission_request_ids,
+            seen_user_input_request_ids,
+        ) && !pending_interactive_request_is_presented(request)
+    })
+}
+
 pub(crate) fn first_pending_interactive_request_by_kind(
     requests: &[PendingInteractiveRequestResource],
     kind: PendingInteractiveKind,

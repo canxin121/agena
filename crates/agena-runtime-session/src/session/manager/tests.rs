@@ -5273,7 +5273,6 @@ mod tests {
         assert!(finished.pending_interactive_requests().is_empty());
     }
 
-    #[derive(Default)]
     struct HookActivityProbe;
 
     #[agena_plugin_host::sdk::agena_plugin(
@@ -5488,5 +5487,137 @@ mod tests {
                 "missing hook activity for {expected}; got {hook_names:?}"
             );
         }
+    }
+    #[tokio::test]
+    async fn mark_interactive_request_presented_is_durable_and_idempotent() {
+        let manager = test_manager().await;
+        let options = SessionRunOptions {
+            model: ModelRef::new("present-test-provider", "present-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        let mut session = manager
+            .create_session(SessionCreateRequest {
+                title: "mark presented fixture".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create present fixture session");
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve present fixture message ids");
+        let call_id = 98;
+        let operation_id = "present-operation";
+        let mut message = build_message(
+            ids,
+            Role::Assistant,
+            ExecutionStatus::InProgress,
+            vec![PartContent::operation(OperationPart::pending(
+                call_id,
+                ToolInvocation::new("test.reply_probe.run", StructuredObject::default()),
+                "Run reply_probe.run",
+                TimeRange::default(),
+            ))],
+            MessageMetadata {
+                model_turn_id: Some(1),
+                model_provider_id: options.model.provider_id.to_string(),
+                model_id: options.model.model_id.to_string(),
+                ..MessageMetadata::default()
+            },
+        )
+        .expect("build present fixture operation message");
+        message.parts[0].operation_id = Some(operation_id.to_owned());
+        session.messages.push(message.clone());
+        session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist present fixture operation");
+        let pending = session.next_pending_tool().expect("pending present tool");
+        let request_id = format!("host-input:{}:{call_id}:0", session.id);
+        session = manager
+            .apply_user_input_request_with_id(
+                session,
+                &pending,
+                crate::message::AskUserToolInput {
+                    title: "Continue?".to_owned(),
+                    body_markdown: "Host tool is waiting.".to_owned(),
+                    kind: "single".to_owned(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
+                    auto_resolution_ms: Some(60_000),
+                    questions: vec![UserInputQuestion {
+                        id: "continue".to_owned(),
+                        header: String::new(),
+                        question: "Continue?".to_owned(),
+                        options: Vec::new(),
+                        multiple: false,
+                        allow_custom: true,
+                    }],
+                },
+                request_id.clone(),
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist present fixture user-input request");
+
+        let presented = |session: &Session| {
+            session
+                .pending_interactive_requests()
+                .into_iter()
+                .find(|resource| resource.request_id() == request_id.as_str())
+                .expect("pending user-input resource")
+        };
+        let is_presented = |resource: &agena_domain::PendingInteractiveRequest| {
+            resource
+                .as_user_input()
+                .is_some_and(|request| request.presented_at.is_some())
+        };
+        let resource = presented(&session);
+        assert!(
+            !is_presented(&resource),
+            "a freshly created request has not been presented yet"
+        );
+
+        let marked = manager
+            .mark_interactive_request_presented(session.id, request_id.clone())
+            .await
+            .expect("marking presented succeeds");
+        assert!(is_presented(&presented(&marked)));
+
+        // Idempotent replay: a second acknowledgement is a no-op, not an error.
+        let replay = manager
+            .mark_interactive_request_presented(session.id, request_id.clone())
+            .await
+            .expect("replay is a no-op");
+        assert!(is_presented(&presented(&replay)));
+
+        // Durability: a fresh load from the store still carries presented_at,
+        // which is what lets restart/multi-client reconciliation work.
+        let reloaded = manager
+            .store
+            .load_session(session.id, manager.execution_state().cache_policy())
+            .await
+            .expect("reload presented session from store");
+        assert!(is_presented(&presented(&reloaded)));
+
+        // Unknown request ids are rejected instead of silently succeeding.
+        manager
+            .mark_interactive_request_presented(session.id, "host-input:999999:1:0".to_owned())
+            .await
+            .expect_err("unknown request id must error");
     }
 }

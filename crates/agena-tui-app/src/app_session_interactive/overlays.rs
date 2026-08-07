@@ -6,6 +6,10 @@ impl App {
         };
         self.seen_user_input_request_ids
             .insert(request.request_id.clone());
+        // Persist the presentation: a presented-but-unanswered request is not
+        // forced open again after a restart or on another client; it stays
+        // reachable through the awaiting-input hint.
+        self.present_pending_interactive_request(session_id, request.request_id.clone());
         self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
             session_id, request,
         )));
@@ -110,11 +114,11 @@ impl App {
         }
     }
 
-    pub(crate) fn next_pending_interactive_overlay_target(
+    pub(crate) fn next_auto_open_pending_interactive_overlay_target(
         &self,
     ) -> Option<PendingInteractiveOverlayTarget> {
         let execution = self.transcript.execution.as_ref()?;
-        let resource = first_unseen_pending_interactive_request(
+        let resource = first_auto_open_pending_interactive_request(
             execution.pending_interactive_requests.as_slice(),
             &self.seen_permission_request_ids,
             &self.seen_user_input_request_ids,
@@ -186,7 +190,7 @@ impl App {
         let Some(execution) = self.transcript.execution.as_ref() else {
             return false;
         };
-        first_unseen_pending_interactive_request(
+        first_auto_open_pending_interactive_request(
             execution.pending_interactive_requests.as_slice(),
             &self.seen_permission_request_ids,
             &self.seen_user_input_request_ids,
@@ -214,7 +218,7 @@ impl App {
         {
             return;
         }
-        match self.next_pending_interactive_overlay_target() {
+        match self.next_auto_open_pending_interactive_overlay_target() {
             Some(PendingInteractiveOverlayTarget::Permission {
                 session_id,
                 request,
@@ -232,6 +236,10 @@ impl App {
             }) => {
                 self.seen_user_input_request_ids
                     .insert(request.request_id.clone());
+                self.present_pending_interactive_request(
+                    session_id,
+                    request.request_id.clone(),
+                );
                 self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
                     session_id, *request,
                 )));
@@ -239,6 +247,30 @@ impl App {
             }
             None => {}
         }
+    }
+
+    /// Fire-and-forget durable presentation acknowledgement for an interactive
+    /// user-input request. Best effort: a failed acknowledgement (for example
+    /// a race with the request being resolved) is logged and never surfaced,
+    /// because the request will simply auto-popup again on the next sync.
+    pub(crate) fn present_pending_interactive_request(
+        &mut self,
+        session_id: i64,
+        request_id: String,
+    ) {
+        let backend = self.backend.clone();
+        tokio::spawn(async move {
+            if let Err(error) = backend
+                .present_interactive_request(session_id, request_id)
+                .await
+            {
+                tracing::debug!(
+                    target: "agena::tui::interactive",
+                    %error,
+                    "failed to mark interactive request presented"
+                );
+            }
+        });
     }
 
     /// Queues a terminal attention notification for an incoming permission
@@ -566,6 +598,7 @@ fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) ->
         submit_label: value.submit_label,
         cancel_label: value.cancel_label,
         auto_resolution_ms: value.auto_resolution_ms,
+        presented_at: value.presented_at,
         questions: value
             .questions
             .into_iter()
@@ -685,8 +718,8 @@ use crate::{
     SessionModelChooserOverlay, SessionModelChooserPurpose, SessionNavigationOverlay,
     SessionNavigationQuery, SessionSearchOverlay, TimelineOverlay, TimelinePresentation,
     UserInputOverlay, UserInputQuestion, UserInputRequest, choice_overlay_clear_detail,
-    execution_pending_flash_key, first_pending_interactive_request_by_kind,
-    first_unseen_pending_interactive_request, path_browser_directory_input,
+    execution_pending_flash_key, first_auto_open_pending_interactive_request,
+    first_pending_interactive_request_by_kind, path_browser_directory_input,
     pending_interactive_kind_for_execution, permission_prompt_content, settings_clear_label,
     ui_text,
 };

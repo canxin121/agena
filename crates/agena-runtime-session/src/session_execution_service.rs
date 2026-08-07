@@ -120,6 +120,18 @@ pub trait SessionExecutionCommandService: Send + Sync {
         request: SessionExecutionReplyRequest<agena_domain::UserInputReply>,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 
+    /// Durable, idempotent acknowledgement that an interactive user-input
+    /// request has been shown to the user. Clients call this when they open
+    /// the request (fire-and-forget); the session manager persists the
+    /// presentation so a never-presented request still auto-popups after a
+    /// restart or on another client, while a presented-but-unanswered request
+    /// can be surfaced through a persistent attention hint.
+    async fn mark_interactive_request_presented(
+        &self,
+        session_id: i64,
+        request_id: String,
+    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
+
     async fn update_session_selection(
         &self,
         session_id: i64,
@@ -229,6 +241,14 @@ mod tests {
             Ok(SessionExecutionCommandOutcome::completed(
                 request.session_id,
             ))
+        }
+
+        async fn mark_interactive_request_presented(
+            &self,
+            session_id: i64,
+            _request_id: String,
+        ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
+            Ok(SessionExecutionCommandOutcome::completed(session_id))
         }
 
         async fn update_session_selection(

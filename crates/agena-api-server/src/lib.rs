@@ -303,6 +303,10 @@ pub fn router(state: AppState) -> Router {
                 post(rest::reply_user_input),
             )
             .route(
+                "/api/v1/sessions/{session_id}/interactive/{request_id}/present",
+                post(rest::mark_interactive_request_presented),
+            )
+            .route(
                 "/api/v1/sessions/{session_id}/rewind",
                 post(rest::rewind_session),
             )
@@ -515,6 +519,119 @@ mod router_contract_tests {
             agena_failure::FailureCategory::NotFound
         );
         assert_eq!(error.problem.user.fallback, "The resource was not found.");
+
+        let _ = std::fs::remove_dir_all(workspace_path);
+    }
+
+    // Runs on a multi-thread runtime like the real server. The session-state
+    // route assembles the system prompt, which dispatches tool definitions
+    // through the plugin host; the plugin host blocks on the ambient runtime
+    // handle, and a current-thread runtime would deadlock there.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mark_interactive_request_presented_route_rejects_unknown_requests() {
+        let runtime = bootstrap_application_services(RuntimeBootstrapRequest {
+            workspace_root: Some(std::env::temp_dir()),
+            database_url: Some("sqlite::memory:".to_owned()),
+            initialize_schema: true,
+            tracing_reload_handle: None,
+            ..RuntimeBootstrapRequest::default()
+        })
+        .await
+        .expect("build test runtime");
+        let app = router(AppState::from_application(application_for_test(&runtime)));
+
+        let workspace_path = std::env::temp_dir().join(format!(
+            "agena-api-server-present-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/v1/workspaces")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({"path": workspace_path}).to_string(),
+                    ))
+                    .expect("build create workspace request"),
+            )
+            .await
+            .expect("serve create workspace request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read workspace response");
+        let workspace: agena_api::resource::WorkspaceResource =
+            serde_json::from_slice(&body).expect("decode shared workspace response");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/api/v1/sessions")
+                    .header(http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(
+                        serde_json::json!({
+                            "workspace_id": workspace.id,
+                            "title": "present contract session"
+                        })
+                        .to_string(),
+                    ))
+                    .expect("build create session request"),
+            )
+            .await
+            .expect("serve create session request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read session response");
+        let session: agena_api::resource::SessionResource =
+            serde_json::from_slice(&body).expect("decode shared session response");
+
+        // The route is wired and maps the runtime command error through the
+        // standard failure contract. A request id that matches no pending
+        // user-input part is rejected by the real command path.
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post(format!(
+                    "/api/v1/sessions/{}/interactive/host-input:999999:1:0/present",
+                    session.id
+                ))
+                .body(axum::body::Body::empty())
+                .expect("build present request"),
+            )
+            .await
+            .expect("serve present request");
+        assert_eq!(response.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read present error body");
+        let error: agena_api::ApiError =
+            serde_json::from_slice(&body).expect("decode shared api error response");
+        assert_eq!(
+            error.problem.category,
+            agena_failure::FailureCategory::Internal
+        );
+
+        // A session with no pending requests reports an empty interactive list.
+        let response = app
+            .oneshot(
+                Request::get(format!("/api/v1/sessions/{}/state", session.id))
+                    .body(axum::body::Body::empty())
+                    .expect("build session state request"),
+            )
+            .await
+            .expect("serve session state request");
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read session state body");
+        let state: agena_application::dto::SessionExecutionResource =
+            serde_json::from_slice(&body).expect("decode shared session execution resource");
+        assert!(state.pending_interactive_requests.is_empty());
 
         let _ = std::fs::remove_dir_all(workspace_path);
     }

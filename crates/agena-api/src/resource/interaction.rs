@@ -16,6 +16,12 @@ pub struct UserInputRequest {
     pub cancel_label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
+    /// Durable presentation acknowledgement set when a client has shown this
+    /// request to the user. Outstanding requests with `presented_at == null`
+    /// must always be surfaced; presented-but-unanswered requests remain
+    /// visible through persistent attention hints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presented_at: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub questions: Vec<UserInputQuestion>,
     pub created_at: DateTime<Utc>,

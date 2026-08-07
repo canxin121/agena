@@ -2478,7 +2478,10 @@ impl SessionManager {
             kind: input.kind,
             submit_label: input.submit_label,
             cancel_label: input.cancel_label,
-            auto_resolution_ms: input.auto_resolution_ms,
+            auto_resolution_ms: super::super::helpers::effective_user_input_timeout_ms(
+                input.auto_resolution_ms,
+            ),
+            presented_at: None,
             questions: input.questions,
             created_at: Utc::now(),
         };

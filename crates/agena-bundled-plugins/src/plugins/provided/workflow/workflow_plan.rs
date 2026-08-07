@@ -1322,6 +1322,58 @@ impl WorkflowPlugin {
             })
     }
 
+    /// Resolve a host ask_user response into a review decision string. A
+    /// cancelled or timed-out request (no decision content) resolves to
+    /// "keep in planning": the plan was already returned to planning before
+    /// the review, so a missed review never strands the plan in a requested
+    /// phase waiting forever.
+    pub(in crate::plugins::provided::workflow) fn review_decision_from_response(
+        response: &agena_plugin_host::sdk::host_api::AskUserResponse,
+    ) -> String {
+        if response.cancelled {
+            return PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string();
+        }
+        Self::review_decision(response)
+            .unwrap_or_else(|| PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string())
+    }
+
+    /// Apply a review decision to the plan. Approvals move the plan to the
+    /// requested phase; every other decision (keep in planning, reject, free
+    /// text feedback, timeout fallback) leaves it in planning so the agent can
+    /// revise and propose again.
+    pub(in crate::plugins::provided::workflow) fn apply_review_decision(
+        plan: &mut WorkflowPlan,
+        decision: &str,
+        phase: WorkflowPlanPhase,
+        requested_autorun: Option<bool>,
+        completion_summary: Option<&str>,
+    ) -> SdkResult<()> {
+        match decision {
+            PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON => {
+                Self::set_plan_phase(plan, phase, completion_summary)?;
+                plan.autorun = true;
+            }
+            PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF
+            | PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE => {
+                Self::set_plan_phase(plan, phase, completion_summary)?;
+                plan.autorun = false;
+            }
+            PLAN_REVIEW_DECISION_APPROVE | PLAN_REVIEW_DECISION_APPROVE_REQUESTED => {
+                Self::set_plan_phase(plan, phase, completion_summary)?;
+                if let Some(autorun) = requested_autorun {
+                    plan.autorun = autorun;
+                }
+            }
+            PLAN_REVIEW_DECISION_CANCELLED => {
+                Self::set_plan_phase(plan, WorkflowPlanPhase::Cancelled, None)?;
+            }
+            _ => {
+                plan.phase = WorkflowPlanPhase::Planning;
+            }
+        }
+        Ok(())
+    }
+
     pub(in crate::plugins::provided::workflow) fn phase_review_transition_summary(
         phase: WorkflowPlanPhase,
         effective_autorun: bool,
@@ -1499,36 +1551,14 @@ impl WorkflowPlugin {
             ))
             .await?;
 
-        let decision = if response.cancelled {
-            PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string()
-        } else {
-            Self::review_decision(&response)
-                .unwrap_or_else(|| PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string())
-        };
-
-        match decision.as_str() {
-            PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON => {
-                Self::set_plan_phase(&mut plan, phase, completion_summary)?;
-                plan.autorun = true;
-            }
-            PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF
-            | PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE => {
-                Self::set_plan_phase(&mut plan, phase, completion_summary)?;
-                plan.autorun = false;
-            }
-            PLAN_REVIEW_DECISION_APPROVE | PLAN_REVIEW_DECISION_APPROVE_REQUESTED => {
-                Self::set_plan_phase(&mut plan, phase, completion_summary)?;
-                if let Some(autorun) = requested_autorun {
-                    plan.autorun = autorun;
-                }
-            }
-            PLAN_REVIEW_DECISION_CANCELLED => {
-                Self::set_plan_phase(&mut plan, WorkflowPlanPhase::Cancelled, None)?;
-            }
-            _ => {
-                plan.phase = WorkflowPlanPhase::Planning;
-            }
-        }
+        let decision = Self::review_decision_from_response(&response);
+        Self::apply_review_decision(
+            &mut plan,
+            &decision,
+            phase,
+            requested_autorun,
+            completion_summary,
+        )?;
         self.save_active_plan(&plan).await?;
 
         let output_text = if Self::is_review_feedback_decision(&decision) {

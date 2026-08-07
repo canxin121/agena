@@ -232,6 +232,17 @@ pub async fn dispatch_command(
                 .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
         }
+        Command::MarkInteractiveRequestPresented(MarkInteractiveRequestPresentedParams {
+            session_id,
+            request_id,
+        }) => {
+            let outcome = session_services
+                .commands
+                .mark_interactive_request_presented(session_id, request_id)
+                .await
+                .map_err(|error| ApplicationError::from_failure(error.failure))?;
+            execution_command_result(state, &session_services, outcome.session_id).await
+        }
         Command::UpdateSession(UpdateSessionParams {
             session_id,
             title,
@@ -388,7 +399,8 @@ use super::{
     ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
     DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams,
     ForkSessionParams, ImportSessionParams, ListSessionTreeParams, PermissionRuleWriteRequest,
-    ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+    MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams, ReplyPermissionParams,
+    ReplyUserInputParams,
     ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, StopActivityParams,
     SubmitMessageParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
     UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,

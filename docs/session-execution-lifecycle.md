@@ -59,6 +59,37 @@ On cancellation the processor:
 5. commits `RunAborted { reason: user_cancelled }`;
 6. returns `AppError::Cancelled`, allowing the lifecycle owner to emit `ExecutionFinished { outcome: cancelled }`.
 
+## Interactive request lifetime and durable presentation
+
+Interactive requests (Operation authorization and UserInput) must never block
+the host indefinitely, and a shown-but-unanswered request must never be lost.
+
+- **Bounded lifetime.** Every UserInput request carries an effective
+  auto-resolution timeout. When a plugin or host API does not specify one,
+  the runtime applies the default (`DEFAULT_USER_INPUT_TIMEOUT_MS`, 10
+  minutes); a requested value is capped at `MAX_USER_INPUT_TIMEOUT_MS` (24
+  hours). On expiry the existing `UserInputReplyKind::Timeout` path durably
+  resolves the pending part and wakes the awaiting execution, so the host is
+  never permanently blocked by a request nobody answered.
+- **Durable presentation acknowledgement.** The `presented_at` field on a
+  pending UserInput request records, on the request part itself, that a
+  client has shown the request to the user. `POST
+  /api/v1/sessions/{session_id}/interactive/{request_id}/present` (and the
+  in-process TUI backend equivalent) performs this acknowledgement
+  idempotently: the first call persists `presented_at`; later calls are
+  no-ops; an unknown request id is rejected.
+- **Clients reconcile against the durable field, not a volatile ledger.**
+  Auto-open eligibility is `outstanding && !presented_at && !locally-seen`.
+  A never-presented request still pops up after a restart or on another
+  client; a presented-but-unanswered request stays visible through a
+  persistent attention hint and can be reopened manually instead of
+  re-prompting a modal.
+- **Closing a modal must not discard the request.** ESC/close only removes
+  the local "seen" guard. User input requests then fall back to the
+  awaiting-input hint (and `open_pending_user_input`), while permission
+  requests (which have no durable presentation field) remain auto-open
+  candidates on the next sync until replied.
+
 ## Event protocol
 
 Every execution and model run has stable typed identity:
@@ -128,3 +159,7 @@ Any change to session execution should answer all of the following:
 - Does restart recovery produce durable terminal events instead of mutating a projection ad hoc?
 - Does the UI derive liveness only from `active_execution`?
 - Is the event log sufficient to rebuild the same terminal transcript from an empty projection?
+- Can every interactive request resolve within a bounded timeout, with the
+  default/cap enforced at the runtime layer rather than by each caller?
+- Is a shown-but-unanswered request recoverable from the durable
+  `presented_at` acknowledgement instead of a volatile client ledger?

@@ -23,7 +23,10 @@ mod interactive_request_visibility_tests {
     };
     use chrono::Utc;
 
-    use super::super::{first_unseen_pending_interactive_request, pending_interactive_request_id};
+    use super::super::{
+        first_auto_open_pending_interactive_request, first_unseen_pending_interactive_request,
+        pending_interactive_request_id, pending_interactive_request_is_presented,
+    };
 
     fn permission(request_id: &str) -> PendingInteractiveRequestResource {
         PendingInteractiveRequestResource {
@@ -67,6 +70,30 @@ mod interactive_request_visibility_tests {
                     submit_label: String::new(),
                     cancel_label: String::new(),
                     auto_resolution_ms: None,
+                    presented_at: None,
+                    questions: Vec::new(),
+                    created_at: Utc::now(),
+                },
+            },
+        }
+    }
+
+    fn presented_user_input(request_id: &str) -> PendingInteractiveRequestResource {
+        PendingInteractiveRequestResource {
+            session_id: 8,
+            parent_session_id: None,
+            task_id: None,
+            request: PendingInteractiveRequest::UserInput {
+                request: UserInputRequest {
+                    request_id: request_id.to_owned(),
+                    session_id: Some(8),
+                    title: "Choose".to_owned(),
+                    body_markdown: String::new(),
+                    kind: String::new(),
+                    submit_label: String::new(),
+                    cancel_label: String::new(),
+                    auto_resolution_ms: None,
+                    presented_at: Some(Utc::now()),
                     questions: Vec::new(),
                     created_at: Utc::now(),
                 },
@@ -131,6 +158,80 @@ mod interactive_request_visibility_tests {
         )
         .expect("the rejected user-input request must be offered again");
         assert_eq!(pending_interactive_request_id(next), "input-a");
+    }
+
+    #[test]
+    fn never_presented_user_input_is_not_durably_presented_and_auto_opens() {
+        let request = user_input("input-fresh");
+        assert!(!pending_interactive_request_is_presented(&request));
+        let requests = vec![request];
+        let next = first_auto_open_pending_interactive_request(
+            requests.as_slice(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .expect("a never-presented request must auto-open");
+        assert_eq!(pending_interactive_request_id(next), "input-fresh");
+    }
+
+    #[test]
+    fn presented_but_unanswered_user_input_is_not_auto_opened_again() {
+        let request = presented_user_input("input-presented");
+        assert!(pending_interactive_request_is_presented(&request));
+        let requests = vec![request];
+        let next = first_auto_open_pending_interactive_request(
+            requests.as_slice(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        );
+        assert!(
+            next.is_none(),
+            "presented-but-unanswered requests must stay behind the persistent hint"
+        );
+    }
+
+    #[test]
+    fn locally_seen_request_is_not_auto_opened_again() {
+        let requests = vec![user_input("input-seen")];
+        let next = first_auto_open_pending_interactive_request(
+            requests.as_slice(),
+            &BTreeSet::new(),
+            &BTreeSet::from(["input-seen".to_owned()]),
+        );
+        assert!(
+            next.is_none(),
+            "a request already shown this session must not re-popup"
+        );
+    }
+
+    #[test]
+    fn permission_requests_always_remain_auto_open_candidates_until_replied() {
+        let request = permission("permission-pending");
+        assert!(!pending_interactive_request_is_presented(&request));
+        let requests = vec![request];
+        let next = first_auto_open_pending_interactive_request(
+            requests.as_slice(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .expect("permissions have no durable presentation and must auto-open");
+        assert_eq!(pending_interactive_request_id(next), "permission-pending");
+    }
+
+    #[test]
+    fn auto_open_skips_presented_or_seen_but_keeps_later_fresh_requests() {
+        let requests = vec![
+            presented_user_input("input-presented"),
+            user_input("input-seen"),
+            user_input("input-fresh"),
+        ];
+        let next = first_auto_open_pending_interactive_request(
+            requests.as_slice(),
+            &BTreeSet::new(),
+            &BTreeSet::from(["input-seen".to_owned()]),
+        )
+        .expect("the fresh request must still auto-open");
+        assert_eq!(pending_interactive_request_id(next), "input-fresh");
     }
 }
 

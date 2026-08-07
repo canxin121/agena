@@ -9,6 +9,24 @@ use crate::session::Session;
 use agena_domain::{PermissionReply, UserInputReply, UserInputRequest};
 use agena_tool::ToolHumanRenderer;
 
+/// Default lifetime of an interactive user-input request when the caller does
+/// not specify `auto_resolution_ms`. Every interactive request is bounded so a
+/// host/plugin `ask_user` (for example the workflow plan approval) can never
+/// wedge a session forever when no client replies.
+pub(super) const DEFAULT_USER_INPUT_TIMEOUT_MS: u64 = 10 * 60 * 1000;
+
+/// Hard ceiling applied to any caller-supplied `auto_resolution_ms`. A plugin
+/// may choose a shorter deadline, never a longer one.
+pub(super) const MAX_USER_INPUT_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// Resolve the effective auto-resolution deadline for a user-input request.
+/// `None` becomes the system default and every value is capped, so the
+/// invariant "no interactive request blocks indefinitely" holds at the
+/// session-manager layer regardless of the calling plugin or tool.
+pub(super) fn effective_user_input_timeout_ms(requested: Option<u64>) -> Option<u64> {
+    Some(requested.unwrap_or(DEFAULT_USER_INPUT_TIMEOUT_MS).min(MAX_USER_INPUT_TIMEOUT_MS))
+}
+
 /// Derive the human-facing detail Markdown from a compact tool result payload.
 ///
 /// This is the runtime's single derivation entry: the durable record stores
@@ -682,5 +700,28 @@ mod tests {
                     && text.contains("[error]")
                     && text.contains("[warning]")
         )));
+    }
+
+    #[test]
+    fn user_input_timeout_defaults_and_caps_are_bounded() {
+        // No deadline requested: the system default applies so an interactive
+        // request can never block the host forever.
+        assert_eq!(
+            effective_user_input_timeout_ms(None),
+            Some(DEFAULT_USER_INPUT_TIMEOUT_MS)
+        );
+        // Caller-specified deadlines are honored below the ceiling.
+        assert_eq!(effective_user_input_timeout_ms(Some(1_000)), Some(1_000));
+        assert_eq!(effective_user_input_timeout_ms(Some(DEFAULT_USER_INPUT_TIMEOUT_MS)), Some(DEFAULT_USER_INPUT_TIMEOUT_MS));
+        // Anything above the ceiling is clamped so a plugin cannot create an
+        // effectively unbounded request.
+        assert_eq!(
+            effective_user_input_timeout_ms(Some(MAX_USER_INPUT_TIMEOUT_MS + 1)),
+            Some(MAX_USER_INPUT_TIMEOUT_MS)
+        );
+        assert_eq!(
+            effective_user_input_timeout_ms(Some(u64::MAX)),
+            Some(MAX_USER_INPUT_TIMEOUT_MS)
+        );
     }
 }

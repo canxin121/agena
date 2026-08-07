@@ -1070,6 +1070,82 @@ mod tests {
     }
 
     #[test]
+    fn timed_out_review_response_keeps_plan_in_planning() {
+        use std::collections::BTreeMap;
+
+        use agena_plugin_host::sdk::host_api::AskUserResponse;
+
+        // A timed-out ask_user arrives with no answers and no reply text; the
+        // runtime resolves the host request with UserInputReplyKind::Timeout.
+        let response = AskUserResponse {
+            reply: String::new(),
+            cancelled: false,
+            timed_out: true,
+            answers: BTreeMap::new(),
+        };
+        let decision = WorkflowPlugin::review_decision_from_response(&response);
+        assert_eq!(decision, super::PLAN_REVIEW_DECISION_KEEP_PLANNING);
+
+        let mut plan = sample_plan();
+        plan.phase = WorkflowPlanPhase::Active;
+        WorkflowPlugin::apply_review_decision(
+            &mut plan,
+            &decision,
+            WorkflowPlanPhase::Active,
+            None,
+            None,
+        )
+        .expect("keep-in-planning decision applies");
+        assert_eq!(plan.phase, WorkflowPlanPhase::Planning);
+    }
+
+    #[test]
+    fn cancelled_review_response_keeps_plan_in_planning() {
+        use agena_plugin_host::sdk::host_api::AskUserResponse;
+
+        let response = AskUserResponse {
+            reply: String::new(),
+            cancelled: true,
+            timed_out: false,
+            answers: Default::default(),
+        };
+        let decision = WorkflowPlugin::review_decision_from_response(&response);
+        assert_eq!(decision, super::PLAN_REVIEW_DECISION_KEEP_PLANNING);
+
+        let mut plan = sample_plan();
+        plan.phase = WorkflowPlanPhase::Blocked;
+        WorkflowPlugin::apply_review_decision(
+            &mut plan,
+            &decision,
+            WorkflowPlanPhase::Blocked,
+            None,
+            None,
+        )
+        .expect("keep-in-planning decision applies");
+        assert_eq!(plan.phase, WorkflowPlanPhase::Planning);
+    }
+
+    #[test]
+    fn phase_review_request_relies_on_runtime_default_timeout() {
+        use super::PlanReviewKind;
+
+        let plan = sample_plan();
+        for kind in [PlanReviewKind::Creation, PlanReviewKind::StatusChange] {
+            let request = WorkflowPlugin::phase_review_request(
+                &plan,
+                WorkflowPlanPhase::Active,
+                None,
+                None,
+                kind,
+            );
+            assert!(
+                request.auto_resolution_ms.is_none(),
+                "plan review must not set its own deadline; the runtime default timeout bounds it"
+            );
+        }
+    }
+
+    #[test]
     fn validate_plan_update_input_rejects_invalid_combinations() {
         let check_without_step = PlanUpdateInput {
             check: Some(1),

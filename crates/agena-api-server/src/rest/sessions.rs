@@ -434,6 +434,19 @@ pub async fn reply_user_input(
     session_execution_json_from_id(&state, outcome.session_id).await
 }
 
+pub async fn mark_interactive_request_presented(
+    State(state): State<AppState>,
+    Path((session_id, request_id)): Path<(i64, String)>,
+) -> Result<impl IntoResponse, ServerError> {
+    let services = state.application().session_execution_services()?;
+    let outcome = services
+        .commands
+        .mark_interactive_request_presented(session_id, request_id)
+        .await
+        .map_err(|error| ServerError::from_failure(error.failure))?;
+    session_execution_json_from_id(&state, outcome.session_id).await
+}
+
 pub async fn rewind_session(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,

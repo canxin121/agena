@@ -608,6 +608,7 @@ pub(crate) fn pending_interactive_request_from_domain(
                     submit_label: request.submit_label,
                     cancel_label: request.cancel_label,
                     auto_resolution_ms: request.auto_resolution_ms,
+                    presented_at: request.presented_at,
                     questions: request
                         .questions
                         .into_iter()
@@ -824,3 +825,77 @@ use super::{
     SessionUsageResource, non_empty, normalize_limit, sessions::subtask_status_from_domain,
 };
 use agena_provider::{ProviderCatalog, ProviderCatalogError};
+
+#[cfg(test)]
+mod pending_interactive_projection_tests {
+    use super::*;
+    use agena_domain::{PendingInteractiveRequest, UserInputRequest};
+    use chrono::Utc;
+
+    fn domain_user_input(
+        presented_at: Option<chrono::DateTime<Utc>>,
+    ) -> PendingInteractiveRequest {
+        PendingInteractiveRequest::UserInput {
+            request: UserInputRequest {
+                request_id: "host-input:1:98:0".to_owned(),
+                session_id: Some(1),
+                title: "Continue?".to_owned(),
+                body_markdown: String::new(),
+                kind: "single".to_owned(),
+                submit_label: String::new(),
+                cancel_label: String::new(),
+                auto_resolution_ms: Some(60_000),
+                presented_at,
+                questions: Vec::new(),
+                created_at: Utc::now(),
+            },
+        }
+    }
+
+    #[test]
+    fn user_input_projection_carries_durable_presented_at() {
+        let marked_at = Utc::now();
+        let wire = pending_interactive_request_from_domain(domain_user_input(Some(marked_at)));
+        let agena_api::resource::PendingInteractiveRequest::UserInput { request } = wire else {
+            panic!("expected the user-input wire variant");
+        };
+        assert_eq!(request.request_id, "host-input:1:98:0");
+        assert_eq!(request.presented_at, Some(marked_at));
+    }
+
+    #[test]
+    fn user_input_projection_defaults_presented_at_to_none() {
+        let wire = pending_interactive_request_from_domain(domain_user_input(None));
+        let agena_api::resource::PendingInteractiveRequest::UserInput { request } = wire else {
+            panic!("expected the user-input wire variant");
+        };
+        assert!(request.presented_at.is_none());
+    }
+
+    #[test]
+    fn permission_projection_has_no_durable_presentation_field() {
+        let wire = pending_interactive_request_from_domain(PendingInteractiveRequest::Permission {
+            request: agena_domain::PermissionRequest {
+                request_id: "permission-1".to_owned(),
+                session_id: Some(1),
+                action: agena_domain::PermissionAction::Tool {
+                    tool_name: "fs.write".to_owned(),
+                    qualifier: None,
+                },
+                related_actions: Vec::new(),
+                requested_actions: Vec::new(),
+                reason: "write the requested file".to_owned(),
+                explanation: String::new(),
+                source: None,
+                scope: None,
+                operator: None,
+                trace: Vec::new(),
+                created_at: Utc::now(),
+            },
+        });
+        let agena_api::resource::PendingInteractiveRequest::Permission { request } = wire else {
+            panic!("expected the permission wire variant");
+        };
+        assert_eq!(request.request_id, "permission-1");
+    }
+}

@@ -612,6 +612,35 @@ impl Backend {
         }
         .context("failed to rewind session to turn")
     }
+
+    /// Durable, idempotent acknowledgement that an interactive user-input
+    /// request has been shown to the user. The session manager persists the
+    /// presentation, so a never-presented request still auto-popups after a
+    /// restart or on another client, while a presented-but-unanswered request
+    /// is surfaced through a persistent attention hint instead of a forced
+    /// modal. Fire-and-forget friendly: replaying the same request is a no-op.
+    pub async fn present_interactive_request(
+        &self,
+        session_id: i64,
+        request_id: String,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.application,
+            ApiCommand::MarkInteractiveRequestPresented(
+                MarkInteractiveRequestPresentedParams {
+                    session_id,
+                    request_id,
+                },
+            ),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to mark interactive request presented")
+    }
 }
 
 use crate::Result;
@@ -619,7 +648,8 @@ use crate::{
     ActivityId, ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams,
     EventFilter, GetOperationDetailParams, GetSessionParams, HashSet, ListSessionsParams,
     LiveEvent, OperationDetailResource, Path, PathBuf, PermissionReply, PermissionReplyKind,
-    PermissionScope, Query, QueryResult, ReplyPermissionParams, ReplyUserInputParams,
+    MarkInteractiveRequestPresentedParams, PermissionScope, Query, QueryResult,
+    ReplyPermissionParams, ReplyUserInputParams,
     RewindSessionParams, RunOptions, Scope, SessionExecutionResource, SessionPermissionStudioState,
     SessionRefresh, SessionResource, SubmitMessageParams, UpdateSessionSelectionParams,
     UserInputReply, api_error, build_file_index, direct_path_candidate, dispatch,

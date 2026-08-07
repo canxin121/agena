@@ -28,7 +28,7 @@
 - 聚合入口：application 层 `spawn_notification_aggregator` 订阅 runtime 事件流，把 `message_part_checkpointed`（NoticePart）与 `background_activity_changed`（BackgroundActivity）投影进 `InMemoryNotificationStore`。
 - 消费端：Web `useNotifications`（REST + SSE `/api/v1/notifications/stream`）；TUI 通过 `Application.notifications()` 读同一 store。
 - 插件：manifest 声明 `ui.display: Vec<PluginDisplayContribution>`（无 location/color）；运行时一次性通知走 `host.notify(PluginNotifyRequest)`（severity + actions）。
-- 保留：`ui_statusline_contribute` / `statusline_segments` 为 deprecated 桥接层（terminal activity + workflow plan 仍用）；如需彻底删除可另行推进。
+- 已删除：`ui_statusline_contribute` / `statusline_segments` 旧命令式桥接层；插件动态显示状态统一走 `host.display_contribute` / `display_remove`（`PluginDisplayContribution`，无 location/color，host 决定放置）。
 
 ---
 

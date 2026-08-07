@@ -19,7 +19,7 @@
 - API：`GET /api/v1/notifications`、`POST /api/v1/notifications/{id}/dismiss`、`POST /api/v1/notifications/{id}/actions/{action_id}`、`GET /api/v1/notifications/stream`（SSE：replay + resumed + live / lagged / subscription_closed）。
 - Web：`useNotifications`（REST + SSE）→ toaster/banner；ChatPage / RuntimeOverview / ActivitiesPage / UsagePage 消费统一 store。
 - TUI：`NotificationStore`（同一 InMemory store 的本地句柄）替代 `Option<UiNotice>`；footer / chips / header / activities 面板读统一模型；`flash_*` 走统一 sink。
-- 插件：manifest `ui.display` 声明式贡献（`PluginDisplayContribution`，无 location/color）；一次性通知 `host.notify(PluginNotifyRequest)`（severity + actions）。旧 `ui_statusline_contribute` 保留为 deprecated 桥接层。
+- 插件：manifest `ui.display` 声明式贡献（`PluginDisplayContribution`，无 location/color）；一次性通知 `host.notify(PluginNotifyRequest)`（severity + actions）；动态显示状态走 `host.display_contribute` / `display_remove`。旧 `ui_statusline_contribute` / `statusline_segments` 通道已删除。
 
 ### 已删除的旧通道
 

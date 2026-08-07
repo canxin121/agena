@@ -193,12 +193,12 @@ export type PluginUiAction =
   | { kind: 'open_url'; url: string }
   | { kind: 'submit_prompt'; prompt: string }
 
-export type PluginTuiStatuslineSegment = {
+export type PluginDisplayContribution = {
   plugin_id: string
-  segment_id: string
-  content: string
+  id: string
+  kind: string
   priority: number
-  color?: string | null
+  content: Record<string, unknown>
 }
 
 export type PluginUiThemePalette = {
@@ -208,15 +208,6 @@ export type PluginUiThemePalette = {
   colors: Record<string, string>
 }
 
-export type PluginTuiContentBlock = {
-  plugin_id: string
-  id: string
-  title: string
-  body?: string
-  location: string
-  priority: number
-  color?: string | null
-}
 
 export type PluginStudioCommand = {
   plugin_id: string
@@ -265,9 +256,8 @@ export type PluginStudioView = {
 
 export type PluginUiCatalog = {
   tui: {
-    statusline_segments?: PluginTuiStatuslineSegment[]
+    display?: PluginDisplayContribution[]
     themes?: PluginUiThemePalette[]
-    content_blocks?: PluginTuiContentBlock[]
   }
   studio: {
     commands?: PluginStudioCommand[]

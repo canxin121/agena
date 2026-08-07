@@ -271,8 +271,8 @@ const manifestFacts = computed<ManifestFact[]>(() => {
       value: `${readArray(studio.commands).length} commands · ${readArray(studio.controls).length} controls · ${readArray(studio.views).length} views`,
     },
     {
-      label: 'TUI UI',
-      value: `${readArray(tui.statusline_segments).length} statusline · ${readArray(tui.themes).length} themes · ${readArray(tui.content_blocks).length} blocks`,
+            label: 'TUI UI',
+      value: `${readArray(tui.display).length} display · ${readArray(tui.themes).length} themes`,
     },
   ]
 })

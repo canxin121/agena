@@ -299,6 +299,10 @@ impl RuntimeSnapshot {
             .as_deref()
     }
 
+    pub(crate) fn default_selection(&self) -> agena_domain::ExecutionSelection {
+        self.state.resolution().default_selection.clone()
+    }
+
     pub(crate) fn ui_config(&self) -> UiConfig {
         self.state.resolution().ui.clone()
     }

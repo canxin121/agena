@@ -198,6 +198,7 @@ const {
     localCommandNotice,
     providerModels,
     providers,
+    runtime,
     selectedAdapterId,
     selectedModelId,
     selectedProviderId,

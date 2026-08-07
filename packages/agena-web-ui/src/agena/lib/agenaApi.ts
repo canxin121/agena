@@ -87,6 +87,7 @@ export type RuntimeStatus = {
     evictions: number
   } | null
   model_catalog?: ModelCatalogSummary | null
+  default_selection?: DefaultSelectionResource | null
   background_tasks: RuntimeBackgroundTask[]
   automation: RuntimeAutomationResource
   operator: {
@@ -511,6 +512,13 @@ export type BackgroundActivityLogResource = {
   completion_reason?: string | null
 }
 
+export type DefaultSelectionResource = {
+  provider?: string | null
+  adapter?: string | null
+  model?: string | null
+  thinking_mode?: string | null
+  speed_mode?: string | null
+}
 
 export type ProviderSummary = {
   provider_id: string
@@ -1301,12 +1309,14 @@ export async function fetchUsageStats(
   return await apiJson<UsageStats>(`/api/v1/usage${suffix ? `?${suffix}` : ''}`)
 }
 
-export async function fetchActivities(input: {
-  kinds?: string[]
-  statuses?: string[]
-  sessionId?: number | null
-  activeOnly?: boolean
-} = {}): Promise<BackgroundActivityResource[]> {
+export async function fetchActivities(
+  input: {
+    kinds?: string[]
+    statuses?: string[]
+    sessionId?: number | null
+    activeOnly?: boolean
+  } = {},
+): Promise<BackgroundActivityResource[]> {
   const params = new URLSearchParams()
   if (input.kinds?.length) params.set('kinds', input.kinds.join(','))
   if (input.statuses?.length) params.set('statuses', input.statuses.join(','))
@@ -1331,23 +1341,20 @@ export async function fetchActivityLogs(
 }
 
 export async function stopActivity(activityId: string): Promise<BackgroundActivityResource> {
-  return await apiJson<BackgroundActivityResource>(
-    `/api/v1/activities/${encodeURIComponent(activityId)}/stop`,
-    { method: 'POST' },
-  )
+  return await apiJson<BackgroundActivityResource>(`/api/v1/activities/${encodeURIComponent(activityId)}/stop`, {
+    method: 'POST',
+  })
 }
 
 export async function dismissActivity(activityId: string): Promise<BackgroundActivityResource> {
-  return await apiJson<BackgroundActivityResource>(
-    `/api/v1/activities/${encodeURIComponent(activityId)}/dismiss`,
-    { method: 'POST' },
-  )
+  return await apiJson<BackgroundActivityResource>(`/api/v1/activities/${encodeURIComponent(activityId)}/dismiss`, {
+    method: 'POST',
+  })
 }
 
 export async function clearFinishedActivities(): Promise<number> {
   return await apiJson<number>('/api/v1/activities/clear-finished', { method: 'POST' })
 }
-
 
 export async function reloadRuntime(): Promise<RuntimeBackgroundTaskStartResponse> {
   return await apiJson<RuntimeBackgroundTaskStartResponse>('/api/v1/runtime/reload', {

@@ -197,11 +197,12 @@ impl Backend {
     }
 
     /// Resolve the effective think/speed mode selectors for the model implied
-    /// by `request`. Prefers the mode the model marks as default; when the
-    /// model exposes modes but none is marked default (common for catalog
-    /// models), falls back to the first listed mode so the composer status can
-    /// always show a value once a model is resolvable. Returns `(None, None)`
-    /// when the model cannot be resolved or exposes no modes.
+    /// by `request`, matching what a fresh session would apply. When the
+    /// request does not pin a model, the configured default selection's
+    /// thinking/speed modes take precedence (the runtime applies them to new
+    /// sessions); otherwise the resolved model's own default (marked default,
+    /// then first listed mode) is used. Returns `(None, None)` when the model
+    /// cannot be resolved or exposes no modes.
     pub fn resolved_model_default_modes(
         &self,
         request: &RunOptions,
@@ -216,10 +217,30 @@ impl Backend {
         else {
             return (None, None);
         };
-        (
-            default_thinking_mode_selector(&options.thinking_modes),
-            default_speed_mode_name(&options.speed_modes),
-        )
+        let selection = self.application.provider_catalog().default_selection();
+        let configured_thinking = selection
+            .thinking_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let configured_speed = selection
+            .speed_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if request.model.is_none() {
+            (
+                configured_thinking.or_else(|| default_thinking_mode_selector(&options.thinking_modes)),
+                configured_speed.or_else(|| default_speed_mode_name(&options.speed_modes)),
+            )
+        } else {
+            (
+                default_thinking_mode_selector(&options.thinking_modes),
+                default_speed_mode_name(&options.speed_modes),
+            )
+        }
     }
 
     pub fn runtime_thinking_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {

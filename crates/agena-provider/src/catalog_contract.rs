@@ -432,6 +432,12 @@ pub trait ProviderCatalog: Send + Sync {
 
     fn default_model(&self) -> Result<Option<ModelRef>, ProviderCatalogError>;
 
+    /// The effective default execution selection (provider/adapter/model and
+    /// default thinking/speed/verbosity modes) from the merged configuration.
+    /// This is the selection the runtime applies when a fresh session starts
+    /// without explicit run options.
+    fn default_selection(&self) -> agena_domain::ExecutionSelection;
+
     /// Resolve a CLI/application model target against the current configured
     /// provider catalog. `target` may be a provider or a fully qualified
     /// model target; implementations observe runtime reloads.

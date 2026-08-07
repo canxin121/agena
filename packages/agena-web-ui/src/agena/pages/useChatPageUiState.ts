@@ -10,6 +10,7 @@ import {
   providerModelThinkingModeSelector,
   type ProviderModel,
   type ProviderSummary,
+  type RuntimeStatus,
   type WorkspaceResource,
 } from '../lib/agenaApi'
 import { buildRuntimeSectionPath, type RuntimeRouteSection } from './runtimePageStateModel'
@@ -30,6 +31,7 @@ export type ChatPageUiStateInput = {
   localCommandNotice: Ref<string>
   providerModels: Record<string, ProviderModel[]>
   providers: Ref<ProviderSummary[]>
+  runtime: Ref<RuntimeStatus | null>
   selectedAdapterId: Ref<string>
   selectedModelId: Ref<string>
   selectedProviderId: Ref<string>
@@ -194,20 +196,40 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   /**
    * Resolve the default think/speed mode selectors for the currently
    * selected model, matching the defaults the runtime applies when a session
-   * starts. Prefers the mode the model marks as default; when the model
-   * exposes modes but none is marked default (common for catalog models),
-   * falls back to the first listed mode so the active-session status stays
-   * populated. Returns empty strings when the model cannot be resolved or
-   * exposes no modes.
+   * starts. When the run-options model matches the configured default
+   * execution selection (or nothing is chosen yet), the selection's
+   * thinking/speed modes take precedence because the runtime applies them
+   * to new sessions; otherwise the resolved model's own default (marked
+   * default, then first listed mode) is used. Returns empty strings when
+   * the model cannot be resolved or exposes no modes.
    */
   function modelDefaultModes(): { thinking: string; speed: string } {
     const model = selectedProviderModel()
     const thinkingModes = model?.thinking_modes || []
     const thinkingMode = thinkingModes.find((mode) => mode.default) ?? thinkingModes[0]
-    const thinking = thinkingMode ? providerModelThinkingModeSelector(thinkingMode) : ''
+    const thinkingFallback = thinkingMode ? providerModelThinkingModeSelector(thinkingMode) : ''
     const speedEntries = Object.entries(model?.speed_modes || {})
     const speedEntry = speedEntries.find(([, mode]) => mode.default) ?? speedEntries[0]
-    return { thinking, speed: speedEntry?.[0] || '' }
+    const speedFallback = speedEntry?.[0] || ''
+
+    const selection = input.runtime.value?.default_selection
+    if (!selection) return { thinking: thinkingFallback, speed: speedFallback }
+
+    const selectedProvider = input.selectedProviderId.value.trim()
+    const selectedAdapter = input.selectedAdapterId.value.trim()
+    const selectedModel = input.selectedModelId.value.trim()
+    const defaultProvider = (selection.provider || '').trim()
+    const defaultAdapter = (selection.adapter || '').trim()
+    const defaultModel = (selection.model || '').trim()
+    const matchesDefaultSelection =
+      (!selectedProvider || !defaultProvider || selectedProvider === defaultProvider) &&
+      (!selectedAdapter || !defaultAdapter || selectedAdapter === defaultAdapter) &&
+      (!selectedModel || !defaultModel || selectedModel === defaultModel)
+    if (!matchesDefaultSelection) return { thinking: thinkingFallback, speed: speedFallback }
+
+    const thinking = (selection.thinking_mode || '').trim() || thinkingFallback
+    const speed = (selection.speed_mode || '').trim() || speedFallback
+    return { thinking, speed }
   }
 
   function modelVerbosityOptions(): Array<{ id: string; label: string; description: string }> {

@@ -224,86 +224,129 @@ impl App {
                 .map(|model| model_label(&model))
         };
 
-        if let Some(execution) = self.transcript.execution.as_ref() {
-            let model_part = self
-                .current_session_model_ref()
-                .map(|model| model_label(&model))
-                .or_else(|| execution_model_name_status_label(&execution.execution))
-                .or_else(fallback_model);
-            let token_usage = agena_tui::session_status::token_usage_status(
-                execution.usage.current_tokens,
-                execution.usage.projected_tokens,
-                execution.usage.model_context_window_tokens,
-            );
-            // Order: model, think, speed, then the context percentage at the
-            // far right — think/speed stay directly adjacent to the model
-            // name instead of having the usage percentage between them.
-            let mut parts =
-                agena_tui::session_status::session_summary_status_parts(model_part, None, None);
-            if let Some(thinking_mode) = execution.execution.model_thinking_mode.as_deref()
-                && !thinking_mode.trim().is_empty()
-            {
-                parts.push(self.i18n.text_args(
-                    "session-status-thinking",
-                    &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
-                ));
-            }
-            if let Some(speed_mode) = execution.execution.model_speed_mode.as_deref()
-                && !speed_mode.trim().is_empty()
-            {
-                parts.push(self.i18n.text_args(
-                    "session-status-speed",
-                    &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
-                ));
-            }
-            parts.push(token_usage.label());
-            if !parts.is_empty() {
-                return parts;
-            }
-        }
+        // Model label: prefer the active session's model (run-options
+        // override or the persisted execution context), then the execution
+        // label, then the resolved default model so the status stays
+        // populated even before a session exists.
+        let model_part = self
+            .current_session_model_ref()
+            .map(|model| model_label(&model))
+            .or_else(|| {
+                self.transcript
+                    .execution
+                    .as_ref()
+                    .and_then(|execution| execution_model_name_status_label(&execution.execution))
+            })
+            .or_else(fallback_model);
 
-        // No session is open: show the run-options model stack (which the
-        // model chooser edits even before a session exists), falling back to
-        // the resolved default model and its default think/speed modes.
-        let mut parts = agena_tui::session_status::session_summary_status_parts(
-            self.run_options
-                .model
-                .as_ref()
-                .map(model_label)
-                .or_else(fallback_model),
-            None,
-            None,
-        );
+        // Think/speed: prefer the execution context (the modes a run actually
+        // used), then run-options overrides, then the resolved model's
+        // default modes so the modes are always visible before the first
+        // message is sent.
         let (default_thinking, default_speed) = self
             .backend
             .resolved_model_default_modes(&self.run_options.to_request());
-        let thinking_mode = self
-            .run_options
-            .thinking_mode
-            .as_deref()
-            .or(default_thinking.as_deref());
-        if let Some(thinking_mode) = thinking_mode.filter(|value| !value.trim().is_empty()) {
+        let thinking_mode = status_mode_value(
+            self.transcript
+                .execution
+                .as_ref()
+                .and_then(|execution| execution.execution.model_thinking_mode.as_deref()),
+            self.run_options.thinking_mode.as_deref(),
+            default_thinking.as_deref(),
+        );
+        let speed_mode = status_mode_value(
+            self.transcript
+                .execution
+                .as_ref()
+                .and_then(|execution| execution.execution.model_speed_mode.as_deref()),
+            self.run_options.speed_mode.as_deref(),
+            default_speed.as_deref(),
+        );
+
+        // Order: model, think, speed, then the context percentage at the
+        // far right — think/speed stay directly adjacent to the model name
+        // instead of having the usage percentage between them.
+        let mut parts =
+            agena_tui::session_status::session_summary_status_parts(model_part, None, None);
+        if let Some(thinking_mode) = thinking_mode {
             parts.push(self.i18n.text_args(
                 "session-status-thinking",
                 &agena_tui::fl_args!("value" => ui_text::thinking_mode_display_value(thinking_mode)),
             ));
         }
-        let speed_mode = self
-            .run_options
-            .speed_mode
-            .as_deref()
-            .or(default_speed.as_deref());
-        if let Some(speed_mode) = speed_mode.filter(|value| !value.trim().is_empty()) {
+        if let Some(speed_mode) = speed_mode {
             parts.push(self.i18n.text_args(
                 "session-status-speed",
                 &agena_tui::fl_args!("value" => ui_text::speed_mode_display_value(speed_mode)),
             ));
         }
+        if let Some(execution) = self.transcript.execution.as_ref() {
+            let token_usage = agena_tui::session_status::token_usage_status(
+                execution.usage.current_tokens,
+                execution.usage.projected_tokens,
+                execution.usage.model_context_window_tokens,
+            );
+            parts.push(token_usage.label());
+        }
         parts
     }
+}
+
+/// Picks the first non-empty status mode value from the execution context,
+/// run-options overrides, and the resolved model defaults. The composer
+/// status shows the modes a run actually used once a message has been sent,
+/// but keeps the pending/effective modes visible before the first message.
+fn status_mode_value<'a>(
+    execution_mode: Option<&'a str>,
+    run_options_mode: Option<&'a str>,
+    default_mode: Option<&'a str>,
+) -> Option<&'a str> {
+    execution_mode
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| run_options_mode.filter(|value| !value.trim().is_empty()))
+        .or_else(|| default_mode.filter(|value| !value.trim().is_empty()))
 }
 use crate::{
     App, SessionActivity, UiResult, current_spinner_millis, execution_model_name_status_label,
     execution_model_status_label, model_name_status_label,
     pending_interactive_counts_for_execution, spinner_frame, ui_text,
 };
+
+#[cfg(test)]
+mod status_mode_value_tests {
+    use super::status_mode_value;
+
+    #[test]
+    fn prefers_the_execution_context_mode() {
+        assert_eq!(
+            status_mode_value(Some("high"), Some("low"), Some("medium")),
+            Some("high"),
+        );
+    }
+
+    #[test]
+    fn falls_back_to_run_options_when_execution_mode_is_empty() {
+        assert_eq!(
+            status_mode_value(Some("   "), Some("low"), Some("medium")),
+            Some("low"),
+        );
+        assert_eq!(
+            status_mode_value(None, Some("fast"), Some("balanced")),
+            Some("fast"),
+        );
+    }
+
+    #[test]
+    fn falls_back_to_defaults_before_any_message_is_sent() {
+        assert_eq!(
+            status_mode_value(None, None, Some("medium")),
+            Some("medium"),
+        );
+    }
+
+    #[test]
+    fn returns_none_when_no_mode_is_available() {
+        assert_eq!(status_mode_value(None, None, None), None);
+        assert_eq!(status_mode_value(Some(""), Some("  "), Some("")), None);
+    }
+}

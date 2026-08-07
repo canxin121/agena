@@ -211,35 +211,35 @@ pub struct CustomNotification {
     pub data: Option<serde_json::Value>,
 }
 
-/// 用户可执行的单一动作
+/// 通知自身的操作（对通知对象的操作；前端本地处理，不经服务端）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationControl {
+    Dismiss,
+    Copy,
+    Pin,
+}
+
+/// 通知上渲染的按钮：外部动作入口（不属于通知领域，点击后转交各自系统执行）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "target", rename_all = "snake_case")]
+pub enum ActionTarget {
+    /// 失败恢复指令（agena_failure::RecoveryDirective；运行时翻译为命令）
+    Recovery(RecoveryDirective),
+    /// 通用命令（应用命令注册表 / 插件命令）
+    Command { command: String, input: Option<serde_json::Value> },
+    /// 前端路由（含 open_url）
+    Navigate { route: String },
+    /// 复制文本
+    Copy { text: String },
+}
+
+/// 用户可执行的单一动作（入口）
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct NotificationAction {
     pub id: String,
     pub label: String,
-    pub effect: NotificationEffect,
-}
-
-/// 动作效果（替代 TUI recovery_action 命令映射 + Web 命令结果枚举）
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "effect", rename_all = "snake_case")]
-pub enum NotificationEffect {
-    Refresh,
-    Reauthenticate { provider: String },
-    OpenSettings,
-    OpenPermissions,
-    Retry,
-    ChooseAlternative,
-    RestartPlugin { plugin_id: String },
-    RestartRuntime,
-    StopActivity { activity_id: String },
-    DismissActivity { activity_id: String },
-    DismissNotification,
-    ApprovePermission { request_id: String },
-    ReplyUserInput { request_id: String },
-    Navigate { route: String },
-    RunCommand { command: String },
-    OpenUrl { url: String },
-    Copy { text: String },
+    pub target: ActionTarget,
 }
 
 /// 一条完整通知
@@ -253,7 +253,8 @@ pub struct Notification {
     pub source: NotificationSource,       // runtime | app | plugin | background | frontend
     pub summary: String,
     pub detail: Option<String>,
-    pub actions: Vec<NotificationAction>,
+    pub control: NotificationControl,  // 通知自身允许的控制操作（Dismiss/Copy/Pin）
+    pub actions: Vec<NotificationAction>,  // 外部动作入口（点击后转交各自系统）
     pub priority: i32,
     pub dedup_key: Option<String>,
     pub created_at_ms: i64,
@@ -270,7 +271,7 @@ pub trait NotificationService: Send + Sync {
     async fn list(&self, filter: NotificationFilter) -> Result<Vec<Notification>, NotificationError>;
     /// 忽略/关闭
     async fn dismiss(&self, id: NotificationId, reason: Option<String>) -> Result<(), NotificationError>;
-    /// 执行动作（转交命令注册表）
+    /// 执行入口动作（转交对应系统：命令注册表 / 路由 / 剪贴板）
     async fn resolve_action(&self, id: NotificationId, action_id: String) -> Result<(), NotificationError>;
     /// 订阅推送（SSE 后端）
     fn subscribe(&self, filter: NotificationFilter) -> NotificationSubscription;
@@ -321,7 +322,7 @@ SSE 事件统一为 `notification`，载荷即 `NotificationResource`；保留 `
   - plan 进度改为 `kind = Progress { current, total }`，不再用 `plan:{session_id}` 段 id 暗示位置。
 - **命令式只留一个统一入口**：插件要「现在告诉用户一件事」，只调用 `host.notify(NotifyRequest)`（对应现有 ui_statusline_contribute 的收敛）；宿主负责落 Notification、去重、决定 surface。
 - **禁止直接操作 UI**：移除/冻结 `tui content block location=composer_footer` 这类「插件指定显示位置」的能力；改为插件声明贡献内容，宿主分配到 footer/chip/页面。
-- **Studio 命令输出**：把 `PluginCommandOutput` 收敛为 `NotificationEffect` 的一子集（message -> Notice；submit_prompt / open_route / open_url / invoke_tool -> 对应 effect），前端只消费统一 action。
+- **Studio 命令输出**：把 `PluginCommandOutput` 收敛为 `ActionTarget` 的一子集（Message -> 生成 kind=Notice 通知；SubmitPrompt / InvokeTool / InvokeCommand -> Command；OpenUrl / OpenPluginWorkbench -> Navigate），前端只消费统一入口。
 
 ### 3.3 trait 签名草案
 
@@ -356,7 +357,7 @@ pub trait PluginDisplayHost: Send + Sync {
 |---|---|
 | `host.ui_statusline_contribute(segment_id="agena.terminal.activity", content="\"running\"", priority=i32::MAX-1)` | 声明 `kind=TerminalActivity`；宿主在 run.pre/run.post 钩子时自动更新 |
 | `host.ui_statusline_contribute(segment_id="plan:3", content="2/5 done", priority=120)` | 声明 `kind=Progress{2,5}`，scope=Session(3)；宿主决定右下 chip 还是 footer |
-| `PluginCommandOutput::Message("done")` | `NotificationEffect::Notice` -> 统一 action |
+| `PluginCommandOutput::Message("done")` | 生成 kind=Notice 通知；无需入口 |
 | `manifest.ui.tui.content_blocks` 指定 composer_footer | `manifest.ui.display.contributions` 声明 FooterBlock，位置由宿主分配 |
 
 ---
@@ -382,14 +383,14 @@ pub fn is_expired(notification: &Notification, now_ms: i64) -> bool;
   - composer chip（Progress / ActivityChanged / model 状态）
   - 头部 right（Run 状态 / spinner）
   - activities 面板（BackgroundTask scope）
-- `TuiActionDispatcher`：把 `NotificationEffect` 转成现有命令（复用 commands.rs 的 CommandId 注册表）。
+- `TuiActionDispatcher`：把 `ActionTarget` 转交对应系统（Recovery -> 命令注册表、Command -> 命令、Navigate -> 路由、Copy -> 剪贴板；复用 commands.rs 的 CommandId 注册表）；`NotificationControl`（Dismiss/Copy/Pin）由前端本地直接处理。
 - 删除：`app_transcript_actions.rs` 的 flash_* 自研 emit；`UiNotice` 收敛为 domain `Notification` 的 TUI 视图。
 
 ### 4.3 Web 适配（packages/agena-web-ui）
 
 - `useNotifications` composable：REST 查询 + SSE 订阅统一 `/notifications/stream`。
 - `NotificationToaster` / `NotificationBanner`：同一渲染器消费 NotificationResource，替代 errorMessage/localCommandNotice 的分散写入。
-- `notificationActions`：把 action effect 转成 router.push / api 调用 / copy。
+- `notificationActions`：把 `ActionTarget` 转成 router.push / api 调用 / 剪贴板；`NotificationControl`（Dismiss/Copy/Pin）本地处理。
 - Activities / RuntimeOverview / Chat 面板全部改为读同一 store。
 
 ### 4.4 终端 chrome 适配
@@ -402,13 +403,16 @@ pub fn is_expired(notification: &Notification, now_ms: i64) -> bool;
 
 ---
 
-## 5. 用户交互统一（Action 执行管道）
+## 5. 用户交互统一（控制 + 入口转交）
 
-- 领域定义 `NotificationEffect` 枚举；每个前端只有一个 `dispatch_effect(effect)`。
-- 服务端提供统一 action 执行端点 `POST /api/v1/notifications/{id}/actions/{action_id}`：
-  - 服务端把 effect 映射到应用命令（复用 agena-application dispatch 命令注册表）。
-  - 前端不再各自实现「Sign in / Open settings / Retry」等命令映射。
-- 交互型通知（权限、用户输入）是 `NotificationEffect::ApprovePermission / ReplyUserInput` 的特化：既有摘要/详情/动作，又有专用交互对话框；两个前端共用同一请求模型（现状已统一在 SessionExecutionResource，保持）。
+- **通知自身控制（NotificationControl，≤3 种）**：Dismiss / Copy / Pin。它们是对「通知对象」的操作，由前端本地直接处理，不需要服务端参与（dismissed 状态同步走 REST）。
+- **外部入口（NotificationAction → ActionTarget，4 种）**：通知只渲染按钮；点击后把 ActionTarget 转交对应系统：
+  - `Recovery(RecoveryDirective)` → 失败恢复命令注册表（agena_failure 领域；现状 recovery_action() 已把 directive 翻译成命令字符串，如 provider.authenticate）
+  - `Command { command, input }` → 应用命令注册表 / 插件命令
+  - `Navigate { route }` → 前端路由（含 open_url）
+  - `Copy { text }` → 剪贴板
+- 服务端提供统一入口执行端点 `POST /api/v1/notifications/{id}/actions/{action_id}`：服务端把 target 映射到应用命令；前端不再各自实现「Sign in / Open settings / Retry」等命令映射。
+- **权限 / 用户输入不是通知动作**：它们是会话执行资源的专用交互（PermissionRequest / UserInputRequest，已统一在 SessionExecutionResource），各自前端保留专用对话框；通知最多携带指向它们的入口（Navigate）。
 
 ---
 
@@ -514,10 +518,10 @@ pub fn is_expired(notification: &Notification, now_ms: i64) -> bool;
 
 ---
 
-## 附录 A：通知与显示分类全表（三轴：Kind × Surface × Effect）
+## 附录 A：通知与显示分类全表（三轴：Kind × Surface × 交互）
 
-> 回答「通知和显示会有哪些类型、一共多少种」：**内容 16 种 Kind、位置 16 处 Surface、交互 17 种 Effect**。
-> 任何一次显示 = 一个 Kind（内容） + 一个 Surface（位置） + 0..n 个 Effect（可交互动作）。
+> 回答「通知和显示会有哪些类型、一共多少种」：**内容 16 种 Kind、位置 16 处 Surface；交互分两层——通知自身操作 3 种（NotificationControl）+ 外部动作入口 4 种（ActionTarget）**。
+> 任何一次显示 = 一个 Kind（内容） + 一个 Surface（位置） + (0..n 自身操作 + 0..n 外部入口)。
 
 ### A.1 内容轴：NotificationKind（16 种）
 
@@ -561,37 +565,36 @@ pub fn is_expired(notification: &Notification, now_ms: i64) -> bool;
 | 15 | BackgroundTask | 后台任务面板 | Web 后台任务卡片、TUI 活动面板任务分组 |
 | 16 | Log | 仅记录（不主动弹出） | 活动日志流（e> 前缀）、日志面板 |
 
-### A.3 交互轴：NotificationEffect（17 种）
+### A.3 交互轴 1：NotificationControl（通知自身操作，3 种）
 
-| # | Effect | 语义 | 现状对应 |
+| # | Control | 语义 | 前端处理 |
 |---|---|---|---|
-| 1 | Refresh | 刷新会话/列表 | RecoveryDirective::Refresh |
-| 2 | Reauthenticate { provider } | 重新认证 | RecoveryDirective::Reauthenticate |
-| 3 | OpenSettings | 打开设置 | RecoveryDirective::OpenSettings |
-| 4 | OpenPermissions | 打开权限页 | RecoveryDirective::RequestPermission |
-| 5 | Retry | 重试 | RecoveryDirective::Retry |
-| 6 | ChooseAlternative | 选择替代方案 | RecoveryDirective::ChooseAlternative |
-| 7 | RestartPlugin { plugin_id } | 重启插件 | RecoveryDirective::RestartPlugin |
-| 8 | RestartRuntime | 重启运行时 | RecoveryDirective::RestartRuntime |
-| 9 | StopActivity { activity_id } | 停止后台活动 | activities stop API |
-| 10 | DismissActivity { activity_id } | 忽略活动 | activities dismiss API |
-| 11 | DismissNotification | 关闭本通知 | toast 关闭 / banner 关闭 |
-| 12 | ApprovePermission { request_id } | 批准权限 | permission-replies API |
-| 13 | ReplyUserInput { request_id } | 提交用户输入 | user-input-replies API |
-| 14 | Navigate { route } | 前端跳转 | open_route |
-| 15 | RunCommand { command } | 执行命令/提交提示 | submit_prompt / invoke_tool |
-| 16 | OpenUrl { url } | 打开链接 | open_url |
-| 17 | Copy { text } | 复制文本 | 复制按钮 |
+| 1 | Dismiss | 关闭/忽略本通知 | toast/banner 关闭按钮；dismissed=true 走 REST |
+| 2 | Copy | 复制通知内容 | 剪贴板 |
+| 3 | Pin | 置顶/稍后处理（可选） | 前端置顶状态 |
 
-### A.4 组合规则（一个 Kind 可落多个 Surface）
+### A.4 交互轴 2：ActionTarget（外部入口，4 种；不属于通知领域）
+
+| # | Target | 语义 | 归属领域 | 现状对应 |
+|---|---|---|---|---|
+| 1 | Recovery(RecoveryDirective) | 失败恢复指令（8 种：Refresh / Reauthenticate / OpenSettings / OpenPermissions / Retry / ChooseAlternative / RestartPlugin / RestartRuntime） | agena_failure | RecoveryDirective -> 命令字符串（session.refresh / provider.authenticate / ...） |
+| 2 | Command { command, input } | 执行命令 / 提交提示 | 应用命令注册表 / 插件命令 | PluginCommandOutput{SubmitPrompt, InvokeTool, InvokeCommand}、submit_prompt |
+| 3 | Navigate { route } | 前端跳转（含 open_url） | 前端路由 | open_route / open_url / OpenPluginWorkbench |
+| 4 | Copy { text } | 复制内容 | 剪贴板 | 复制按钮 |
+
+> 曾并入通知模型的 12 个系统操作全部回到各自领域：8 个 RecoveryDirective（agena_failure）、StopActivity/DismissActivity（activities REST API）、ApprovePermission/ReplyUserInput（SessionExecutionResource 会话交互）。
+
+### A.5 组合规则（一个 Kind 可落多个 Surface）
 
 - **主 Surface**：宿主按 kind + scope + priority 决定主位置（如 Notice → Banner/Toast、Progress → Toast、Status → StatusLine）。
 - **次 Surface（镜像）**：同一通知可同步镜像到 Log（可追溯）、TerminalTitle/TerminalBell（终端可达性）、ComposerChip（常驻计数）。
+- **控制与入口分离**：NotificationControl 由前端本地处理；ActionTarget 经 `POST /api/v1/notifications/{id}/actions/{action_id}` 转交对应系统。
 - 例：`ToolCall` 主 Surface = StatusLine，同时镜像 Log；`PermissionRequest` 主 Surface = PermissionDialog + ComposerChip 待审批角标。
 
-### A.5 计数汇总
+### A.6 计数汇总
 
 - **Kind：16**（含 1 个插件扩展点 Custom）
 - **Surface：16**
-- **Effect：17**
-- 任何一次显示 = 1 Kind × ≥1 Surface × 0..n Effect
+- **NotificationControl：3**（通知自身操作）
+- **ActionTarget：4**（外部入口；其中 Recovery 承载 8 个 agena_failure 指令，不属于通知领域）
+- 任何一次显示 = 1 Kind × ≥1 Surface × (0..n 自身操作 + 0..n 外部入口)

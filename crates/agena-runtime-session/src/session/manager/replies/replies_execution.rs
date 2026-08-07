@@ -2646,6 +2646,18 @@ impl SessionManager {
                     if let Some(event) =
                         handler.refresh_elapsed_title(stream_started.elapsed().as_secs())
                     {
+                        if let crate::activity::ActivityLiveEvent::TitleChanged {
+                            activity_id,
+                            title,
+                        } = &event
+                        {
+                            crate::session::store::update_activity_label(
+                                &self.store.db,
+                                *activity_id,
+                                title,
+                            )
+                            .await?;
+                        }
                         self.broadcast_activity_v2(session.id, event)?;
                     }
                 }
@@ -2736,20 +2748,23 @@ impl SessionManager {
             }
         };
 
-        // Publish the terminal v2 activity node once the stream finished
-        // successfully. The durable write happens in the legacy success path;
-        // the live wire event is broadcast in memory only.
-        if let Some(mut handler) = activity_handler.take() {
-            let node = handler.finish(
+        // Assemble the terminal v2 activity node once the stream finished
+        // successfully. The live wire event is broadcast immediately; the
+        // durable write happens after every legacy checkpoint so the v2
+        // payload (raw output) is the final word for this node.
+        let terminal_node = activity_handler.take().map(|mut handler| {
+            handler.finish(
                 agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(
                     streamed_output,
                 )),
                 agena_domain::ActivityState::Completed,
-            );
+            )
+        });
+        if let Some(node) = &terminal_node {
             self.broadcast_activity_v2(
                 session.id,
                 crate::activity::ActivityLiveEvent::Upserted {
-                    node: Box::new(node),
+                    node: Box::new(node.clone()),
                 },
             )?;
         }
@@ -2758,8 +2773,17 @@ impl SessionManager {
             .store
             .load_session(session.id, state.cache_policy())
             .await?;
-        self.apply_tool_success(session, pending_tool, execution, None, state)
-            .await
+        let session = self
+            .apply_tool_success(session, pending_tool, execution, None, state)
+            .await?;
+        // Durable v2 terminal write (07 §8.2 upsert_content_node): the raw
+        // output lands exactly once, after every legacy checkpoint, and the
+        // revision guard lets the v2 payload win over any earlier projection.
+        if let Some(node) = &terminal_node {
+            crate::session::store::upsert_content_node(&self.store.db, session.id, node)
+                .await?;
+        }
+        Ok(session)
     }
 
     pub(in crate::session::manager) async fn apply_tool_cancellation(

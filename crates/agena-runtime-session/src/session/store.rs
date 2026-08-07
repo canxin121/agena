@@ -114,6 +114,7 @@ pub(crate) struct SessionStore {
     pub(crate) session_summary_repository: Arc<dyn SessionSummaryRepository>,
 }
 
+mod activity_v2;
 mod core;
 mod event_rewrite;
 mod helpers;
@@ -122,6 +123,7 @@ mod ids;
 mod types;
 mod workspace;
 
+pub(crate) use self::activity_v2::*;
 pub(crate) use self::core::LEASE_STALENESS_MS;
 pub(crate) use self::event_rewrite::*;
 pub(crate) use self::helpers::*;

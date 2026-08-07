@@ -31,13 +31,15 @@ pub use crate::host_api::{
     HostStorageRecord, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
     HostThemeListResponse, HostThemePalette, HostThemeRegisterRequest, HostThemeRemoveRequest,
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
-    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, NoopHostClient, ToolRegistryChangeKind,
+    HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, NoopHostClient, PluginNotifyAction,
+    PluginNotifyActionTarget, PluginNotifyRequest, ToolRegistryChangeKind,
     ToolRegistryChangedEvent,
 };
 pub use crate::macro_support::{schema_example_texts, schema_usage_text};
 pub use crate::manifest::{
-    HookSubscription, InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PLUGIN_WORKBENCH_TAB_IDS,
-    PathAccessSpec, PathKind, PluginCommandDefinition, PluginManifest, PluginSkillDefinition,
+    ContributionKind, HookSubscription, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
+    PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition,
+    PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginSkillDefinition,
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
     PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiContentBlock,
     PluginTuiStatuslineSegment, PluginTuiThemeColors, PluginTuiUiContributions, PluginUiAction,

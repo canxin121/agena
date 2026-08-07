@@ -154,6 +154,12 @@ impl Backend {
         self.application.plugin_runtime().statusline_segments()
     }
 
+    /// Plugin notifications emitted through the unified `host.notify` entry
+    /// (Phase 6). Bounded recent queue; the TUI dedupes/consumes each intent.
+    pub fn plugin_host_notifications(&self) -> Vec<agena_plugin_host::HostNotification> {
+        self.application.plugin_runtime().host_notifications()
+    }
+
     pub fn plugin_tui_content_blocks(
         &self,
     ) -> Vec<agena_plugin_host::PluginTuiContentBlockCatalogItem> {

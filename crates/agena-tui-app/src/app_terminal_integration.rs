@@ -248,29 +248,21 @@ pub(crate) fn drain_terminal_notification(
     Ok(Some(method))
 }
 
-/// Maps the plugin's `agena.terminal.notify` statusline segment to a terminal
-/// notification method. The plugin keeps the segment present across frames, so
-/// the App records each distinct intent as consumed once and fires it a single
-/// time.
+/// Maps a plugin notification emitted through the unified `host.notify` entry
+/// to a terminal notification method. Each distinct intent is recorded as
+/// consumed once so a bell fires a single time even while the host keeps the
+/// bounded recent queue around.
 fn take_plugin_notify(app: &mut App) -> Option<NotificationMethod> {
-    let segment = app
-        .backend
-        .plugin_statusline_segments()
-        .into_iter()
-        .find(|segment| segment.segment_id == "agena.terminal.notify")?;
-    if !matches!(
-        segment.content.trim(),
-        "\"done\"" | "done" | "\"blocked\"" | "blocked"
-    ) {
-        return None;
+    for notification in app.backend.plugin_host_notifications() {
+        let key = format!(
+            "{}:{}:{}",
+            notification.plugin_id, notification.severity, notification.body
+        );
+        if app.terminal_integration.notify_consumed_once(&key) {
+            return current_notification_method(app);
+        }
     }
-    if !app
-        .terminal_integration
-        .notify_consumed_once(&segment.content)
-    {
-        return None;
-    }
-    current_notification_method(app)
+    None
 }
 
 /// The localized notification summary text shown by the desktop notification

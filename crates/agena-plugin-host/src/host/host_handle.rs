@@ -46,6 +46,7 @@ impl HostHandle {
             statuses,
             logs,
             statusline: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
+            host_notifications: Arc::new(RwLock::new(std::collections::VecDeque::new())),
             themes: Arc::new(RwLock::new(std::collections::BTreeMap::new())),
             quotas: Arc::new(crate::quota::QuotaRegistry::default()),
             plugin_transports: tokio::sync::RwLock::new(HashMap::new()),
@@ -786,6 +787,13 @@ impl HostHandle {
                         serde_json::to_value(&HostStatuslineRemoveResponse { removed })
                             .map_err(|e| PluginError::invalid_params(e.to_string()))
                     }
+                    method::HOST_NOTIFY => {
+                        let plugin_id = plugin_id
+                            .ok_or_else(|| host_unavailable("notify requires plugin id"))?;
+                        let p: HostNotifyParams = parse(params)?;
+                        self.push_host_notification(&plugin_id, p.request);
+                        Ok(serde_json::Value::Object(Default::default()))
+                    }
                     method::HOST_UI_THEME_REGISTER => {
                         let plugin_id = plugin_id.ok_or_else(|| {
                             host_unavailable("ui.theme.register requires plugin id")
@@ -1038,6 +1046,38 @@ impl HostHandle {
         false
     }
 
+    /// Record a plugin notification intent through the unified `host.notify`
+    /// entry. The queue is bounded: oldest entries drop first so a frontend
+    /// that polls late never observes unbounded growth.
+    pub(super) fn push_host_notification(&self, plugin_id: &str, req: PluginNotifyRequest) {
+        const HOST_NOTIFICATION_QUEUE_LIMIT: usize = 64;
+        let Ok(plugin_id) = plugin_id.parse::<PluginKey>() else {
+            return;
+        };
+        if let Ok(mut guard) = self.host_notifications.write() {
+            guard.push_back(HostNotification {
+                plugin_id: plugin_id.to_string(),
+                title: req.title,
+                body: req.body,
+                severity: req.severity,
+                session_id: req.session_id,
+                actions: req.actions,
+            });
+            while guard.len() > HOST_NOTIFICATION_QUEUE_LIMIT {
+                guard.pop_front();
+            }
+        }
+    }
+
+    /// Snapshot of the recent plugin notifications (newest last). Frontends
+    /// dedupe/consume by `plugin_id:severity:body`.
+    pub fn host_notifications(&self) -> Vec<HostNotification> {
+        self.host_notifications
+            .read()
+            .map(|guard| guard.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
     pub fn statusline_list_response(&self) -> HostStatuslineListResponse {
         let mut segments: Vec<HostStatuslineSegment> = self
             .statusline
@@ -1108,21 +1148,21 @@ use super::{
     HostListToolsParams, HostLogParams, HostLspListDiagnosticsParams, HostLspListServersParams,
     HostMcpAddServerParams, HostMcpListServersParams, HostMcpRemoveServerParams,
     HostMessageSubtaskParams, HostMonitorListParams, HostMonitorReadParams, HostMonitorStartParams,
-    HostMonitorStopParams, HostPluginStatusGetParams, HostPluginStatusGetResponse,
-    HostPluginStatusListResponse, HostReadSubtaskOutputParams, HostRegisteredToolDescriptor,
-    HostRegisteredToolListResponse, HostRunSubtaskParams, HostSchedulerCreateParams,
-    HostSchedulerDeleteParams, HostSchedulerListParams, HostSecretDeleteParams,
-    HostSecretGetParams, HostSecretListParams, HostSecretSetParams, HostSetSessionModelParams,
-    HostSnapshotListParams, HostStatuslineContributeParams, HostStatuslineContributeRequest,
-    HostStatuslineListResponse, HostStatuslineRemoveParams, HostStatuslineRemoveResponse,
-    HostStatuslineSegment, HostStorageDeleteParams, HostStorageGetParams, HostStorageListParams,
-    HostStorageSetParams, HostSubscribeParams, HostThemeListResponse, HostThemePalette,
-    HostThemeRegisterParams, HostThemeRegisterRequest, HostThemeRemoveParams,
-    HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterParams,
-    HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams, PluginError, PluginKey,
-    PluginLogRecord, PluginLogStore, PluginToolRegistry, PluginTransport, RegisteredTool, RwLock,
-    ScopedHostClient, ToolKey, ToolRegistryChangeKind, ToolRegistryChangedEvent,
-    ToolRegistryEventListener, VecDeque, callback_context_from_params, host_api, host_status_from,
-    host_unavailable, method, parse, scoped_context, transport_to_plugin_error, unix_timestamp_ms,
-    validate_tool_definition,
+    HostMonitorStopParams, HostNotification, HostNotifyParams, HostPluginStatusGetParams,
+    HostPluginStatusGetResponse, HostPluginStatusListResponse, HostReadSubtaskOutputParams,
+    HostRegisteredToolDescriptor, HostRegisteredToolListResponse, HostRunSubtaskParams,
+    HostSchedulerCreateParams, HostSchedulerDeleteParams, HostSchedulerListParams,
+    HostSecretDeleteParams, HostSecretGetParams, HostSecretListParams, HostSecretSetParams,
+    HostSetSessionModelParams, HostSnapshotListParams, HostStatuslineContributeParams,
+    HostStatuslineContributeRequest, HostStatuslineListResponse, HostStatuslineRemoveParams,
+    HostStatuslineRemoveResponse, HostStatuslineSegment, HostStorageDeleteParams,
+    HostStorageGetParams, HostStorageListParams, HostStorageSetParams, HostSubscribeParams,
+    HostThemeListResponse, HostThemePalette, HostThemeRegisterParams, HostThemeRegisterRequest,
+    HostThemeRemoveParams, HostThemeRemoveResponse, HostToolMutationResponse,
+    HostToolRegisterParams, HostToolRemoveParams, HostToolUpdateParams, HostUnsubscribeParams,
+    PluginError, PluginKey, PluginLogRecord, PluginLogStore, PluginNotifyRequest,
+    PluginToolRegistry, PluginTransport, RegisteredTool, RwLock, ScopedHostClient, ToolKey,
+    ToolRegistryChangeKind, ToolRegistryChangedEvent, ToolRegistryEventListener, VecDeque,
+    callback_context_from_params, host_api, host_status_from, host_unavailable, method, parse,
+    scoped_context, transport_to_plugin_error, unix_timestamp_ms, validate_tool_definition,
 };

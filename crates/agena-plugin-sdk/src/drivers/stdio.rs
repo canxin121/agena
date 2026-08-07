@@ -38,8 +38,8 @@ use crate::host_api::{
     HostThemeRemoveResponse, HostToolMutationResponse, HostToolRegisterRequest,
     HostToolRemoveRequest, HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle,
     MonitorReadRequest, MonitorReadResponse, MonitorStartRequest, MonitorStopRequest,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    SubtaskControlResponse, ToolDescriptor,
+    PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest,
+    RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor,
 };
 use crate::plugin::Plugin;
 use crate::rpc::{
@@ -920,6 +920,19 @@ impl HostClient for StdioHostClient {
             }),
         )
         .await
+    }
+
+    async fn notify(&self, req: PluginNotifyRequest) -> crate::error::Result<()> {
+        let _: serde_json::Value = self
+            .call(
+                method::HOST_NOTIFY,
+                serde_json::json!({
+                    "request": req,
+                    "context": crate::host_api::current_host_callback_context(),
+                }),
+            )
+            .await?;
+        Ok(())
     }
 
     async fn ui_theme_register(&self, req: HostThemeRegisterRequest) -> crate::error::Result<()> {

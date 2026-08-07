@@ -14,7 +14,7 @@ use std::sync::{Arc, RwLock};
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
-    HostClient, HostStatuslineContributeRequest, HostStatuslineRemoveRequest,
+    HostClient, HostStatuslineContributeRequest, HostStatuslineRemoveRequest, PluginNotifyRequest,
 };
 use agena_plugin_host::sdk::{
     AgentStopInput, AgentStopPatch, InitContext, InitOutcome, PostRunInput, PreRunInput,
@@ -28,17 +28,10 @@ pub(crate) const TERMINAL_PLUGIN_ID: &str = "agena.terminal";
 /// exactly these ids to reconstruct the terminal state.
 pub(crate) const TITLE_SEGMENT_ID: &str = "agena.terminal.title";
 pub(crate) const ACTIVITY_SEGMENT_ID: &str = "agena.terminal.activity";
-/// One-shot attention notification intent. Written before `activity` so the
-/// TUI can consume it on the next frame and clear it.
-pub(crate) const NOTIFY_SEGMENT_ID: &str = "agena.terminal.notify";
 
-/// Statusline priority for the notification-intent segment. This must stay
-/// strictly above `ACTIVITY_SEGMENT_PRIORITY` so the notify intent outranks
-/// the activity state in the plugin UI catalog. `i32::MAX + 1` cannot be
-/// represented: it overflow-panics in debug builds and wraps to `i32::MIN`
-/// in release, demoting the notify segment to the bottom of the catalog.
-pub(crate) const NOTIFY_SEGMENT_PRIORITY: i32 = i32::MAX;
-/// Statusline priority for the activity segment, one below the notify intent.
+/// Statusline priority for the activity segment. One-shot attention moved to
+/// the unified `host.notify` entry (Phase 6), so only the activity state
+/// remains on the deprecated statusline bridge until Phase 7 cleanup.
 pub(crate) const ACTIVITY_SEGMENT_PRIORITY: i32 = i32::MAX - 1;
 
 /// A lifecycle event that should raise terminal attention.
@@ -69,6 +62,24 @@ pub(crate) struct TerminalPlugin {
     host: RwLock<Option<Arc<dyn HostClient>>>,
     activity: Arc<RwLock<TerminalActivity>>,
     notify: Arc<RwLock<Option<TerminalNotify>>>,
+}
+
+/// Build the unified notify request for a terminal lifecycle event (Phase 6).
+/// The host decides surface/priority; the TUI consumes it for terminal bells.
+fn notify_request(kind: TerminalNotify) -> PluginNotifyRequest {
+    PluginNotifyRequest {
+        title: String::new(),
+        body: match kind {
+            TerminalNotify::Done => "run completed".to_owned(),
+            TerminalNotify::Blocked => "run blocked".to_owned(),
+        },
+        severity: match kind {
+            TerminalNotify::Done => "success".to_owned(),
+            TerminalNotify::Blocked => "error".to_owned(),
+        },
+        session_id: None,
+        actions: Vec::new(),
+    }
 }
 
 #[agena_plugin_host::sdk::agena_plugin(
@@ -123,23 +134,10 @@ impl TerminalPlugin {
         )
         .unwrap_or_default()
         .to_string();
-        let notify = self
-            .notify
-            .read()
-            .ok()
-            .and_then(|guard| *guard)
-            .and_then(|kind| serde_json::to_value(kind).ok())
-            .map(|value| value.to_string());
-        // Publish notify before activity so the TUI can consume and clear it.
-        if let Some(notify) = notify {
-            let _ = host
-                .ui_statusline_contribute(HostStatuslineContributeRequest {
-                    segment_id: NOTIFY_SEGMENT_ID.to_owned(),
-                    content: notify,
-                    priority: NOTIFY_SEGMENT_PRIORITY,
-                    color: None,
-                })
-                .await;
+        // One-shot attention notification via the unified notify entry. The
+        // host decides surface; the TUI consumes it for terminal bells.
+        if let Some(kind) = self.notify.read().ok().and_then(|guard| *guard) {
+            let _ = host.notify(notify_request(kind)).await;
         }
         let _ = host
             .ui_statusline_contribute(HostStatuslineContributeRequest {
@@ -149,9 +147,8 @@ impl TerminalPlugin {
                 color: None,
             })
             .await;
-        // The TUI consumes the notify intent by reading the segment. Keep the
-        // segment present so it is not re-armed; the App clears it after firing
-        // a notification.
+        // The activity segment stays present as the TUI's authoritative
+        // idle/running/blocked source on the deprecated statusline bridge.
     }
 
     /// Clear the statusline segments on shutdown.
@@ -167,11 +164,6 @@ impl TerminalPlugin {
         let _ = host
             .ui_statusline_remove(HostStatuslineRemoveRequest {
                 segment_id: TITLE_SEGMENT_ID.to_owned(),
-            })
-            .await;
-        let _ = host
-            .ui_statusline_remove(HostStatuslineRemoveRequest {
-                segment_id: NOTIFY_SEGMENT_ID.to_owned(),
             })
             .await;
     }
@@ -262,13 +254,20 @@ mod tests {
     }
 
     #[test]
-    fn statusline_priorities_keep_notify_above_activity_without_overflow() {
-        assert_eq!(NOTIFY_SEGMENT_PRIORITY, i32::MAX);
+    fn statusline_activity_priority_stays_high() {
         assert_eq!(ACTIVITY_SEGMENT_PRIORITY, i32::MAX - 1);
-        assert!(
-            NOTIFY_SEGMENT_PRIORITY > ACTIVITY_SEGMENT_PRIORITY,
-            "notify must outrank activity"
-        );
+    }
+
+    #[test]
+    fn notify_request_maps_terminal_lifecycle_to_severity() {
+        let done = notify_request(TerminalNotify::Done);
+        assert_eq!(done.body, "run completed");
+        assert_eq!(done.severity, "success");
+        assert!(done.actions.is_empty());
+
+        let blocked = notify_request(TerminalNotify::Blocked);
+        assert_eq!(blocked.body, "run blocked");
+        assert_eq!(blocked.severity, "error");
     }
 
     #[test]

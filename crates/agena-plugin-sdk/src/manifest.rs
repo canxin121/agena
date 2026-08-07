@@ -578,6 +578,10 @@ impl ToolDisplayPreset {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginUiContributions {
+    /// Declarative display contributions (Phase 6): pure content plus a kind,
+    /// no location/color. The host decides placement and priority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub display: Vec<PluginDisplayContribution>,
     #[serde(default, skip_serializing_if = "PluginTuiUiContributions::is_empty")]
     pub tui: PluginTuiUiContributions,
     #[serde(default, skip_serializing_if = "PluginStudioUiContributions::is_empty")]
@@ -586,7 +590,7 @@ pub struct PluginUiContributions {
 
 impl PluginUiContributions {
     pub fn is_empty(&self) -> bool {
-        self.tui.is_empty() && self.studio.is_empty()
+        self.display.is_empty() && self.tui.is_empty() && self.studio.is_empty()
     }
 }
 
@@ -630,6 +634,39 @@ pub struct PluginTuiStatuslineSegment {
     pub priority: i32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<PluginTuiColor>,
+}
+
+/// Declarative plugin display contribution (Phase 6). Pure content plus a
+/// kind; the host decides placement and priority. No location/color fields
+/// leak into the plugin contract.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginDisplayContribution {
+    pub id: String,
+    pub kind: ContributionKind,
+    #[serde(default)]
+    pub priority: i32,
+    pub content: PluginDisplayContent,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContributionKind {
+    StatusLineText,
+    Progress,
+    TerminalTitle,
+    TerminalNotify,
+    TerminalActivity,
+    FooterBlock,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PluginDisplayContent {
+    Text { text: String },
+    Progress { current: u32, total: u32 },
+    TerminalActivity { value: String },
+    TerminalNotify { value: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -894,9 +931,49 @@ fn default_studio_view_kind() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PluginTuiColor, PluginTuiThemeColors};
+    use super::{
+        ContributionKind, PluginDisplayContent, PluginDisplayContribution, PluginTuiColor,
+        PluginTuiThemeColors, PluginUiContributions,
+    };
     use crate::manifest_support::normalize_schema_json;
     use serde_json::json;
+
+    #[test]
+    fn display_contribution_round_trips_without_location_or_color() {
+        let contribution = PluginDisplayContribution {
+            id: "plan:3".to_owned(),
+            kind: ContributionKind::Progress,
+            priority: 120,
+            content: PluginDisplayContent::Progress {
+                current: 2,
+                total: 5,
+            },
+        };
+        let wire = serde_json::to_value(&contribution).expect("serialize");
+        assert!(wire.get("location").is_none());
+        assert!(wire.get("color").is_none());
+        let restored: PluginDisplayContribution =
+            serde_json::from_value(wire).expect("deserialize");
+        assert_eq!(restored, contribution);
+    }
+
+    #[test]
+    fn ui_contributions_accept_declarative_display_channel() {
+        let manifest_ui = PluginUiContributions {
+            display: vec![PluginDisplayContribution {
+                id: "terminal.activity".to_owned(),
+                kind: ContributionKind::TerminalActivity,
+                priority: i32::MAX - 1,
+                content: PluginDisplayContent::TerminalActivity {
+                    value: "idle".to_owned(),
+                },
+            }],
+            ..PluginUiContributions::default()
+        };
+        let wire = serde_json::to_value(&manifest_ui).expect("serialize");
+        assert!(wire.get("display").is_some());
+        assert!(!manifest_ui.is_empty());
+    }
 
     #[test]
     fn normalize_schema_preserves_property_names() {

@@ -38,8 +38,9 @@ use crate::sdk::host_api::{
     HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
     HostToolUpdateRequest, LogLevel, MessageSubtaskRequest, MonitorHandle, MonitorReadRequest,
     MonitorReadResponse, MonitorStartRequest, MonitorStopRequest, NoopHostClient,
-    ReadSubtaskOutputRequest, ReadSubtaskOutputResponse, RunSubtaskRequest, RunSubtaskResponse,
-    SubtaskControlResponse, ToolDescriptor, ToolRegistryChangeKind, ToolRegistryChangedEvent,
+    PluginNotifyAction, PluginNotifyRequest, ReadSubtaskOutputRequest, ReadSubtaskOutputResponse,
+    RunSubtaskRequest, RunSubtaskResponse, SubtaskControlResponse, ToolDescriptor,
+    ToolRegistryChangeKind, ToolRegistryChangedEvent,
 };
 use crate::sdk::rpc::method;
 use crate::sdk::{
@@ -504,6 +505,25 @@ impl StaticPluginRegistration {
     }
 }
 
+/// A plugin-emitted notification intent through the unified `host.notify`
+/// entry (Phase 6). The host keeps a bounded recent queue for frontends;
+/// surface/priority/dedupe decisions stay on the host side.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HostNotification {
+    pub plugin_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    /// One of `info` | `success` | `warning` | `error`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub severity: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<PluginNotifyAction>,
+}
+
 pub struct PluginHostBuildConfig {
     pub static_plugins: Vec<StaticPluginRegistration>,
     pub config: PluginsConfig,
@@ -547,6 +567,7 @@ pub struct HostHandle {
     statuses: Arc<crate::status::StatusRegistry>,
     logs: Arc<PluginLogStore>,
     statusline: Arc<RwLock<std::collections::BTreeMap<(PluginKey, String), HostStatuslineSegment>>>,
+    host_notifications: Arc<RwLock<std::collections::VecDeque<HostNotification>>>,
     themes: Arc<RwLock<BTreeMap<(PluginKey, String), HostThemePalette>>>,
     quotas: Arc<crate::quota::QuotaRegistry>,
     /// Plugin transport registry shared by the parent [`PluginHost`]. Lets
@@ -869,6 +890,13 @@ struct HostStatuslineContributeParams {
 #[derive(serde::Deserialize)]
 struct HostStatuslineRemoveParams {
     request: HostStatuslineRemoveRequest,
+    #[serde(rename = "context", default)]
+    _context: Option<HostCallbackContext>,
+}
+
+#[derive(serde::Deserialize)]
+struct HostNotifyParams {
+    request: PluginNotifyRequest,
     #[serde(rename = "context", default)]
     _context: Option<HostCallbackContext>,
 }

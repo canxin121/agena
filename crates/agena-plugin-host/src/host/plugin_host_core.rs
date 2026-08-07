@@ -1441,6 +1441,13 @@ impl PluginHost {
         self.ui_catalog().tui.content_blocks
     }
 
+    /// Plugin-emitted notifications through the unified `host.notify` entry
+    /// (Phase 6). Bounded recent queue; frontends dedupe/consume by
+    /// `plugin_id:severity:body`.
+    pub fn host_notifications(&self) -> Vec<HostNotification> {
+        self._host_handle.host_notifications()
+    }
+
     pub fn studio_commands(&self) -> Vec<PluginCommandCatalogItem> {
         self.ui_catalog().studio.commands
     }
@@ -1651,9 +1658,9 @@ use super::{
     ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch,
     CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch,
     Duration, EventEnvelope, HashMap, HookSubscription, HostCallbackContext, HostHandle,
-    HostStatuslineSegment, HostThemePalette, LoadedPlugin, NoopHostClient, NotificationInput,
-    PluginCommandCatalogItem, PluginCommandInvokeInput, PluginCommandOutput, PluginError,
-    PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
+    HostNotification, HostStatuslineSegment, HostThemePalette, LoadedPlugin, NoopHostClient,
+    NotificationInput, PluginCommandCatalogItem, PluginCommandInvokeInput, PluginCommandOutput,
+    PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
     PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
     PluginToolRegistry, PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction,
     PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,

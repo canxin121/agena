@@ -335,6 +335,12 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Unified notification — tell the user something now. The host decides
+    /// surface, priority, and dedupe; plugins never target a location (Phase 6).
+    async fn notify(&self, _req: PluginNotifyRequest) -> Result<()> {
+        Err(unavailable())
+    }
+
     /// UI theme — register or update a palette.
     async fn ui_theme_register(&self, _req: HostThemeRegisterRequest) -> Result<()> {
         Err(unavailable())
@@ -352,6 +358,51 @@ pub trait HostClient: Send + Sync + 'static {
     ) -> Result<HostThemeRemoveResponse> {
         Err(unavailable())
     }
+}
+
+/// Unified imperative notification entry for plugins (Phase 6). Replaces
+/// ad-hoc statusline segment ids as the way a plugin tells the user something
+/// now: the host decides surface, priority, and dedupe.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginNotifyRequest {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub body: String,
+    /// One of `info` | `success` | `warning` | `error`.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub severity: String,
+    /// Optional session scope; `None` means global.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<PluginNotifyAction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginNotifyAction {
+    pub label: String,
+    pub target: PluginNotifyActionTarget,
+}
+
+/// A notification action button. Maps to the domain `ActionTarget` subset
+/// that plugins may produce (recovery is app-owned).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PluginNotifyActionTarget {
+    Command {
+        command: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<serde_json::Value>,
+    },
+    Navigate {
+        route: String,
+    },
+    Copy {
+        text: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -1480,4 +1531,55 @@ fn unavailable() -> PluginError {
         crate::error::PluginErrorKind::HostUnavailable,
         "host is unavailable for this plugin",
     )
+}
+
+#[cfg(test)]
+mod notify_request_tests {
+    use super::{PluginNotifyAction, PluginNotifyActionTarget, PluginNotifyRequest};
+
+    #[test]
+    fn notify_request_round_trips_with_action_targets() {
+        let request = PluginNotifyRequest {
+            title: "Build finished".to_owned(),
+            body: "cargo check passed".to_owned(),
+            severity: "success".to_owned(),
+            session_id: Some(7),
+            actions: vec![
+                PluginNotifyAction {
+                    label: "Open logs".to_owned(),
+                    target: PluginNotifyActionTarget::Navigate {
+                        route: "/activities".to_owned(),
+                    },
+                },
+                PluginNotifyAction {
+                    label: "Retry".to_owned(),
+                    target: PluginNotifyActionTarget::Command {
+                        command: "session.refresh".to_owned(),
+                        input: None,
+                    },
+                },
+                PluginNotifyAction {
+                    label: "Copy".to_owned(),
+                    target: PluginNotifyActionTarget::Copy {
+                        text: "diagnostic".to_owned(),
+                    },
+                },
+            ],
+        };
+        let wire = serde_json::to_value(&request).expect("serialize");
+        let restored: PluginNotifyRequest = serde_json::from_value(wire).expect("deserialize");
+        assert_eq!(restored, request);
+        assert_eq!(restored.actions.len(), 3);
+    }
+
+    #[test]
+    fn notify_request_rejects_unknown_fields() {
+        let wire = serde_json::json!({
+            "title": "t",
+            "body": "b",
+            "severity": "info",
+            "location": "composer_footer",
+        });
+        assert!(serde_json::from_value::<PluginNotifyRequest>(wire).is_err());
+    }
 }

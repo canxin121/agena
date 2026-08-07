@@ -28,21 +28,23 @@ pub mod cdylib_abi;
 #[cfg(any(feature = "cdylib", feature = "stdio", feature = "http"))]
 pub mod drivers;
 
+pub use activity::ActivitySourceAdapter;
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
-pub use activity::ActivitySourceAdapter;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
 pub use hooks::*;
 pub use host_api::{
     HostClient, HostImageExecuteRequest, HostImageExecuteResponse, HostImageInput,
     HostImageOperation, HostPluginDescriptor, HostPluginListResponse, NoopHostClient,
+    PluginNotifyAction, PluginNotifyActionTarget, PluginNotifyRequest,
 };
 pub use identity::{PluginKey, PluginKeyParseError, ToolKey, ToolKeyParseError};
 pub use macro_support::{schema_example_texts, schema_usage_text};
 pub use manifest::{
-    HookSubscription, InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PLUGIN_WORKBENCH_TAB_IDS,
-    PathAccessSpec, PathKind, PluginCommandDefinition, PluginManifest, PluginSkillDefinition,
+    ContributionKind, HookSubscription, InputNetworkSpec, InputPathSpec, NetworkAccessSpec,
+    PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition,
+    PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginSkillDefinition,
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
     PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiContentBlock,
     PluginTuiStatuslineSegment, PluginTuiThemeColors, PluginTuiUiContributions, PluginUiAction,

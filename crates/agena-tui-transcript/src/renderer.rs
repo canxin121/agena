@@ -162,14 +162,10 @@ pub fn render_entry_detailed(
                         kind: TranscriptNodeKind::Activity,
                         start_line,
                         end_line: lines.len(),
-                        copy_text: activities
-                            .iter()
-                            .zip(hidden_when_collapsed.iter())
-                            .filter(|(_, hidden)| **hidden)
-                            .map(|(part, _)| *part)
-                            .filter_map(|part| activity_copy_text(part, i18n))
-                            .collect::<Vec<_>>()
-                            .join("\n\n"),
+                        // The folded run is a UI marker, never real content:
+                        // copying the collapsed block must copy the visible
+                        // marker line, never the hidden activities' full text.
+                        copy_text: summary.clone(),
                         atomic: true,
                         toggleable: true,
                         expanded,
@@ -746,6 +742,69 @@ mod tests {
                 }
             ) && !node.expanded
         }));
+    }
+
+    #[test]
+    fn folded_activity_run_copies_only_the_marker_not_the_hidden_activities() {
+        let now = Utc::now();
+        let activity = |part_id: i64| {
+            TranscriptFixture::reasoning_part(
+                part_id,
+                19,
+                now,
+                ExecutionStatus::Completed,
+                agena_domain::ReasoningPart {
+                    summary: vec![format!("deep thought {part_id}")],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                },
+            )
+        };
+        let message = entry(
+            19,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::Completed,
+            now,
+            (51..59).map(activity).collect(),
+        );
+
+        let rendered = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let summary = rendered
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.key,
+                    TranscriptNodeKey::ActivitySummary {
+                        entry_id: TranscriptEntryId::StoredMessage(19),
+                        ..
+                    }
+                )
+            })
+            .expect("folded run summary");
+        assert!(!summary.expanded);
+        assert!(
+            summary.copy_text.contains("collapsed"),
+            "the folded marker text belongs in copy: {}",
+            summary.copy_text
+        );
+        assert!(
+            !summary.copy_text.contains("deep thought"),
+            "a collapsed fold must never copy the hidden activities' full text: {}",
+            summary.copy_text
+        );
+        assert!(
+            !summary.contributes_to_aggregate_copy(),
+            "the fold marker must never contribute to an aggregate copy"
+        );
     }
 
     #[test]

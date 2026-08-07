@@ -1749,6 +1749,229 @@ mod transcript_paging_tests {
         );
         assert!(page_cursor < node_end);
     }
+
+    #[test]
+    fn page_motions_still_move_the_cursor_when_the_transcript_fits_the_viewport() {
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 1,
+            document: pending_document(
+                (0..4)
+                    .map(|line| format!("short line {line}"))
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+            ),
+            confirmed: false,
+        });
+
+        transcript.scroll_to_top(40, 10);
+        let total_lines = transcript.rendered(40).lines.len();
+        assert!(
+            total_lines < 10,
+            "the fixture must be shorter than the viewport so the viewport cannot scroll"
+        );
+        assert_eq!(transcript.max_scroll(40, 10), 0);
+
+        let first_focusable = (0..total_lines)
+            .find(|line| line_is_focusable(&mut transcript, *line))
+            .expect("first focusable row");
+        let last_focusable = (0..total_lines)
+            .rev()
+            .find(|line| line_is_focusable(&mut transcript, *line))
+            .expect("last focusable row");
+        assert!(last_focusable > first_focusable);
+
+        transcript.select_pointer_line(
+            40,
+            10,
+            TranscriptTextPosition {
+                line: first_focusable,
+                column: 0,
+            },
+        );
+        assert_eq!(transcript.viewport.top, 0);
+
+        transcript.move_cursor_by_page(40, 10, true);
+        assert_eq!(
+            transcript.viewport.top, 0,
+            "the viewport must not scroll when the content is shorter than the window"
+        );
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(last_focusable),
+            "PageDown on a short transcript must still move the cursor to the boundary"
+        );
+
+        transcript.move_cursor_by_page(40, 10, false);
+        assert_eq!(
+            transcript.navigation_cursor_line(),
+            Some(first_focusable),
+            "PageUp on a short transcript must move the cursor back to the boundary"
+        );
+    }
+}
+
+#[cfg(test)]
+mod transcript_activity_copy_tests {
+    use super::super::{
+        ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptNodeKey,
+        TranscriptState, TranscriptTextPosition, TranscriptVisualSelectionMode, Utc,
+    };
+
+    fn reasoning_activity(
+        message_id: i64,
+        part_id: i64,
+    ) -> agena_api::message_part::MessagePartResource {
+        crate::TranscriptFixture::reasoning_part(
+            part_id,
+            message_id,
+            Utc::now(),
+            ExecutionStatus::Completed,
+            agena_domain::ReasoningPart {
+                summary: vec![format!("deep thought {part_id}")],
+                raw_content: Vec::new(),
+                encrypted_content: None,
+            },
+        )
+    }
+
+    fn folded_run_parts() -> Vec<agena_api::message_part::MessagePartResource> {
+        (51..59).map(|part| reasoning_activity(19, part)).collect()
+    }
+
+    fn folded_run_transcript(parts: Vec<agena_api::message_part::MessagePartResource>) -> TranscriptState {
+        TranscriptState {
+            session_id: Some(7),
+            messages: vec![MessageResource {
+                id: 19,
+                session_id: 7,
+                role: MessageRole::Assistant,
+                state: MessageStatus::Completed,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                metadata: Default::default(),
+                usage: None,
+                part_count: parts.len() as u64,
+                parts: Some(parts),
+            }],
+            ..TranscriptState::default()
+        }
+    }
+
+    fn entry_node(
+        transcript: &mut TranscriptState,
+        message_id: i64,
+    ) -> agena_tui_transcript::RenderedTranscriptNode {
+        transcript
+            .rendered(120)
+            .nodes
+            .iter()
+            .find(|node| {
+                node.key
+                    == TranscriptNodeKey::Entry {
+                        entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(message_id),
+                    }
+            })
+            .cloned()
+            .expect("entry container node")
+    }
+
+    #[test]
+    fn folded_run_marker_copies_only_the_visible_marker_not_the_hidden_activities() {
+        let mut transcript = folded_run_transcript(folded_run_parts());
+        let marker_line = transcript
+            .rendered(120)
+            .lines
+            .iter()
+            .enumerate()
+            .find_map(|(line, rendered)| {
+                rendered
+                    .text
+                    .contains("older activity blocks collapsed")
+                    .then_some(line)
+            })
+            .expect("folded run marker line");
+        transcript.select_pointer_line(
+            120,
+            20,
+            TranscriptTextPosition {
+                line: marker_line,
+                column: 0,
+            },
+        );
+        transcript.toggle_visual_selection(120, 20, TranscriptVisualSelectionMode::Line);
+        let copied = transcript.selected_text(120, "").expect("Visual line copy");
+        assert!(
+            copied.contains("older activity blocks collapsed"),
+            "copying the folded marker should keep the visible marker: {copied}"
+        );
+        assert!(
+            !copied.contains("deep thought"),
+            "V-copy must not expand the hidden activities behind a collapsed fold: {copied}"
+        );
+    }
+
+    #[test]
+    fn entry_copy_excludes_collapsed_activities_and_includes_expanded_ones() {
+        let parts = folded_run_parts();
+        let mut transcript = folded_run_transcript(parts.clone());
+        let activity_key = |index: usize| TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(19),
+            content_id: agena_tui_transcript::TranscriptContentId::Activity(
+                parts[index].activity_id.expect("reasoning activity identity"),
+            ),
+        };
+        let summary_key = TranscriptNodeKey::ActivitySummary {
+            entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(19),
+            first_content_id: agena_tui_transcript::TranscriptContentId::Activity(
+                parts[0].activity_id.expect("reasoning activity identity"),
+            ),
+        };
+
+        // Reasoning defaults to expanded, so the visible tail (parts 54..58)
+        // is expanded content and belongs in the copy. The older activities
+        // (51..53) are folded away behind the marker and must never leak.
+        let entry = entry_node(&mut transcript, 19);
+        assert!(
+            !entry.copy_text.contains("deep thought 51")
+                && !entry.copy_text.contains("deep thought 52")
+                && !entry.copy_text.contains("deep thought 53"),
+            "folded-away activities must not leak into the message copy: {}",
+            entry.copy_text
+        );
+        assert!(
+            entry.copy_text.contains("deep thought 54"),
+            "default-expanded reasoning belongs in the message copy: {}",
+            entry.copy_text
+        );
+        assert!(
+            !entry.copy_text.contains("older activity blocks collapsed"),
+            "the fold marker itself must never appear in the message copy: {}",
+            entry.copy_text
+        );
+
+        // Expand the fold: the hidden activities render as their own nodes.
+        // A still-collapsed one stays out of the copy while its expanded
+        // siblings come in.
+        transcript.node_expansions.insert(summary_key, true);
+        transcript.node_expansions.insert(activity_key(0), false);
+        transcript.node_expansions.insert(activity_key(1), true);
+        transcript.invalidate_render();
+        let entry = entry_node(&mut transcript, 19);
+        assert!(
+            !entry.copy_text.contains("deep thought 51"),
+            "a collapsed activity body must not leak into the message copy: {}",
+            entry.copy_text
+        );
+        assert!(
+            entry.copy_text.contains("deep thought 52"),
+            "an expanded activity body belongs in the message copy: {}",
+            entry.copy_text
+        );
+    }
 }
 
 #[cfg(test)]

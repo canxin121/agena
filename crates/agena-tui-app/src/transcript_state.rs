@@ -2158,27 +2158,46 @@ impl TranscriptState {
         } else {
             self.viewport.top.saturating_sub(distance)
         };
-        if new_top == self.viewport.top {
-            return;
-        }
 
-        // Pick the directional edge of the new page. Landing on the final
-        // (or first) focusable row when the page reaches the end (or start)
-        // resumes tail-following instead of stranding the cursor at a
-        // partially filled edge page.
-        let line = if forward && new_top == max_scroll {
-            self.focusable_line_near(width, total_lines.saturating_sub(1), false)
-        } else if !forward && new_top == 0 {
-            self.focusable_line_near(width, 0, true)
+        let line = if new_top != self.viewport.top {
+            // Pick the directional edge of the new page. Landing on the final
+            // (or first) focusable row when the page reaches the end (or start)
+            // resumes tail-following instead of stranding the cursor at a
+            // partially filled edge page.
+            if forward && new_top == max_scroll {
+                self.focusable_line_near(width, total_lines.saturating_sub(1), false)
+            } else if !forward && new_top == 0 {
+                self.focusable_line_near(width, 0, true)
+            } else {
+                let inset = usize::from(visible > 2);
+                let raw_line = match direction {
+                    TranscriptMoveDirection::Down => new_top.saturating_add(inset),
+                    TranscriptMoveDirection::Up => new_top
+                        .saturating_add(visible.saturating_sub(1).saturating_sub(inset))
+                        .min(total_lines.saturating_sub(1)),
+                };
+                self.focusable_line_in_viewport(width, new_top, visible, raw_line, direction)
+            }
         } else {
-            let inset = usize::from(visible > 2);
-            let raw_line = match direction {
-                TranscriptMoveDirection::Down => new_top.saturating_add(inset),
-                TranscriptMoveDirection::Up => new_top
-                    .saturating_add(visible.saturating_sub(1).saturating_sub(inset))
-                    .min(total_lines.saturating_sub(1)),
+            // The viewport cannot move: either the whole transcript fits in
+            // the window (few messages, short replies) or the document edge
+            // is already reached. Still move the cursor by the page distance
+            // so paging works on short transcripts, clamping to the document
+            // boundary instead of freezing the cursor.
+            let current = self
+                .interaction
+                .cursor
+                .as_ref()
+                .map(|cursor| cursor.line)
+                .unwrap_or(0);
+            let raw_line = if forward {
+                current
+                    .saturating_add(distance)
+                    .min(total_lines.saturating_sub(1))
+            } else {
+                current.saturating_sub(distance)
             };
-            self.focusable_line_in_viewport(width, new_top, visible, raw_line, direction)
+            self.focusable_line_near(width, raw_line, forward)
         };
         let column = self
             .interaction

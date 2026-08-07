@@ -1429,6 +1429,138 @@ mod tests {
     }
 
     #[test]
+    fn activity_copy_text_mirrors_the_expansion_state() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Tool,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Operation(OperationActivity {
+                call_id: ToolCallId::new("call-tools-list"),
+                invocation: ToolInvocation {
+                    tool_api_call: Some(agena_domain::ToolApiCall {
+                        function: agena_domain::ToolApiFunction::List,
+                        arguments: StructuredObject::try_from(serde_json::json!({
+                            "limit": 33,
+                            "offset": 100
+                        }))
+                        .expect("structured tools_list provider input"),
+                    }),
+                    name: "tools_list".to_owned(),
+                    plugin_name: None,
+                    input: StructuredObject::try_from(serde_json::json!({
+                        "limit": 33,
+                        "offset": 100
+                    }))
+                    .expect("structured tools_list input"),
+                },
+                title: "List tools · 2/133".to_owned(),
+                summary: "Returned 2 of 133 tools; continue at offset 102.".to_owned(),
+                data: serde_json::json!({
+                    "tool": "tool_search",
+                    "results": ["fs.read", "repo.status"]
+                }),
+                markdown: String::new(),
+                authorization: Default::default(),
+                error: None,
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Completed,
+            1,
+            &document,
+            None,
+        );
+        let key = crate::TranscriptNodeKey::Activity {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+        };
+        let input_key = crate::TranscriptNodeKey::ActivitySection {
+            entry_id: TranscriptEntryId::AssistantReply(response_id),
+            content_id: TranscriptContentId::Activity(activity_id),
+            section: crate::TranscriptActivitySection::Input,
+        };
+
+        let collapsed = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let collapsed_node = collapsed
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("collapsed Activity node");
+        assert!(!collapsed_node.expanded);
+        assert!(
+            collapsed_node.copy_text.is_empty(),
+            "a collapsed Activity must not leak its expanded content into copy text: {}",
+            collapsed_node.copy_text
+        );
+        assert!(!collapsed_node.contributes_to_aggregate_copy());
+
+        let expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true)]),
+        );
+        let expanded_node = expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("expanded Activity node");
+        assert!(expanded_node.expanded);
+        assert!(
+            expanded_node.copy_text.contains("fs.read"),
+            "expanded Output section belongs in copy text: {}",
+            expanded_node.copy_text
+        );
+        assert!(
+            !expanded_node.copy_text.contains("\"limit\": 33"),
+            "a collapsed Input section must not leak into copy text: {}",
+            expanded_node.copy_text
+        );
+        assert!(expanded_node.contributes_to_aggregate_copy());
+
+        let input_expanded = crate::render_entry_detailed(
+            &entry,
+            100,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(key.clone(), true), (input_key, true)]),
+        );
+        let input_expanded_node = input_expanded
+            .nodes
+            .iter()
+            .find(|node| node.key == key)
+            .expect("expanded Activity node");
+        assert!(
+            input_expanded_node.copy_text.contains("\"limit\": 33"),
+            "an expanded Input section belongs in copy text: {}",
+            input_expanded_node.copy_text
+        );
+    }
+
+    #[test]
     fn canonical_operation_uses_rich_markdown_for_folded_and_expanded_activity_content() {
         let response_id = agena_domain::AssistantReplyId::new();
         let activity_id = agena_domain::ActivityId::new();

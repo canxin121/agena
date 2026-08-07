@@ -139,10 +139,23 @@ pub struct RenderedTranscriptNode {
 }
 
 impl RenderedTranscriptNode {
+    /// Whether this node's `copy_text` belongs in a whole-entry or visible
+    /// aggregate copy. Copying must mirror what the transcript actually
+    /// shows:
+    ///
+    /// - Entry containers and activity sections are projected by their leaf
+    ///   nodes (the entry container is a parent-only node; sections are
+    ///   already folded into the parent Activity's copy text).
+    /// - An `ActivitySummary` is a fold marker, not content: even when
+    ///   expanded the underlying Activities render as their own nodes, so
+    ///   the marker itself never contributes.
+    /// - A collapsed Activity hides its details: its content must not leak
+    ///   into an aggregate copy, matching the user's expand/collapse state.
     pub fn contributes_to_aggregate_copy(&self) -> bool {
         !self.key.is_entry_container()
-            && !(matches!(&self.key, TranscriptNodeKey::ActivitySummary { .. }) && self.expanded)
+            && !matches!(&self.key, TranscriptNodeKey::ActivitySummary { .. })
             && !matches!(&self.key, TranscriptNodeKey::ActivitySection { .. })
+            && !(matches!(&self.key, TranscriptNodeKey::Activity { .. }) && !self.expanded)
             && !self.copy_text.trim().is_empty()
     }
 }

@@ -653,37 +653,25 @@ fn canonical_text_equivalent(left: &str, right: &str) -> bool {
     left == right
 }
 
-fn canonical_activity_copy_text(
-    title: String,
-    summary: String,
-    details: &[CanonicalActivityDetail],
-    error_text: Option<String>,
-    include_summary: bool,
-) -> String {
-    let mut sections = vec![title];
-    let candidates = [
-        (include_summary && error_text.is_none()).then_some(summary),
-        (!details.is_empty()).then_some(
-            details
-                .iter()
-                .map(CanonicalActivityDetail::copy_text)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        error_text,
-    ];
-    for section in candidates.into_iter().flatten() {
+/// Join the headline title with the currently visible content sections of a
+/// canonical Activity. Sections whose text is equivalent to an already
+/// included section are dropped (a summary that repeats the title, an error
+/// that repeats the output, …) so copy text never duplicates the projection.
+fn join_canonical_copy_sections(sections: Vec<String>) -> String {
+    let mut out = Vec::<String>::new();
+    for section in sections {
         if section.trim().is_empty() {
             continue;
         }
-        if !sections
+        if out
             .iter()
             .any(|existing| canonical_text_equivalent(existing.as_str(), section.as_str()))
         {
-            sections.push(section);
+            continue;
         }
+        out.push(section);
     }
-    sections.join("\n")
+    out.join("\n")
 }
 
 fn patch_rendered_lines_style(lines: &mut [RenderedLine], style: Style) {
@@ -999,101 +987,6 @@ fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> M
         height: resource.height,
         duration_ms: resource.duration_ms,
         page_count: resource.page_count,
-    }
-}
-
-pub(crate) fn activity_copy_text(part: &TranscriptEntryPart, i18n: &I18n) -> Option<String> {
-    match transcript_part_content(part) {
-        TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload)) => {
-            let (_, title, summary, error) = activity_presentation(payload);
-            let error_text = error.as_ref().map(|e| e.user.fallback.clone());
-            let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
-            let details =
-                canonical_activity_details(i18n, payload, summary.as_str(), error_equivalence_text);
-            Some(canonical_activity_copy_text(
-                title,
-                summary,
-                details.as_slice(),
-                error_text,
-                !matches!(payload, agena_domain::ActivityPayload::Operation(_)),
-            ))
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(segment)) => {
-            Some(segment.text.clone())
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
-            Some(reasoning.preferred_text())
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Operation(tool)) => {
-            Some(tool_output_copy_text(part, tool, i18n))
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(attachment)) => Some(
-            attachment
-                .attachments
-                .iter()
-                .map(|item| {
-                    item.title
-                        .as_ref()
-                        .or(item.filename.as_ref())
-                        .cloned()
-                        .unwrap_or_else(|| item.mime.clone())
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
-            Some(
-                reference
-                    .skills
-                    .iter()
-                    .map(|skill| format!("Skill: {}\n{}", skill.name, skill.instructions))
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            )
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)) => {
-            Some(error.problem.user.fallback.clone())
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::Hook(hook)) => {
-            let mut text = format!("Hook: {}\n{}", hook.hook, hook.summary);
-            if let Some(detail) = hook.detail.as_ref() {
-                text.push('\n');
-                text.push_str(detail);
-            }
-            Some(text)
-        }
-        TranscriptPartContent::Activity(TranscriptActivityContent::AssistantReplyLifecycle(
-            status,
-        )) => Some(match status {
-            TranscriptAssistantReplyLifecycle::Running => {
-                ui_text::t(i18n, "message-activity-response-running")
-            }
-            TranscriptAssistantReplyLifecycle::Completed => {
-                ui_text::t(i18n, "message-activity-response-completed")
-            }
-            TranscriptAssistantReplyLifecycle::Failed { problem } => match problem {
-                Some(problem) => format!(
-                    "{}: {}",
-                    ui_text::t(i18n, "message-activity-response-failed"),
-                    problem.user.fallback
-                ),
-                None => ui_text::t(i18n, "message-activity-response-failed"),
-            },
-            TranscriptAssistantReplyLifecycle::Cancelled => {
-                ui_text::t(i18n, "message-activity-response-cancelled")
-            }
-        }),
-        TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
-            Some(match request.as_ref() {
-                MessageRequestPartResource::UserInput { request, .. } => request
-                    .questions
-                    .iter()
-                    .map(|question| question.question.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            })
-        }
-        _ => None,
     }
 }
 
@@ -1442,7 +1335,7 @@ pub(crate) fn render_part_node(
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: summary,
+                copy_text: if expanded { summary } else { String::new() },
                 toggleable: true,
                 expanded,
                 end_line: None,
@@ -1462,7 +1355,11 @@ pub(crate) fn render_part_node(
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: tool_output_copy_text(part, tool, i18n),
+                copy_text: if expanded {
+                    tool_output_copy_text(part, tool, i18n)
+                } else {
+                    String::new()
+                },
                 toggleable: true,
                 expanded,
                 end_line: None,
@@ -1606,7 +1503,11 @@ pub(crate) fn render_part_node(
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: labels.join("\n"),
+                copy_text: if expanded {
+                    labels.join("\n")
+                } else {
+                    String::new()
+                },
                 toggleable: true,
                 expanded,
                 end_line: None,
@@ -1675,7 +1576,11 @@ pub(crate) fn render_part_node(
             RenderedNodeDraft {
                 key,
                 kind: TranscriptNodeKind::Activity,
-                copy_text: labels.join("\n"),
+                copy_text: if expanded {
+                    labels.join("\n")
+                } else {
+                    String::new()
+                },
                 toggleable: true,
                 expanded,
                 end_line: None,
@@ -1759,6 +1664,7 @@ fn render_activity_canonical(
     );
     let headline_end = out.len();
     let mut children = Vec::new();
+    let mut copy_sections = Vec::<String>::new();
     let mut detail_index = 0_usize;
     let is_operation = matches!(payload, agena_domain::ActivityPayload::Operation(_));
     let render_summary = expanded && !is_operation && error.is_none() && !summary.trim().is_empty();
@@ -1787,6 +1693,7 @@ fn render_activity_canonical(
             children.push(child);
             detail_index = detail_index.saturating_add(1);
         }
+        copy_sections.push(summary.clone());
     }
     if expanded {
         for detail in &details {
@@ -1815,6 +1722,9 @@ fn render_activity_canonical(
             ) {
                 children.push(child);
             }
+            if section_expanded {
+                copy_sections.push(detail.copy_text());
+            }
         }
         if let agena_domain::ActivityPayload::Resource(resource) = payload {
             let section_start = out.len();
@@ -1835,6 +1745,7 @@ fn render_activity_canonical(
             ) {
                 children.push(child);
             }
+            copy_sections.push(resource.name.clone());
         }
     }
     if expanded && let Some(ref error_str) = error_text {
@@ -1867,14 +1778,21 @@ fn render_activity_canonical(
         ) {
             children.push(child);
         }
+        if section_expanded {
+            copy_sections.push(error_str.clone());
+        }
     }
-    let copy_text = canonical_activity_copy_text(
-        title.to_owned(),
-        summary,
-        details.as_slice(),
-        error_text,
-        !is_operation,
-    );
+    // Copy text mirrors the visible expansion state: a collapsed Activity
+    // contributes nothing, and an expanded one carries only the sections
+    // that are actually expanded.
+    let mut sections = Vec::with_capacity(copy_sections.len() + 1);
+    sections.push(title.to_owned());
+    sections.extend(copy_sections);
+    let copy_text = if expanded {
+        join_canonical_copy_sections(sections)
+    } else {
+        String::new()
+    };
     RenderedNodeDraft {
         key,
         kind: TranscriptNodeKind::Activity,

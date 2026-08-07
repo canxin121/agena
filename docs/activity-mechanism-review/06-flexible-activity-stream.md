@@ -1,3 +1,7 @@
+> **v2 修订（重要）**：本文中 `human_blocks`/`model_output` 作为终态显式字段的设计，在总设计 v2 中已废除——
+> 数据只存一份 canonical（`payload`/`blocks`/`text`），给 AI 看与给人看是同一份数据的两个纯函数投影（`for_model`/`for_human`），
+> 视图永不落盘。详见 `07-comprehensive-redesign.md` v2 §2（核心原则）与 §6（投影器）。
+
 # 06 设计：更灵活的 Activity 体系 —— 工具活动事件流与三层内容显式化
 
 > 状态：设计提案（未实施）｜适用分支：`agent/activity-mechanism-review`（实施时另开分支）

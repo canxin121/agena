@@ -10,8 +10,7 @@ use crate::event::{
     TranscriptPartUpsertedEvent,
 };
 use crate::message::{
-    Message, MessageMetadata, MessagePart, MessageProviderState, OperationBlock, OperationPart,
-    PartContent,
+    Message, MessageMetadata, MessagePart, MessageProviderState, OperationPart, PartContent,
 };
 use crate::provider::ProviderRegistry;
 use agena_domain::ModelRef;

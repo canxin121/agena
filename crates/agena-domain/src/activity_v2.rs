@@ -129,6 +129,17 @@ impl ViewBlock {
         }
     }
 
+    /// 纯文本值（Text/Markdown/Log/Diff 的正文），对应旧 `OperationBlock::text_value`。
+    pub fn text_value(&self) -> Option<&str> {
+        match self {
+            Self::Text { text, .. }
+            | Self::Markdown { text, .. }
+            | Self::Log { text, .. }
+            | Self::Diff { diff: text, .. } => Some(text.as_str()),
+            _ => None,
+        }
+    }
+
     /// 便捷：带 id 的 Log 块。
     pub fn log(id: impl Into<String>, stream: CommandOutputStream, text: impl Into<String>) -> Self {
         Self::Log {

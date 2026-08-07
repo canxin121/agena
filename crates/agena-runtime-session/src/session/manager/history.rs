@@ -1566,123 +1566,85 @@ fn project_model_visible_output(
 }
 
 fn project_operation_block(
-    value: &crate::message::OperationBlock,
+    value: &agena_domain::ViewBlock,
 ) -> agena_runtime::SessionProjectedOperationBlock {
     use agena_runtime::SessionProjectedOperationBlock as Projected;
     match value {
-        crate::message::OperationBlock::Text { text } => Projected::Text { text: text.clone() },
-        crate::message::OperationBlock::Markdown { text } => {
-            Projected::Markdown { text: text.clone() }
-        }
-        crate::message::OperationBlock::Json { value } => Projected::Json {
-            value: value.clone(),
-        },
-        crate::message::OperationBlock::Table { columns, rows } => Projected::Table {
-            columns: columns.clone(),
-            rows: rows.clone(),
-        },
-        crate::message::OperationBlock::Log { stream, text } => Projected::Log {
-            stream: stream.clone(),
+        agena_domain::ViewBlock::Text { text, .. } => Projected::Text { text: text.clone() },
+        agena_domain::ViewBlock::Markdown { text, .. } => Projected::Markdown {
             text: text.clone(),
         },
-        crate::message::OperationBlock::Command {
+        agena_domain::ViewBlock::Json { value, .. } => Projected::Json {
+            value: value.clone(),
+        },
+        agena_domain::ViewBlock::Table {
+            columns, rows, ..
+        } => Projected::Table {
+            columns: columns
+                .iter()
+                .map(|label| agena_domain::TableColumn {
+                    key: label.clone(),
+                    label: Some(label.clone()),
+                })
+                .collect(),
+            rows: rows.clone(),
+        },
+        agena_domain::ViewBlock::Log { stream, text, .. } => Projected::Log {
+            stream: Some(match stream {
+                agena_domain::CommandOutputStream::Stdout => "stdout".to_string(),
+                agena_domain::CommandOutputStream::Stderr => "stderr".to_string(),
+            }),
+            text: text.clone(),
+        },
+        agena_domain::ViewBlock::Command {
             command,
             cwd,
             exit_code,
             stdout,
             stderr,
+            ..
         } => Projected::Command {
             command: command.clone(),
             cwd: cwd.clone(),
             exit_code: *exit_code,
-            stdout: stdout.clone(),
-            stderr: stderr.clone(),
+            stdout: Some(stdout.clone()),
+            stderr: Some(stderr.clone()),
         },
-        crate::message::OperationBlock::Diff { diff, language } => Projected::Diff {
+        agena_domain::ViewBlock::Diff { diff, language, .. } => Projected::Diff {
             diff: diff.clone(),
             language: language.clone(),
         },
-        crate::message::OperationBlock::FileChanges { changes } => Projected::FileChanges {
+        agena_domain::ViewBlock::FileChanges { changes, .. } => Projected::FileChanges {
             changes: changes.clone(),
         },
-        crate::message::OperationBlock::SearchResults { query, results } => {
-            Projected::SearchResults {
-                query: query.clone(),
-                results: results.clone(),
-            }
-        }
-        crate::message::OperationBlock::Citation {
-            uri,
-            title,
-            snippet,
-        } => Projected::Citation {
-            uri: uri.clone(),
-            title: title.clone(),
-            snippet: snippet.clone(),
+        agena_domain::ViewBlock::SearchResults { items, .. } => Projected::SearchResults {
+            query: None,
+            results: items
+                .iter()
+                .map(|item| agena_domain::SearchResultItem {
+                    title: item.title.clone(),
+                    uri: item.url.clone(),
+                    snippet: item.snippet.clone(),
+                    score: None,
+                })
+                .collect(),
         },
-        crate::message::OperationBlock::Image { mime, url } => Projected::Image {
-            mime: mime.clone(),
-            url: url.clone(),
-        },
-        crate::message::OperationBlock::Audio { mime, url } => Projected::Audio {
-            mime: mime.clone(),
-            url: url.clone(),
-        },
-        crate::message::OperationBlock::ResourceLink {
-            uri,
-            title,
-            mime_type,
-        } => Projected::ResourceLink {
-            uri: uri.clone(),
-            title: title.clone(),
-            mime_type: mime_type.clone(),
-        },
-        crate::message::OperationBlock::EmbeddedResource {
-            uri,
-            mime,
-            text,
-            base64,
-        } => Projected::EmbeddedResource {
-            uri: uri.clone(),
-            mime: mime.clone(),
-            text: text.clone(),
-            base64: base64.clone(),
-        },
-        crate::message::OperationBlock::File {
-            url,
-            filename,
-            mime,
-        } => Projected::File {
-            url: url.clone(),
-            filename: filename.clone(),
-            mime: mime.clone(),
-        },
-        crate::message::OperationBlock::Media {
-            mime_type,
-            artifact,
-        } => Projected::Media {
-            mime_type: mime_type.clone(),
+        agena_domain::ViewBlock::Media { artifact, .. } => Projected::Media {
+            mime_type: artifact.mime.clone(),
             artifact: artifact.clone(),
         },
-        crate::message::OperationBlock::Checklist { items } => Projected::Checklist {
-            items: items.clone(),
-        },
-        crate::message::OperationBlock::NestedTask {
-            task_id,
-            title,
-            status,
-        } => Projected::NestedTask {
-            task_id: task_id.clone(),
-            title: title.clone(),
-            status: *status,
-        },
-        crate::message::OperationBlock::Progress { message, percent } => Projected::Progress {
-            message: message.clone(),
-            percent: *percent,
-        },
-        crate::message::OperationBlock::Custom { schema, value } => Projected::Custom {
-            schema: schema.clone(),
-            value: value.clone(),
+        agena_domain::ViewBlock::Custom {
+            kind,
+            schema,
+            presentation,
+            ..
+        } => Projected::Custom {
+            schema: if schema.is_null() {
+                None
+            } else {
+                Some(schema.to_string())
+            },
+            value: serde_json::json!({ "kind": kind, "presentation": presentation }),
         },
     }
 }

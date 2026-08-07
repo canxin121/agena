@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { fetchUsageStats, type UsagePeriod, type UsageStats, type UsageTotals } from '@/agena/lib/agenaApi'
+import { useNotifications } from '@/agena/lib/notifications/useNotifications'
 import {
   formatUsageCost,
   formatUsageInteger,
@@ -21,9 +22,9 @@ const modelFilter = ref('')
 const includeSubagents = ref(true)
 const sortBy = ref<'cost' | 'tokens' | 'runs'>('cost')
 const loading = ref(false)
-const error = ref('')
 const stats = ref<UsageStats | null>(null)
 
+const { notify } = useNotifications()
 const headline = computed(() => usageHeadline(stats.value))
 const facts = computed(() => (stats.value ? usageFactLine(stats.value.totals) : []))
 const route = useRoute()
@@ -42,7 +43,7 @@ const dailyRows = computed(() => stats.value?.by_day.slice(-14) || [])
 async function loadUsage(period = activePeriod.value) {
   activePeriod.value = period
   loading.value = true
-  error.value = ''
+  notify.clearBanner()
   try {
     stats.value = await fetchUsageStats({
       period,
@@ -57,7 +58,7 @@ async function loadUsage(period = activePeriod.value) {
     if (!includeSubagents.value) query.include_subagents = 'false'
     await router.replace({ path: '/usage', query })
   } catch (err) {
-    error.value = userErrorMessage(err)
+    notify.error(userErrorMessage(err))
   } finally {
     loading.value = false
   }
@@ -105,8 +106,6 @@ onMounted(() => {
         </button>
       </div>
     </section>
-
-    <div v-if="error" class="notice">{{ error }}</div>
 
     <section class="card">
       <div class="page-header" style="align-items: flex-end">

@@ -14,6 +14,7 @@ import {
   type WorkspaceResource,
 } from '../lib/agenaApi'
 import { buildRuntimeSectionPath, type RuntimeRouteSection } from './runtimePageStateModel'
+import type { NotificationsHandle } from '../lib/notifications/types'
 
 function supportedVerbosityLevelsForModel(
   modelId: string | null | undefined,
@@ -28,7 +29,7 @@ function supportedVerbosityLevelsForModel(
 }
 
 export type ChatPageUiStateInput = {
-  localCommandNotice: Ref<string>
+  notify: NotificationsHandle
   providerModels: Record<string, ProviderModel[]>
   providers: Ref<ProviderSummary[]>
   runtime: Ref<RuntimeStatus | null>
@@ -126,23 +127,23 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   async function forgetMemory(name: string) {
     try {
       const removed = await deleteMemory(name)
-      input.localCommandNotice.value = `Forgot memory ${removed.name}.`
+      input.notify.notice(`Forgot memory ${removed.name}.`)
     } catch (error) {
-      input.localCommandNotice.value = userErrorMessage(error)
+      input.notify.notice(userErrorMessage(error))
     }
   }
 
   async function downloadWorkspaceFile(path: string) {
     const workspaceId = input.selectedWorkspaceId.value
     if (!workspaceId) {
-      input.localCommandNotice.value = 'Select a workspace before downloading a file.'
+      input.notify.notice('Select a workspace before downloading a file.')
       return
     }
     try {
       await downloadWorkspaceFileFromApi({ workspaceId, path })
-      input.localCommandNotice.value = `Downloaded ${path.trim()}.`
+      input.notify.notice(`Downloaded ${path.trim()}.`)
     } catch (error) {
-      input.localCommandNotice.value = userErrorMessage(error)
+      input.notify.notice(userErrorMessage(error))
     }
   }
 
@@ -278,44 +279,46 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   }
 
   function copySessionUsageSummary(summaryFacts: string[]) {
-    input.localCommandNotice.value = summaryFacts.length
-      ? `Session usage: ${summaryFacts.join(' · ')}`
-      : 'No assistant usage has been recorded for the active session yet.'
+    input.notify.notice(
+      summaryFacts.length
+        ? `Session usage: ${summaryFacts.join(' · ')}`
+        : 'No assistant usage has been recorded for the active session yet.',
+    )
   }
 
   async function copyText(text: string, successMessage: string) {
     const normalized = text.trim()
     if (!normalized) {
-      input.localCommandNotice.value = 'There is no text to copy.'
+      input.notify.notice('There is no text to copy.')
       return
     }
     if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
-      input.localCommandNotice.value = 'Clipboard access is unavailable in this browser context.'
+      input.notify.notice('Clipboard access is unavailable in this browser context.')
       return
     }
     try {
       await navigator.clipboard.writeText(normalized)
-      input.localCommandNotice.value = successMessage
+      input.notify.notice(successMessage)
     } catch (error) {
-      input.localCommandNotice.value = `Clipboard write failed: ${userErrorMessage(error)}`
+      input.notify.notice(`Clipboard write failed: ${userErrorMessage(error)}`)
     }
   }
 
   async function createCommit(message: string) {
     try {
       const result = await createGitCommit(message)
-      input.localCommandNotice.value = `Created commit ${result.commit.slice(0, 12)}: ${result.summary}`
+      input.notify.notice(`Created commit ${result.commit.slice(0, 12)}: ${result.summary}`)
     } catch (error) {
-      input.localCommandNotice.value = userErrorMessage(error)
+      input.notify.notice(userErrorMessage(error))
     }
   }
 
   async function createPullRequest(options: { title: string; body?: string; base?: string; head?: string }) {
     try {
       const result = await createGitPullRequest(options)
-      input.localCommandNotice.value = `Created pull request: ${result.url}`
+      input.notify.notice(`Created pull request: ${result.url}`)
     } catch (error) {
-      input.localCommandNotice.value = userErrorMessage(error)
+      input.notify.notice(userErrorMessage(error))
     }
   }
 

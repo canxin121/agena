@@ -53,11 +53,9 @@ export function useChatPageState() {
   const loading = ref(false)
   const sending = ref(false)
   const continuing = ref(false)
-  const errorMessage = ref('')
 
   const interactiveRequestInFlight = reactive<Record<string, boolean>>({})
   const userInputDrafts = reactive<Record<string, Record<string, string>>>({})
-  const localCommandNotice = ref('')
   const sessionImportJsonl = ref('')
   const attachments = ref<ComposerAttachmentDraft[]>([])
   const attachmentLoading = ref(false)
@@ -72,11 +70,9 @@ export function useChatPageState() {
     composerQueue,
     composer,
     continuing,
-    errorMessage,
     interactiveRequestInFlight,
     loading,
     liveCommandEvents,
-    localCommandNotice,
     messages,
     newSessionTitle,
     inspectedMessage,

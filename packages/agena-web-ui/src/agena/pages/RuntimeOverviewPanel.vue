@@ -1,6 +1,6 @@
 import { userErrorMessage } from '@/lib/api'
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import type {
   ModelCatalogEntry,
@@ -16,6 +16,7 @@ import type {
 import { cancelRuntimeBackgroundTask, listModelCatalogEntries } from '@/agena/lib/agenaApi'
 
 import { useRuntimeModelCatalogActions } from './useRuntimeModelCatalogActions'
+import { useNotifications } from '@/agena/lib/notifications/useNotifications'
 
 const props = defineProps<{
   catalogEntries: ModelCatalogEntry[]
@@ -28,6 +29,8 @@ const props = defineProps<{
   formatProviderModel: (model: ProviderModel) => string
   load: () => Promise<void>
 }>()
+
+const { notify } = useNotifications()
 
 function summarizeCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogSummary {
   return {
@@ -50,10 +53,7 @@ const catalogOffset = ref(0)
 const catalogLimit = ref(50)
 const submitting = ref(false)
 const cancellingTaskIds = reactive<Record<string, boolean>>({})
-const toasts = ref<Array<{ id: number; kind: 'info' | 'success' | 'error'; message: string }>>([])
-const toastTimers = new Map<number, ReturnType<typeof setTimeout>>()
 const taskStatuses = new Map<string, RuntimeBackgroundTask['status']>()
-let nextToastId = 0
 
 const { refreshCatalogAction } = useRuntimeModelCatalogActions({
   actionError,
@@ -71,23 +71,6 @@ const catalogRefreshing = computed(() =>
   backgroundTasks.value.some((task) => task.kind === 'model_catalog_refresh' && task.status === 'running'),
 )
 const catalogRefreshButtonLabel = computed(() => (catalogRefreshing.value ? 'Refreshing…' : 'Refresh Catalog'))
-
-function removeToast(id: number) {
-  const timer = toastTimers.get(id)
-  if (timer) {
-    clearTimeout(timer)
-    toastTimers.delete(id)
-  }
-  toasts.value = toasts.value.filter((toast) => toast.id !== id)
-}
-
-function pushToast(kind: 'info' | 'success' | 'error', message: string, ttlMs = 4000) {
-  const id = nextToastId
-  nextToastId += 1
-  toasts.value = [...toasts.value, { id, kind, message }]
-  const timer = setTimeout(() => removeToast(id), ttlMs)
-  toastTimers.set(id, timer)
-}
 
 function clearCatalogFilters() {
   catalogQuery.value = ''
@@ -221,10 +204,10 @@ async function refreshCatalog() {
       : `${result.task.title} is already running.`
     actionError.value = ''
     actionMessage.value = message
-    pushToast('info', message)
+    notify.toast('info', message)
   } catch (err) {
     const message = userErrorMessage(err)
-    pushToast('error', message, 7000)
+    notify.toast('error', message, 7000)
   } finally {
     submitting.value = false
   }
@@ -238,13 +221,13 @@ async function cancelTask(task: RuntimeBackgroundTask) {
     const message = updated.message || `Cancellation requested for ${updated.title.toLowerCase()}.`
     actionError.value = ''
     actionMessage.value = message
-    pushToast('info', message)
+    notify.toast('info', message)
     await props.load()
   } catch (err) {
     const message = userErrorMessage(err)
     actionMessage.value = ''
     actionError.value = message
-    pushToast('error', message, 7000)
+    notify.toast('error', message, 7000)
   } finally {
     delete cancellingTaskIds[task.id]
   }
@@ -263,7 +246,7 @@ function handleTaskCompletion(task: RuntimeBackgroundTask) {
     const message = task.message || `${task.title} completed.`
     actionError.value = ''
     actionMessage.value = message
-    pushToast('success', message)
+    notify.toast('success', message)
     return
   }
 
@@ -271,7 +254,7 @@ function handleTaskCompletion(task: RuntimeBackgroundTask) {
     const message = taskFailureMessage(task) || `${task.title} failed.`
     actionMessage.value = ''
     actionError.value = message
-    pushToast('error', message, 7000)
+    notify.toast('error', message, 7000)
     return
   }
 
@@ -279,7 +262,7 @@ function handleTaskCompletion(task: RuntimeBackgroundTask) {
     const message = task.message || `${task.title} was cancelled.`
     actionError.value = ''
     actionMessage.value = message
-    pushToast('info', message)
+    notify.toast('info', message)
   }
 }
 
@@ -317,13 +300,6 @@ watch(
 
 onMounted(() => {
   void loadCatalogPage(0)
-})
-
-onBeforeUnmount(() => {
-  for (const timer of toastTimers.values()) {
-    clearTimeout(timer)
-  }
-  toastTimers.clear()
 })
 </script>
 
@@ -637,53 +613,9 @@ onBeforeUnmount(() => {
       </section>
     </div>
   </div>
-
-  <teleport to="body">
-    <div v-if="toasts.length" class="toast-stack">
-      <div v-for="toast in toasts" :key="toast.id" class="toast" :class="`toast-${toast.kind}`">
-        <div class="toast-message">{{ toast.message }}</div>
-        <button class="toast-close" @click="removeToast(toast.id)">Close</button>
-      </div>
-    </div>
-  </teleport>
 </template>
 
 <style scoped>
-.toast-stack {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 1000;
-  display: grid;
-  gap: 10px;
-  width: min(360px, calc(100vw - 32px));
-}
-
-.toast {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 12px;
-  align-items: start;
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid rgba(15, 23, 42, 0.12);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
-  backdrop-filter: blur(12px);
-}
-
-.toast-info {
-  border-color: rgba(14, 116, 144, 0.2);
-}
-
-.toast-success {
-  border-color: rgba(22, 163, 74, 0.24);
-}
-
-.toast-error {
-  border-color: rgba(220, 38, 38, 0.24);
-}
-
 .task-status-running {
   background: rgba(14, 116, 144, 0.12);
 }
@@ -698,19 +630,5 @@ onBeforeUnmount(() => {
 
 .task-status-cancelled {
   background: rgba(100, 116, 139, 0.12);
-}
-
-.toast-message {
-  line-height: 1.4;
-  color: #0f172a;
-}
-
-.toast-close {
-  border: 0;
-  background: transparent;
-  color: #475569;
-  cursor: pointer;
-  font: inherit;
-  padding: 0;
 }
 </style>

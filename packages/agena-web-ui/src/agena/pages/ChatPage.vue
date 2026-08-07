@@ -10,6 +10,7 @@ import {
   permissionRiskLabel,
 } from '@/agena/lib/permissionFormatting'
 import { openGlobalCommandPalette } from '@/agena/lib/commandPaletteRegistry'
+import { useNotifications } from '@/agena/lib/notifications/useNotifications'
 import ChatPageContent from './ChatPageContent.vue'
 import { createChatPageContentState } from './chatPageContentModel'
 import { messageBlocks, messageUsageFacts, readPayloadMessageId, readPayloadPartId } from './chatRenderModel'
@@ -37,14 +38,12 @@ const {
   composer,
   composerQueue,
   continuing,
-  errorMessage,
   interactiveRequestInFlight,
   inspectedMessage,
   inspectedMessageParts,
   inspectedPart,
   loading,
   liveCommandEvents,
-  localCommandNotice,
   messages,
   newSessionTitle,
   providerModels,
@@ -79,12 +78,14 @@ const {
   workspaces,
 } = useChatPageState()
 
+const { notify } = useNotifications()
+
 async function addComposerFiles(files: File[], imageOnly = false) {
   if (!files.length) return
-  errorMessage.value = ''
+  notify.clearBanner()
   const available = Math.max(0, MAX_COMPOSER_ATTACHMENTS - attachments.value.length)
   if (!available) {
-    errorMessage.value = `A maximum of ${MAX_COMPOSER_ATTACHMENTS} attachments can be sent at once.`
+    notify.error(`A maximum of ${MAX_COMPOSER_ATTACHMENTS} attachments can be sent at once.`)
     return
   }
   const selectedFiles = files.slice(0, available)
@@ -92,7 +93,7 @@ async function addComposerFiles(files: File[], imageOnly = false) {
     attachments.value.reduce((total, attachment) => total + attachment.size, 0) +
     selectedFiles.reduce((total, file) => total + file.size, 0)
   if (totalBytes > MAX_COMPOSER_ATTACHMENT_TOTAL_BYTES) {
-    errorMessage.value = 'Attachments for one message cannot exceed 64 MB in total.'
+    notify.error('Attachments for one message cannot exceed 64 MB in total.')
     return
   }
   attachmentLoading.value = true
@@ -105,10 +106,10 @@ async function addComposerFiles(files: File[], imageOnly = false) {
     }
     attachments.value = [...attachments.value, ...next]
     if (files.length > available) {
-      errorMessage.value = `Only the first ${available} attachment(s) were added; the limit is ${MAX_COMPOSER_ATTACHMENTS}.`
+      notify.error(`Only the first ${available} attachment(s) were added; the limit is ${MAX_COMPOSER_ATTACHMENTS}.`)
     }
   } catch (error) {
-    errorMessage.value = userErrorMessage(error)
+    notify.error(userErrorMessage(error))
   } finally {
     attachmentLoading.value = false
   }
@@ -119,7 +120,7 @@ function removeComposerAttachment(id: string) {
 }
 
 function openSkillPicker() {
-  errorMessage.value = ''
+  notify.clearBanner()
   skillPickerOpen.value = true
 }
 
@@ -127,15 +128,15 @@ function addComposerSkill(skill: ComposerSkillDraft) {
   const existing = skillReferences.value.findIndex((entry) => entry.name === skill.name)
   if (existing >= 0) {
     skillReferences.value = skillReferences.value.map((entry, index) => (index === existing ? skill : entry))
-    localCommandNotice.value = `Updated attached Skill ${skill.name} to content ${skill.contentHash.slice(0, 12)}.`
+    notify.notice(`Updated attached Skill ${skill.name} to content ${skill.contentHash.slice(0, 12)}.`)
     return
   }
   if (skillReferences.value.length >= MAX_COMPOSER_SKILLS) {
-    errorMessage.value = `A maximum of ${MAX_COMPOSER_SKILLS} Skills can be attached to one message.`
+    notify.error(`A maximum of ${MAX_COMPOSER_SKILLS} Skills can be attached to one message.`)
     return
   }
   skillReferences.value = [...skillReferences.value, skill]
-  localCommandNotice.value = `Attached Skill ${skill.name} to the next message.`
+  notify.notice(`Attached Skill ${skill.name} to the next message.`)
 }
 
 function removeComposerSkill(id: string) {
@@ -195,7 +196,7 @@ const {
   downloadWorkspaceFile,
 } = useChatPageUiState(
   {
-    localCommandNotice,
+    notify,
     providerModels,
     providers,
     runtime,
@@ -228,10 +229,9 @@ const {
   syncEventStream,
 } = useChatSessionLifecycle({
   composer,
-  errorMessage,
   loading,
   liveCommandEvents,
-  localCommandNotice,
+  notify,
   messages,
   providerModels,
   providers,
@@ -329,13 +329,12 @@ const {
   confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
   composer,
   continuing,
-  errorMessage,
+  notify,
   interactiveRequestInFlight,
   inspectedMessage,
   inspectedMessageParts,
   inspectedPart,
   loading,
-  localCommandNotice,
   messages,
   newSessionTitle,
   refreshConversation,
@@ -398,7 +397,7 @@ watch(
   sessionState,
   sessionUsageSummary,
   composer,
-  localCommandNotice,
+  notify,
   newSessionTitle,
   workspacePath,
   sessionSearch,
@@ -576,9 +575,6 @@ const pageContent = createChatPageContentState({
       </div>
       <div class="badge">{{ runtime?.provider_ids?.length || 0 }} provider(s)</div>
     </header>
-
-    <div v-if="errorMessage" class="notice">{{ errorMessage }}</div>
-    <div v-else-if="localCommandNotice" class="notice">{{ localCommandNotice }}</div>
 
     <ChatPageContent :state="pageContent" />
   </section>

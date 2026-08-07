@@ -34,6 +34,7 @@ import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import { composerQueuePreview, createComposerQueueItem, type ComposerQueueItem } from './chatQueueModel'
 import { rewindMessageComposerText } from './chatRenderModel'
 import type { ComposerSkillDraft } from './chatSkillModel'
+import type { NotificationsHandle } from '../lib/notifications/types'
 
 export type ChatSessionActionsInput = {
   attachments: Ref<ComposerAttachmentDraft[]>
@@ -43,10 +44,9 @@ export type ChatSessionActionsInput = {
   confirm: (message: string) => boolean
   composer: Ref<string>
   continuing: Ref<boolean>
-  errorMessage: Ref<string>
+  notify: NotificationsHandle
   interactiveRequestInFlight: Record<string, boolean>
   loading: Ref<boolean>
-  localCommandNotice: Ref<string>
   inspectedMessage: Ref<MessageResource | null>
   inspectedMessageParts: Ref<MessagePart[]>
   inspectedPart: Ref<MessagePart | null>
@@ -240,7 +240,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
 
     const workspaceId = input.selectedWorkspaceId.value
     if (!workspaceId) {
-      input.errorMessage.value = 'Select or create a workspace before sending a prompt.'
+      input.notify.error('Select or create a workspace before sending a prompt.')
       return null
     }
 
@@ -257,7 +257,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
 
   async function inspectMessage(messageId: number | string, partId?: number | string) {
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const message = input.messages.value.find((message) => message.id === messageId) || null
       if (!message) throw new Error(`Canonical conversation entry not found: ${messageId}`)
@@ -265,9 +265,9 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.inspectedMessage.value = message
       input.inspectedMessageParts.value = parts
       input.inspectedPart.value = partId == null ? null : parts.find((part) => part.id === partId) || null
-      input.localCommandNotice.value = `Loaded canonical entry ${messageId} inspector.`
+      input.notify.notice(`Loaded canonical entry ${messageId} inspector.`)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -278,14 +278,14 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!path) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const workspace = createIfMissing ? await deps.resolveWorkspace(path, true) : await deps.createWorkspace(path)
       input.workspacePath.value = workspace.path
       await input.loadSidebar()
       await input.selectWorkspace(workspace.id)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -296,7 +296,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!workspaceId) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const fallbackTitle = parentId ? `Child of #${parentId}` : 'New session'
       const title = input.newSessionTitle.value.trim() || fallbackTitle
@@ -308,9 +308,9 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.newSessionTitle.value = ''
       await input.loadSessionsForWorkspace(workspaceId, false)
       await input.selectSession(session.id)
-      input.localCommandNotice.value = `Created session #${session.id}.`
+      input.notify.notice(`Created session #${session.id}.`)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -321,16 +321,16 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const goal =
         input.sessionState.value?.goal ??
         input.sessionState.value?.session.goal ??
         (await deps.getSessionGoal(sessionId))
       patchCurrentGoal(goal ?? null)
-      input.localCommandNotice.value = goal ? formatGoalNotice(goal) : `Session #${sessionId} has no active goal.`
+      input.notify.notice(goal ? formatGoalNotice(goal) : `Session #${sessionId} has no active goal.`)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -342,15 +342,15 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId || !trimmedObjective) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const goal = await deps.setSessionGoal({ sessionId, objective: trimmedObjective })
       patchCurrentGoal(goal)
-      input.localCommandNotice.value = `Set ${formatGoalNotice(goal)}`
+      input.notify.notice(`Set ${formatGoalNotice(goal)}`)
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -361,15 +361,15 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const goal = await deps.completeSessionGoal(sessionId)
       patchCurrentGoal(goal)
-      input.localCommandNotice.value = `Completed ${formatGoalNotice(goal)}`
+      input.notify.notice(`Completed ${formatGoalNotice(goal)}`)
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -380,15 +380,15 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       await deps.clearSessionGoal(sessionId)
       patchCurrentGoal(null)
-      input.localCommandNotice.value = `Cleared goal for session #${sessionId}.`
+      input.notify.notice(`Cleared goal for session #${sessionId}.`)
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -402,7 +402,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!nextTitle || nextTitle === session.title) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const updated = await deps.updateSession({
         sessionId: session.id,
@@ -420,9 +420,9 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       }
       await input.loadSessionsForWorkspace(updated.workspace_id, false)
       await input.selectSession(updated.id)
-      input.localCommandNotice.value = `Renamed session #${updated.id}.`
+      input.notify.notice(`Renamed session #${updated.id}.`)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -434,7 +434,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId || !workspaceId) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const fallbackTitle = `Fork of #${sessionId}`
       const execution = await deps.forkSession({
@@ -445,7 +445,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.loadSessionsForWorkspace(workspaceId, false)
       await input.selectSession(execution.session.id)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -458,7 +458,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!parent || !workspaceId || !normalizedQuestion) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const titleText = normalizedQuestion.replace(/\s+/g, ' ').slice(0, 72)
       const child = await deps.createSession({
@@ -472,9 +472,9 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         ...selectedRunOptions(),
       })
       await input.loadSessionsForWorkspace(workspaceId, true)
-      input.localCommandNotice.value = `Started aside session #${child.id}; the current session remains selected.`
+      input.notify.notice(`Started aside session #${child.id}; the current session remains selected.`)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -489,16 +489,16 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       await deps.deleteSession({
         sessionId: session.id,
         version: session.version,
       })
-      input.localCommandNotice.value = `Deleted session #${session.id}.`
+      input.notify.notice(`Deleted session #${session.id}.`)
       await input.loadSessionsForWorkspace(workspaceId, false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -511,7 +511,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     clearComposerOnSuccess = true,
   ): Promise<boolean> {
     input.sending.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const sessionId = await ensureSessionForPrompt(text)
       if (!sessionId) return false
@@ -533,7 +533,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       await input.refreshConversation(false)
       return true
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
       return false
     } finally {
       input.sending.value = false
@@ -546,26 +546,26 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.composer.value = ''
     input.attachments.value = []
     input.skillReferences.value = []
-    input.localCommandNotice.value = `Queued message ${input.composerQueue.value.length}: ${composerQueuePreview(item)}`
+    input.notify.notice(`Queued message ${input.composerQueue.value.length}: ${composerQueuePreview(item)}`)
   }
 
   function clearComposerQueue() {
     const count = input.composerQueue.value.length
     input.composerQueue.value = []
-    input.localCommandNotice.value = count ? `Cleared ${count} queued message(s).` : 'The message queue is empty.'
+    input.notify.notice(count ? `Cleared ${count} queued message(s).` : 'The message queue is empty.')
   }
 
   function popComposerQueue() {
     const [item, ...rest] = input.composerQueue.value
     if (!item) {
-      input.localCommandNotice.value = 'The message queue is empty.'
+      input.notify.notice('The message queue is empty.')
       return
     }
     input.composerQueue.value = rest
     input.composer.value = item.text
     input.attachments.value = item.attachments
     input.skillReferences.value = item.skills
-    input.localCommandNotice.value = `Moved queued message back to the composer: ${composerQueuePreview(item)}`
+    input.notify.notice(`Moved queued message back to the composer: ${composerQueuePreview(item)}`)
   }
 
   async function drainComposerQueue() {
@@ -592,7 +592,6 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     const text = input.composer.value.trim()
     if (!text && !input.attachments.value.length && !input.skillReferences.value.length) return
 
-    const noticeBeforeSlash = input.localCommandNotice.value
     const slashResult =
       input.attachments.value.length || input.skillReferences.value.length
         ? { matched: false as const, command: undefined, result: undefined }
@@ -604,14 +603,10 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         return
       }
       if (slashResult.result?.notice) {
-        input.localCommandNotice.value = slashResult.result.notice
+        input.notify.notice(slashResult.result.notice)
         return
       }
-      const commandNoticeChanged =
-        input.localCommandNotice.value && input.localCommandNotice.value !== noticeBeforeSlash
-      if (!commandNoticeChanged) {
-        input.localCommandNotice.value = `Executed ${slashResult.command?.title || text}`
-      }
+      input.notify.notice(`Executed ${slashResult.command?.title || text}`)
       return
     }
 
@@ -631,7 +626,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId) return
 
     input.continuing.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       input.sessionState.value = await deps.continueSession({
         sessionId,
@@ -640,7 +635,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.continuing.value = false
     }
@@ -651,18 +646,18 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId) return
 
     input.continuing.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       input.sessionState.value = await deps.compactSession({
         sessionId,
         expectedVersion: input.sessionState.value?.session.version,
         ...selectedRunOptions(),
       })
-      input.localCommandNotice.value = `Compaction started for session #${sessionId}.`
+      input.notify.notice(`Compaction started for session #${sessionId}.`)
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.continuing.value = false
     }
@@ -673,13 +668,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!sessionId) return
 
     input.continuing.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       await deps.cancelSessionRun(sessionId)
-      input.localCommandNotice.value = `Cancellation requested for session #${sessionId}.`
+      input.notify.notice(`Cancellation requested for session #${sessionId}.`)
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.continuing.value = false
     }
@@ -694,7 +689,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     const sessionId = request?.session_id || input.selectedSessionId.value
     if (!sessionId) return
     if (!beginInteractiveRequest(sessionId, requestId)) return
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       await deps.replyPermission({
         sessionId,
@@ -705,7 +700,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       finishInteractiveRequest(sessionId, requestId)
     }
@@ -739,7 +734,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       finishInteractiveRequest(sessionId, requestId)
     }
@@ -760,7 +755,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.syncEventStream()
       await input.refreshConversation(false)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       finishInteractiveRequest(sessionId, requestId)
     }
@@ -772,7 +767,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     const rewoundMessage = input.messages.value.find((message) => message.id === messageId)
     const turnId = rewoundMessage?.metadata.canonical_turn_id
     if (!rewoundMessage || rewoundMessage.role !== 'user' || typeof turnId !== 'string') {
-      input.errorMessage.value = 'Only canonical user turns can be rewound.'
+      input.notify.error('Only canonical user turns can be rewound.')
       return
     }
     if (
@@ -784,7 +779,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     }
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const messageText = rewindMessageComposerText(rewoundMessage)
       input.sessionState.value = await deps.rewindSession({
@@ -795,9 +790,9 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.composer.value = messageText
       input.attachments.value = []
       input.skillReferences.value = []
-      input.localCommandNotice.value = `Restored canonical turn ${turnId} to the composer.`
+      input.notify.notice(`Restored canonical turn ${turnId} to the composer.`)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }
@@ -807,7 +802,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
 
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const jsonl = await deps.exportSessionJsonl(sessionId)
       input.sessionImportJsonl.value = jsonl
@@ -824,11 +819,13 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         link.remove()
         window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0)
       }
-      input.localCommandNotice.value = requestedFilename
-        ? `Exported session #${sessionId} as ${requestedFilename}.`
-        : `Exported session #${sessionId} into the Session Transfer panel.`
+      input.notify.notice(
+        requestedFilename
+          ? `Exported session #${sessionId} as ${requestedFilename}.`
+          : `Exported session #${sessionId} into the Session Transfer panel.`,
+      )
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     }
   }
 
@@ -837,16 +834,16 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     if (!jsonl) return
 
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       const execution = await deps.importSessionJsonl(jsonl)
       input.sessionImportJsonl.value = ''
       await input.loadSidebar()
       await input.loadSessionsForWorkspace(execution.session.workspace_id, false)
       await input.selectSession(execution.session.id)
-      input.localCommandNotice.value = `Imported session #${execution.session.id}.`
+      input.notify.notice(`Imported session #${execution.session.id}.`)
     } catch (err) {
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
     } finally {
       input.loading.value = false
     }

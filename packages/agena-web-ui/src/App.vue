@@ -6,6 +6,9 @@ import LoginPage from './agena/pages/LoginPage.vue'
 import { dispatchAuthCallback } from './agena/lib/authCallbackRegistry'
 import { buildPluginCommandPayload, createCommandPalette, type CommandItem } from './agena/lib/commandPalette'
 import { registeredLocalCommands, setGlobalCommandPaletteOpenHandler } from './agena/lib/commandPaletteRegistry'
+import NotificationBanner from './agena/lib/notifications/NotificationBanner.vue'
+import NotificationToaster from './agena/lib/notifications/NotificationToaster.vue'
+import { useNotifications } from './agena/lib/notifications/useNotifications'
 import {
   fetchRuntimeStatus,
   runPluginUiAction,
@@ -23,6 +26,7 @@ const auth = useAuthStore()
 const health = useHealthStore()
 const route = useRoute()
 const router = useRouter()
+const notifications = useNotifications()
 
 const booting = ref(true)
 const runtimeSnapshot = ref<RuntimeStatus | null>(null)
@@ -225,9 +229,11 @@ watch(
   pluginRegistrySyncEnabled,
   (enabled) => {
     if (enabled) {
+      notifications.start()
       pluginRegistryRuntimeSync.start()
       void pluginRegistryRuntimeSync.refreshRuntime()
     } else {
+      notifications.stop()
       pluginRegistryRuntimeSync.stop()
       applyRuntimeSnapshot(null)
     }
@@ -274,7 +280,7 @@ watch(
           <RouterLink to="/workspace" class="nav-link" :class="{ active: route.path.startsWith('/workspace') }">
             Workspace
           </RouterLink>
-                    <RouterLink to="/usage" class="nav-link" :class="{ active: route.path.startsWith('/usage') }">
+          <RouterLink to="/usage" class="nav-link" :class="{ active: route.path.startsWith('/usage') }">
             Usage
           </RouterLink>
           <RouterLink to="/activities" class="nav-link" :class="{ active: route.path.startsWith('/activities') }">
@@ -338,5 +344,8 @@ watch(
         <p v-else class="muted" style="margin-top: 12px">No commands matched the current query.</p>
       </section>
     </div>
+
+    <NotificationBanner />
+    <NotificationToaster />
   </div>
 </template>

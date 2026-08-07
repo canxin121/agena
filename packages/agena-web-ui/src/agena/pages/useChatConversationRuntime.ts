@@ -12,9 +12,10 @@ import {
 } from '../lib/agenaApi'
 import { applyLiveCommandEvent, applySessionEvent, type ChatEventState } from './chatPageModel'
 import { transcriptMessages } from './chatRenderModel'
+import type { NotificationsHandle } from '../lib/notifications/types'
 
 export type ChatConversationRuntimeInput = {
-  errorMessage: Ref<string>
+  notify: NotificationsHandle
   loading: Ref<boolean>
   liveCommandEvents: Ref<DomainEventRecord[]>
   messages: Ref<MessageResource[]>
@@ -231,7 +232,7 @@ export function useChatConversationRuntime(
       syncPolling()
     } catch (err) {
       if (input.selectedSessionId.value !== sessionId) return
-      input.errorMessage.value = userErrorMessage(err)
+      input.notify.error(userErrorMessage(err))
       stopPolling()
     } finally {
       refreshInFlight = false

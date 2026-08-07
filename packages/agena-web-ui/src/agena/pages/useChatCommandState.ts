@@ -21,6 +21,7 @@ import {
 } from '../lib/commandPalette'
 import { useRegisteredCommandPaletteItems } from '../lib/commandPaletteRegistry'
 import { isPluginUiToolInvokeResponse, resolvePluginCommandOutput } from '../lib/pluginUiActionRuntime'
+import type { NotificationsHandle } from '../lib/notifications/types'
 import type { ChatUsageSummary } from './chatUsageModel'
 import type { ComposerQueueItem } from './chatQueueModel'
 
@@ -43,7 +44,7 @@ export type ChatCommandStateInput = {
   sessionState: Ref<import('../lib/agenaApi').SessionExecutionResource | null>
   sessionUsageSummary: ComputedRef<ChatUsageSummary>
   composer: Ref<string>
-  localCommandNotice: Ref<string>
+  notify: NotificationsHandle
   newSessionTitle: Ref<string>
   workspacePath: Ref<string>
   sessionSearch: Ref<string>
@@ -155,9 +156,7 @@ export function useChatCommandState(input: ChatCommandStateInput) {
       },
       {
         ...input.actions,
-        setLocalCommandNotice: (value) => {
-          input.localCommandNotice.value = value
-        },
+        setLocalCommandNotice: (value) => input.notify.notice(value),
         setNewSessionTitle: (value) => {
           input.newSessionTitle.value = value
         },
@@ -187,7 +186,7 @@ export function useChatCommandState(input: ChatCommandStateInput) {
       })
       const prompt = response.output_text.trim()
       if (!prompt) {
-        input.localCommandNotice.value = `Runtime entry /${item.name} returned an empty prompt.`
+        input.notify.notice(`Runtime entry /${item.name} returned an empty prompt.`)
         return
       }
       return { submitText: prompt }

@@ -11,13 +11,14 @@ import {
   type BackgroundActivityLogResource,
   type BackgroundActivityResource,
 } from '@/agena/lib/agenaApi'
+import { useNotifications } from '@/agena/lib/notifications/useNotifications'
 
+const { notify } = useNotifications()
 const activities = ref<BackgroundActivityResource[]>([])
 const logs = ref<BackgroundActivityLogResource | null>(null)
 const selectedId = ref<string | null>(null)
 const loading = ref(false)
 const busyId = ref<string | null>(null)
-const error = ref('')
 const kindFilter = ref('')
 const statusFilter = ref('')
 const activeOnly = ref(false)
@@ -95,7 +96,7 @@ function durationLabel(activity: BackgroundActivityResource): string {
 
 async function loadActivities() {
   loading.value = true
-  error.value = ''
+  notify.clearBanner()
   try {
     activities.value = await fetchActivities({
       kinds: kindFilter.value ? [kindFilter.value] : [],
@@ -107,7 +108,7 @@ async function loadActivities() {
       logs.value = null
     }
   } catch (err) {
-    error.value = userErrorMessage(err)
+    notify.error(userErrorMessage(err))
   } finally {
     loading.value = false
   }
@@ -118,7 +119,7 @@ async function loadLogs() {
   try {
     logs.value = await fetchActivityLogs(selectedId.value, { limit: 300 })
   } catch (err) {
-    error.value = userErrorMessage(err)
+    notify.error(userErrorMessage(err))
   }
 }
 
@@ -130,12 +131,12 @@ function toggleDetail(activity: BackgroundActivityResource) {
 
 async function handleStop(activity: BackgroundActivityResource) {
   busyId.value = activity.id
-  error.value = ''
+  notify.clearBanner()
   try {
     await stopActivity(activity.id)
     await loadActivities()
   } catch (err) {
-    error.value = userErrorMessage(err)
+    notify.error(userErrorMessage(err))
   } finally {
     busyId.value = null
   }
@@ -143,7 +144,7 @@ async function handleStop(activity: BackgroundActivityResource) {
 
 async function handleDismiss(activity: BackgroundActivityResource) {
   busyId.value = activity.id
-  error.value = ''
+  notify.clearBanner()
   try {
     await dismissActivity(activity.id)
     if (selectedId.value === activity.id) {
@@ -152,7 +153,7 @@ async function handleDismiss(activity: BackgroundActivityResource) {
     }
     await loadActivities()
   } catch (err) {
-    error.value = userErrorMessage(err)
+    notify.error(userErrorMessage(err))
   } finally {
     busyId.value = null
   }
@@ -160,14 +161,14 @@ async function handleDismiss(activity: BackgroundActivityResource) {
 
 async function handleClearFinished() {
   busyId.value = 'clear'
-  error.value = ''
+  notify.clearBanner()
   try {
     await clearFinishedActivities()
     selectedId.value = null
     logs.value = null
     await loadActivities()
   } catch (err) {
-    error.value = userErrorMessage(err)
+    notify.error(userErrorMessage(err))
   } finally {
     busyId.value = null
   }
@@ -193,8 +194,8 @@ onBeforeUnmount(() => {
       <div>
         <h1>Background Activities</h1>
         <p class="muted">
-          {{ activeCount }} active · {{ finishedCount }} finished — unified view of shell processes,
-          delegated tasks, runtime maintenance, and browser sessions
+          {{ activeCount }} active · {{ finishedCount }} finished — unified view of shell processes, delegated tasks,
+          runtime maintenance, and browser sessions
         </p>
       </div>
       <div class="button-row">
@@ -208,8 +209,6 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </section>
-
-    <div v-if="error" class="notice">{{ error }}</div>
 
     <section class="card">
       <div class="form-grid" style="align-items: end">
@@ -279,7 +278,9 @@ onBeforeUnmount(() => {
             <div v-if="activity.exit_code != null" class="muted mono" style="margin-bottom: 8px">
               exit code {{ activity.exit_code }}
             </div>
-            <pre v-if="logs?.lines.length" class="log-tail mono">{{ logs.lines.map((line) => line.text).join('\n') }}</pre>
+            <pre v-if="logs?.lines.length" class="log-tail mono">{{
+              logs.lines.map((line) => line.text).join('\n')
+            }}</pre>
             <p v-else class="muted">No output available for this activity.</p>
           </div>
         </div>

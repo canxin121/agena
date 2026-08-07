@@ -27,16 +27,16 @@ import {
   type WorkspaceResource,
 } from '../lib/agenaApi'
 import { usePluginToolRegistryRuntimeSync } from '../lib/usePluginToolRegistryRuntimeSync'
+import type { NotificationsHandle } from '../lib/notifications/types'
 import { readChatRouteSessionId, readChatRouteSlash, readChatRouteWorkspaceId } from './chatRouteState'
 import { applySessionEvent } from './chatPageModel'
 import { useChatConversationRuntime } from './useChatConversationRuntime'
 
 export type ChatSessionLifecycleInput = {
   composer: Ref<string>
-  errorMessage: Ref<string>
   loading: Ref<boolean>
   liveCommandEvents: Ref<DomainEventRecord[]>
-  localCommandNotice: Ref<string>
+  notify: NotificationsHandle
   messages: Ref<MessageResource[]>
   providerModels: Record<string, ProviderModel[]>
   providers: Ref<ProviderSummary[]>
@@ -125,7 +125,7 @@ export function useChatSessionLifecycle(
 
   const conversationRuntime = useChatConversationRuntime(
     {
-      errorMessage: input.errorMessage,
+      notify: input.notify,
       loading: input.loading,
       liveCommandEvents: input.liveCommandEvents,
       messages: input.messages,
@@ -215,7 +215,7 @@ export function useChatSessionLifecycle(
     const routeSlash = readChatRouteSlash(input.route.query.slash)
     if (routeSlash) {
       input.composer.value = routeSlash
-      input.localCommandNotice.value = `Prepared ${routeSlash} from runtime inspector.`
+      input.notify.notice(`Prepared ${routeSlash} from runtime inspector.`)
     }
 
     const routeWorkspaceId = readChatRouteWorkspaceId(input.route.query.workspace)
@@ -294,7 +294,7 @@ export function useChatSessionLifecycle(
 
   async function setSessionViewMode(mode: 'all' | 'roots' | 'subtree', query = '') {
     if (mode === 'subtree' && !input.selectedSessionId.value) {
-      input.localCommandNotice.value = 'Select a session before using subtree view.'
+      input.notify.notice('Select a session before using subtree view.')
       return
     }
     input.sessionViewMode.value = mode
@@ -307,11 +307,11 @@ export function useChatSessionLifecycle(
     const sessionId = input.selectedSessionId.value
     if (!sessionId) return
     input.loading.value = true
-    input.errorMessage.value = ''
+    input.notify.clearBanner()
     try {
       input.timelineEvents.value = await deps.listSessionTimeline(sessionId, { limit })
     } catch (error) {
-      input.errorMessage.value = userErrorMessage(error)
+      input.notify.error(userErrorMessage(error))
     } finally {
       input.loading.value = false
     }
@@ -368,7 +368,7 @@ export function useChatSessionLifecycle(
       input.liveCommandEvents.value = []
       input.selectedSessionId.value = routeSessionId
       void loadSidebar().catch((err) => {
-        input.errorMessage.value = userErrorMessage(err)
+        input.notify.error(userErrorMessage(err))
       })
     },
   )
@@ -380,7 +380,7 @@ export function useChatSessionLifecycle(
       if (routeWorkspaceId === null || routeWorkspaceId === input.selectedWorkspaceId.value) return
       input.selectedWorkspaceId.value = routeWorkspaceId
       void loadSidebar().catch((err) => {
-        input.errorMessage.value = userErrorMessage(err)
+        input.notify.error(userErrorMessage(err))
       })
     },
   )
@@ -391,14 +391,14 @@ export function useChatSessionLifecycle(
       const routeSlash = readChatRouteSlash(value)
       if (!routeSlash) return
       input.composer.value = routeSlash
-      input.localCommandNotice.value = `Prepared ${routeSlash} from runtime inspector.`
+      input.notify.notice(`Prepared ${routeSlash} from runtime inspector.`)
     },
   )
 
   if (registerComponentLifecycle) {
     onMounted(() => {
       void loadSidebar().catch((err) => {
-        input.errorMessage.value = userErrorMessage(err)
+        input.notify.error(userErrorMessage(err))
       })
     })
 

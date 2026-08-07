@@ -1,7 +1,6 @@
 # Agena Activity 消息机制调查报告
 
 > 分支: `agent/activity-mechanism-review`（基于 `origin/master` @ `acaeaf76`）
-> 日期: 本次调查会话
 
 ## 0. 调查范围
 
@@ -18,7 +17,7 @@
   - `agena-web-ui/src/agena/pages/chatRenderModel.ts`（Web 呈现）
   - `agena-plugin-sdk/src/activity.rs`（插件后台活动接口）
 
-## 1. 结论摘要（对五个问题的直接回答）
+## 1. 结论摘要（对六个问题的直接回答）
 
 | 问题 | 结论 | 证据/位置 |
 | --- | --- | --- |
@@ -28,9 +27,11 @@
 | 类型是否完善充足 | 18 个 ActivityPayload 变体偏多，其中 6-7 个在生产代码中没有任何构造点（死变体）；运行时实际只产生 ~10 种 | 见 `02-types-and-visibility.md` §2 |
 | AI 服务器 vs 用户呈现分离 | 机制成熟：模型侧按 payload 类型投影、Operation 双轨（model_preview vs human markdown/blocks）、用户专属类型完全不进 provider；但 Web 端引用不存在的 `model_output_text` 字段 | 见 `02-types-and-visibility.md` §3 |
 | 创建/删除机制 | 创建=part 带 ActivityId + 单表 upsert；更新=revision 守卫 + O(1) title + 增量 patch；删除=ContentRemoved（重试成功删除 live 节点），durable 错误按设计保留；无面向用户的 transcript 删除 API | 见 `03-lifecycle-organization-issues.md` §2 |
+| **是否需要彻底重构** | **不需要推倒重来**；需要有边界的分层重构（表示层收敛 → 边界接通 → 分治 → 补强），见 `04-refactor-assessment.md` | 见 `04-refactor-assessment.md` |
 
 ## 2. 报告分卷
 
 - `01-producers.md` — 所有 activity 生产点清单
 - `02-types-and-visibility.md` — 类型体系、死变体、AI/用户分离机制
 - `03-lifecycle-organization-issues.md` — 创建/更新/删除、代码组织与复用评估、问题清单与建议
+- `04-refactor-assessment.md` — 是否需要彻底重构的评估与分层重构路线图

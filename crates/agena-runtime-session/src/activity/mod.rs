@@ -12,6 +12,10 @@ use agena_tool::{
 };
 
 /// Converged activity kinds (07 §4.1): the only nine live variants.
+pub mod projection;
+pub use projection::{fallback_human_view, for_model};
+
+/// Converged activity kinds (07 §4.1): the only nine live variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityKind {

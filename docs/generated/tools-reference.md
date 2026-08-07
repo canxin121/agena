@@ -6235,7 +6235,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Use for non-trivial implementation work: new features, multiple viable approaches, changing existing behavior or structure, architectural decisions, changes touching 2-3 or more files, unclear requirements, or when user preference affects the direction. Skip for single-line fixes, clearly scoped single-function changes, or pure research/read-only work. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools, clarify with `ask`, and refine. Present the finished plan for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.
+> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine. Present the finished plan for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8028,7 +8028,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8059,7 +8059,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
 > Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.
@@ -8236,7 +8236,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8365,7 +8365,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8451,10 +8451,10 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `execute`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Use when the work is genuinely parallel, independent, or read-heavy across many files, or when a matching subagent type exists. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.
+> Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

@@ -370,7 +370,7 @@ impl SessionProcessor {
         title: String,
         summary: String,
         output_text: String,
-        blocks: Vec<crate::message::OperationBlock>,
+        blocks: Vec<agena_domain::ViewBlock>,
         details: agena_domain::ToolOutput,
         raw: Option<serde_json::Value>,
     ) -> Result<(), AppError> {

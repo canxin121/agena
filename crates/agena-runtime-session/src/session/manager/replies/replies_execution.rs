@@ -2536,16 +2536,74 @@ impl SessionManager {
         // refreshes the running title (a tiny UPDATE), so a long stream costs
         // O(delta) writes instead of re-persisting the cumulative output.
         const TITLE_REFRESH_MS: u64 = 2_000;
-        const DETAIL_BROADCAST_MS: u64 = 200;
         let mut last_title_refresh = std::time::Instant::now();
-        let mut last_detail_broadcast = std::time::Instant::now();
         let mut streamed_output = String::new();
-        let mut pending_detail_delta = String::new();
         // Resolve the Activity id once so live detail broadcasts never need a
         // per-tick session load.
         let streaming_activity_id = session
             .part(&pending_tool.part)
             .and_then(|part| part.activity_id);
+        // Activity v2 live bridge (07 §5.2, §6.1): one in-memory handler feeds
+        // the unified wire events from the same text deltas that drive the
+        // legacy detail broadcasts. Events are published as
+        // `EventKind::ActivityV2` (live, non-persistent) for TUI/Web.
+        let initial_title = session
+            .part(&pending_tool.part)
+            .and_then(|part| match &part.content {
+                Some(crate::message::PartContent::Activity(
+                    crate::message::RuntimeActivity::Operation(operation),
+                )) if !operation.title.is_empty() => Some(operation.title.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "tool".to_owned());
+        let mut activity_handler = streaming_activity_id.map(|activity_id| {
+            // The built-in human renderer maps the tool's structured output to
+            // ViewBlocks (v2). Shell/process executions carry the command line
+            // so the human view renders a `$ command` card.
+            let invocation = session
+                .part(&pending_tool.part)
+                .and_then(|part| match &part.content {
+                    Some(crate::message::PartContent::Activity(
+                        crate::message::RuntimeActivity::Operation(operation),
+                    )) => Some(&operation.invocation),
+                    _ => None,
+                });
+            let command = invocation
+                .and_then(|invocation| {
+                    invocation
+                        .input
+                        .get("command")
+                        .and_then(|value| value.as_text())
+                        .map(ToOwned::to_owned)
+                });
+            let cwd = invocation
+                .and_then(|invocation| {
+                    invocation
+                        .input
+                        .get("workdir")
+                        .and_then(|value| value.as_text())
+                        .map(ToOwned::to_owned)
+                });
+            let mut renderer = crate::tool::human_view::BuiltinHumanRenderer::new(
+                invocation
+                    .map(|invocation| invocation.name.as_str())
+                    .unwrap_or("tool"),
+            );
+            if let Some(command) = command {
+                renderer = renderer.with_command(command);
+            }
+            if let Some(cwd) = cwd {
+                renderer = renderer.with_cwd(cwd);
+            }
+            crate::activity::ActivityHandler::begin(
+                activity_id,
+                crate::activity::ActivityKind::Operation,
+                initial_title,
+            )
+            .with_renderer(renderer)
+        });
+        let stream_started = std::time::Instant::now();
+        let mut stream_block_created = false;
         loop {
             let chunk = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
@@ -2575,27 +2633,57 @@ impl SessionManager {
                 continue;
             }
             streamed_output.push_str(delta);
-            pending_detail_delta.push_str(delta);
-            // Broadcast the new output as a live, non-persisted detail delta so
-            // an expanded terminal renders the growing detail in real time.
-            if last_detail_broadcast.elapsed()
-                >= std::time::Duration::from_millis(DETAIL_BROADCAST_MS)
-                && !pending_detail_delta.is_empty()
-            {
-                last_detail_broadcast = std::time::Instant::now();
-                self.broadcast_streaming_detail(
-                    session.id,
-                    pending_tool,
-                    &pending_detail_delta,
-                    streaming_activity_id,
-                )?;
-                pending_detail_delta.clear();
+            if let Some(handler) = &mut activity_handler {
+                let render_event = if stream_block_created {
+                    agena_tool::ToolActivityEvent::Render(agena_domain::RenderDelta::append(
+                        "stream",
+                        agena_domain::ViewBlock::Log {
+                            id: None,
+                            stream: agena_domain::CommandOutputStream::Stdout,
+                            text: delta.to_string(),
+                        },
+                    ))
+                } else {
+                    stream_block_created = true;
+                    agena_tool::ToolActivityEvent::Render(agena_domain::RenderDelta::new(
+                        agena_domain::ViewBlock::Log {
+                            id: Some("stream".to_owned()),
+                            stream: agena_domain::CommandOutputStream::Stdout,
+                            text: delta.to_string(),
+                        },
+                    ))
+                };
+                for event in handler.apply_event(render_event) {
+                    self.broadcast_activity_v2(session.id, event)?;
+                }
             }
+            // Live streaming detail is carried by ActivityV2 DetailDelta
+            // broadcasts above; the legacy CommandOutputDelta detail path is
+            // removed.
             if last_title_refresh.elapsed() >= std::time::Duration::from_millis(TITLE_REFRESH_MS) {
                 last_title_refresh = std::time::Instant::now();
                 session = self
                     .refresh_streaming_title(session.id, pending_tool, state.clone())
                     .await?;
+                if let Some(handler) = &mut activity_handler {
+                    if let Some(event) =
+                        handler.refresh_elapsed_title(stream_started.elapsed().as_secs())
+                    {
+                        if let crate::activity::ActivityLiveEvent::TitleChanged {
+                            activity_id,
+                            title,
+                        } = &event
+                        {
+                            crate::session::store::update_activity_label(
+                                &self.store.db,
+                                *activity_id,
+                                title,
+                            )
+                            .await?;
+                        }
+                        self.broadcast_activity_v2(session.id, event)?;
+                    }
+                }
             }
         }
         session = self
@@ -2683,12 +2771,42 @@ impl SessionManager {
             }
         };
 
+        // Assemble the terminal v2 activity node once the stream finished
+        // successfully. The live wire event is broadcast immediately; the
+        // durable write happens after every legacy checkpoint so the v2
+        // payload (raw output) is the final word for this node.
+        let terminal_node = activity_handler.take().map(|mut handler| {
+            handler.finish(
+                agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(
+                    streamed_output,
+                )),
+                agena_domain::ActivityState::Completed,
+            )
+        });
+        if let Some(node) = &terminal_node {
+            self.broadcast_activity_v2(
+                session.id,
+                crate::activity::ActivityLiveEvent::Upserted {
+                    node: Box::new(node.clone()),
+                },
+            )?;
+        }
+
         let session = self
             .store
             .load_session(session.id, state.cache_policy())
             .await?;
-        self.apply_tool_success(session, pending_tool, execution, None, state)
-            .await
+        let session = self
+            .apply_tool_success(session, pending_tool, execution, None, state)
+            .await?;
+        // Durable v2 terminal write (07 §8.2 upsert_content_node): the raw
+        // output lands exactly once, after every legacy checkpoint, and the
+        // revision guard lets the v2 payload win over any earlier projection.
+        if let Some(node) = &terminal_node {
+            crate::session::store::upsert_content_node(&self.store.db, session.id, node)
+                .await?;
+        }
+        Ok(session)
     }
 
     pub(in crate::session::manager) async fn apply_tool_cancellation(
@@ -2727,44 +2845,29 @@ impl SessionManager {
     /// consumers as a non-persistent `CommandOutputDelta`. Expanded terminals
     /// render this delta into the Activity's detail in real time; collapsed
     /// terminals drop it. Nothing is written to disk.
-    fn broadcast_streaming_detail(
+    /// Publish one activity v2 live wire event (07 §5.2). In-memory,
+    /// non-persistent, fire-and-forget like the legacy detail broadcasts.
+    fn broadcast_activity_v2(
         &self,
         session_id: i64,
-        pending_tool: &SessionPendingTool,
-        delta: &str,
-        activity_id: Option<agena_domain::ActivityId>,
+        event: crate::activity::ActivityLiveEvent,
     ) -> Result<(), AppError> {
-        let event = agena_domain::CommandOutputDeltaEvent {
-            context: agena_domain::CommandContext {
-                session_id,
-                call_id: 0,
-                message_id: Some(pending_tool.part.message_id),
-                part_id: Some(pending_tool.part.part_id),
-                activity_id: activity_id.map(|id| id.to_string()),
-            },
-            stream: agena_domain::CommandOutputStream::Stdout,
-            seq: 0,
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-            chunk: delta.as_bytes().to_vec(),
-            preview_text: delta.to_string(),
-            preview_lossy: false,
-        };
         let publisher = Arc::clone(&self.publisher);
         let context = crate::event::PublishContext::for_session(session_id);
         let handle = tokio::runtime::Handle::current();
-        // Fire-and-forget in-memory broadcast; the bus is in-process and
-        // non-persistent for CommandOutputDelta, so this never blocks the
-        // streaming loop on disk I/O.
         handle.spawn(async move {
             if let Err(error) = publisher
-                .publish(context, crate::event::EventKind::CommandOutputDelta(event))
+                .publish(
+                    context,
+                    crate::event::EventKind::ActivityV2(Box::new(event)),
+                )
                 .await
             {
                 tracing::debug!(
-                    target: "agena::session::streaming_detail",
+                    target: "agena::session::activity_v2",
                     session_id,
                     error = %error,
-                    "failed to broadcast live streaming detail"
+                    "failed to broadcast activity v2 live event"
                 );
             }
         });

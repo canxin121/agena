@@ -65,6 +65,7 @@ pub enum EventKind {
     PluginEvent(PluginEventPayload),
     /// Structured runtime event emitted when the plugin tool registry changes.
     PluginToolRegistryChanged(PluginToolRegistryChangedEvent),
+    ActivityV2(Box<crate::activity::ActivityLiveEvent>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -106,6 +107,7 @@ impl EventKind {
             Self::BackgroundActivityChanged(_) => "background_activity_changed",
             Self::PluginEvent(_) => "plugin_event",
             Self::PluginToolRegistryChanged(_) => "plugin_tool_registry_changed",
+            Self::ActivityV2(_) => "activity_v2",
         }
     }
 
@@ -123,6 +125,7 @@ impl EventKind {
                 | Self::CommandBegin(_)
                 | Self::CommandOutputDelta(_)
                 | Self::CommandEnd(_)
+                | Self::ActivityV2(_)
         )
     }
 

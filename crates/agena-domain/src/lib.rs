@@ -74,6 +74,8 @@ mod usage_query;
 mod usage_stats;
 mod user_input;
 
+pub mod activity_v2;
+pub use activity_v2::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
 pub use access::{AccessKind, AccessSelector};
 pub use background_activity::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,
@@ -83,13 +85,13 @@ pub use background_activity::{
 pub use activity::{
     ActivityActor, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
     ActivityProvenance, ActivityState, AssistantReplySnapshot, AssistantReplyStatus,
-    CancellationResult, ChecklistActivity, ComposerActivity, ComposerDocument, ComposerNode,
-    ContentDocument, ContentNode, ContentPosition, CustomActivity, ErrorActivity, ExecutionTarget,
-    FileChangesActivity, HookActivity, InteractionActivity, MaintenanceActivity, NestedTaskActivity,
+    CancellationResult, ComposerActivity, ComposerDocument, ComposerNode,
+    ContentDocument, ContentNode, ContentPosition, ErrorActivity, ExecutionTarget,
+      InteractionActivity,
     NoticeActivity, OperationActivity, OperationActivityError, OperationAuthorization,
     OperationPermission,
-    ProgressActivity, ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference,
-    SearchActivity, SkillExecutionActivity, SkillReferenceActivity, TextArtifactActivity,
+     ReasoningActivity, ResourceActivity, ResourceKind, ResourceReference,
+     SkillReferenceActivity, TextArtifactActivity,
     TextSegment, TextSegmentActivity, TranscriptPatch, TranscriptSnapshot, TurnSnapshot,
 };
 pub use auto_compaction::SessionAutoCompactionConfig;

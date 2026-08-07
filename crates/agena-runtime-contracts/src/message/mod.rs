@@ -14,7 +14,7 @@ pub use part::{
     EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput, GrepToolInput, HookPart,
     InteractionNotifyToolInput, InteractiveRequestPart, LspDefinitionToolInput,
     LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MessagePart, NoticePart,
-    ModelVisibleOutput, OperationBlock, OperationCompletion, OperationPart, PartContent,
+    ModelVisibleOutput, OperationCompletion, OperationPart, PartContent,
     ReadToolInput, RequestPart, RuntimeActivity, ScheduleWakeupToolInput, ShellCommandInput,
     ShellMonitorInput, ShellMonitorPatternKind, ShellToolInput, SkillReference, SkillReferencePart,
     TaskAccess, TaskToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,

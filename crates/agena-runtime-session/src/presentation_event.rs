@@ -8,14 +8,6 @@ use async_trait::async_trait;
 #[derive(Debug, Clone)]
 pub enum RuntimePresentationEventKind {
     TranscriptPatch(Box<agena_domain::TranscriptPatch>),
-    /// A live delta of the human-facing detail of a streaming tool Activity.
-    /// Emitted (in memory only, never persisted) while a tool runs so an
-    /// expanded terminal can render the growing detail in real time. Clients
-    /// that collapsed the Activity simply drop the receiver and stop listening.
-    OperationDetailDelta {
-        activity_id: agena_domain::ActivityId,
-        delta: String,
-    },
     /// A background activity started, updated, or finished. Carries the
     /// mutated activity so presentation consumers can refresh a management
     /// panel without a full persisted-state replay.
@@ -28,6 +20,9 @@ pub enum RuntimePresentationEventKind {
     Refresh {
         force_refresh: bool,
     },
+    /// A live activity-v2 event (detail delta, title change, state change,
+    /// upsert, removal). Broadcast in memory only, never persisted.
+    ActivityV2(Box<crate::activity::ActivityLiveEvent>),
 }
 
 #[derive(Debug, Clone)]

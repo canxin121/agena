@@ -12,7 +12,7 @@ use agena_api::{
 };
 use agena_domain::{
     ActivityNode, ActivityPayload, ActivityState, AssistantReplyStatus, ComposerDocument,
-    ComposerNode, ContentDocument, ContentNode, MaintenanceActivity, ResourceKind,
+    ComposerNode, ContentDocument, ContentNode, ResourceKind,
     ResourceReference, TextSegmentActivity, TranscriptSnapshot,
 };
 use chrono::{DateTime, Utc};
@@ -359,7 +359,7 @@ pub fn pending_user_entry<'a>(
 const fn user_activity_style(payload: &ActivityPayload) -> TranscriptUserActivityStyle {
     match payload {
         ActivityPayload::Resource(_) => TranscriptUserActivityStyle::Resource,
-        ActivityPayload::SkillReference(_) | ActivityPayload::SkillExecution(_) => {
+        ActivityPayload::SkillReference(_) => {
             TranscriptUserActivityStyle::Skill
         }
         ActivityPayload::TextArtifact(_) => TranscriptUserActivityStyle::TextArtifact,
@@ -378,7 +378,6 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
             format!("[{kind}: {}]", resource.name)
         }
         ActivityPayload::SkillReference(skill) => format!("[Skill: {}]", skill.name),
-        ActivityPayload::SkillExecution(skill) => format!("[Skill: {}]", skill.skill_name),
         ActivityPayload::TextArtifact(artifact) => format!(
             "[{}]",
             crate::text::text_artifact_display_label(
@@ -448,12 +447,6 @@ pub(crate) fn activity_presentation(
             skill.description.clone(),
             None,
         ),
-        ActivityPayload::SkillExecution(skill) => (
-            "skill_execution".to_owned(),
-            format!("Skill: {}", skill.skill_name),
-            String::new(),
-            None,
-        ),
         ActivityPayload::TextArtifact(artifact) => (
             "text_artifact".to_owned(),
             artifact
@@ -511,83 +504,16 @@ pub(crate) fn activity_presentation(
                 None,
             ),
         },
-        ActivityPayload::Progress(progress) => (
-            "progress".to_owned(),
-            progress.title.clone(),
-            progress.detail.clone(),
-            None,
-        ),
-        ActivityPayload::Checklist(checklist) => (
-            "checklist".to_owned(),
-            "Checklist".to_owned(),
-            format!("{} item(s)", checklist.items.len()),
-            None,
-        ),
-        ActivityPayload::Search(search) => (
-            "search".to_owned(),
-            "Search".to_owned(),
-            search.query.clone(),
-            None,
-        ),
-        ActivityPayload::FileChanges(changes) => (
-            "file_changes".to_owned(),
-            "File changes".to_owned(),
-            format!("{} file(s)", changes.changes.len()),
-            None,
-        ),
-        ActivityPayload::NestedTask(task) => (
-            "nested_task".to_owned(),
-            task.title.clone().unwrap_or_else(|| task.task_id.clone()),
-            format!("{:?}", task.status).to_ascii_lowercase(),
-            None,
-        ),
-        ActivityPayload::Maintenance(maintenance) => match maintenance {
-            MaintenanceActivity::Compaction { activity, .. } => (
-                "compaction".to_owned(),
-                "Context compacted".to_owned(),
-                format!(
-                    "Reduced context from {} to {} tokens",
-                    activity.before_tokens, activity.after_tokens
-                ),
-                None,
-            ),
-            MaintenanceActivity::Process { process } => (
-                "process".to_owned(),
-                "Process".to_owned(),
-                format!("{process:?}"),
-                None,
-            ),
-        },
         ActivityPayload::Error(error) => (
             "error".to_owned(),
             "Error".to_owned(),
             error.problem.user.fallback.clone(),
             Some(error.problem.clone()),
         ),
-        ActivityPayload::Hook(hook) => (
-            "hook".to_owned(),
-            format!("Hook: {}", hook.hook),
-            hook.summary.clone(),
-            None,
-        ),
         ActivityPayload::Notice(notice) => (
             "notice".to_owned(),
             "Notice".to_owned(),
             notice.summary.clone(),
-            None,
-        ),
-        ActivityPayload::Custom(custom) => (
-            custom.schema.clone(),
-            custom
-                .presentation
-                .get("title")
-                .cloned()
-                .unwrap_or_else(|| custom.schema.clone()),
-            custom
-                .presentation
-                .get("summary")
-                .cloned()
-                .unwrap_or_default(),
             None,
         ),
     }
@@ -654,7 +580,7 @@ const fn assistant_reply_status(status: AssistantReplyStatus) -> MessageStatus {
 mod tests {
     use agena_domain::{
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
-        CustomActivity, OperationActivity, OperationActivityError, OperationAuthorization,
+        OperationActivity, OperationActivityError, OperationAuthorization,
         OperationPermission, PermissionAction, PermissionReply, PermissionReplyKind,
         PermissionRequest, ResourceActivity, SkillReferenceActivity, StructuredObject, ToolCallId,
         ToolInvocation,
@@ -1204,14 +1130,10 @@ mod tests {
                 position: ContentPosition { index: 0 },
                 revision_seq: 1,
                 lifecycle: ActivityLifecycle::default(),
-                payload: ActivityPayload::Custom(CustomActivity {
-                    schema: "session_notice".to_owned(),
-                    schema_version: 1,
-                    data: serde_json::json!({"kind": "notice"}),
-                    presentation: std::collections::BTreeMap::from([
-                        ("title".to_owned(), "Session notice".to_owned()),
-                        ("summary".to_owned(), "Background state changed".to_owned()),
-                    ]),
+                payload: ActivityPayload::Notice(agena_domain::NoticeActivity {
+                    kind: "session_notice".to_owned(),
+                    summary: "Session notice".to_owned(),
+                    detail: Some("Background state changed".to_owned()),
                 }),
                 provenance: ActivityProvenance::default(),
             }],
@@ -2071,9 +1993,8 @@ mod tests {
             position: ContentPosition { index: 0 },
             revision_seq: 1,
             lifecycle: ActivityLifecycle::default(),
-            payload: ActivityPayload::Hook(agena_domain::HookActivity {
-                hook: "agent.stop".to_owned(),
-                plugin_id: Some("agena_workflow_plan".to_owned()),
+            payload: ActivityPayload::Notice(agena_domain::NoticeActivity {
+                kind: "hook".to_owned(),
                 summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
                 detail: Some("Continue: next plan step".to_owned()),
             }),
@@ -2109,14 +2030,14 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(collapsed_text.contains("Hook: agent.stop"), "{collapsed_text}");
+        assert!(collapsed_text.contains("Notice"), "{collapsed_text}");
         assert!(
             collapsed_text.contains("agent.stop hook blocked stop: workflow plan autorun"),
             "{collapsed_text}"
         );
         assert!(!collapsed_text.contains("Continue: next plan step"), "{collapsed_text}");
 
-        // Expanded: the plugin and detail render in the Hook section.
+        // Expanded: the detail renders in the Notice section.
         let expanded = crate::render_entry_detailed(
             &entry,
             120,
@@ -2130,7 +2051,6 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(expanded_text.contains("Plugin: agena_workflow_plan"), "{expanded_text}");
         assert!(expanded_text.contains("Continue: next plan step"), "{expanded_text}");
     }
 

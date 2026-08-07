@@ -7,6 +7,7 @@ pub mod definition;
 mod executor;
 pub(crate) mod file_attachment;
 pub(crate) mod glob;
+pub mod human_view;
 pub(crate) mod grep;
 pub(crate) mod lsp;
 pub(crate) mod mcp;

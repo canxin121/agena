@@ -194,14 +194,19 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
   /**
    * Resolve the default think/speed mode selectors for the currently
    * selected model, matching the defaults the runtime applies when a session
-   * starts. Returns empty strings when the model cannot be resolved or
-   * exposes no default mode.
+   * starts. Prefers the mode the model marks as default; when the model
+   * exposes modes but none is marked default (common for catalog models),
+   * falls back to the first listed mode so the active-session status stays
+   * populated. Returns empty strings when the model cannot be resolved or
+   * exposes no modes.
    */
   function modelDefaultModes(): { thinking: string; speed: string } {
     const model = selectedProviderModel()
-    const thinkingMode = model?.thinking_modes?.find((mode) => mode.default)
+    const thinkingModes = model?.thinking_modes || []
+    const thinkingMode = thinkingModes.find((mode) => mode.default) ?? thinkingModes[0]
     const thinking = thinkingMode ? providerModelThinkingModeSelector(thinkingMode) : ''
-    const speedEntry = Object.entries(model?.speed_modes || {}).find(([, mode]) => mode.default)
+    const speedEntries = Object.entries(model?.speed_modes || {})
+    const speedEntry = speedEntries.find(([, mode]) => mode.default) ?? speedEntries[0]
     return { thinking, speed: speedEntry?.[0] || '' }
   }
 

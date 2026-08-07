@@ -196,10 +196,12 @@ impl Backend {
             .ok_or_else(|| anyhow!("no providers configured"))
     }
 
-    /// Resolve the default think/speed mode selectors for the model implied
-    /// by `request`, matching the defaults the runtime applies when a session
-    /// starts. Returns `(None, None)` when the model cannot be resolved or
-    /// exposes no default mode.
+    /// Resolve the effective think/speed mode selectors for the model implied
+    /// by `request`. Prefers the mode the model marks as default; when the
+    /// model exposes modes but none is marked default (common for catalog
+    /// models), falls back to the first listed mode so the composer status can
+    /// always show a value once a model is resolvable. Returns `(None, None)`
+    /// when the model cannot be resolved or exposes no modes.
     pub fn resolved_model_default_modes(
         &self,
         request: &RunOptions,
@@ -214,17 +216,10 @@ impl Backend {
         else {
             return (None, None);
         };
-        let thinking = options
-            .thinking_modes
-            .iter()
-            .find(|mode| mode.is_default)
-            .and_then(|mode| mode.selector().map(|selector| selector.into_owned()));
-        let speed = options
-            .speed_modes
-            .iter()
-            .find(|(_, mode)| mode.is_default)
-            .map(|(name, _)| name.clone());
-        (thinking, speed)
+        (
+            default_thinking_mode_selector(&options.thinking_modes),
+            default_speed_mode_name(&options.speed_modes),
+        )
     }
 
     pub fn runtime_thinking_mode_rows(&self, request: &RunOptions) -> Result<Vec<InspectorRow>> {
@@ -838,10 +833,38 @@ fn build_provider_adapter_matches_patch(
     )
 }
 
+/// Picks the effective thinking-mode selector for the composer status: the
+/// mode the model marks as default, or the first listed mode when no default
+/// is marked (catalog models commonly leave every mode unmarked). Returns
+/// `None` only when the model exposes no thinking modes at all.
+fn default_thinking_mode_selector(
+    modes: &[agena_domain::ModelThinkingMode],
+) -> Option<String> {
+    modes
+        .iter()
+        .find(|mode| mode.is_default)
+        .or_else(|| modes.first())
+        .and_then(|mode| mode.selector().map(|selector| selector.into_owned()))
+}
+
+/// Picks the effective speed-mode name for the composer status: the mode the
+/// model marks as default, or the first listed mode when no default is marked.
+/// Returns `None` only when the model exposes no speed modes at all.
+fn default_speed_mode_name(
+    modes: &std::collections::BTreeMap<String, agena_domain::ModelSpeedMode>,
+) -> Option<String> {
+    modes
+        .iter()
+        .find(|(_, mode)| mode.is_default)
+        .or_else(|| modes.iter().next())
+        .map(|(name, _)| name.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         apply_provider_adapter_selection, build_provider_adapter_matches_patch,
+        default_speed_mode_name, default_thinking_mode_selector,
         preferred_model_display_name, preserve_existing_model_execution_policy,
         resolve_provider_defaults_from_value_for_save,
     };
@@ -851,6 +874,62 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeSet;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn default_thinking_selector_prefers_the_marked_default_mode() {
+        let mut second = agena_domain::ModelThinkingMode::default();
+        second.preset = Some("balanced".to_owned());
+        let mut default = agena_domain::ModelThinkingMode::default();
+        default.is_default = true;
+        default.preset = Some("high".to_owned());
+
+        assert_eq!(
+            default_thinking_mode_selector(&[second, default]).as_deref(),
+            Some("high"),
+        );
+    }
+
+    #[test]
+    fn default_thinking_selector_falls_back_to_the_first_mode_when_none_is_default() {
+        let mut first = agena_domain::ModelThinkingMode::default();
+        first.preset = Some("high".to_owned());
+        let mut second = agena_domain::ModelThinkingMode::default();
+        second.preset = Some("max".to_owned());
+
+        assert_eq!(
+            default_thinking_mode_selector(&[first, second]).as_deref(),
+            Some("high"),
+        );
+    }
+
+    #[test]
+    fn default_thinking_selector_is_none_without_modes() {
+        assert_eq!(default_thinking_mode_selector(&[]), None);
+    }
+
+    #[test]
+    fn default_speed_name_prefers_the_marked_default_then_falls_back_to_the_first() {
+        let mut default = agena_domain::ModelSpeedMode::default();
+        default.is_default = true;
+        let mut modes = BTreeMap::new();
+        modes.insert("fast".to_owned(), agena_domain::ModelSpeedMode::default());
+        modes.insert("balanced".to_owned(), default);
+        assert_eq!(
+            default_speed_mode_name(&modes).as_deref(),
+            Some("balanced"),
+        );
+
+        let mut modes = BTreeMap::new();
+        modes.insert("fast".to_owned(), agena_domain::ModelSpeedMode::default());
+        modes.insert("balanced".to_owned(), agena_domain::ModelSpeedMode::default());
+        assert_eq!(
+            default_speed_mode_name(&modes).as_deref(),
+            Some("balanced"),
+        );
+
+        assert_eq!(default_speed_mode_name(&BTreeMap::new()), None);
+    }
 
     #[test]
     fn adapter_selection_is_authoritative_and_materializes_disabled_overrides() {

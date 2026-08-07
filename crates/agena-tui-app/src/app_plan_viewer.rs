@@ -134,7 +134,11 @@ impl App {
             }
             Some(KeyAction::PageUp) | Some(KeyAction::PageDown) => {
                 let page = i64::from(self.plan_viewer_page_size());
-                let delta = if key.code == KeyCode::PageUp { -page } else { page };
+                let delta = if key.code == KeyCode::PageUp {
+                    -page
+                } else {
+                    page
+                };
                 state.presentation.scroll_by(delta);
                 false
             }

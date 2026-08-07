@@ -5,8 +5,8 @@
 //! `agena-tui-components`; configurable composer actions are re-exported here
 //! so this directory is the discovery point for all Agena TUI input policy.
 
-mod core;
 mod activities;
+mod core;
 mod plugin;
 mod studio;
 mod usage;
@@ -86,7 +86,7 @@ pub enum KeyContext {
     Timeline,
     Confirm,
     PermissionPrompt,
-        UserInputQuestion,
+    UserInputQuestion,
     UserInputReview,
     Usage,
     Activities,
@@ -208,7 +208,7 @@ pub enum KeyAction {
     ProviderAddModel,
     ProviderSaveAdapter,
     ProviderSave,
-        UsageCyclePeriod,
+    UsageCyclePeriod,
     UsageCycleView,
     UsageCycleProvider,
     UsageCycleModel,
@@ -256,7 +256,7 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::UserInputQuestion
         | KeyContext::UserInputReview
         | KeyContext::PlanViewer => core::resolve(context, key),
-                KeyContext::Usage => usage::resolve(key),
+        KeyContext::Usage => usage::resolve(key),
         KeyContext::Activities => activities::resolve(key),
         KeyContext::SettingsStudio
         | KeyContext::PermissionStudio
@@ -1484,8 +1484,16 @@ mod tests {
         }
         for (code, modifiers, action) in [
             (KeyCode::Char('r'), KeyModifiers::SHIFT, KeyAction::Refresh),
-            (KeyCode::Char('r'), KeyModifiers::CONTROL, KeyAction::Refresh),
-            (KeyCode::Char('a'), KeyModifiers::CONTROL, KeyAction::PlanToggleAutorun),
+            (
+                KeyCode::Char('r'),
+                KeyModifiers::CONTROL,
+                KeyAction::Refresh,
+            ),
+            (
+                KeyCode::Char('a'),
+                KeyModifiers::CONTROL,
+                KeyAction::PlanToggleAutorun,
+            ),
         ] {
             assert_eq!(
                 resolve(KeyContext::PlanViewer, key(code, modifiers)),
@@ -1515,7 +1523,10 @@ mod tests {
             Some(KeyAction::OpenPlan)
         );
         assert_eq!(
-            resolve(KeyContext::Main, key(KeyCode::Char('p'), KeyModifiers::NONE)),
+            resolve(
+                KeyContext::Main,
+                key(KeyCode::Char('p'), KeyModifiers::NONE)
+            ),
             None
         );
         assert_eq!(

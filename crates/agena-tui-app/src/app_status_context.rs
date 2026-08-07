@@ -228,16 +228,15 @@ impl App {
         // override or the persisted execution context), then the execution
         // label, then the resolved default model so the status stays
         // populated even before a session exists.
-        let model_part = self
-            .current_session_model_ref()
-            .map(|model| model_label(&model))
-            .or_else(|| {
-                self.transcript
-                    .execution
-                    .as_ref()
-                    .and_then(|execution| execution_model_name_status_label(&execution.execution))
-            })
-            .or_else(fallback_model);
+        let model_part =
+            self.current_session_model_ref()
+                .map(|model| model_label(&model))
+                .or_else(|| {
+                    self.transcript.execution.as_ref().and_then(|execution| {
+                        execution_model_name_status_label(&execution.execution)
+                    })
+                })
+                .or_else(fallback_model);
 
         // Think/speed: prefer the execution context (the modes a run actually
         // used), then run-options overrides, then the resolved model's

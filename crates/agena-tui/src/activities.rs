@@ -9,7 +9,7 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-        style::{Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -111,7 +111,10 @@ pub fn sort_rows(rows: &mut [ActivitiesRow]) {
 }
 
 /// Rows visible under the current filters, in display order.
-pub fn visible_rows<'a>(rows: &'a [ActivitiesRow], filter: &ActivitiesPresentation) -> Vec<&'a ActivitiesRow> {
+pub fn visible_rows<'a>(
+    rows: &'a [ActivitiesRow],
+    filter: &ActivitiesPresentation,
+) -> Vec<&'a ActivitiesRow> {
     rows.iter()
         .filter(|row| {
             if !filter.show_finished && row.is_active() == false {
@@ -266,11 +269,11 @@ pub fn status_label(status: &str) -> &'static str {
 
 pub fn kind_icon(kind: &str) -> &'static str {
     match kind {
-        "shell" => "\u{2699}",      // ⚙
-        "task" => "\u{25C8}",       // ◈
-        "runtime" => "\u{21BB}",    // ↻
-        "browser" => "\u{25C9}",    // ◉
-        _ => "\u{2022}",            // •
+        "shell" => "\u{2699}",   // ⚙
+        "task" => "\u{25C8}",    // ◈
+        "runtime" => "\u{21BB}", // ↻
+        "browser" => "\u{25C9}", // ◉
+        _ => "\u{2022}",         // •
     }
 }
 
@@ -319,7 +322,11 @@ pub fn render_activities_panel(
         .split(area);
 
     let list_area = horizontal[0];
-    let detail_area = if presentation.detail { horizontal[1] } else { Rect::default() };
+    let detail_area = if presentation.detail {
+        horizontal[1]
+    } else {
+        Rect::default()
+    };
 
     render_list_pane(frame, list_area, presentation, rows, loading, error, now_ms);
     if presentation.detail {
@@ -376,12 +383,18 @@ fn render_list_pane(
         let mut index = 0_usize;
         let mut last_section: Option<&'static str> = None;
         for row in &visible {
-            let section = if row.is_active() { "Active" } else { "Finished" };
+            let section = if row.is_active() {
+                "Active"
+            } else {
+                "Finished"
+            };
             if last_section != Some(section) {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!(" {section}"),
-                    Style::default().fg(warning_color()).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(warning_color())
+                        .add_modifier(Modifier::BOLD),
                 )));
                 last_section = Some(section);
             }
@@ -430,10 +443,7 @@ fn render_row_line(row: &ActivitiesRow, selected: bool, now_ms: i64) -> Line<'st
 
     let mut spans = vec![icon, status, duration, Span::raw(" "), title];
     if let Some(command) = row.command.as_deref() {
-        spans.push(Span::styled(
-            format!("  ({command})"),
-            muted_style(),
-        ));
+        spans.push(Span::styled(format!("  ({command})"), muted_style()));
     }
     if let Some(exit) = row.exit_code {
         spans.push(Span::styled(format!(" exit={exit}"), muted_style()));
@@ -492,7 +502,10 @@ fn render_detail_pane(
         )));
     }
     if let Some(command) = selected.command.as_deref() {
-        lines.push(Line::from(Span::styled(format!(" $ {command}"), muted_style())));
+        lines.push(Line::from(Span::styled(
+            format!(" $ {command}"),
+            muted_style(),
+        )));
     }
     if let Some(session_id) = selected.session_id {
         lines.push(Line::from(Span::styled(
@@ -512,10 +525,17 @@ fn render_detail_pane(
         Some(tail) if !tail.lines.is_empty() => {
             lines.push(Line::from(Span::styled(
                 " — output — ",
-                Style::default().fg(warning_color()).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(warning_color())
+                    .add_modifier(Modifier::BOLD),
             )));
-                        let skipped = tail.dropped_lines;
-            for line in tail.lines.iter().rev().take(inner.height.saturating_sub(6) as usize) {
+            let skipped = tail.dropped_lines;
+            for line in tail
+                .lines
+                .iter()
+                .rev()
+                .take(inner.height.saturating_sub(6) as usize)
+            {
                 lines.push(Line::from(Span::styled(line.clone(), Style::default())));
             }
             if tail.has_more {
@@ -526,10 +546,7 @@ fn render_detail_pane(
             }
         }
         Some(_) => {
-            lines.push(Line::from(Span::styled(
-                " No output yet.",
-                muted_style(),
-            )));
+            lines.push(Line::from(Span::styled(" No output yet.", muted_style())));
         }
         None => {
             lines.push(Line::from(Span::styled(

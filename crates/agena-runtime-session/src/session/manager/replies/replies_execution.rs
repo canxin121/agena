@@ -2560,11 +2560,50 @@ impl SessionManager {
             })
             .unwrap_or_else(|| "tool".to_owned());
         let mut activity_handler = streaming_activity_id.map(|activity_id| {
+            // The built-in human renderer maps the tool's structured output to
+            // ViewBlocks (v2). Shell/process executions carry the command line
+            // so the human view renders a `$ command` card.
+            let invocation = session
+                .part(&pending_tool.part)
+                .and_then(|part| match &part.content {
+                    Some(crate::message::PartContent::Activity(
+                        crate::message::RuntimeActivity::Operation(operation),
+                    )) => Some(&operation.invocation),
+                    _ => None,
+                });
+            let command = invocation
+                .and_then(|invocation| {
+                    invocation
+                        .input
+                        .get("command")
+                        .and_then(|value| value.as_text())
+                        .map(ToOwned::to_owned)
+                });
+            let cwd = invocation
+                .and_then(|invocation| {
+                    invocation
+                        .input
+                        .get("workdir")
+                        .and_then(|value| value.as_text())
+                        .map(ToOwned::to_owned)
+                });
+            let mut renderer = crate::tool::human_view::BuiltinHumanRenderer::new(
+                invocation
+                    .map(|invocation| invocation.name.as_str())
+                    .unwrap_or("tool"),
+            );
+            if let Some(command) = command {
+                renderer = renderer.with_command(command);
+            }
+            if let Some(cwd) = cwd {
+                renderer = renderer.with_cwd(cwd);
+            }
             crate::activity::ActivityHandler::begin(
                 activity_id,
                 crate::activity::ActivityKind::Operation,
                 initial_title,
             )
+            .with_renderer(renderer)
         });
         let stream_started = std::time::Instant::now();
         let mut stream_block_created = false;

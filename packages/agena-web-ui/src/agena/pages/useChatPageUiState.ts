@@ -191,6 +191,20 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     }))
   }
 
+  /**
+   * Resolve the default think/speed mode selectors for the currently
+   * selected model, matching the defaults the runtime applies when a session
+   * starts. Returns empty strings when the model cannot be resolved or
+   * exposes no default mode.
+   */
+  function modelDefaultModes(): { thinking: string; speed: string } {
+    const model = selectedProviderModel()
+    const thinkingMode = model?.thinking_modes?.find((mode) => mode.default)
+    const thinking = thinkingMode ? providerModelThinkingModeSelector(thinkingMode) : ''
+    const speedEntry = Object.entries(model?.speed_modes || {}).find(([, mode]) => mode.default)
+    return { thinking, speed: speedEntry?.[0] || '' }
+  }
+
   function modelVerbosityOptions(): Array<{ id: string; label: string; description: string }> {
     const model = selectedProviderModel()
     const metadata = model?.metadata
@@ -329,6 +343,7 @@ export function useChatPageUiState(input: ChatPageUiStateInput, deps: ChatPageUi
     providerDefaultModel,
     providerModelLabel,
     providerModelOptions,
+    modelDefaultModes,
     modelParallelToolCallsOptions,
     modelThinkingModeOptions,
     modelSpeedModeOptions,

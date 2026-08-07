@@ -36,6 +36,9 @@ const activeGoal = computed(
 <template>
   <section class="card">
     <h3>Active Session</h3>
+    <template v-if="props.executionFacts.length">
+      <div class="muted mono">{{ props.executionFacts.join(' · ') }}</div>
+    </template>
     <div v-if="props.selectedSession">
       <div>
         <strong>{{ props.selectedSession.title }}</strong>
@@ -109,9 +112,6 @@ const activeGoal = computed(
       </div>
       <template v-if="props.ancestorSessions.length">
         <div class="muted">ancestors={{ props.ancestorSessions.map((session) => `#${session.id}`).join(' → ') }}</div>
-      </template>
-      <template v-if="props.executionFacts.length">
-        <div class="muted mono">{{ props.executionFacts.join(' · ') }}</div>
       </template>
       <div v-if="props.contextUsageLabel" class="muted mono">{{ props.contextUsageLabel }}</div>
       <template v-if="props.sessionState?.automation">

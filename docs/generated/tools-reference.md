@@ -8028,7 +8028,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8059,7 +8059,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
 > Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.
@@ -8236,7 +8236,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8365,7 +8365,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `mutate`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -8451,7 +8451,7 @@ Delegated subtask orchestration tools.
 
 **Tags**: `subtask` `execute`
 
-**Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
+**Runtime**: ✓ concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
 > Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.

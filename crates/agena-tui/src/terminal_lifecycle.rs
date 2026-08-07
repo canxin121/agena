@@ -31,11 +31,6 @@ pub struct LifecycleCapabilities {
     /// Kitty protocol flag 4: report every key through CSI u. iTerm2 needs it
     /// to treat Option as Alt (Option+Backspace word deletion on macOS).
     pub keyboard_report_all_keys: bool,
-    /// iTerm2-only per-session Option-as-Alt takeover: on activate, switch the
-    /// session to the `Agena Option Alt` dynamic profile ("Option Key Sends =
-    /// Esc+") so Option+Backspace is reported as ALT+Backspace and word-
-    /// deletes; on leave, restore the default profile.
-    pub iterm2_option_alt: bool,
 }
 
 /// Process-wide mode ownership is shared with the process panic hook so a
@@ -43,20 +38,6 @@ pub struct LifecycleCapabilities {
 /// restoration already did so.
 pub static TERMINAL_MODES_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static TERMINAL_KEYBOARD_STACK_ACTIVE: AtomicBool = AtomicBool::new(false);
-
-/// iTerm2 dynamic profile used for the per-session Option-as-Alt takeover.
-/// Must match the `Name` written by `scripts/setup-iterm2-option-alt.sh`
-/// ("Agena Option Alt"). Switching to it makes iTerm2 report
-/// Option+Backspace as ALT+Backspace (CSI u `127;3u`), which the editor
-/// handles as word-delete.
-///
-/// `OSC 1337;SetProfile=<name> BEL` switches the current iTerm2 session to
-/// that profile; other sessions and other TUI programs are unaffected.
-const ITERM2_SET_PROFILE_OSC: &[u8] = b"\x1b]1337;SetProfile=Agena Option Alt\x07";
-
-/// `OSC 1337;SetProfile= BEL`: restore the iTerm2 session to its default
-/// profile when agena leaves the terminal.
-const ITERM2_RESTORE_PROFILE_OSC: &[u8] = b"\x1b]1337;SetProfile=\x07";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SuspendReason {
@@ -88,7 +69,6 @@ pub struct TerminalLifecycle {
     mouse_capture: bool,
     cursor_hidden: bool,
     keyboard_enhancement: bool,
-    iterm2_profile_switched: bool,
 }
 
 impl Default for TerminalLifecycle {
@@ -105,7 +85,6 @@ impl Default for TerminalLifecycle {
             mouse_capture: false,
             cursor_hidden: false,
             keyboard_enhancement: false,
-            iterm2_profile_switched: false,
         }
     }
 }
@@ -124,8 +103,6 @@ enum Control {
     ShowCursor,
     PushKeyboard(KeyboardEnhancementFlags),
     PopKeyboard,
-    Iterm2SetProfile,
-    Iterm2RestoreProfile,
 }
 
 trait LifecycleDriver {
@@ -172,12 +149,6 @@ impl LifecycleDriver for SystemLifecycleDriver {
                 execute!(self.stdout, PushKeyboardEnhancementFlags(flags))
             }
             Control::PopKeyboard => execute!(self.stdout, PopKeyboardEnhancementFlags),
-            Control::Iterm2SetProfile => {
-                std::io::Write::write_all(&mut self.stdout, ITERM2_SET_PROFILE_OSC)
-            }
-            Control::Iterm2RestoreProfile => {
-                std::io::Write::write_all(&mut self.stdout, ITERM2_RESTORE_PROFILE_OSC)
-            }
         }
     }
 
@@ -199,7 +170,6 @@ impl TerminalLifecycle {
         self.mouse_capture = false;
         self.cursor_hidden = false;
         self.keyboard_enhancement = false;
-        self.iterm2_profile_switched = false;
         self.phase = Phase::Detached;
     }
 
@@ -364,10 +334,6 @@ impl TerminalLifecycle {
             driver.control(Control::PushKeyboard(flags))?;
             self.keyboard_enhancement = true;
         }
-        if capabilities.iterm2_option_alt {
-            driver.control(Control::Iterm2SetProfile)?;
-            self.iterm2_profile_switched = true;
-        }
         driver.flush()?;
         Ok(())
     }
@@ -409,10 +375,6 @@ impl TerminalLifecycle {
         if self.keyboard_enhancement {
             record(driver.control(Control::PopKeyboard));
             self.keyboard_enhancement = false;
-        }
-        if self.iterm2_profile_switched {
-            record(driver.control(Control::Iterm2RestoreProfile));
-            self.iterm2_profile_switched = false;
         }
         record(driver.flush());
         if self.cursor_hidden {
@@ -458,7 +420,6 @@ impl Drop for TerminalLifecycle {
             || self.mouse_capture
             || self.cursor_hidden
             || self.keyboard_enhancement
-            || self.iterm2_profile_switched
         {
             if !TERMINAL_MODES_ACTIVE.load(Ordering::Acquire) {
                 // The process panic hook has already restored visible state.
@@ -605,8 +566,6 @@ mod tests {
                 Control::ShowCursor => "show-cursor",
                 Control::PushKeyboard(_) => "push-keyboard",
                 Control::PopKeyboard => "pop-keyboard",
-                Control::Iterm2SetProfile => "iterm2-set-profile",
-                Control::Iterm2RestoreProfile => "iterm2-restore-profile",
             };
             self.perform(action)
         }
@@ -626,7 +585,6 @@ mod tests {
             keyboard_alternate_keys: true,
             keyboard_event_types: false,
             keyboard_report_all_keys: true,
-            iterm2_option_alt: true,
         }
     }
 
@@ -686,7 +644,6 @@ mod tests {
                 "enable-mouse",
                 "hide-cursor",
                 "push-keyboard",
-                "iterm2-set-profile",
                 "flush",
             ]
         );
@@ -757,7 +714,7 @@ mod tests {
         let capabilities = fully_enabled_capabilities();
         // raw, alternate screen, probe flush, raw reassertion, then paste,
         // focus, mouse, cursor, keyboard, and the runtime-mode flush.
-        for fail_at in 0..=10 {
+        for fail_at in 0..=9 {
             let mut lifecycle = TerminalLifecycle::default();
             let mut driver = FakeDriver {
                 fail_at: vec![fail_at],
@@ -818,7 +775,6 @@ mod tests {
             mouse_capture: true,
             cursor_hidden: true,
             keyboard_enhancement: true,
-            iterm2_profile_switched: false,
         };
         lifecycle.acknowledge_emergency_restore();
         assert_eq!(lifecycle.phase, Phase::Detached);
@@ -829,45 +785,5 @@ mod tests {
         assert!(!lifecycle.mouse_capture);
         assert!(!lifecycle.cursor_hidden);
         assert!(!lifecycle.keyboard_enhancement);
-    }
-
-    #[test]
-    fn iterm2_option_alt_takeover_switches_profile_on_activate_and_restores_on_leave() {
-        let capabilities = fully_enabled_capabilities();
-        let mut lifecycle = TerminalLifecycle::default();
-        let mut driver = FakeDriver::default();
-
-        lifecycle
-            .enter_with(&capabilities, &mut driver)
-            .expect("active terminal lifecycle");
-        assert!(driver.actions.contains(&"iterm2-set-profile"));
-        assert!(lifecycle.iterm2_profile_switched);
-
-        driver.actions.clear();
-        lifecycle
-            .leave_with(&mut driver)
-            .expect("leave terminal lifecycle");
-        assert!(driver.actions.contains(&"iterm2-restore-profile"));
-        assert!(!lifecycle.iterm2_profile_switched);
-    }
-
-    #[test]
-    fn iterm2_option_alt_takeover_is_skipped_when_capability_is_off() {
-        let mut capabilities = fully_enabled_capabilities();
-        capabilities.iterm2_option_alt = false;
-        let mut lifecycle = TerminalLifecycle::default();
-        let mut driver = FakeDriver::default();
-
-        lifecycle
-            .enter_with(&capabilities, &mut driver)
-            .expect("active terminal lifecycle");
-        assert!(!driver.actions.contains(&"iterm2-set-profile"));
-        assert!(!lifecycle.iterm2_profile_switched);
-
-        driver.actions.clear();
-        lifecycle
-            .leave_with(&mut driver)
-            .expect("leave terminal lifecycle");
-        assert!(!driver.actions.contains(&"iterm2-restore-profile"));
     }
 }

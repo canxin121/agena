@@ -207,12 +207,6 @@ pub struct TerminalCapabilities {
     /// Kitty protocol flag 4 (`REPORT_ALL_KEYS_AS_ESCAPE_CODES`). iTerm2 only
     /// reports Option as Alt when every key is reported through CSI u.
     pub keyboard_report_all_keys: Capability,
-    /// iTerm2-only, per-session Option-as-Alt takeover: agena emits
-    /// OSC 1337 SetProfile at startup to switch its own session to a dynamic
-    /// profile with "Option Key Sends = Esc+", so Option+Backspace is
-    /// reported as ALT+Backspace (CSI u 127;3u) and word-deletes. The
-    /// profile is restored on exit; other sessions are unaffected.
-    pub iterm2_option_alt: Capability,
     pub default_color_query: Capability,
     pub clipboard_write_native: Capability,
     pub clipboard_write_osc52: Capability,
@@ -252,7 +246,6 @@ impl TerminalCapabilities {
             keyboard_alternate_keys: self.keyboard_alternate_keys.is_operational(),
             keyboard_event_types: self.keyboard_event_types.is_operational(),
             keyboard_report_all_keys: self.keyboard_report_all_keys.is_operational(),
-            iterm2_option_alt: self.iterm2_option_alt.is_operational(),
         }
     }
 }
@@ -275,7 +268,6 @@ mod tests {
             keyboard_alternate_keys: capability,
             keyboard_event_types: capability,
             keyboard_report_all_keys: capability,
-            iterm2_option_alt: capability,
             default_color_query: capability,
             clipboard_write_native: capability,
             clipboard_write_osc52: capability,

@@ -1069,7 +1069,7 @@ mod tests {
 
     #[test]
     fn task_input_rejects_zero_timeout_and_unknown_legacy_fields() {
-                let valid = serde_json::json!({
+        let valid = serde_json::json!({
             "description": "verify",
             "prompt": "run the checks",
             "access": "read_only",

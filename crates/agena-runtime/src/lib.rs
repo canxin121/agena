@@ -22,8 +22,8 @@ pub mod tool {
     pub use agena_runtime_tools::tool::*;
 }
 
-mod application_services;
 mod activity;
+mod application_services;
 mod background_task;
 mod background_task_completion;
 mod background_task_registry;
@@ -79,6 +79,7 @@ mod watch_paths;
 
 pub use runtime::bootstrap_application_services;
 
+pub use activity::{ActivityControlError, RuntimeActivityService};
 pub(crate) use agena_bundled_plugins::tool::{memory_plugin_id, new_memory_plugin};
 pub use agena_runtime_config::default_config_path;
 pub use agena_runtime_config::runtime_config_settings_service::list_json_path;
@@ -207,7 +208,6 @@ pub(crate) use agena_runtime_session::{
     estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,
     estimate_prompt_budget_threshold_tokens, estimate_session_context_usable_tokens,
 };
-pub use activity::{ActivityControlError, RuntimeActivityService};
 pub(crate) use agena_runtime_session::{
     record_provider_call, record_provider_stream, record_tool_execution, session_finished,
     session_started,

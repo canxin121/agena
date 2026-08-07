@@ -31,7 +31,10 @@ impl ActivityControlError {
     }
 
     pub fn not_running(id: impl Into<String>) -> Self {
-        Self::new(format!("background activity `{}` is not running", id.into()))
+        Self::new(format!(
+            "background activity `{}` is not running",
+            id.into()
+        ))
     }
 
     pub fn not_stoppable(id: impl Into<String>) -> Self {
@@ -58,10 +61,7 @@ impl ActivityControlError {
 pub trait RuntimeActivityService: Send + Sync {
     fn list_activities(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity>;
 
-    fn get_activity(
-        &self,
-        activity_id: &str,
-    ) -> Result<BackgroundActivity, ActivityControlError>;
+    fn get_activity(&self, activity_id: &str) -> Result<BackgroundActivity, ActivityControlError>;
 
     /// Read incremental activity logs with the unified `since_seq` cursor.
     /// `wait_ms` blocks for fresh output when no new lines are available yet
@@ -74,7 +74,7 @@ pub trait RuntimeActivityService: Send + Sync {
         wait_ms: u64,
     ) -> Result<BackgroundActivityLogRead, ActivityControlError>;
 
-        /// Stop a running activity. Shell processes are killed, runtime tasks are
+    /// Stop a running activity. Shell processes are killed, runtime tasks are
     /// cancelled, delegated tasks are cancelled through their child session.
     async fn stop_activity(
         &self,

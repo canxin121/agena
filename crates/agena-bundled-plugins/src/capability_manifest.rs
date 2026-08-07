@@ -78,10 +78,7 @@ pub(crate) fn bundled_plugin_manifests() -> Vec<(PluginManifest, Option<String>)
             plugins.push(($plugin.manifest(), None));
         };
         ($plugin:expr, $condition:literal) => {
-            plugins.push((
-                $plugin.manifest(),
-                Some($condition.to_string()),
-            ));
+            plugins.push(($plugin.manifest(), Some($condition.to_string())));
         };
     }
     add!(crate::tool::new_chatgpt_plugin());

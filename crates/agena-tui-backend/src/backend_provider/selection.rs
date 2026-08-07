@@ -232,7 +232,8 @@ impl Backend {
             .map(ToOwned::to_owned);
         if request.model.is_none() {
             (
-                configured_thinking.or_else(|| default_thinking_mode_selector(&options.thinking_modes)),
+                configured_thinking
+                    .or_else(|| default_thinking_mode_selector(&options.thinking_modes)),
                 configured_speed.or_else(|| default_speed_mode_name(&options.speed_modes)),
             )
         } else {
@@ -858,9 +859,7 @@ fn build_provider_adapter_matches_patch(
 /// mode the model marks as default, or the first listed mode when no default
 /// is marked (catalog models commonly leave every mode unmarked). Returns
 /// `None` only when the model exposes no thinking modes at all.
-fn default_thinking_mode_selector(
-    modes: &[agena_domain::ModelThinkingMode],
-) -> Option<String> {
+fn default_thinking_mode_selector(modes: &[agena_domain::ModelThinkingMode]) -> Option<String> {
     modes
         .iter()
         .find(|mode| mode.is_default)
@@ -885,17 +884,16 @@ fn default_speed_mode_name(
 mod tests {
     use super::{
         apply_provider_adapter_selection, build_provider_adapter_matches_patch,
-        default_speed_mode_name, default_thinking_mode_selector,
-        preferred_model_display_name, preserve_existing_model_execution_policy,
-        resolve_provider_defaults_from_value_for_save,
+        default_speed_mode_name, default_thinking_mode_selector, preferred_model_display_name,
+        preserve_existing_model_execution_policy, resolve_provider_defaults_from_value_for_save,
     };
     use crate::{
         JsonMap, ModelRef, ProviderConfigDraft, ProviderDraftAuthKind,
         ProviderDraftSecretSourceKind, ProviderModel,
     };
     use serde_json::json;
-    use std::collections::BTreeSet;
     use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
 
     #[test]
     fn default_thinking_selector_prefers_the_marked_default_mode() {
@@ -936,18 +934,15 @@ mod tests {
         let mut modes = BTreeMap::new();
         modes.insert("fast".to_owned(), agena_domain::ModelSpeedMode::default());
         modes.insert("balanced".to_owned(), default);
-        assert_eq!(
-            default_speed_mode_name(&modes).as_deref(),
-            Some("balanced"),
-        );
+        assert_eq!(default_speed_mode_name(&modes).as_deref(), Some("balanced"),);
 
         let mut modes = BTreeMap::new();
         modes.insert("fast".to_owned(), agena_domain::ModelSpeedMode::default());
-        modes.insert("balanced".to_owned(), agena_domain::ModelSpeedMode::default());
-        assert_eq!(
-            default_speed_mode_name(&modes).as_deref(),
-            Some("balanced"),
+        modes.insert(
+            "balanced".to_owned(),
+            agena_domain::ModelSpeedMode::default(),
         );
+        assert_eq!(default_speed_mode_name(&modes).as_deref(), Some("balanced"),);
 
         assert_eq!(default_speed_mode_name(&BTreeMap::new()), None);
     }

@@ -17,8 +17,8 @@ use agena_runtime_session::SessionManager;
 
 use super::registry::ActivityRegistry;
 use crate::{
-    RuntimeBackgroundTask, RuntimeBackgroundTaskListener, RuntimeBackgroundTaskStatus,
-    RuntimeBackgroundTaskRegistry,
+    RuntimeBackgroundTask, RuntimeBackgroundTaskListener, RuntimeBackgroundTaskRegistry,
+    RuntimeBackgroundTaskStatus,
 };
 
 /// Shared mutable state backing the runtime's activity service.
@@ -172,17 +172,15 @@ fn runtime_task_activity(task: &RuntimeBackgroundTask) -> BackgroundActivity {
 }
 
 /// Project a delegated-task status event into the unified registry.
-pub(crate) fn upsert_task_activity(
-    registry: &ActivityRegistry,
-    event: &SubtaskStatusChangedEvent,
-) {
+pub(crate) fn upsert_task_activity(registry: &ActivityRegistry, event: &SubtaskStatusChangedEvent) {
     let status = match event.status {
         agena_domain::SubtaskStatus::Created => BackgroundActivityStatus::Pending,
         agena_domain::SubtaskStatus::Running => BackgroundActivityStatus::Running,
         agena_domain::SubtaskStatus::Completed => BackgroundActivityStatus::Succeeded,
         agena_domain::SubtaskStatus::Failed => BackgroundActivityStatus::Failed,
-        agena_domain::SubtaskStatus::Cancelled
-        | agena_domain::SubtaskStatus::Interrupted => BackgroundActivityStatus::Cancelled,
+        agena_domain::SubtaskStatus::Cancelled | agena_domain::SubtaskStatus::Interrupted => {
+            BackgroundActivityStatus::Cancelled
+        }
         agena_domain::SubtaskStatus::TimedOut => BackgroundActivityStatus::Failed,
     };
     let started_at = event.started_at_ms.unwrap_or(event.ts_ms);
@@ -200,7 +198,7 @@ pub(crate) fn upsert_task_activity(
         started_at_ms: started_at,
         finished_at_ms: event.finished_at_ms,
         exit_code: None,
-                message: event
+        message: event
             .failure
             .as_ref()
             .map(|failure| failure.user.fallback.clone()),
@@ -279,7 +277,7 @@ pub(crate) async fn read_task_logs(
             let mut last_seq = after_cursor;
             for chunk in output.chunks {
                 last_seq = chunk.cursor;
-                                let text = format!(
+                let text = format!(
                     "{}: {}",
                     format!("{:?}", chunk.role).to_lowercase(),
                     chunk.text
@@ -318,4 +316,3 @@ fn empty_task_logs(task_id: &str, cursor: i64) -> BackgroundActivityLogRead {
         completion_reason: None,
     }
 }
-

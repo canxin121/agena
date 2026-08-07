@@ -115,7 +115,8 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
             | EventKind::ToolUserDeclined(_)
             | EventKind::BackgroundActivityChanged(_)
             | EventKind::PluginEvent(_)
-            | EventKind::PluginToolRegistryChanged(_) => {}
+            | EventKind::PluginToolRegistryChanged(_)
+            | EventKind::ActivityV2(_) => {}
         }
     }
 }
@@ -229,7 +230,8 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         | EventKind::RunAborted(_)
         | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
-        | EventKind::PluginToolRegistryChanged(_) => {}
+        | EventKind::PluginToolRegistryChanged(_)
+        | EventKind::ActivityV2(_) => {}
     }
 }
 
@@ -284,6 +286,7 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
         | EventKind::PluginToolRegistryChanged(_)
+        | EventKind::ActivityV2(_)
         | EventKind::ToolCallIssued(_) => {}
         EventKind::ToolCallCompleted(_) => {}
     }
@@ -344,7 +347,8 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         | EventKind::RunAborted(_)
         | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
-        | EventKind::PluginToolRegistryChanged(_) => {}
+        | EventKind::PluginToolRegistryChanged(_)
+        | EventKind::ActivityV2(_) => {}
     }
 }
 
@@ -401,7 +405,8 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::BackgroundActivityChanged(_)
         | EventKind::ToolCallIssued(_)
         | EventKind::PluginEvent(_)
-        | EventKind::PluginToolRegistryChanged(_) => {}
+        | EventKind::PluginToolRegistryChanged(_)
+        | EventKind::ActivityV2(_) => {}
         EventKind::ToolCallCompleted(_) => {}
     }
 }
@@ -440,7 +445,8 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         | EventKind::ToolCallCompleted(_)
         | EventKind::BackgroundActivityChanged(_)
         | EventKind::PluginEvent(_)
-        | EventKind::PluginToolRegistryChanged(_) => {}
+        | EventKind::PluginToolRegistryChanged(_)
+        | EventKind::ActivityV2(_) => {}
     }
 }
 

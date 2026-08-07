@@ -2546,6 +2546,28 @@ impl SessionManager {
         let streaming_activity_id = session
             .part(&pending_tool.part)
             .and_then(|part| part.activity_id);
+        // Activity v2 live bridge (07 §5.2, §6.1): one in-memory handler feeds
+        // the unified wire events from the same text deltas that drive the
+        // legacy detail broadcasts. Events are published as
+        // `EventKind::ActivityV2` (live, non-persistent) for TUI/Web.
+        let initial_title = session
+            .part(&pending_tool.part)
+            .and_then(|part| match &part.content {
+                Some(crate::message::PartContent::Activity(
+                    crate::message::RuntimeActivity::Operation(operation),
+                )) if !operation.title.is_empty() => Some(operation.title.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| "tool".to_owned());
+        let mut activity_handler = streaming_activity_id.map(|activity_id| {
+            crate::activity::ActivityHandler::begin(
+                activity_id,
+                crate::activity::ActivityKind::Operation,
+                initial_title,
+            )
+        });
+        let stream_started = std::time::Instant::now();
+        let mut stream_block_created = false;
         loop {
             let chunk = match cancellation.as_ref() {
                 Some(cancellation) => tokio::select! {
@@ -2576,6 +2598,30 @@ impl SessionManager {
             }
             streamed_output.push_str(delta);
             pending_detail_delta.push_str(delta);
+            if let Some(handler) = &mut activity_handler {
+                let render_event = if stream_block_created {
+                    agena_tool::ToolActivityEvent::Render(agena_domain::RenderDelta::append(
+                        "stream",
+                        agena_domain::ViewBlock::Log {
+                            id: None,
+                            stream: agena_domain::CommandOutputStream::Stdout,
+                            text: delta.to_string(),
+                        },
+                    ))
+                } else {
+                    stream_block_created = true;
+                    agena_tool::ToolActivityEvent::Render(agena_domain::RenderDelta::new(
+                        agena_domain::ViewBlock::Log {
+                            id: Some("stream".to_owned()),
+                            stream: agena_domain::CommandOutputStream::Stdout,
+                            text: delta.to_string(),
+                        },
+                    ))
+                };
+                for event in handler.apply_event(render_event) {
+                    self.broadcast_activity_v2(session.id, event)?;
+                }
+            }
             // Broadcast the new output as a live, non-persisted detail delta so
             // an expanded terminal renders the growing detail in real time.
             if last_detail_broadcast.elapsed()
@@ -2596,6 +2642,13 @@ impl SessionManager {
                 session = self
                     .refresh_streaming_title(session.id, pending_tool, state.clone())
                     .await?;
+                if let Some(handler) = &mut activity_handler {
+                    if let Some(event) =
+                        handler.refresh_elapsed_title(stream_started.elapsed().as_secs())
+                    {
+                        self.broadcast_activity_v2(session.id, event)?;
+                    }
+                }
             }
         }
         session = self
@@ -2682,6 +2735,24 @@ impl SessionManager {
                     .await;
             }
         };
+
+        // Publish the terminal v2 activity node once the stream finished
+        // successfully. The durable write happens in the legacy success path;
+        // the live wire event is broadcast in memory only.
+        if let Some(mut handler) = activity_handler.take() {
+            let node = handler.finish(
+                agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(
+                    streamed_output,
+                )),
+                agena_domain::ActivityState::Completed,
+            );
+            self.broadcast_activity_v2(
+                session.id,
+                crate::activity::ActivityLiveEvent::Upserted {
+                    node: Box::new(node),
+                },
+            )?;
+        }
 
         let session = self
             .store
@@ -2776,6 +2847,35 @@ impl SessionManager {
     /// the compact title (a tiny UPDATE), never the cumulative output, so a
     /// long stream costs O(1) writes rather than re-persisting the growing
     /// text every 2s.
+    /// Publish one activity v2 live wire event (07 §5.2). In-memory,
+    /// non-persistent, fire-and-forget like the legacy detail broadcasts.
+    fn broadcast_activity_v2(
+        &self,
+        session_id: i64,
+        event: crate::activity::ActivityLiveEvent,
+    ) -> Result<(), AppError> {
+        let publisher = Arc::clone(&self.publisher);
+        let context = crate::event::PublishContext::for_session(session_id);
+        let handle = tokio::runtime::Handle::current();
+        handle.spawn(async move {
+            if let Err(error) = publisher
+                .publish(
+                    context,
+                    crate::event::EventKind::ActivityV2(Box::new(event)),
+                )
+                .await
+            {
+                tracing::debug!(
+                    target: "agena::session::activity_v2",
+                    session_id,
+                    error = %error,
+                    "failed to broadcast activity v2 live event"
+                );
+            }
+        });
+        Ok(())
+    }
+
     pub(in crate::session::manager) async fn refresh_streaming_title(
         &self,
         session_id: i64,

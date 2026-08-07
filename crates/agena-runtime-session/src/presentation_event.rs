@@ -28,6 +28,9 @@ pub enum RuntimePresentationEventKind {
     Refresh {
         force_refresh: bool,
     },
+    /// A live activity-v2 event (detail delta, title change, state change,
+    /// upsert, removal). Broadcast in memory only, never persisted.
+    ActivityV2(Box<crate::activity::ActivityLiveEvent>),
 }
 
 #[derive(Debug, Clone)]

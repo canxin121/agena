@@ -318,6 +318,7 @@ fn project_runtime_timeline_event(
         EventKind::PluginEvent(_) | EventKind::PluginToolRegistryChanged(_) => {
             "timeline-type-plugin-event"
         }
+        EventKind::ActivityV2(_) => "timeline-type-activity-v2",
     };
     let detail = serde_json::to_string_pretty(&event.kind)
         .map_err(|error| agena_runtime::RuntimeEventQueryError::internal(error.to_string()))?;
@@ -418,6 +419,11 @@ fn project_runtime_presentation_event(
             Some(agena_runtime::RuntimePresentationEventKind::Refresh {
                 force_refresh: true,
             })
+        }
+        EventKind::ActivityV2(activity) => {
+            Some(agena_runtime::RuntimePresentationEventKind::ActivityV2(
+                activity.clone(),
+            ))
         }
         EventKind::CommandOutputDelta(delta) => {
             // Streaming tool output is broadcast live (never persisted) so an

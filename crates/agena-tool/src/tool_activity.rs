@@ -116,7 +116,7 @@ impl RenderError {
 /// When a tool registers a renderer, the runtime calls it on detail requests;
 /// when it does not, the runtime renders the raw output directly (the same
 /// content the model sees).
-pub trait ToolHumanRenderer {
+pub trait ToolHumanRenderer: Send + Sync {
     fn render_human(
         &self,
         ctx: &RenderContext,

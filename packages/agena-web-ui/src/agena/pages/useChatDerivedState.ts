@@ -25,6 +25,12 @@ export type ChatDerivedStateInput = {
   rewindCheckpoints: Ref<RewindCheckpointResource[]>
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
+  selectedThinkingMode: Ref<string>
+  selectedSpeedMode: Ref<string>
+  selectedProviderId: Ref<string>
+  selectedAdapterId: Ref<string>
+  selectedModelId: Ref<string>
+  modelDefaultModes: () => { thinking: string; speed: string }
   sessionState: Ref<SessionExecutionResource | null>
   sessionTree: Ref<SessionTreeResource[]>
   workspaces: Ref<WorkspaceResource[]>
@@ -154,23 +160,44 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
 
   const executionFacts = computed(() => {
     const execution = input.sessionState.value?.execution
-    if (!execution) return [] as string[]
-
     const facts: string[] = []
-    facts.push(`agent=${execution.agent_id}`)
-    if (execution.execution_access !== 'inherit') facts.push(`access=${execution.execution_access}`)
-    if (execution.task_id) facts.push(`task=${execution.task_id}`)
-    const modelLabel = formatSessionExecutionModelLabel(execution)
+    if (execution) {
+      facts.push(`agent=${execution.agent_id}`)
+      if (execution.execution_access !== 'inherit') facts.push(`access=${execution.execution_access}`)
+      if (execution.task_id) facts.push(`task=${execution.task_id}`)
+    }
+    // Model label: prefer the active session's execution context, falling
+    // back to the run-options model stack so the status stays populated
+    // even before a session exists.
+    const modelLabel = execution
+      ? formatSessionExecutionModelLabel(execution)
+      : formatSessionExecutionModelLabel({
+          model_provider_id: input.selectedProviderId.value,
+          model_adapter_id: input.selectedAdapterId.value,
+          model_id: input.selectedModelId.value,
+        })
     if (modelLabel) {
       facts.push(`model=${modelLabel}`)
     }
-    if (execution.model_thinking_mode) facts.push(`thinking=${execution.model_thinking_mode}`)
-    if (execution.model_speed_mode) facts.push(`speed=${execution.model_speed_mode}`)
-    if (execution.model_verbosity) facts.push(`verbosity=${execution.model_verbosity}`)
-    if (execution.model_parallel_tool_calls != null) {
-      facts.push(`parallel_tools=${execution.model_parallel_tool_calls ? 'on' : 'off'}`)
+    // Think/speed: prefer the modes a run actually used, then run-options
+    // overrides, then the resolved model defaults so they stay visible
+    // before the first message of a new session.
+    const defaults = input.modelDefaultModes()
+    const thinkingMode = firstNonEmpty(
+      execution?.model_thinking_mode || '',
+      input.selectedThinkingMode.value,
+      defaults.thinking,
+    )
+    if (thinkingMode) facts.push(`thinking=${thinkingMode}`)
+    const speedMode = firstNonEmpty(execution?.model_speed_mode || '', input.selectedSpeedMode.value, defaults.speed)
+    if (speedMode) facts.push(`speed=${speedMode}`)
+    if (execution) {
+      if (execution.model_verbosity) facts.push(`verbosity=${execution.model_verbosity}`)
+      if (execution.model_parallel_tool_calls != null) {
+        facts.push(`parallel_tools=${execution.model_parallel_tool_calls ? 'on' : 'off'}`)
+      }
+      if (execution.effective_workspace_root) facts.push(`workspace=${execution.effective_workspace_root}`)
     }
-    if (execution.effective_workspace_root) facts.push(`workspace=${execution.effective_workspace_root}`)
     return facts
   })
 
@@ -191,4 +218,8 @@ export function useChatDerivedState(input: ChatDerivedStateInput) {
     sessionUsageSummaryFacts,
     siblingSessions,
   }
+}
+
+function firstNonEmpty(...values: string[]): string {
+  return values.find((value) => value.trim().length > 0)?.trim() || ''
 }

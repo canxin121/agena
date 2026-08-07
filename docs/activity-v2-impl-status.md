@@ -52,8 +52,11 @@
 - `cargo test -p agena-api-server` → 5
 - `cargo test -p agena-tui-app` → 168（含 activity_v2 2）
 
-## 备注（P7 收敛边界）
+## 彻底收敛（P8，`a290a98f`）
 
-- 旧 `ActivityPayload`（18 变体）**保留**：仍是持久化 `content_nodes.payload_json` 与 TUI snapshot 渲染的活跃格式（ProviderRetry 投影、Hook/Maintenance 存储、message_render 分支均有引用），非死代码；v2 新体系（`ActivityKind` 9 变体）已并行上线。
-- 旧 `operation_blocks_from_tool_output`（helpers.rs）保留：人类视图 Golden 保持，`BuiltinHumanRenderer` 为其 v2 等价下放。
-- `Broadcast_activity_v2` 注释错位（P3c 遗留）已修复。
+- `ActivityPayload` 18 → **9 变体**，与 `ActivityKind` 完全对齐：删除 `SkillExecution/Progress/Checklist/Search/FileChanges/NestedTask/Maintenance/Hook/Custom` 及其 struct（-609 行）。
+- 旧功能改投影为 `Notice`（保留可见性）：ProviderRetry → `kind=provider_retry`；Hook part → `kind=hook`；compaction → `kind=compaction`。
+- 删除旧 live-detail 路径：`RuntimePresentationEventKind::OperationDetailDelta` 变体、`broadcast_streaming_detail`、TUI `append_live_operation_detail`（流式实时由 `ActivityV2::DetailDelta` 统一承担）。
+- TUI 渲染/快照删除 9 个旧分支；`TranscriptActivityContent::Hook` 渲染为 Notice。
+- `RuntimeActivity::Hook` 与 `OperationBlock`（OperationPart）是当前功能的持久化契约（非旧兼容层），保留。
+- 全 workspace **1724 tests 全绿**；主 repo 干净。

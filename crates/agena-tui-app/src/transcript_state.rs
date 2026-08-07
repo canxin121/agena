@@ -54,6 +54,7 @@ impl TranscriptState {
             detail_expanded_by_default,
             node_expansions: BTreeMap::new(),
             expanded_operation_activity_ids: BTreeSet::new(),
+            v2_activities: BTreeMap::new(),
             rendered: None,
         }
     }
@@ -85,6 +86,7 @@ impl TranscriptState {
         self.jump_history.clear();
         self.jump_history_index = 0;
         self.node_expansions.clear();
+        self.v2_activities.clear();
         self.invalidate_render();
     }
 
@@ -240,6 +242,12 @@ impl TranscriptState {
             }
             agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
             agena_runtime::RuntimePresentationEventKind::ActivityChanged { .. } => true,
+            agena_runtime::RuntimePresentationEventKind::ActivityV2(_) => {
+                // Unified live wire event (07 §5.2): merge into the in-memory
+                // v2 overlay. Never persisted and never part of the snapshot.
+                self.apply_activity_v2_event(event);
+                false
+            }
         };
 
         if !refresh_needed {
@@ -295,6 +303,75 @@ impl TranscriptState {
             matched |= append(activity);
         }
         let _ = matched;
+    }
+
+    /// Apply a live activity-v2 wire event to the in-memory overlay.
+    ///
+    /// Detail deltas are only merged for expanded Activities (same budget
+    /// rule as the legacy Operation path); collapsed Activities keep only
+    /// their headline. Title/state/upsert/removal events update the overlay
+    /// entry's stable fields. Nothing here touches the persisted snapshot.
+    fn apply_activity_v2_event(&mut self, event: &agena_runtime::RuntimePresentationEvent) {
+        let agena_runtime::RuntimePresentationEventKind::ActivityV2(activity) = &event.kind else {
+            return;
+        };
+        match activity.as_ref() {
+            agena_runtime::session::activity::ActivityLiveEvent::DetailDelta {
+                activity_id,
+                delta,
+            } => {
+                if !self.expanded_operation_activity_ids.contains(activity_id) {
+                    return;
+                }
+                let entry = self
+                    .v2_activities
+                    .entry(*activity_id)
+                    .or_insert_with(|| V2LiveActivity {
+                        activity_id: *activity_id,
+                        title: String::new(),
+                        state: agena_domain::ActivityState::InProgress,
+                        live_blocks: Vec::new(),
+                    });
+                merge_v2_delta(&mut entry.live_blocks, delta);
+            }
+            agena_runtime::session::activity::ActivityLiveEvent::TitleChanged {
+                activity_id,
+                title,
+            } => {
+                if let Some(entry) = self.v2_activities.get_mut(activity_id) {
+                    entry.title = title.clone();
+                }
+            }
+            agena_runtime::session::activity::ActivityLiveEvent::SummaryChanged { .. } => {}
+            agena_runtime::session::activity::ActivityLiveEvent::StateChanged {
+                activity_id,
+                state,
+            } => {
+                if let Some(entry) = self.v2_activities.get_mut(activity_id) {
+                    entry.state = *state;
+                }
+            }
+            agena_runtime::session::activity::ActivityLiveEvent::Upserted { node } => {
+                let live_blocks = self
+                    .v2_activities
+                    .get(&node.activity_id)
+                    .map(|entry| entry.live_blocks.clone())
+                    .unwrap_or_default();
+                self.v2_activities.insert(
+                    node.activity_id,
+                    V2LiveActivity {
+                        activity_id: node.activity_id,
+                        title: node.title.clone(),
+                        state: node.state,
+                        live_blocks,
+                    },
+                );
+            }
+            agena_runtime::session::activity::ActivityLiveEvent::Removed { activity_id } => {
+                self.v2_activities.remove(activity_id);
+            }
+        }
+        self.invalidate_render();
     }
 
     pub(crate) fn set_search_query(&mut self, query: String) {
@@ -1014,6 +1091,29 @@ impl TranscriptState {
                     toggleable: false,
                     expanded: true,
                 });
+            }
+        }
+
+        // Live activity-v2 overlays render as a compact trailing section: one
+        // headline per activity plus the merged ViewBlocks when expanded.
+        for activity in self.v2_activities.values() {
+            let state_label = format!("{:?}", activity.state).to_ascii_lowercase();
+            let headline = format!("\u{25b8} {} \u{00b7} {state_label}", activity.title);
+            lines.push(
+                RenderedLine::dim(headline.clone()).with_copy_projection(headline, 0),
+            );
+            line_nodes.push(None);
+            if self.expanded_operation_activity_ids.contains(&activity.activity_id) {
+                for block in &activity.live_blocks {
+                    for block_line in render_activity_block(block) {
+                        lines.push(RenderedLine::plain(
+                            block_line.clone(),
+                            ratatui::style::Style::default(),
+                        )
+                        .with_copy_projection(block_line.clone(), 0));
+                        line_nodes.push(None);
+                    }
+                }
             }
         }
 
@@ -2815,6 +2915,128 @@ impl TranscriptState {
     }
 }
 
+fn merge_v2_delta(live_blocks: &mut Vec<agena_domain::ViewBlock>, delta: &agena_domain::RenderDelta) {
+    let block_id = delta.block_id.as_deref().or_else(|| delta.view.block_id());
+    match delta.mode {
+        agena_domain::DeltaMode::New => live_blocks.push(delta.view.clone()),
+        agena_domain::DeltaMode::Append => {
+            if let Some(id) = block_id
+                && let Some(block) = live_blocks.iter_mut().find(|b| b.block_id() == Some(id))
+            {
+                append_to_v2_block(block, &delta.view);
+                return;
+            }
+            live_blocks.push(delta.view.clone());
+        }
+        agena_domain::DeltaMode::Replace => {
+            if let Some(id) = block_id
+                && let Some(block) = live_blocks.iter_mut().find(|b| b.block_id() == Some(id))
+            {
+                *block = delta.view.clone();
+                return;
+            }
+            live_blocks.push(delta.view.clone());
+        }
+    }
+}
+
+fn append_to_v2_block(target: &mut agena_domain::ViewBlock, incoming: &agena_domain::ViewBlock) {
+    let append_text = match incoming {
+        agena_domain::ViewBlock::Text { text, .. }
+        | agena_domain::ViewBlock::Markdown { text, .. }
+        | agena_domain::ViewBlock::Log { text, .. } => Some(text.as_str()),
+        _ => None,
+    };
+    if let Some(text) = append_text
+        && let agena_domain::ViewBlock::Text { text: t, .. }
+        | agena_domain::ViewBlock::Markdown { text: t, .. }
+        | agena_domain::ViewBlock::Log { text: t, .. } = target
+    {
+        t.push_str(text);
+    }
+}
+
+/// Render one unified activity-v2 `ViewBlock` into display lines. This is the
+/// single rendering entry point for every ViewBlock variant (07 §5.2): the
+/// terminal handles all 11 variants here, mirroring the wire shape Web
+/// receives.
+pub(crate) fn render_activity_block(block: &agena_domain::ViewBlock) -> Vec<String> {
+    match block {
+        agena_domain::ViewBlock::Text { text, .. } => vec![text.clone()],
+        agena_domain::ViewBlock::Markdown { text, .. } => vec![text.clone()],
+        agena_domain::ViewBlock::Json { value, .. } => vec![
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
+        ],
+        agena_domain::ViewBlock::Table { columns, rows, .. } => {
+            let mut lines = vec![columns.join(" | ")];
+            lines.extend(
+                rows.iter()
+                    .map(|row| row.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" | ")),
+            );
+            lines
+        }
+        agena_domain::ViewBlock::Log { stream, text, .. } => {
+            let prefix = match stream {
+                agena_domain::CommandOutputStream::Stdout => "",
+                agena_domain::CommandOutputStream::Stderr => "[stderr] ",
+            };
+            text.lines().map(|line| format!("{prefix}{line}")).collect()
+        }
+        agena_domain::ViewBlock::Command {
+            command,
+            cwd,
+            exit_code,
+            stdout,
+            stderr,
+            ..
+        } => {
+            let mut lines = Vec::new();
+            let cwd_suffix = cwd
+                .as_deref()
+                .map(|c| format!("  (cwd: {c})"))
+                .unwrap_or_default();
+            lines.push(format!("$ {command}{cwd_suffix}"));
+            lines.extend(stdout.lines().map(str::to_owned));
+            lines.extend(stderr.lines().map(|line| format!("[stderr] {line}")));
+            if let Some(code) = exit_code {
+                lines.push(format!("exit code: {code}"));
+            }
+            lines
+        }
+        agena_domain::ViewBlock::FileChanges { changes, .. } => {
+            changes.iter().map(|change| format!("{change:?}")).collect()
+        }
+        agena_domain::ViewBlock::Diff { diff, .. } => diff.lines().map(str::to_owned).collect(),
+        agena_domain::ViewBlock::SearchResults { items, total, .. } => {
+            let mut lines = Vec::new();
+            if let Some(total) = total {
+                lines.push(format!("{total} results"));
+            }
+            for item in items {
+                lines.push(item.title.clone());
+                lines.push(format!("  {}", item.url));
+                if let Some(snippet) = &item.snippet {
+                    lines.push(format!("    {snippet}"));
+                }
+            }
+            lines
+        }
+        agena_domain::ViewBlock::Media { artifact, .. } => {
+            vec![format!("media: {}", artifact.uri)]
+        }
+        agena_domain::ViewBlock::Custom {
+            kind, presentation, ..
+        } => {
+            if presentation.is_empty() {
+                vec![format!("[{kind}]")]
+            } else {
+                presentation.values().cloned().collect()
+            }
+        }
+    }
+}
+
+
 fn weave_pending_user_entries<'a>(
     snapshot: &'a agena_domain::TranscriptSnapshot,
     canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'a>>,
@@ -3040,7 +3262,7 @@ use crate::{
     TranscriptDetailDefaults, TranscriptInteraction, TranscriptMoveDirection, TranscriptNodeKey,
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
-    contains_case_insensitive, initial_search_match_index, min,
+    V2LiveActivity, contains_case_insensitive, initial_search_match_index, min,
     normalize_transcript_text_selection, render_entry_detailed, transcript_entries,
     transcript_node_highlight_range, transcript_selection_scroll_position,
     transcript_text_selection_text, ui_text,
@@ -3125,5 +3347,257 @@ mod stall_recovery_tests {
 
         state.snapshot.turns[0].reply.status = agena_domain::AssistantReplyStatus::Completed;
         assert!(!state.has_non_terminal_replies());
+    }
+}
+
+#[cfg(test)]
+mod activity_v2_tests {
+    use super::*;
+    use agena_domain::{
+        ActivityId, ActivityState, CommandOutputStream, RenderDelta, ViewBlock,
+    };
+    use agena_runtime::{
+        RuntimePresentationEvent, RuntimePresentationEventKind,
+        session::activity::{ActivityKind, ActivityLiveEvent, ActivityStateNode},
+    };
+    use agena_domain::EventMeta;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn state() -> TranscriptState {
+        TranscriptState::new(
+            I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+        )
+    }
+
+    fn v2_event(activity: ActivityLiveEvent, seq: i64) -> RuntimePresentationEvent {
+        RuntimePresentationEvent {
+            meta: EventMeta {
+                id: Uuid::new_v4(),
+                seq_global: seq,
+                seq_session: Some(seq),
+                session_id: Some(7),
+                workspace_id: None,
+                created_at: Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: 1,
+            },
+            invalidates_ancestor_projection: false,
+            kind: RuntimePresentationEventKind::ActivityV2(Box::new(activity)),
+        }
+    }
+
+    #[test]
+    fn render_activity_block_handles_all_variants() {
+        let cases: Vec<(ViewBlock, &str)> = vec![
+            (ViewBlock::Text { id: None, text: "hello".into() }, "hello"),
+            (ViewBlock::Markdown { id: None, text: "# hi".into() }, "# hi"),
+            (ViewBlock::Json { id: None, value: serde_json::json!({ "a": 1 }) }, "{"),
+            (
+                ViewBlock::Table {
+                    id: None,
+                    columns: vec!["name".into()],
+                    rows: vec![vec![serde_json::json!("v")]],
+                },
+                "name",
+            ),
+            (
+                ViewBlock::Log {
+                    id: None,
+                    stream: CommandOutputStream::Stderr,
+                    text: "boom\nnext".into(),
+                },
+                "[stderr] boom",
+            ),
+            (
+                ViewBlock::Command {
+                    id: None,
+                    command: "cargo test".into(),
+                    cwd: Some("/tmp".into()),
+                    exit_code: Some(0),
+                    stdout: "ok".into(),
+                    stderr: String::new(),
+                },
+                "$ cargo test  (cwd: /tmp)",
+            ),
+            (
+                ViewBlock::FileChanges {
+                    id: None,
+                    changes: vec![agena_domain::FileChangeRecord {
+                        path: "a.txt".into(),
+                        kind: agena_domain::FileChangeKind::Updated,
+                        from_path: None,
+                    }],
+                },
+                "a.txt",
+            ),
+            (ViewBlock::Diff { id: None, diff: "-a\n+b".into(), language: None }, "-a"),
+            (
+                ViewBlock::SearchResults {
+                    id: None,
+                    items: vec![agena_domain::WebSearchResult {
+                        title: "doc".into(),
+                        url: "https://example.test".into(),
+                        snippet: None,
+                    }],
+                    total: Some(1),
+                },
+                "1 results",
+            ),
+            (
+                ViewBlock::Media {
+                    id: None,
+                    artifact: agena_domain::ArtifactRef {
+                        uri: "file:///tmp/x.png".into(),
+                        mime: "image/png".into(),
+                        name: None,
+                        size_bytes: None,
+                        sha256: None,
+                    },
+                },
+                "media: file:///tmp/x.png",
+            ),
+            (
+                ViewBlock::Custom {
+                    id: None,
+                    kind: "badge".into(),
+                    schema: serde_json::Value::Null,
+                    presentation: std::collections::BTreeMap::new(),
+                },
+                "[badge]",
+            ),
+        ];
+        for (block, expected) in cases {
+            let lines = render_activity_block(&block);
+            assert!(
+                lines.iter().any(|line| line.contains(expected)),
+                "variant {block:?} rendered {lines:?} without {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn activity_v2_events_drive_the_live_overlay() {
+        let activity_id = ActivityId::new();
+        let mut transcript = state();
+        transcript.expanded_operation_activity_ids.insert(activity_id);
+
+        // New + Append deltas merge into live blocks when expanded.
+        transcript.apply_presentation_event(
+            &v2_event(
+                ActivityLiveEvent::DetailDelta {
+                    activity_id,
+                    delta: RenderDelta::new(ViewBlock::log(
+                        "out",
+                        CommandOutputStream::Stdout,
+                        "a\n",
+                    )),
+                },
+                1,
+            ),
+            80,
+            20,
+        );
+        transcript.apply_presentation_event(
+            &v2_event(
+                ActivityLiveEvent::DetailDelta {
+                    activity_id,
+                    delta: RenderDelta::append(
+                        "out",
+                        ViewBlock::log("out", CommandOutputStream::Stdout, "b\n"),
+                    ),
+                },
+                2,
+            ),
+            80,
+            20,
+        );
+        let entry = transcript.v2_activities.get(&activity_id).expect("overlay entry");
+        assert_eq!(entry.live_blocks.len(), 1);
+        match &entry.live_blocks[0] {
+            ViewBlock::Log { text, .. } => assert_eq!(text, "a\nb\n"),
+            other => panic!("expected log block, got {other:?}"),
+        }
+
+        // Collapsed activities ignore detail deltas.
+        transcript.expanded_operation_activity_ids.clear();
+        transcript.apply_presentation_event(
+            &v2_event(
+                ActivityLiveEvent::DetailDelta {
+                    activity_id,
+                    delta: RenderDelta::append(
+                        "out",
+                        ViewBlock::log("out", CommandOutputStream::Stdout, "c\n"),
+                    ),
+                },
+                3,
+            ),
+            80,
+            20,
+        );
+        assert_eq!(
+            transcript.v2_activities.get(&activity_id).unwrap().live_blocks[0],
+            ViewBlock::log("out", CommandOutputStream::Stdout, "a\nb\n")
+        );
+
+        // Title/state/upsert/removed lifecycle.
+        transcript.apply_presentation_event(
+            &v2_event(
+                ActivityLiveEvent::TitleChanged {
+                    activity_id,
+                    title: "cargo test".into(),
+                },
+                4,
+            ),
+            80,
+            20,
+        );
+        assert_eq!(transcript.v2_activities.get(&activity_id).unwrap().title, "cargo test");
+
+        transcript.apply_presentation_event(
+            &v2_event(
+                ActivityLiveEvent::StateChanged {
+                    activity_id,
+                    state: ActivityState::Completed,
+                },
+                5,
+            ),
+            80,
+            20,
+        );
+        assert_eq!(
+            transcript.v2_activities.get(&activity_id).unwrap().state,
+            ActivityState::Completed
+        );
+
+        let node = ActivityStateNode {
+            activity_id,
+            kind: ActivityKind::Operation,
+            title: "shell.run".into(),
+            summary: String::new(),
+            state: ActivityState::Completed,
+            raw_output: None,
+            sections: Vec::new(),
+        };
+        transcript.apply_presentation_event(
+            &v2_event(ActivityLiveEvent::Upserted { node: Box::new(node) }, 6),
+            80,
+            20,
+        );
+        let entry = transcript.v2_activities.get(&activity_id).expect("upserted");
+        assert_eq!(entry.title, "shell.run");
+        assert_eq!(entry.state, ActivityState::Completed);
+        assert_eq!(entry.live_blocks.len(), 1, "upsert keeps merged blocks");
+
+        transcript.apply_presentation_event(
+            &v2_event(ActivityLiveEvent::Removed { activity_id }, 7),
+            80,
+            20,
+        );
+        assert!(transcript.v2_activities.get(&activity_id).is_none());
     }
 }

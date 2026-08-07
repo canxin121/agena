@@ -1,0 +1,22 @@
+[package]
+name = "agena-runtime-notifications"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Runtime aggregator and in-memory store for unified notifications"
+
+[dependencies]
+agena-domain = { workspace = true }
+agena-notification = { workspace = true }
+agena-runtime-contracts = { workspace = true }
+async-trait.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

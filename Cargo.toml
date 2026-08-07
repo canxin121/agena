@@ -36,6 +36,7 @@ members = [
     "crates/agena-bundled-plugins",
     "crates/agena-runtime-session",
     "crates/agena-runtime-session-core",
+    "crates/agena-runtime-notifications",
     "crates/agena-git-http",
     "crates/agena-web",
     "crates/agena-api",
@@ -98,6 +99,7 @@ agena-runtime-plugins = { path = "crates/agena-runtime-plugins" }
 agena-bundled-plugins = { path = "crates/agena-bundled-plugins" }
 agena-runtime-session = { path = "crates/agena-runtime-session" }
 agena-runtime-session-core = { path = "crates/agena-runtime-session-core" }
+agena-runtime-notifications = { path = "crates/agena-runtime-notifications" }
 agena-git-http = { path = "crates/agena-git-http" }
 agena-web = { path = "crates/agena-web" }
 agena-api = { path = "crates/agena-api" }

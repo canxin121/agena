@@ -29,7 +29,7 @@ pub enum NotificationError {
 }
 
 /// 查询过滤器（分页游标基于 created_at_ms）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct NotificationFilter {
     pub scope: Option<NotificationScope>,
@@ -38,15 +38,26 @@ pub struct NotificationFilter {
     pub surface: Option<NotificationSurface>,
     pub source: Option<NotificationSource>,
     /// 默认只返回未忽略（active）通知。
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub active_only: bool,
     pub limit: Option<usize>,
     /// 游标：返回 created_at_ms < cursor 的条目（倒序分页）。
     pub cursor: Option<i64>,
 }
 
-fn default_true() -> bool {
-    true
+impl Default for NotificationFilter {
+    fn default() -> Self {
+        Self {
+            scope: None,
+            severity: None,
+            kind: None,
+            surface: None,
+            source: None,
+            active_only: true,
+            limit: None,
+            cursor: None,
+        }
+    }
 }
 
 /// 发出通知的请求。
@@ -91,14 +102,27 @@ pub trait NotificationSubscription: Send + Sync {
 #[async_trait]
 pub trait NotificationService: Send + Sync {
     /// 发出通知（聚合/去重/持久化/推送订阅者）。
-    async fn emit(&self, request: EmitNotificationRequest) -> Result<Notification, NotificationError>;
+    async fn emit(
+        &self,
+        request: EmitNotificationRequest,
+    ) -> Result<Notification, NotificationError>;
     /// 按过滤器查询（分页）。
-    async fn list(&self, filter: NotificationFilter) -> Result<Vec<Notification>, NotificationError>;
+    async fn list(
+        &self,
+        filter: NotificationFilter,
+    ) -> Result<Vec<Notification>, NotificationError>;
     /// 忽略/关闭。
-    async fn dismiss(&self, id: NotificationId, reason: Option<String>) -> Result<(), NotificationError>;
+    async fn dismiss(
+        &self,
+        id: NotificationId,
+        reason: Option<String>,
+    ) -> Result<(), NotificationError>;
     /// 解析并返回入口对应的外部动作目标（执行交给宿主命令执行器）。
-    async fn resolve_target(&self, id: NotificationId, action_id: String)
-        -> Result<ActionTarget, NotificationError>;
+    async fn resolve_target(
+        &self,
+        id: NotificationId,
+        action_id: String,
+    ) -> Result<ActionTarget, NotificationError>;
     /// 订阅推送（SSE 后端等）。
     fn subscribe(&self, filter: NotificationFilter) -> Box<dyn NotificationSubscription>;
 }

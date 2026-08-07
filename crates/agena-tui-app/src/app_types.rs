@@ -359,7 +359,7 @@ impl TerminalIntegrationState {
     }
 
     /// Returns `true` when `notify_content` (from the `agena.terminal.notify`
-    /// statusline segment) has not yet fired, and records it as consumed.
+    /// display contribution) has not yet fired, and records it as consumed.
     pub(super) fn notify_consumed_once(&mut self, notify_content: &str) -> bool {
         if self.consumed_notify.contains(notify_content) {
             return false;

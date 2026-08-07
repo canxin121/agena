@@ -47,7 +47,7 @@ impl PlanViewerPresentation {
 
 /// Render the plan viewer overlay into `area`.
 ///
-/// `summary` is the compact statusline text (for example `▶ 2/5 ↻`), `markdown`
+/// `summary` is the compact display text (for example `▶ 2/5 ↻`), `markdown`
 /// is the full plan document from `plan.get`, and `autorun` drives the
 /// title badge. Loading and error states replace the body while fetching.
 #[allow(clippy::too_many_arguments)]

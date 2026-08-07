@@ -448,7 +448,7 @@ impl WorkflowPlugin {
         .await?;
         self.clear_autorun_signature().await?;
         self.clear_autorun_continuations().await?;
-        self.sync_plan_statusline(Some(plan)).await?;
+        self.sync_plan_display(Some(plan)).await?;
         Ok(())
     }
 
@@ -463,7 +463,7 @@ impl WorkflowPlugin {
         .await?;
         self.clear_autorun_signature().await?;
         self.clear_autorun_continuations().await?;
-        self.sync_plan_statusline(None).await?;
+        self.sync_plan_display(None).await?;
         Ok(())
     }
 
@@ -562,7 +562,7 @@ impl WorkflowPlugin {
             .await
     }
 
-    pub(in crate::plugins::provided::workflow) async fn sync_plan_statusline(
+    pub(in crate::plugins::provided::workflow) async fn sync_plan_display(
         &self,
         plan: Option<&WorkflowPlan>,
     ) -> SdkResult<()> {
@@ -572,22 +572,27 @@ impl WorkflowPlugin {
             .await?
             .session
             .id;
-        // The plan segment is qualified by the contributing session so the UI
-        // never renders one session's plan while another session is active.
-        let segment_id = format!("{PLAN_STATUSLINE_SEGMENT_ID}:{session_id}");
+        // The plan contribution is qualified by the contributing session so
+        // the UI never renders one session's plan while another session is
+        // active.
+        let contribution_id = format!("{PLAN_DISPLAY_CONTRIBUTION_ID}:{session_id}");
         match plan {
             Some(plan) => {
-                host.ui_statusline_contribute(HostStatuslineContributeRequest {
-                    segment_id,
-                    content: Self::plan_statusline_content(plan),
-                    priority: 120,
-                    color: None,
+                host.display_contribute(HostDisplayContributeRequest {
+                    contribution: PluginDisplayContribution {
+                        id: contribution_id,
+                        kind: ContributionKind::StatusLineText,
+                        priority: 120,
+                        content: PluginDisplayContent::Text {
+                            text: Self::plan_display_content(plan),
+                        },
+                    },
                 })
                 .await?;
             }
             None => {
                 let _ = host
-                    .ui_statusline_remove(HostStatuslineRemoveRequest { segment_id })
+                    .display_remove(HostDisplayRemoveRequest { contribution_id })
                     .await?;
             }
         }
@@ -914,7 +919,7 @@ impl WorkflowPlugin {
         sections.join("\n")
     }
 
-    pub(in crate::plugins::provided::workflow) fn plan_statusline_content(
+    pub(in crate::plugins::provided::workflow) fn plan_display_content(
         plan: &WorkflowPlan,
     ) -> String {
         let (completed_steps, total_steps, _, _) = Self::plan_progress_counts(plan);
@@ -1569,19 +1574,20 @@ impl WorkflowPlugin {
 }
 use super::{
     Arc, AskUserRequest, AskUserToolInput, AvailablePluginRecord, AvailableToolRecord, BTreeMap,
-    HashMap, HashSet, HostAskUserOption, HostAskUserQuestion, HostClient, HostGetSessionRequest,
-    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
-    HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
+    ContributionKind, HashMap, HashSet, HostAskUserOption, HostAskUserQuestion, HostClient,
+    HostDisplayContributeRequest, HostDisplayRemoveRequest, HostGetSessionRequest,
+    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
-    PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
+    OnceLock, PLAN_DISPLAY_CONTRIBUTION_ID, PLAN_KEY_ACTIVE, PLAN_NAMESPACE,
+    PLAN_REVIEW_DECISION_APPROVE, PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT,
     PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY, PLAN_RUNTIME_AUTO_SIGNATURE_KEY, PLAN_RUNTIME_NAMESPACE,
-    PLAN_STATUSLINE_SEGMENT_ID, Path, PathBuf, PlanGetView, PlanReviewKind, PlanUpdateInput,
-    PlanUpdateTarget, PluginError, RwLock, SdkResult, SessionRenameToolInput, SessionToolResponse,
-    ToolDescriptor, ToolInvokeOutput, ToolSearchDocument, ToolTagRecord, WorkflowPlan,
-    WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
-    WorkflowPlanStepInput, WorkflowPlanStepStatus, WorkflowPlugin, WorkflowPluginConfig,
+    Path, PathBuf, PlanGetView, PlanReviewKind, PlanUpdateInput, PlanUpdateTarget,
+    PluginDisplayContent, PluginDisplayContribution, PluginError, RwLock, SdkResult,
+    SessionRenameToolInput, SessionToolResponse, ToolDescriptor, ToolInvokeOutput,
+    ToolSearchDocument, ToolTagRecord, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
+    WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
+    WorkflowPlugin, WorkflowPluginConfig,
 };

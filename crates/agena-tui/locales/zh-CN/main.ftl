@@ -69,9 +69,9 @@ transcript-footer-pending = 待发消息
 transcript-footer-pending-preview = 待发：{$preview}
 transcript-footer-plugin-block = {$label}: {$body}
 runtime-status-keys = 按键 q={$queue} send={$send}
-runtime-status-statusline = 状态栏 {$value}
-runtime-status-statusline-default = 默认
-runtime-status-statusline-plugin = 插件
+runtime-status-display = 状态栏 {$value}
+runtime-status-display-default = 默认
+runtime-status-display-plugin = 插件
 runtime-status-tui-blocks = tui_blocks {$count}
 runtime-status-theme = 主题 {$value}
 run-options-summary-thinking = think {$value}

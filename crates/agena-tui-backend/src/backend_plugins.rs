@@ -150,8 +150,8 @@ impl Backend {
             .collect()
     }
 
-    pub fn plugin_statusline_segments(&self) -> Vec<agena_plugin_host::HostStatuslineSegment> {
-        self.application.plugin_runtime().statusline_segments()
+    pub fn plugin_display_contributions(&self) -> Vec<agena_plugin_host::HostDisplayContribution> {
+        self.application.plugin_runtime().display_contributions()
     }
 
     /// Plugin notifications emitted through the unified `host.notify` entry

@@ -58,14 +58,14 @@ impl App {
             ),
         ));
         parts.push(self.i18n.text_args(
-            "runtime-status-statusline",
+            "runtime-status-display",
             &agena_tui::fl_args!(
                 "value" => ui_text::t(
                     &self.i18n,
-                    if self.backend.plugin_statusline_segments().is_empty() {
-                        "runtime-status-statusline-default"
+                                        if self.backend.plugin_display_contributions().is_empty() {
+                        "runtime-status-display-default"
                     } else {
-                        "runtime-status-statusline-plugin"
+                        "runtime-status-display-plugin"
                     },
                 )
             ),

@@ -362,24 +362,24 @@ fn plugin_ui_catalog_resource_from_domain(
     value: agena_plugin_host::PluginUiCatalog,
 ) -> agena_api::resource::PluginUiCatalogResource {
     use agena_api::resource::{
-        PluginCommandResource, PluginStatuslineSegmentResource, PluginStudioControlOptionResource,
-        PluginStudioControlResource, PluginStudioUiCatalogResource, PluginStudioViewResource,
-        PluginThemeColorsResource, PluginThemePaletteResource, PluginTuiUiCatalogResource,
-        PluginUiCatalogResource,
+        PluginCommandResource, PluginDisplayContributionResource,
+        PluginStudioControlOptionResource, PluginStudioControlResource,
+        PluginStudioUiCatalogResource, PluginStudioViewResource, PluginThemeColorsResource,
+        PluginThemePaletteResource, PluginTuiUiCatalogResource, PluginUiCatalogResource,
     };
 
     PluginUiCatalogResource {
         tui: PluginTuiUiCatalogResource {
-            statusline_segments: value
+            display: value
                 .tui
-                .statusline_segments
+                .display
                 .into_iter()
-                .map(|segment| PluginStatuslineSegmentResource {
-                    plugin_id: segment.plugin_id.to_string(),
-                    segment_id: segment.segment_id,
-                    content: segment.content,
-                    priority: segment.priority,
-                    color: segment.color.map(|color| color.as_str().to_owned()),
+                .map(|item| PluginDisplayContributionResource {
+                    plugin_id: item.plugin_id.to_string(),
+                    id: item.contribution.id,
+                    kind: item.contribution.kind,
+                    priority: item.contribution.priority,
+                    content: item.contribution.content,
                 })
                 .collect(),
             themes: value

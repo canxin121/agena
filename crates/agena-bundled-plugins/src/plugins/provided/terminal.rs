@@ -14,25 +14,25 @@ use std::sync::{Arc, RwLock};
 
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
-    HostClient, HostStatuslineContributeRequest, HostStatuslineRemoveRequest, PluginNotifyRequest,
+    HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, PluginNotifyRequest,
 };
 use agena_plugin_host::sdk::{
-    AgentStopInput, AgentStopPatch, InitContext, InitOutcome, PostRunInput, PreRunInput,
+    AgentStopInput, AgentStopPatch, ContributionKind, InitContext, InitOutcome,
+    PluginDisplayContent, PluginDisplayContribution, PostRunInput, PreRunInput,
     Result as SdkResult, SessionEndInput, SessionStartInput, SessionStartPatch,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 
 pub(crate) const TERMINAL_PLUGIN_ID: &str = "agena.terminal";
 
-/// Reserved statusline segment ids published by this plugin. The TUI reads
-/// exactly these ids to reconstruct the terminal state.
-pub(crate) const TITLE_SEGMENT_ID: &str = "agena.terminal.title";
-pub(crate) const ACTIVITY_SEGMENT_ID: &str = "agena.terminal.activity";
+/// Display contribution id published by this plugin. The TUI reads exactly
+/// this id to reconstruct the terminal activity state.
+pub(crate) const ACTIVITY_CONTRIBUTION_ID: &str = "agena.terminal.activity";
 
-/// Statusline priority for the activity segment. One-shot attention moved to
-/// the unified `host.notify` entry (Phase 6), so only the activity state
-/// remains on the deprecated statusline bridge until Phase 7 cleanup.
-pub(crate) const ACTIVITY_SEGMENT_PRIORITY: i32 = i32::MAX - 1;
+/// Display priority for the activity contribution. One-shot attention uses
+/// the unified `host.notify` entry; the activity state rides the declarative
+/// display channel (`host.display_contribute`).
+pub(crate) const ACTIVITY_CONTRIBUTION_PRIORITY: i32 = i32::MAX - 1;
 
 /// A lifecycle event that should raise terminal attention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -107,9 +107,9 @@ impl TerminalPlugin {
     }
 
     /// Record the current activity (and optionally a one-shot notify intent)
-    /// and publish it to the statusline channel so the TUI can render the
-    /// terminal title and raise attention. Best-effort: a missing host or a
-    /// failed write is non-fatal because the TUI retains a local fallback.
+    /// and publish it through the declarative display channel so the TUI can
+    /// render the terminal title. Best-effort: a missing host or a failed
+    /// write is non-fatal because the TUI retains a local fallback.
     async fn set_and_publish(&self, activity: TerminalActivity, notify: Option<TerminalNotify>) {
         if let Ok(mut guard) = self.activity.write() {
             *guard = activity;
@@ -119,51 +119,50 @@ impl TerminalPlugin {
         {
             *guard = notify;
         }
-        self.publish_segments().await;
+        self.publish_display().await;
     }
 
-    async fn publish_segments(&self) {
+    async fn publish_display(&self) {
         let Ok(host) = self.host() else {
             return;
         };
-        let activity = serde_json::to_value(
-            self.activity
-                .read()
-                .map(|guard| *guard)
-                .unwrap_or(TerminalActivity::Idle),
-        )
-        .unwrap_or_default()
-        .to_string();
         // One-shot attention notification via the unified notify entry. The
         // host decides surface; the TUI consumes it for terminal bells.
         if let Some(kind) = self.notify.read().ok().and_then(|guard| *guard) {
             let _ = host.notify(notify_request(kind)).await;
         }
+        let activity = self
+            .activity
+            .read()
+            .map(|guard| *guard)
+            .unwrap_or(TerminalActivity::Idle);
+        let value = match activity {
+            TerminalActivity::Idle => "idle",
+            TerminalActivity::Running => "running",
+            TerminalActivity::Blocked => "blocked",
+        };
         let _ = host
-            .ui_statusline_contribute(HostStatuslineContributeRequest {
-                segment_id: ACTIVITY_SEGMENT_ID.to_owned(),
-                content: activity,
-                priority: ACTIVITY_SEGMENT_PRIORITY,
-                color: None,
+            .display_contribute(HostDisplayContributeRequest {
+                contribution: PluginDisplayContribution {
+                    id: ACTIVITY_CONTRIBUTION_ID.to_owned(),
+                    kind: ContributionKind::TerminalActivity,
+                    priority: ACTIVITY_CONTRIBUTION_PRIORITY,
+                    content: PluginDisplayContent::TerminalActivity {
+                        value: value.to_owned(),
+                    },
+                },
             })
             .await;
-        // The activity segment stays present as the TUI's authoritative
-        // idle/running/blocked source on the deprecated statusline bridge.
     }
 
-    /// Clear the statusline segments on shutdown.
-    async fn clear_segments(&self) {
+    /// Clear the display contribution on shutdown.
+    async fn clear_display(&self) {
         let Ok(host) = self.host() else {
             return;
         };
         let _ = host
-            .ui_statusline_remove(HostStatuslineRemoveRequest {
-                segment_id: ACTIVITY_SEGMENT_ID.to_owned(),
-            })
-            .await;
-        let _ = host
-            .ui_statusline_remove(HostStatuslineRemoveRequest {
-                segment_id: TITLE_SEGMENT_ID.to_owned(),
+            .display_remove(HostDisplayRemoveRequest {
+                contribution_id: ACTIVITY_CONTRIBUTION_ID.to_owned(),
             })
             .await;
     }
@@ -181,7 +180,7 @@ impl TerminalPlugin {
 
     #[hook(shutdown)]
     async fn shutdown(&self) -> SdkResult<()> {
-        self.clear_segments().await;
+        self.clear_display().await;
         Ok(())
     }
 
@@ -254,8 +253,8 @@ mod tests {
     }
 
     #[test]
-    fn statusline_activity_priority_stays_high() {
-        assert_eq!(ACTIVITY_SEGMENT_PRIORITY, i32::MAX - 1);
+    fn activity_contribution_priority_stays_high() {
+        assert_eq!(ACTIVITY_CONTRIBUTION_PRIORITY, i32::MAX - 1);
     }
 
     #[test]

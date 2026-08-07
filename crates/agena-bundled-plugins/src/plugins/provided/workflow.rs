@@ -8,16 +8,16 @@ use crate::message::{AskUserToolInput, TaskAccess, TaskToolInput};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,
-    HostClient, HostEnterSnapshotRequest, HostExitSnapshotRequest, HostGetSessionRequest,
-    HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
-    HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
-    HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    RunSubtaskAccess, RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus,
-    ToolDescriptor,
+    HostClient, HostDisplayContributeRequest, HostDisplayRemoveRequest, HostEnterSnapshotRequest,
+    HostExitSnapshotRequest, HostGetSessionRequest, HostRegisteredToolDescriptor,
+    HostRenameSessionRequest, HostSession, HostStorageDeleteRequest, HostStorageGetRequest,
+    HostStorageScope, HostStorageSetRequest, HostStorageVisibility, RunSubtaskAccess,
+    RunSubtaskModelSelection, RunSubtaskRequest, RunSubtaskStatus, ToolDescriptor,
 };
 use agena_plugin_host::sdk::{
-    CommandBeforeInput, CommandBeforeResponse, PathRequest, Result as SdkResult, ToolBeforeInput,
-    ToolBeforePatch, ToolInvokeOutput, ToolTag,
+    CommandBeforeInput, CommandBeforeResponse, ContributionKind, PathRequest, PluginDisplayContent,
+    PluginDisplayContribution, Result as SdkResult, ToolBeforeInput, ToolBeforePatch,
+    ToolInvokeOutput, ToolTag,
 };
 use agena_runtime_tools::tool::{
     ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user,
@@ -258,7 +258,7 @@ const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
 const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_autorun_signature";
 const PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY: &str = "autorun_continuations";
 const PLAN_AUTORUN_MAX_CONTINUATIONS: u32 = 5;
-const PLAN_STATUSLINE_SEGMENT_ID: &str = "plan";
+const PLAN_DISPLAY_CONTRIBUTION_ID: &str = "plan";
 const PLAN_REVIEW_DECISION_APPROVE: &str = "Approve";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON: &str = "Approve with autorun on";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF: &str = "Approve with autorun off";
@@ -392,17 +392,17 @@ impl WorkflowPlugin {
             return Ok(None);
         }
         let Some(plan) = self.load_active_plan().await? else {
-            let _ = self.sync_plan_statusline(None).await;
+            let _ = self.sync_plan_display(None).await;
             return Ok(None);
         };
-        // The statusline sync is cosmetic. A failure here must not abort the
+        // The display sync is cosmetic. A failure here must not abort the
         // stop hook, which would hide the plan autorun continuation (and, at
         // the dispatch level, every other plugin's hook run) from the run.
-        if let Err(error) = self.sync_plan_statusline(Some(&plan)).await {
+        if let Err(error) = self.sync_plan_display(Some(&plan)).await {
             tracing::warn!(
                 target: "agena::workflow",
                 plan = %plan.title,
-                "plan statusline sync failed during agent.stop: {error}"
+                                "plan display sync failed during agent.stop: {error}"
             );
         }
         if plan.phase != WorkflowPlanPhase::Active || !plan.autorun {
@@ -942,31 +942,31 @@ mod tests {
     }
 
     #[test]
-    fn plan_statusline_content_uses_compact_symbols() {
+    fn plan_display_content_uses_compact_symbols() {
         let plan = sample_plan();
-        assert_eq!(WorkflowPlugin::plan_statusline_content(&plan), "⏳ 0/2");
+        assert_eq!(WorkflowPlugin::plan_display_content(&plan), "⏳ 0/2");
 
         let mut active = sample_plan();
         active.phase = WorkflowPlanPhase::Active;
         active.autorun = true;
-        assert_eq!(WorkflowPlugin::plan_statusline_content(&active), "▶ 0/2 ↻");
+        assert_eq!(WorkflowPlugin::plan_display_content(&active), "▶ 0/2 ↻");
 
         let mut blocked = sample_plan();
         blocked.phase = WorkflowPlanPhase::Blocked;
-        assert_eq!(WorkflowPlugin::plan_statusline_content(&blocked), "⚠ 0/2");
+        assert_eq!(WorkflowPlugin::plan_display_content(&blocked), "⚠ 0/2");
 
         let mut completed = sample_plan();
         completed.phase = WorkflowPlanPhase::Completed;
         completed.steps[0].status = WorkflowPlanStepStatus::Completed;
-        assert_eq!(WorkflowPlugin::plan_statusline_content(&completed), "✓ 1/2");
+        assert_eq!(WorkflowPlugin::plan_display_content(&completed), "✓ 1/2");
 
         let mut cancelled = sample_plan();
         cancelled.phase = WorkflowPlanPhase::Cancelled;
-        assert_eq!(WorkflowPlugin::plan_statusline_content(&cancelled), "✕ 0/2");
+        assert_eq!(WorkflowPlugin::plan_display_content(&cancelled), "✕ 0/2");
 
         let mut empty = sample_plan();
         empty.steps.clear();
-        assert_eq!(WorkflowPlugin::plan_statusline_content(&empty), "⏳");
+        assert_eq!(WorkflowPlugin::plan_display_content(&empty), "⏳");
 
         assert_eq!(
             WorkflowPlugin::plan_phase_symbol(WorkflowPlanPhase::Planning),

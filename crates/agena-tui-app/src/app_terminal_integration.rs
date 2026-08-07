@@ -54,7 +54,7 @@ fn notifications_operational(app: &App) -> bool {
 /// plugin's hook-driven state when it is loaded.
 ///
 /// The plugin observes the session lifecycle hooks (`run.pre`, `run.post`,
-/// `agent.stop`, ...) and publishes an `agena.terminal.activity` statusline
+/// `agent.stop`, ...) and publishes an `agena.terminal.activity` display
 /// segment. When present, it is the authoritative idle/running/blocked source.
 /// Permission and user-input waits are not observable through a plugin hook, so
 /// the App's own pending-interactive state always wins for those.
@@ -76,18 +76,33 @@ fn effective_terminal_activity(app: &App) -> SessionActivity {
     }
 }
 
-/// Reads the `agena.terminal.activity` statusline segment contributed by the
+/// Reads the `agena.terminal.activity` display contribution published by the
 /// bundled terminal plugin, if loaded.
 fn plugin_terminal_activity(app: &App) -> Option<SessionActivity> {
-    let segment = app
+    let contribution = app
         .backend
-        .plugin_statusline_segments()
+        .plugin_display_contributions()
         .into_iter()
-        .find(|segment| segment.segment_id == "agena.terminal.activity")?;
-    match segment.content.trim() {
-        "\"idle\"" | "idle" => Some(SessionActivity::Idle),
-        "\"running\"" | "running" => Some(SessionActivity::Running),
-        "\"blocked\"" | "blocked" => Some(SessionActivity::Blocked),
+        .find(|contribution| {
+            contribution.contribution.id == "agena.terminal.activity"
+                && matches!(
+                    (
+                        contribution.contribution.kind,
+                        &contribution.contribution.content,
+                    ),
+                    (
+                        agena_plugin_host::ContributionKind::TerminalActivity,
+                        agena_plugin_host::PluginDisplayContent::TerminalActivity { .. },
+                    )
+                )
+        })?;
+    match contribution.contribution.content {
+        agena_plugin_host::PluginDisplayContent::TerminalActivity { value } => match value.trim() {
+            "idle" => Some(SessionActivity::Idle),
+            "running" => Some(SessionActivity::Running),
+            "blocked" => Some(SessionActivity::Blocked),
+            _ => None,
+        },
         _ => None,
     }
 }

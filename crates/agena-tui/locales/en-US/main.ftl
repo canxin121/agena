@@ -69,9 +69,9 @@ transcript-footer-pending = pending message
 transcript-footer-pending-preview = pending: {$preview}
 transcript-footer-plugin-block = {$label}: {$body}
 runtime-status-keys = keys q={$queue} send={$send}
-runtime-status-statusline = statusline {$value}
-runtime-status-statusline-default = default
-runtime-status-statusline-plugin = plugin
+runtime-status-display = display {$value}
+runtime-status-display-default = default
+runtime-status-display-plugin = plugin
 runtime-status-tui-blocks = tui_blocks {$count}
 runtime-status-theme = theme {$value}
 run-options-summary-thinking = think {$value}

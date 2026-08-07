@@ -143,7 +143,7 @@ pub struct PluginUiCatalogResource {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct PluginTuiUiCatalogResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub statusline_segments: Vec<PluginStatuslineSegmentResource>,
+    pub display: Vec<PluginDisplayContributionResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<PluginThemePaletteResource>,
 }
@@ -158,15 +158,14 @@ pub struct PluginStudioUiCatalogResource {
     pub views: Vec<PluginStudioViewResource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PluginStatuslineSegmentResource {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PluginDisplayContributionResource {
     pub plugin_id: String,
-    pub segment_id: String,
-    pub content: String,
+    pub id: String,
+    pub kind: agena_plugin_sdk::ContributionKind,
     #[serde(default)]
     pub priority: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
+    pub content: agena_plugin_sdk::PluginDisplayContent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

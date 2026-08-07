@@ -519,26 +519,42 @@ impl App {
         {
             parts.push(status_line.trim().to_string());
         }
-        for segment in self.backend.plugin_statusline_segments() {
-            // The `agena.terminal.*` segments are internal terminal-integration
-            // signals (window-title/notification activity like `blocked`,
-            // `running`, `idle`). They are not user-facing footer content and
-            // their raw payloads must not be rendered above the composer; the
-            // terminal integration consumes them separately.
-            if segment.segment_id.starts_with("agena.terminal.") {
+        for contribution in self.backend.plugin_display_contributions() {
+            // Only text-bearing display contributions (status line text and
+            // footer blocks) are user-facing footer content. Progress belongs
+            // to the composer chip; terminal activity/notify are internal
+            // terminal-integration signals consumed separately.
+            let (kind, content) = (
+                &contribution.contribution.kind,
+                &contribution.contribution.content,
+            );
+            let text = match (kind, content) {
+                (
+                    agena_plugin_host::ContributionKind::StatusLineText
+                    | agena_plugin_host::ContributionKind::FooterBlock,
+                    agena_plugin_host::PluginDisplayContent::Text { text },
+                ) => text,
+                _ => continue,
+            };
+            // The `agena.terminal.*` contributions are internal terminal
+            // signals (window-title/activity like `blocked`, `running`, `idle`).
+            if contribution.contribution.id.starts_with("agena.terminal.") {
                 continue;
             }
             // Plan progress has a dedicated composer bottom-right chip; keeping
             // it in the footer would duplicate it above the input box. The plan
-            // segment is qualified by its contributing session (`plan:{id}`) so
-            // stale segments from other sessions are never rendered either.
-            if segment.segment_id == "plan" || segment.segment_id.starts_with("plan:") {
+            // contribution is qualified by its contributing session
+            // (`plan:{id}`) so stale contributions from other sessions are
+            // never rendered either.
+            if contribution.contribution.id == "plan"
+                || contribution.contribution.id.starts_with("plan:")
+            {
                 continue;
             }
-            if segment.content.trim().is_empty() {
+            if text.trim().is_empty() {
                 continue;
             }
-            parts.push(segment.content.clone());
+            parts.push(text.trim().to_string());
         }
 
         parts.join("  |  ")
@@ -675,15 +691,31 @@ impl App {
     }
 
     /// Text for the composer's bottom-right chip: plan progress contributed
-    /// by the planning plugin's statusline segment.
+    /// by the planning plugin as a declarative display contribution.
     fn composer_plan_progress_part(&self) -> Option<String> {
         let session_id = self.transcript.session_id?;
-        let expected_segment = format!("plan:{session_id}");
+        let expected_id = format!("plan:{session_id}");
         self.backend
-            .plugin_statusline_segments()
+            .plugin_display_contributions()
             .into_iter()
-            .find(|segment| segment.segment_id == expected_segment)
-            .map(|segment| segment.content.trim().to_string())
+            .find(|contribution| {
+                contribution.contribution.id == expected_id
+                    && matches!(
+                        (
+                            contribution.contribution.kind,
+                            &contribution.contribution.content,
+                        ),
+                        (
+                            agena_plugin_host::ContributionKind::StatusLineText,
+                            agena_plugin_host::PluginDisplayContent::Text { .. },
+                        )
+                    )
+            })
+            .and_then(|contribution| match contribution.contribution.content {
+                agena_plugin_host::PluginDisplayContent::Text { text } => Some(text),
+                _ => None,
+            })
+            .map(|text| text.trim().to_string())
             .filter(|content| !content.is_empty())
     }
 

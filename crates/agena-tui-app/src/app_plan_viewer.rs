@@ -23,7 +23,7 @@ impl App {
         self.refresh_plan_viewer();
     }
 
-    /// Reload the full plan markdown and the compact statusline summary,
+    /// Reload the full plan markdown and the compact display summary,
     /// tracking the request id on the active plan-viewer state. Returns the
     /// request id so callers that hold a detached route state (during route
     /// key handling) can record it themselves.
@@ -111,7 +111,7 @@ impl App {
             }
         }
         if ok {
-            // Re-fetch so the title badge and the statusline summary reflect
+            // Re-fetch so the title badge and the display summary reflect
             // the new autorun value.
             self.refresh_plan_viewer();
         }
@@ -190,15 +190,31 @@ impl App {
         state.toggle_request_id = request_id;
     }
 
-    /// Compact statusline text contributed by the planning plugin for
+    /// Compact display text contributed by the planning plugin for
     /// `session_id` (for example `▶ 2/5 ↻`).
     fn plan_viewer_summary(&self, session_id: i64) -> Option<String> {
-        let expected = format!("plan:{session_id}");
+        let expected_id = format!("plan:{session_id}");
         self.backend
-            .plugin_statusline_segments()
+            .plugin_display_contributions()
             .into_iter()
-            .find(|segment| segment.segment_id == expected)
-            .map(|segment| segment.content.trim().to_string())
+            .find(|contribution| {
+                contribution.contribution.id == expected_id
+                    && matches!(
+                        (
+                            contribution.contribution.kind,
+                            &contribution.contribution.content,
+                        ),
+                        (
+                            agena_plugin_host::ContributionKind::StatusLineText,
+                            agena_plugin_host::PluginDisplayContent::Text { .. },
+                        )
+                    )
+            })
+            .and_then(|contribution| match contribution.contribution.content {
+                agena_plugin_host::PluginDisplayContent::Text { text } => Some(text),
+                _ => None,
+            })
+            .map(|text| text.trim().to_string())
             .filter(|content| !content.is_empty())
     }
 

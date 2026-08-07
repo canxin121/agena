@@ -540,16 +540,6 @@ impl App {
             }
             parts.push(segment.content.clone());
         }
-        for block in self.backend.plugin_tui_content_blocks() {
-            if block.block.location != "composer_footer" || block.block.body.trim().is_empty() {
-                continue;
-            }
-            parts.push(ui_text::transcript_footer_plugin_block(
-                &self.i18n,
-                block.block.title.as_str(),
-                block.block.body.as_str(),
-            ));
-        }
 
         parts.join("  |  ")
     }

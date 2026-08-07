@@ -479,12 +479,6 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
             .host_notifications()
     }
 
-    fn tui_content_blocks(&self) -> Vec<agena_plugin_host::PluginTuiContentBlockCatalogItem> {
-        self.current_snapshot()
-            .plugin_manager()
-            .tui_content_blocks()
-    }
-
     fn theme_palettes(&self) -> Vec<agena_plugin_host::HostThemePalette> {
         self.current_snapshot().plugin_manager().theme_palettes()
     }

@@ -7,6 +7,29 @@
 
 ---
 
+## 0. 落地后架构（Unified Notification Architecture）
+
+> 已实现（分支 `feat/notification-unified`，Phase 0–7 全部落地）。以下为当前架构；本文后续章节保留为重构前的现状盘点。
+
+### 统一模型与数据流
+
+- 领域模型：`crates/agena-notification` —— `Notification`（Kind 16 / Surface 16 / Control 3 / ActionTarget 4），severity/scope/state/dedupe/expiry/排序纯逻辑可单测。
+- 运行时聚合：`crates/agena-runtime-notifications` —— `from_notice_part` / `from_activity_payload` / `from_background_activity` 纯转换 + `InMemoryNotificationStore`（去重 / 过期 / broadcast + lagged）。
+- application 接线：`Application::spawn_notification_aggregator` 订阅 runtime 事件流（`message_part_checkpointed` / `background_activity_changed`）写入统一 store。
+- API：`GET /api/v1/notifications`、`POST /api/v1/notifications/{id}/dismiss`、`POST /api/v1/notifications/{id}/actions/{action_id}`、`GET /api/v1/notifications/stream`（SSE：replay + resumed + live / lagged / subscription_closed）。
+- Web：`useNotifications`（REST + SSE）→ toaster/banner；ChatPage / RuntimeOverview / ActivitiesPage / UsagePage 消费统一 store。
+- TUI：`NotificationStore`（同一 InMemory store 的本地句柄）替代 `Option<UiNotice>`；footer / chips / header / activities 面板读统一模型；`flash_*` 走统一 sink。
+- 插件：manifest `ui.display` 声明式贡献（`PluginDisplayContribution`，无 location/color）；一次性通知 `host.notify(PluginNotifyRequest)`（severity + actions）。旧 `ui_statusline_contribute` 保留为 deprecated 桥接层。
+
+### 已删除的旧通道
+
+- TUI `UiNotice`（`crates/agena-tui/src/notice.rs` 已删除）。
+- Web `errorMessage` / `localCommandNotice` 直写（迁移到统一 store）。
+- 插件 `tui.content_blocks`（含 location 字段）通道：host catalog / runtime trait / TUI footer 全部移除。
+- 说明：`/api/v1/events/stream` 仍保留，作为通用 runtime 事件传输（Web `plugin_tool_registry_changed` 订阅使用），不是通知重复通道；通知唯一通道是 `/api/v1/notifications*`。
+
+---
+
 ## 1. 总体架构（三层）
 
 | 层 | 位置 | 职责 |

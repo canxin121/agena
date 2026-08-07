@@ -146,8 +146,6 @@ pub struct PluginTuiUiCatalogResource {
     pub statusline_segments: Vec<PluginStatuslineSegmentResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<PluginThemePaletteResource>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content_blocks: Vec<PluginTuiContentBlockResource>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -200,20 +198,6 @@ pub struct PluginThemeColorsResource {
     pub selection_fg: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_bg: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PluginTuiContentBlockResource {
-    pub plugin_id: String,
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body: String,
-    pub location: String,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

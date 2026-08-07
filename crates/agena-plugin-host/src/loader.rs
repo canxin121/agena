@@ -524,14 +524,6 @@ fn validate_manifest(
     for theme in &manifest.ui.tui.themes {
         validate_id(theme.id.as_str(), "theme", &mut theme_ids)?;
     }
-    let mut content_block_ids = BTreeSet::new();
-    for block in &manifest.ui.tui.content_blocks {
-        validate_id(
-            block.id.as_str(),
-            "TUI content block",
-            &mut content_block_ids,
-        )?;
-    }
     for control in &manifest.ui.studio.controls {
         validate_id(control.id.as_str(), "studio action", &mut action_ids)?;
     }

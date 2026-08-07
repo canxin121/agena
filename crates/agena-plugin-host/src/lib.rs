@@ -23,9 +23,9 @@ pub use error::{HostError, TransportError};
 pub use host::{
     AgentStopDispatch, AgentStopHookRun, HostNotification, LoadedPlugin, PluginCommandCatalogItem,
     PluginHost, PluginHostBuildConfig, PluginInspect, PluginStudioControlCatalogItem,
-    PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginTuiContentBlockCatalogItem,
-    PluginTuiUiCatalog, PluginUiCatalog, PluginUiToolInvokeResponse, PluginUiToolInvokeStatus,
-    StaticPluginRegistration, ToolInvokeStream,
+    PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginTuiUiCatalog, PluginUiCatalog,
+    PluginUiToolInvokeResponse, PluginUiToolInvokeStatus, StaticPluginRegistration,
+    ToolInvokeStream,
 };
 #[cfg(feature = "signing")]
 pub use loader::{verify_sha256, verify_signature, verify_signature_bytes};
@@ -43,12 +43,12 @@ pub use sdk::{
     PluginDisplayContribution, PluginError, PluginKey, PluginKeyParseError, PluginManifest,
     PluginNotifyAction, PluginNotifyActionTarget, PluginNotifyRequest, PluginStudioControl,
     PluginStudioControlOption, PluginStudioUiContributions, PluginStudioView,
-    PluginTuiContentBlock, PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction,
-    PluginUiContributions, PluginUiThemePalette, PostRunInput, PreRunInput, ProviderDescriptor,
-    ProviderKind, ProviderListInput, ProviderListPatch, SessionEndInput, SessionEndReason,
-    SessionStartInput, SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch,
-    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinition,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolDescriptionMode, ToolFailureInput,
-    ToolInvokeInput, ToolInvokeOutput, ToolKey, ToolKeyParseError, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, UserPromptSubmitInput, UserPromptSubmitPatch,
+    PluginTuiStatuslineSegment, PluginTuiUiContributions, PluginUiAction, PluginUiContributions,
+    PluginUiThemePalette, PostRunInput, PreRunInput, ProviderDescriptor, ProviderKind,
+    ProviderListInput, ProviderListPatch, SessionEndInput, SessionEndReason, SessionStartInput,
+    SessionStartPatch, SessionStartSource, ShellEnvInput, ShellEnvPatch, ToolAfterInput,
+    ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinition, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolDescriptionMode, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
+    ToolKey, ToolKeyParseError, ToolPermissionNetworksInput, ToolPermissionPathsInput,
+    UserPromptSubmitInput, UserPromptSubmitPatch,
 };

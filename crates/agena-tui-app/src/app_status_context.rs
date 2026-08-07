@@ -70,13 +70,6 @@ impl App {
                 )
             ),
         ));
-        let tui_blocks = self.backend.plugin_tui_content_blocks().len();
-        if tui_blocks > 0 {
-            parts.push(self.i18n.text_args(
-                "runtime-status-tui-blocks",
-                &agena_tui::fl_args!("count" => tui_blocks as i64),
-            ));
-        }
         if let Some(theme) = self.plugin_theme.as_ref() {
             parts.push(self.i18n.text_args(
                 "runtime-status-theme",

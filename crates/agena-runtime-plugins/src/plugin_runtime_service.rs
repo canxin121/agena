@@ -44,8 +44,6 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn host_notifications(&self) -> Vec<agena_plugin_host::HostNotification>;
 
-    fn tui_content_blocks(&self) -> Vec<agena_plugin_host::PluginTuiContentBlockCatalogItem>;
-
     fn theme_palettes(&self) -> Vec<agena_plugin_host::HostThemePalette>;
 
     fn studio_commands(&self) -> Vec<agena_plugin_host::PluginCommandCatalogItem>;

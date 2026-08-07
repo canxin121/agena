@@ -1437,10 +1437,6 @@ impl PluginHost {
         self.ui_catalog().tui.themes
     }
 
-    pub fn tui_content_blocks(&self) -> Vec<PluginTuiContentBlockCatalogItem> {
-        self.ui_catalog().tui.content_blocks
-    }
-
     /// Plugin-emitted notifications through the unified `host.notify` entry
     /// (Phase 6). Bounded recent queue; frontends dedupe/consume by
     /// `plugin_id:severity:body`.
@@ -1466,7 +1462,6 @@ impl PluginHost {
         // the catalog key so two plugins cannot silently overwrite one
         // another while building the aggregate UI catalog.
         let mut themes_by_key = BTreeMap::<(PluginKey, String), HostThemePalette>::new();
-        let mut content_blocks = Vec::new();
         let mut studio_commands = Vec::new();
         let mut studio_controls = Vec::new();
         let mut studio_views = Vec::new();
@@ -1497,13 +1492,6 @@ impl PluginHost {
                     },
                 );
             }
-
-            content_blocks.extend(plugin.manifest.ui.tui.content_blocks.iter().cloned().map(
-                |block| PluginTuiContentBlockCatalogItem {
-                    plugin_id: plugin.key(),
-                    block,
-                },
-            ));
 
             studio_commands.extend(plugin.manifest.commands.iter().cloned().map(|command| {
                 PluginCommandCatalogItem {
@@ -1545,13 +1533,6 @@ impl PluginHost {
                 .then_with(|| a.segment_id.cmp(&b.segment_id))
         });
         let themes = themes_by_key.into_values().collect::<Vec<_>>();
-        content_blocks.sort_by(|a, b| {
-            b.block
-                .priority
-                .cmp(&a.block.priority)
-                .then_with(|| a.plugin_id.cmp(&b.plugin_id))
-                .then_with(|| a.block.id.cmp(&b.block.id))
-        });
         studio_commands.sort_by(|a, b| {
             a.command
                 .location
@@ -1579,7 +1560,6 @@ impl PluginHost {
             tui: PluginTuiUiCatalog {
                 statusline_segments,
                 themes,
-                content_blocks,
             },
             studio: PluginStudioUiCatalog {
                 commands: studio_commands,
@@ -1662,15 +1642,15 @@ use super::{
     NotificationInput, PluginCommandCatalogItem, PluginCommandInvokeInput, PluginCommandOutput,
     PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord, PluginLogStore,
     PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
-    PluginToolRegistry, PluginTuiContentBlockCatalogItem, PluginTuiUiCatalog, PluginUiAction,
-    PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    RegisteredTool, RwLock, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput,
-    ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput,
-    ToolInvokeOutput, ToolInvokeStream, ToolKey, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd,
-    TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
-    block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
-    block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
-    merge_json, method, shutdown_transport, tool_hook_context, transport_to_plugin_error,
+    PluginToolRegistry, PluginTuiUiCatalog, PluginUiAction, PluginUiCatalog, PostRunInput,
+    PreRunInput, ProviderListInput, ProviderListPatch, RegisteredTool, RwLock, SessionEndInput,
+    SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch, TimeoutsConfig,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStream,
+    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolRegistryChangedEvent,
+    ToolStreamChunk, ToolStreamEnd, TransportError, UserPromptSubmitInput, UserPromptSubmitPatch,
+    block_on_handle_or_thread, block_on_handle_scoped_thread, block_on_new_thread,
+    block_on_runtime_scoped_thread, block_on_scoped_thread, call_with_timeout, dispatcher,
+    hook_registration_for_plugin, host_api, merge_json, method, shutdown_transport,
+    tool_hook_context, transport_to_plugin_error,
 };

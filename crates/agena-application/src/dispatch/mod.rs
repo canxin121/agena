@@ -20,20 +20,20 @@ use agena_api::{
     commands::{
         CancelRunParams, Command, CommandResult, CompactSessionParams, ContinueRunParams,
         CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
-        DeleteSessionParams, DeleteWorkspaceParams, ExportSessionParams, ForkSessionParams,
-                ImportSessionParams, ListSessionTreeParams, ReplacePermissionRuleParams,
+        DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams,
+        ForkSessionParams, ImportSessionParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, DismissActivityParams,
-        SubmitMessageParams, UpdateSessionParams,
-        UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
+        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitMessageParams,
+        UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
+        UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
-                GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-        ListEventsParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
-        ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
-        ListWorkspacesParams, PaginatedEvents, Query, QueryResult, ListActivitiesParams,
-        GetActivityParams, ActivityLogsParams,
+        ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
+        GetSessionParams, GetWorkspaceParams, ListActivitiesParams, ListEventsParams,
+        ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
+        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
+        PaginatedEvents, Query, QueryResult,
     },
     resource::{
         DefaultSelectionResource, ModelCatalogResponse, ModelCatalogSourceKind,
@@ -364,8 +364,8 @@ fn plugin_ui_catalog_resource_from_domain(
     use agena_api::resource::{
         PluginCommandResource, PluginStatuslineSegmentResource, PluginStudioControlOptionResource,
         PluginStudioControlResource, PluginStudioUiCatalogResource, PluginStudioViewResource,
-        PluginThemeColorsResource, PluginThemePaletteResource, PluginTuiContentBlockResource,
-        PluginTuiUiCatalogResource, PluginUiCatalogResource,
+        PluginThemeColorsResource, PluginThemePaletteResource, PluginTuiUiCatalogResource,
+        PluginUiCatalogResource,
     };
 
     PluginUiCatalogResource {
@@ -407,20 +407,6 @@ fn plugin_ui_catalog_resource_from_domain(
                             .selection_bg
                             .map(|color| color.as_str().to_owned()),
                     },
-                })
-                .collect(),
-            content_blocks: value
-                .tui
-                .content_blocks
-                .into_iter()
-                .map(|item| PluginTuiContentBlockResource {
-                    plugin_id: item.plugin_id.to_string(),
-                    id: item.block.id,
-                    title: item.block.title,
-                    body: item.block.body,
-                    location: item.block.location,
-                    priority: item.block.priority,
-                    color: item.block.color.map(|color| color.as_str().to_owned()),
                 })
                 .collect(),
         },

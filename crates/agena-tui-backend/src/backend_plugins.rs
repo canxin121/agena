@@ -160,12 +160,6 @@ impl Backend {
         self.application.plugin_runtime().host_notifications()
     }
 
-    pub fn plugin_tui_content_blocks(
-        &self,
-    ) -> Vec<agena_plugin_host::PluginTuiContentBlockCatalogItem> {
-        self.application.plugin_runtime().tui_content_blocks()
-    }
-
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }

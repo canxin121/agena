@@ -7,6 +7,31 @@
 
 ---
 
+## ✅ 实施状态（Phase 0–7 全部落地）
+
+> 分支 `feat/notification-unified`（worktree `.agena/worktrees/notification-unified`），基于 master `889cb3e8`。
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| 0 | 独立 worktree + 分支 + 源码基线确认 | ✅ |
+| 1 | `agena-notification` 领域 crate（Notification/Kind/Surface/Control/ActionTarget + 纯逻辑） | ✅ |
+| 2 | `agena-runtime-notifications` 聚合器 + InMemory store + application 层接线 | ✅ |
+| 3 | `agena-api` / `agena-api-server`：notifications REST + `/notifications/stream` SSE | ✅ |
+| 4 | Web 迁移：`useNotifications` + toaster/banner，删除 errorMessage/localCommandNotice 直写 | ✅ |
+| 5 | TUI 迁移：NotificationStore 替代 `Option<UiNotice>`，flash_* 走统一 sink | ✅ |
+| 6 | 插件契约收敛：`PluginDisplayContribution` 声明式 + `host.notify` | ✅ |
+| 7 | 删除旧通道（UiNotice / errorMessage 直写 / `tui.content_blocks` location 通道）；全量回归 | ✅ |
+
+落地要点：
+
+- 统一通知模型：`agena_notification::model::Notification`（Kind 16 / Surface 16 / Control 3 / ActionTarget 4）。
+- 聚合入口：application 层 `spawn_notification_aggregator` 订阅 runtime 事件流，把 `message_part_checkpointed`（NoticePart）与 `background_activity_changed`（BackgroundActivity）投影进 `InMemoryNotificationStore`。
+- 消费端：Web `useNotifications`（REST + SSE `/api/v1/notifications/stream`）；TUI 通过 `Application.notifications()` 读同一 store。
+- 插件：manifest 声明 `ui.display: Vec<PluginDisplayContribution>`（无 location/color）；运行时一次性通知走 `host.notify(PluginNotifyRequest)`（severity + actions）。
+- 保留：`ui_statusline_contribute` / `statusline_segments` 为 deprecated 桥接层（terminal activity + workflow plan 仍用）；如需彻底删除可另行推进。
+
+---
+
 ## 0. 摘要（目标与原则）
 
 本次重构把 Agena 里所有「通知 / 状态 / 进度 / 提示 / 后台活动 / 插件贡献的显示」收拢为**一个领域模型（Notification）+ 一套服务 API（REST/SSE + trait）+ 每个前端只有一层薄渲染适配**。

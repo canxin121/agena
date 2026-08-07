@@ -51,11 +51,11 @@ use crate::sdk::{
     CommandBeforeResponse, ConfigInput, ConfigPatch, EventEnvelope, EventFilter, HookSubscription,
     NotificationInput, PluginCommandDefinition, PluginCommandInvokeInput, PluginCommandOutput,
     PluginError, PluginErrorKind, PluginKey, PluginManifest, PluginStudioControl, PluginStudioView,
-    PluginTuiContentBlock, PluginUiAction, PostRunInput, PreRunInput, ProviderListInput,
-    ProviderListPatch, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch,
-    ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput,
-    ToolKey, ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
+    PluginUiAction, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
+    SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput, ShellEnvPatch,
+    ToolAfterInput, ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput,
+    ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolKey,
+    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolStreamChunk, ToolStreamEnd,
     UserPromptSubmitInput, UserPromptSubmitPatch,
 };
 use crate::transport::PluginTransport;
@@ -287,8 +287,6 @@ pub struct PluginTuiUiCatalog {
     pub statusline_segments: Vec<HostStatuslineSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<HostThemePalette>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content_blocks: Vec<PluginTuiContentBlockCatalogItem>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -299,13 +297,6 @@ pub struct PluginStudioUiCatalog {
     pub controls: Vec<PluginStudioControlCatalogItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<PluginStudioViewCatalogItem>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginTuiContentBlockCatalogItem {
-    pub plugin_id: PluginKey,
-    #[serde(flatten)]
-    pub block: PluginTuiContentBlock,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

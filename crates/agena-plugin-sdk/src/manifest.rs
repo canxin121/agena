@@ -600,15 +600,11 @@ pub struct PluginTuiUiContributions {
     pub statusline_segments: Vec<PluginTuiStatuslineSegment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<PluginUiThemePalette>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content_blocks: Vec<PluginTuiContentBlock>,
 }
 
 impl PluginTuiUiContributions {
     pub fn is_empty(&self) -> bool {
-        self.statusline_segments.is_empty()
-            && self.themes.is_empty()
-            && self.content_blocks.is_empty()
+        self.statusline_segments.is_empty() && self.themes.is_empty()
     }
 }
 
@@ -762,20 +758,6 @@ pub struct PluginTuiThemeColors {
     pub selection_bg: Option<PluginTuiColor>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PluginTuiContentBlock {
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body: String,
-    #[serde(default = "default_tui_content_location")]
-    pub location: String,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<PluginTuiColor>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginCommandDefinition {
     pub id: String,
@@ -899,10 +881,6 @@ pub fn plugin_workbench_tab_id_is_supported(value: &str) -> bool {
     PLUGIN_WORKBENCH_TAB_IDS
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(value))
-}
-
-fn default_tui_content_location() -> String {
-    "composer_footer".to_string()
 }
 
 fn default_studio_category() -> String {

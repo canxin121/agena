@@ -41,11 +41,11 @@ pub use crate::manifest::{
     PLUGIN_WORKBENCH_TAB_IDS, PathAccessSpec, PathKind, PluginCommandDefinition,
     PluginDisplayContent, PluginDisplayContribution, PluginManifest, PluginSkillDefinition,
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
-    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiContentBlock,
-    PluginTuiStatuslineSegment, PluginTuiThemeColors, PluginTuiUiContributions, PluginUiAction,
-    PluginUiContributions, PluginUiThemePalette, ToolDefinition, ToolDescriptionMode,
-    ToolDisplayPreset, ToolInput, ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode,
-    ToolTag, TransportKind, normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
+    PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiStatuslineSegment,
+    PluginTuiThemeColors, PluginTuiUiContributions, PluginUiAction, PluginUiContributions,
+    PluginUiThemePalette, ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput,
+    ToolResultPolicy, ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind,
+    normalize_tool_tag_name, plugin_workbench_tab_id_is_supported,
 };
 pub use crate::plugin::{InitContext, InitOutcome, Plugin, PluginConfig, ToolStreamSink};
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};

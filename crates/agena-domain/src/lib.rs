@@ -74,6 +74,7 @@ mod usage_query;
 mod usage_stats;
 mod user_input;
 
+pub mod activity_v2;
 pub use access::{AccessKind, AccessSelector};
 pub use background_activity::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,

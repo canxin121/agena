@@ -14,8 +14,11 @@ pub mod model;
 pub mod service;
 
 pub use logic::{
-    default_surface, is_expired, recovery_command, resolve_action_target, scope_label,
-    severity_color, should_dedupe, sort_and_group, NotificationGroup, SemanticColor,
+    NotificationGroup, SemanticColor, default_surface, is_expired, recovery_command,
+    resolve_action_target, scope_label, severity_color, should_dedupe, sort_and_group,
 };
 pub use model::*;
-pub use service::{EmitNotificationRequest, NotificationError, NotificationFilter, NotificationService, NotificationSubscription};
+pub use service::{
+    EmitNotificationRequest, NotificationError, NotificationFilter, NotificationService,
+    NotificationSubscription,
+};

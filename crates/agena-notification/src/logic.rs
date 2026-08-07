@@ -179,35 +179,86 @@ mod tests {
 
     #[test]
     fn severity_color_maps_errors_to_danger() {
-        assert_eq!(severity_color(NotificationSeverity::Error), SemanticColor::Danger);
-        assert_eq!(severity_color(NotificationSeverity::Success), SemanticColor::Success);
+        assert_eq!(
+            severity_color(NotificationSeverity::Error),
+            SemanticColor::Danger
+        );
+        assert_eq!(
+            severity_color(NotificationSeverity::Success),
+            SemanticColor::Success
+        );
     }
 
     #[test]
     fn scope_label_formats_scopes() {
         assert_eq!(scope_label(&NotificationScope::Global), "global");
         assert_eq!(scope_label(&NotificationScope::Session(3)), "session:3");
-        assert_eq!(scope_label(&NotificationScope::Plugin("x".into())), "plugin:x");
+        assert_eq!(
+            scope_label(&NotificationScope::Plugin("x".into())),
+            "plugin:x"
+        );
     }
 
     #[test]
     fn sort_and_group_groups_by_surface_and_sorts_by_priority() {
-        let n1 = sample("a", NotificationKind::Notice { code: "x".into() }, NotificationSurface::Banner, 1, 10);
-        let n2 = sample("b", NotificationKind::Notice { code: "y".into() }, NotificationSurface::Banner, 5, 20);
-        let n3 = sample("c", NotificationKind::ToolCall { call_id: "c1".into(), name: "t".into() }, NotificationSurface::StatusLine, 0, 30);
+        let n1 = sample(
+            "a",
+            NotificationKind::Notice { code: "x".into() },
+            NotificationSurface::Banner,
+            1,
+            10,
+        );
+        let n2 = sample(
+            "b",
+            NotificationKind::Notice { code: "y".into() },
+            NotificationSurface::Banner,
+            5,
+            20,
+        );
+        let n3 = sample(
+            "c",
+            NotificationKind::ToolCall {
+                call_id: "c1".into(),
+                name: "t".into(),
+            },
+            NotificationSurface::StatusLine,
+            0,
+            30,
+        );
         let groups = sort_and_group(&[n1.clone(), n2.clone(), n3.clone()]);
         assert_eq!(groups.len(), 2);
-        let banner = groups.iter().find(|g| g.surface == NotificationSurface::Banner).unwrap();
+        let banner = groups
+            .iter()
+            .find(|g| g.surface == NotificationSurface::Banner)
+            .unwrap();
         assert_eq!(banner.items[0].id, "b"); // priority 5 first
         assert_eq!(banner.items[1].id, "a");
     }
 
     #[test]
     fn should_dedupe_uses_dedup_key_then_kind_scope() {
-        let a = sample("a", NotificationKind::Notice { code: "x".into() }, NotificationSurface::Banner, 0, 0);
-        let b = sample("b", NotificationKind::Notice { code: "x".into() }, NotificationSurface::Banner, 0, 0);
+        let a = sample(
+            "a",
+            NotificationKind::Notice { code: "x".into() },
+            NotificationSurface::Banner,
+            0,
+            0,
+        );
+        let b = sample(
+            "b",
+            NotificationKind::Notice { code: "x".into() },
+            NotificationSurface::Banner,
+            0,
+            0,
+        );
         assert!(should_dedupe(&a, &b)); // same kind+scope
-        let c = sample("c", NotificationKind::Notice { code: "z".into() }, NotificationSurface::Banner, 0, 0);
+        let c = sample(
+            "c",
+            NotificationKind::Notice { code: "z".into() },
+            NotificationSurface::Banner,
+            0,
+            0,
+        );
         assert!(!should_dedupe(&a, &c));
         let mut a2 = a.clone();
         a2.dedup_key = Some("k1".into());
@@ -220,7 +271,13 @@ mod tests {
 
     #[test]
     fn is_expired_checks_expires_at() {
-        let n = sample("a", NotificationKind::Notice { code: "x".into() }, NotificationSurface::Banner, 0, 0);
+        let n = sample(
+            "a",
+            NotificationKind::Notice { code: "x".into() },
+            NotificationSurface::Banner,
+            0,
+            0,
+        );
         assert!(!is_expired(&n, 1_000));
         let mut n2 = n.clone();
         n2.expires_at_ms = Some(100);
@@ -231,11 +288,16 @@ mod tests {
     #[test]
     fn default_surface_maps_kinds() {
         assert_eq!(
-            default_surface(&NotificationKind::Progress { current: Some(1), total: Some(3) }),
+            default_surface(&NotificationKind::Progress {
+                current: Some(1),
+                total: Some(3)
+            }),
             NotificationSurface::Toast
         );
         assert_eq!(
-            default_surface(&NotificationKind::Status { state: crate::model::NotificationState::Running }),
+            default_surface(&NotificationKind::Status {
+                state: crate::model::NotificationState::Running
+            }),
             NotificationSurface::StatusLine
         );
         assert_eq!(
@@ -246,27 +308,46 @@ mod tests {
 
     #[test]
     fn resolve_action_target_returns_target_or_not_found() {
-        let mut n = sample("a", NotificationKind::Notice { code: "x".into() }, NotificationSurface::Banner, 0, 0);
+        let mut n = sample(
+            "a",
+            NotificationKind::Notice { code: "x".into() },
+            NotificationSurface::Banner,
+            0,
+            0,
+        );
         n.actions = vec![NotificationAction {
             id: "go".into(),
             label: "Go".into(),
-            target: ActionTarget::Navigate { route: "/settings".into() },
+            target: ActionTarget::Navigate {
+                route: "/settings".into(),
+            },
         }];
         assert_eq!(
             resolve_action_target(&n, "go").unwrap(),
-            ActionTarget::Navigate { route: "/settings".into() }
+            ActionTarget::Navigate {
+                route: "/settings".into()
+            }
         );
-        assert!(matches!(resolve_action_target(&n, "missing"), Err(NotificationError::NotFound(_))));
+        assert!(matches!(
+            resolve_action_target(&n, "missing"),
+            Err(NotificationError::NotFound(_))
+        ));
     }
 
     #[test]
     fn recovery_command_maps_directives() {
-        assert_eq!(recovery_command(RecoveryDirective::Refresh), Some(("Refresh", "session.refresh")));
+        assert_eq!(
+            recovery_command(RecoveryDirective::Refresh),
+            Some(("Refresh", "session.refresh"))
+        );
         assert_eq!(
             recovery_command(RecoveryDirective::Reauthenticate),
             Some(("Sign in", "provider.authenticate"))
         );
-        assert_eq!(recovery_command(RecoveryDirective::Retry), Some(("Retry", "operation.retry")));
+        assert_eq!(
+            recovery_command(RecoveryDirective::Retry),
+            Some(("Retry", "operation.retry"))
+        );
         assert_eq!(recovery_command(RecoveryDirective::None), None);
         assert_eq!(recovery_command(RecoveryDirective::AskUser), None);
     }

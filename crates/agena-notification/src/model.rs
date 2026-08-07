@@ -147,7 +147,9 @@ pub enum NotificationKind {
 }
 
 /// 物理渲染位置（Surface）：宿主根据 kind/scope 决定，前端只按 surface 渲染。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationSurface {
     /// 顶部横幅（Web .notice / TUI 顶栏）。
@@ -207,13 +209,9 @@ pub enum ActionTarget {
         input: Option<serde_json::Value>,
     },
     /// 前端路由（含 open_url）。
-    Navigate {
-        route: String,
-    },
+    Navigate { route: String },
     /// 复制文本。
-    Copy {
-        text: String,
-    },
+    Copy { text: String },
 }
 
 /// 用户可执行的单一动作（入口）。

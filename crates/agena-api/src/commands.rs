@@ -45,7 +45,7 @@ pub enum Command {
     ReplyPermission(ReplyPermissionParams),
     ReplyUserInput(ReplyUserInputParams),
 
-        // ── permission rules ──
+    // ── permission rules ──
     UpsertPermissionRule(UpsertPermissionRuleParams),
     ReplacePermissionRule(ReplacePermissionRuleParams),
     RevokePermissionRule(RevokePermissionRuleParams),
@@ -69,7 +69,7 @@ pub enum CommandResult {
     SessionExport { jsonl: String },
     Execution(SessionExecutionResource),
     Cancellation(agena_domain::CancellationResult),
-        PermissionRule(crate::resource::PermissionRuleResource),
+    PermissionRule(crate::resource::PermissionRuleResource),
     PermissionRuleDeleted { id: i64 },
     Activity(BackgroundActivityResource),
     ActivityDeleted { id: String },

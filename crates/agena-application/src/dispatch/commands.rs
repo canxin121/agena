@@ -350,7 +350,7 @@ pub async fn dispatch_command(
                 .application()?;
             Ok(CommandResult::PermissionRule(rule.into_wire()))
         }
-                Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
+        Command::DeletePermissionRule(DeletePermissionRuleParams { rule_id }) => {
             state
                 .service()
                 .delete_permission_rule(rule_id)
@@ -391,7 +391,7 @@ use super::{
     ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
     ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, StopActivityParams,
     SubmitMessageParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
+    UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
 };
 
 fn activity_command_error(error: agena_runtime::ActivityControlError) -> ApplicationError {

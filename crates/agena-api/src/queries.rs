@@ -29,7 +29,7 @@ pub enum Query {
     /// this on expansion; the runtime derives Markdown from compact data.
     GetOperationDetail(GetOperationDetailParams),
     ListEvents(ListEventsParams),
-        ListPermissionRules(ListPermissionRulesParams),
+    ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
     ListActivities(ListActivitiesParams),
     GetActivity(GetActivityParams),
@@ -52,7 +52,7 @@ pub enum QueryResult {
     SessionState(crate::resource::SessionExecutionResource),
     OperationDetail(crate::resource::OperationDetailResource),
     Events(PaginatedEvents),
-        PermissionRules(PaginatedResponse<PermissionRuleResource>),
+    PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
     Activities(Vec<BackgroundActivityResource>),
     Activity(BackgroundActivityResource),

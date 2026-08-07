@@ -196,6 +196,7 @@ impl TasksPlugin {
         task,
         subtask,
         display = detailed,
+        concurrency_safe,
 
     )]
     async fn run(&self, input: &TaskToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -209,6 +210,7 @@ impl TasksPlugin {
         task,
         subtask,
         display = detailed,
+        concurrency_safe,
 
     )]
     async fn create(
@@ -433,6 +435,7 @@ impl TasksPlugin {
         task,
         subtask,
         display = detailed,
+        concurrency_safe,
 
     )]
     async fn cancel(
@@ -480,6 +483,7 @@ impl TasksPlugin {
         task,
         subtask,
         display = detailed,
+        concurrency_safe,
 
     )]
     async fn message(
@@ -518,6 +522,7 @@ impl TasksPlugin {
         task,
         subtask,
         display = detailed,
+        concurrency_safe,
 
     )]
     async fn followup(
@@ -1042,6 +1047,22 @@ mod tests {
             assert!(
                 manifest.tools.iter().any(|tool| tool.name == name),
                 "missing task lifecycle tool `{name}`"
+            );
+        }
+        // Delegated task tools must be flagged concurrency-safe so the
+        // runtime fans out multiple tasks.run/create/followup calls from one
+        // turn instead of serializing them (one child session at a time).
+        for name in [
+            "run", "create", "list", "get", "output", "cancel", "message", "followup", "wait",
+        ] {
+            let tool = manifest
+                .tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .expect("task tool");
+            assert!(
+                tool.runtime.concurrency_safe,
+                "task tool `{name}` must be concurrency-safe so parallel delegation is not serialized"
             );
         }
     }

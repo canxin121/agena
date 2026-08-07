@@ -880,8 +880,9 @@ mod tool_api_history_tests {
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
     use agena_domain::{Role, StructuredObject, TimeRange};
+    use agena_domain::ExecutionStatus;
     use agena_runtime_contracts::message::{
-        Message, MessageProviderState, OperationPart, PartContent,
+        Message, MessagePart, MessageProviderState, OperationPart, PartContent,
     };
 
     #[test]
@@ -1082,5 +1083,160 @@ mod tool_api_history_tests {
         assert!(!OpenAiTransport::is_reasoning_content_array_error(
             &ProviderError::Internal("array_above_max_length input[48].content".to_owned())
         ));
+    }
+
+    #[test]
+    fn full_replay_restart_replays_content_only_reasoning_after_protocol_repair() {
+        // Reproduces session 80's failing Turn Y: a full-transcript Restart
+        // (anchor is the last committed message, so delta is empty) whose
+        // transcript ends in a protocol-repair assistant message that carries
+        // content-only `openai_reasoning_items` plus inline tool results. The
+        // real production path (project -> backfill -> replay gate) must keep
+        // that reasoning item so the provider's pass-back requirement is met.
+        use agena_provider::{CompletionRequest};
+        use agena_runtime_provider::provider::chat_wire;
+
+        // 12001's shape: visible text + reasoning + inline tool results.
+        let mut repair = Message::prompt_parts(
+            Role::Assistant,
+            vec![
+                PartContent::text("只有 codex 存在。让我深入探索 codex 的源码"),
+                PartContent::reasoning_summary(
+                    "I made a mistake - I placed `tools_search` inside `tools_call.arguments.tool`. Let me correct that.",
+                ),
+            ],
+        );
+        // Inline operation parts replayed as tool results (tools_search id 12, fs.read id 13).
+        for (id, name, input) in [
+            (12, "tools_search", serde_json::json!({"query": "session"})),
+            (13, "fs.read", serde_json::json!({"file_path": "../codex/.codex"})),
+        ] {
+            let invocation = ToolInvocation::new(
+                name,
+                StructuredObject::try_from(input).expect("structured input"),
+            );
+            repair.parts.push(MessagePart::from_content_with_index(
+                0,
+                0,
+                repair.parts.len() as i32,
+                repair.created_at,
+                ExecutionStatus::Completed,
+                PartContent::operation(OperationPart::completed(
+                    id,
+                    invocation,
+                    agena_runtime_contracts::message::OperationCompletion::new(
+                        name,
+                        name,
+                        "result".to_owned(),
+                        Vec::new(),
+                        Vec::new(),
+                        ToolOutput::default(),
+                    ),
+                    TimeRange::default(),
+                )),
+            ));
+            repair.parts.last_mut().expect("operation part").operation_id =
+                Some(format!("call_{name}"));
+        }
+        // Content-only reasoning item as persisted in the DB for message 12001.
+        repair.provider_state = Some(MessageProviderState {
+            openai_reasoning_items: vec![serde_json::json!({
+                "type": "reasoning",
+                "summary": [],
+                "content": [{
+                    "type": "reasoning_text",
+                    "text": "I made a mistake - I placed `tools_search` inside `tools_call.arguments.tool`. I need to call `tools_search` directly. Let me correct that. Also, the `../gemini`, `../claude`, `../grok` directories don't exist. Only `../codex` exists. Let me explore what's available.\n\nLet me first search for session-related tools in the fs plugin, and also explore the codex directory more."
+                }]
+            })],
+            response_id: Some("6f8566f1-0062-40a4-b3fa-87093636c0d7".to_owned()),
+            ..MessageProviderState::default()
+        });
+
+        // Replayed transcript: 11994(user) + 11995..11999(assistant) + 12001(repair).
+        let mut messages = vec![crate::provider::project_completion_input(&Message::prompt_text(
+            Role::User,
+            "查看../codex ../claude ../grok ../gemini看看他们是如何实现",
+        ))];
+        for text in [
+            "Let me first explore the workspaces",
+            "Let me find the correct FS tools first",
+            "",
+            "",
+        ] {
+            messages.push(crate::provider::project_completion_input(
+                &Message::prompt_text(Role::Assistant, text),
+            ));
+        }
+        messages.push(crate::provider::project_completion_input(&repair));
+
+        // The failing request had previous_response_id cleared (Restart).
+        let mut request = CompletionRequest {
+            model: agena_domain::ModelId::new("deepseek-v4-flash"),
+            system: None,
+            messages,
+            tool_api_functions: Vec::new(),
+            provider_native_tools: Default::default(),
+            disable_tools: false,
+            temperature: Some(0.0),
+            max_output_tokens: None,
+            prompt_cache_key: None,
+            previous_response_id: None,
+            prompt_window_generation: None,
+            provider_compaction: None,
+            stop_sequences: Vec::new(),
+            top_p: None,
+            top_k: None,
+            seed: None,
+            thinking: None,
+            verbosity: None,
+            response_format: None,
+            responses_api_metadata: None,
+            request_override: Default::default(),
+        };
+
+        // Production backfill for deepseek-v4-flash's configured metadata.
+        chat_wire::backfill_assistant_reasoning_field_on_request(
+            &mut request,
+            Some("reasoning_content"),
+            true,
+        );
+
+        let repair = request
+            .messages
+            .last()
+            .expect("repair message must be present");
+        assert_eq!(
+            repair.provider_state.assistant_reasoning_field,
+            Some(agena_domain::AssistantReasoningField::ReasoningContent),
+            "backfill must inject reasoning_content onto the repair assistant message"
+        );
+
+        let mut input = Vec::new();
+        for message in &request.messages {
+            OpenAiTransport::append_responses_items_for_message(&mut input, message);
+        }
+        validate_responses_input(input.as_slice()).expect("provider-safe replay input");
+
+        let value = serde_json::to_value(&input).expect("serialize replay input");
+        let reasoning = value
+            .as_array()
+            .expect("responses input array")
+            .iter()
+            .find(|item| item.get("type").and_then(serde_json::Value::as_str) == Some("reasoning"))
+            .expect("content-only reasoning must be replayed after a protocol-repair restart");
+        assert!(
+            reasoning
+                .get("content")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|content| !content.is_empty()),
+            "the plaintext reasoning content must survive full-transcript replay"
+        );
+        assert!(
+            reasoning
+                .pointer("/content/0/text")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| text.contains("tools_call.arguments.tool")),
+            "the repair reasoning text must be passed back verbatim"
+        );
     }
 }

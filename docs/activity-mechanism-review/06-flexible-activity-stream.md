@@ -1,3 +1,7 @@
+> **v3 修订（重要）**：渲染职责进一步下沉——人类视图由**工具自己的渲染函数** `render_human(raw)` 生成；
+> 工具没有渲染函数时，运行时才直接渲染原始输出（即给 AI 的内容）作为 fallback；存储进一步简化为只有 `raw_output`（不再存 blocks）。
+> 详见 `07-comprehensive-redesign.md` v3 §2（P3 渲染下沉）与 §4.3/§6。
+
 > **v2 修订（重要）**：本文中 `human_blocks`/`model_output` 作为终态显式字段的设计，在总设计 v2 中已废除——
 > 数据只存一份 canonical（`payload`/`blocks`/`text`），给 AI 看与给人看是同一份数据的两个纯函数投影（`for_model`/`for_human`），
 > 视图永不落盘。详见 `07-comprehensive-redesign.md` v2 §2（核心原则）与 §6（投影器）。

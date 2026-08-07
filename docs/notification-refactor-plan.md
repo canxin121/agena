@@ -132,18 +132,83 @@ pub enum NotificationScope {
     BackgroundTask(String),
 }
 
-/// 机器可读类别（枚举 + 自定义）
+/// 机器可读类别（枚举 + 自定义）。全系统收敛为 16 种，见文档附录 A。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum NotificationKind {
-    Notice { code: String },               // max_turns_exhausted ...
+    Notice { code: String },
     Progress { current: Option<u64>, total: Option<u64> },
-    ActivityChanged { activity_id: String },
+    Status { state: NotificationState },
+    ModelStatus { model: String, thinking: Option<String>, speed: Option<String> },
+    PlanProgress { current: u64, total: u64 },
+    RunState { state: RunNotificationState },
+    CommandExecution { command: String, stream: Option<String>, exit_code: Option<i32> },
+    ToolCall { call_id: String, name: String },
+    BackgroundActivity { activity_id: String },
     PermissionRequest { request_id: String },
     UserInputRequest { request_id: String },
-    Run { state: RunNotificationState },   // started/completed/aborted/cancelled
-    Command { command: String },
+    HistorySearch { query: String, current: u64, total: u64 },
+    TerminalTitle { title: String },
+    TerminalNotify { text: String },
+    UsageUpdate { current_tokens: u64, projected_tokens: Option<u64>, context_window: Option<u32> },
     Custom(CustomNotification),
+}
+
+/// 物理渲染位置（Surface）：宿主根据 kind/scope 决定，前端只按 surface 渲染。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationSurface {
+    Banner,           // 顶部横幅（Web .notice / TUI 顶栏）
+    Toast,            // 浮动 toast（Web 右上 / TUI 覆盖层）
+    ComposerChip,     // 输入区四角 chip（状态/搜索/后台/plan）
+    ComposerFooter,   // 输入框上方 footer 行（TUI）
+    StatusLine,       // 状态行（TUI 底部 / Web 面板状态段）
+    TerminalTitle,    // 终端窗口标题（OSC 0/2）
+    TerminalProgress, // 终端进度（OSC 9;4 / 任务栏）
+    TerminalBell,     // 终端铃响 / 系统通知
+    ActivitiesPanel,  // 后台活动面板
+    HistorySearch,    // 历史搜索浮动条
+    PermissionDialog, // 权限请求对话框
+    InputPrompt,      // 用户输入请求对话框
+    Settings,         // 设置面板
+    PlanPanel,        // 计划/进度面板
+    BackgroundTask,   // 后台任务面板
+    Log,              // 仅记录（活动日志流）
+}
+
+/// 状态类通知的取值
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NotificationState {
+    Idle,
+    Running,
+    Awaiting,
+    Blocked,
+    Finished,
+    Failed,
+    Cancelled,
+}
+
+/// Run 状态类通知的取值（plan / workflow 执行）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RunNotificationState {
+    Queued,
+    Running,
+    Paused,
+    AwaitingInput,
+    Blocked,
+    Finished,
+    Failed,
+    Cancelled,
+}
+
+/// 插件自定义通知载荷（kind = Custom）
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CustomNotification {
+    pub plugin_id: String,
+    pub code: String,
+    pub data: Option<serde_json::Value>,
 }
 
 /// 用户可执行的单一动作
@@ -184,6 +249,7 @@ pub struct Notification {
     pub kind: NotificationKind,
     pub severity: NotificationSeverity,
     pub scope: NotificationScope,
+    pub surface: NotificationSurface,  // 物理渲染位置（宿主根据 kind/scope 分配）
     pub source: NotificationSource,       // runtime | app | plugin | background | frontend
     pub summary: String,
     pub detail: Option<String>,
@@ -445,3 +511,87 @@ pub fn is_expired(notification: &Notification, now_ms: i64) -> bool;
 1. 在本 worktree 分支先落地 Phase 1（agena-notification 领域 crate + 单测），作为可独立评审的 PR。
 2. 同时产出《插件贡献迁移指南》供 agena.terminal / workflow plan / 第三方插件作者参考。
 3. 建立通知 API 契约测试夹具（golden JSON），防止 wire 形状漂移。
+
+---
+
+## 附录 A：通知与显示分类全表（三轴：Kind × Surface × Effect）
+
+> 回答「通知和显示会有哪些类型、一共多少种」：**内容 16 种 Kind、位置 16 处 Surface、交互 17 种 Effect**。
+> 任何一次显示 = 一个 Kind（内容） + 一个 Surface（位置） + 0..n 个 Effect（可交互动作）。
+
+### A.1 内容轴：NotificationKind（16 种）
+
+| # | Kind | 语义 | 现状对应 | 典型 Surface |
+|---|---|---|---|---|
+| 1 | Notice { code } | 一次性消息（成功/警告/错误/信息） | UiNotice / flash_* / NoticePart / Web errorMessage | Banner / Toast |
+| 2 | Progress { current, total } | 一般进度（total 可空） | 后台任务进度 | Toast / BackgroundTask |
+| 3 | Status { state } | 状态切换（idle/running/awaiting/blocked/...） | 终端 activity 段 / RuntimeStatus | StatusLine / TerminalProgress |
+| 4 | ModelStatus { model, thinking, speed } | 模型状态与速度 | TUI model chip / speed 显示 | ComposerChip / StatusLine |
+| 5 | PlanProgress { current, total } | plan 执行进度 | plan:{session_id} 段 | ComposerChip / PlanPanel |
+| 6 | RunState { state } | run/workflow 执行状态 | workflow 状态 | PlanPanel / StatusLine |
+| 7 | CommandExecution { command, stream, exit_code } | 命令执行反馈 | 命令运行状态 | ComposerFooter / Toast |
+| 8 | ToolCall { call_id, name } | 工具调用反馈 | ToolCallNotice / 工具调用状态 | StatusLine / ComposerChip |
+| 9 | BackgroundActivity { activity_id } | 后台活动状态变化 | BackgroundActivity / 后台计数 | ActivitiesPanel / ComposerChip |
+| 10 | PermissionRequest { request_id } | 权限请求 | 待审批 chip / PermissionRequest | PermissionDialog / ComposerChip |
+| 11 | UserInputRequest { request_id } | 用户输入请求 | UserInputRequest | InputPrompt / ComposerChip |
+| 12 | HistorySearch { query, current, total } | 历史搜索反馈 | 历史搜索状态 | HistorySearch |
+| 13 | TerminalTitle { title } | 终端窗口标题 | OSC 0/2 帧（title_frames） | TerminalTitle |
+| 14 | TerminalNotify { text } | 终端通知（铃响/OSC 9/系统通知） | NotificationMethod{Bell,Osc9,...} | TerminalBell |
+| 15 | UsageUpdate { current_tokens, projected_tokens, context_window } | 上下文用量更新 | token% / 用量显示 | StatusLine / ComposerChip |
+| 16 | Custom(CustomNotification) | 插件自定义（扩展点） | 插件贡献（manifest/命令输出） | 宿主指定 |
+
+### A.2 位置轴：NotificationSurface（16 处）
+
+| # | Surface | 说明 | 现状对应 |
+|---|---|---|---|
+| 1 | Banner | 顶部横幅 | Web .notice（errorMessage/localCommandNotice）、TUI 顶栏 |
+| 2 | Toast | 浮动提示 | Web RuntimeOverviewPanel toast（teleport body 右上 fixed） |
+| 3 | ComposerChip | 输入区四角 chip | TUI render_composer 四角（状态/搜索/后台/plan） |
+| 4 | ComposerFooter | 输入框上方 footer | TUI transcript_footer（notice 优先渲染行 + 插件段） |
+| 5 | StatusLine | 状态行 | TUI status_line + 插件段（agena.terminal.activity 等）、Web 面板状态段 |
+| 6 | TerminalTitle | 终端窗口标题 | OSC 0/2（title_frames） |
+| 7 | TerminalProgress | 终端进度 | OSC 9;4（ProgressState{Clear,Working,Awaiting,Blocked}） |
+| 8 | TerminalBell | 铃响/系统通知 | NotificationMethod{Bell,Osc9,Osc9AndItermAttention} |
+| 9 | ActivitiesPanel | 后台活动面板 | TUI activities 面板、Web ActivitiesPage |
+| 10 | HistorySearch | 历史搜索浮动条 | TUI 历史搜索状态 |
+| 11 | PermissionDialog | 权限请求对话框 | TUI permission overlay、Web 待审批面板 |
+| 12 | InputPrompt | 用户输入请求对话框 | TUI user_input overlay、Web 输入请求面板 |
+| 13 | Settings | 设置面板 | 设置页 |
+| 14 | PlanPanel | 计划/进度面板 | plan 面板 / workflow 视图 |
+| 15 | BackgroundTask | 后台任务面板 | Web 后台任务卡片、TUI 活动面板任务分组 |
+| 16 | Log | 仅记录（不主动弹出） | 活动日志流（e> 前缀）、日志面板 |
+
+### A.3 交互轴：NotificationEffect（17 种）
+
+| # | Effect | 语义 | 现状对应 |
+|---|---|---|---|
+| 1 | Refresh | 刷新会话/列表 | RecoveryDirective::Refresh |
+| 2 | Reauthenticate { provider } | 重新认证 | RecoveryDirective::Reauthenticate |
+| 3 | OpenSettings | 打开设置 | RecoveryDirective::OpenSettings |
+| 4 | OpenPermissions | 打开权限页 | RecoveryDirective::RequestPermission |
+| 5 | Retry | 重试 | RecoveryDirective::Retry |
+| 6 | ChooseAlternative | 选择替代方案 | RecoveryDirective::ChooseAlternative |
+| 7 | RestartPlugin { plugin_id } | 重启插件 | RecoveryDirective::RestartPlugin |
+| 8 | RestartRuntime | 重启运行时 | RecoveryDirective::RestartRuntime |
+| 9 | StopActivity { activity_id } | 停止后台活动 | activities stop API |
+| 10 | DismissActivity { activity_id } | 忽略活动 | activities dismiss API |
+| 11 | DismissNotification | 关闭本通知 | toast 关闭 / banner 关闭 |
+| 12 | ApprovePermission { request_id } | 批准权限 | permission-replies API |
+| 13 | ReplyUserInput { request_id } | 提交用户输入 | user-input-replies API |
+| 14 | Navigate { route } | 前端跳转 | open_route |
+| 15 | RunCommand { command } | 执行命令/提交提示 | submit_prompt / invoke_tool |
+| 16 | OpenUrl { url } | 打开链接 | open_url |
+| 17 | Copy { text } | 复制文本 | 复制按钮 |
+
+### A.4 组合规则（一个 Kind 可落多个 Surface）
+
+- **主 Surface**：宿主按 kind + scope + priority 决定主位置（如 Notice → Banner/Toast、Progress → Toast、Status → StatusLine）。
+- **次 Surface（镜像）**：同一通知可同步镜像到 Log（可追溯）、TerminalTitle/TerminalBell（终端可达性）、ComposerChip（常驻计数）。
+- 例：`ToolCall` 主 Surface = StatusLine，同时镜像 Log；`PermissionRequest` 主 Surface = PermissionDialog + ComposerChip 待审批角标。
+
+### A.5 计数汇总
+
+- **Kind：16**（含 1 个插件扩展点 Custom）
+- **Surface：16**
+- **Effect：17**
+- 任何一次显示 = 1 Kind × ≥1 Surface × 0..n Effect

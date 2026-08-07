@@ -257,7 +257,15 @@ impl App {
     }
 
     pub(crate) fn notify(&mut self, severity: NoticeSeverity, text: impl Into<String>) {
-        self.notice = Some(UiNotice::message(severity, text));
+        self.notifications
+            .push(crate::notifications::notice_notification(
+                severity,
+                text,
+                NoticeScope::Global,
+                NotificationSurface::Banner,
+                None,
+                0,
+            ));
         self.queue_notice_notification(severity);
     }
 
@@ -284,9 +292,8 @@ impl App {
             self.seen_failure_ids.clear();
             self.seen_failure_ids.insert(failure.id);
         }
-        let mut notice = UiNotice::from_failure(failure);
-        notice.scope = scope;
-        self.notice = Some(notice);
+        self.notifications
+            .push(crate::notifications::failure_notification(failure, scope));
     }
 
     pub(crate) fn notify_ui_failure(&mut self, error: crate::UiFailure, scope: NoticeScope) {
@@ -325,8 +332,8 @@ impl App {
 }
 use crate::Result;
 use crate::{
-    App, Local, NoticeScope, NoticeSeverity, Path, PathBuf, TerminalRuntime,
-    TranscriptDetailDefaults, UiNotice, UiResult, min, open_path, page_text, render_entry_export,
+    App, Local, NoticeScope, NoticeSeverity, NotificationSurface, Path, PathBuf, TerminalRuntime,
+    TranscriptDetailDefaults, UiResult, min, open_path, page_text, render_entry_export,
     render_transcript_snapshot_export_markdown, transcript_entries, ui_text,
 };
 use agena_tui::terminal_lifecycle::SuspendReason;

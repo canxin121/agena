@@ -1147,7 +1147,6 @@ dependencies = [
 name = "agena-tui"
 version = "0.1.0"
 dependencies = [
- "agena-failure",
  "agena-tui-components",
  "anyhow",
  "crossterm",
@@ -1172,6 +1171,7 @@ dependencies = [
  "agena-application",
  "agena-domain",
  "agena-failure",
+ "agena-notification",
  "agena-plugin-host",
  "agena-plugin-sdk",
  "agena-provider",

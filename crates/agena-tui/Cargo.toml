@@ -8,7 +8,6 @@ description = "Agena terminal UI application library"
 
 [dependencies]
 anyhow.workspace = true
-agena-failure = { workspace = true }
 agena-tui-components.workspace = true
 crossterm.workspace = true
 fluent-templates.workspace = true

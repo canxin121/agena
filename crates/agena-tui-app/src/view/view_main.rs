@@ -475,9 +475,9 @@ impl App {
     }
 
     pub(crate) fn transcript_footer_spec(&self) -> Option<WrappedTextSpec<'static>> {
-        if let Some(notice) = &self.notice {
+        if let Some(notice) = self.notifications.banner(crate::notifications::now_ms()) {
             return Some(WrappedTextSpec {
-                text: sanitize_display_text(notice.display_summary().as_str()).into(),
+                text: sanitize_display_text(notice.summary.as_str()).into(),
                 style: self.notice_style(notice.severity),
             });
         }

@@ -202,7 +202,7 @@ impl App {
                 .map(ToOwned::to_owned)
                 .ok_or_else(|| "review Skill did not return instructions".to_owned()),
             Err(error) => {
-                self.notify_ui_failure(error, NoticeScope::Session);
+                self.notify_ui_failure(error, NoticeScope::Session(session_id));
                 return;
             }
         };

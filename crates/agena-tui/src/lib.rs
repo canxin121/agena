@@ -18,7 +18,6 @@ pub mod link;
 pub mod main_focus;
 pub mod model_catalog;
 pub mod model_chooser;
-pub mod notice;
 pub mod path_browser;
 pub mod permission_prompt;
 pub mod plan_viewer;

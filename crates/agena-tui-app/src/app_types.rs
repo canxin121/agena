@@ -19,6 +19,7 @@ use agena_domain::UsageStats;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::composer_queue::ComposerQueue;
+use crate::notifications::NotificationStore;
 use agena_application::dto::ModelCatalogListResponse;
 use agena_tui::composer::ComposerItemSelection;
 use agena_tui::i18n::I18n;
@@ -403,7 +404,7 @@ pub struct App {
     pub(super) context_help: Option<HelpOverlay>,
     pub(super) seen_permission_request_ids: BTreeSet<String>,
     pub(super) seen_user_input_request_ids: BTreeSet<String>,
-    pub(super) notice: Option<UiNotice>,
+    pub(super) notifications: NotificationStore,
     pub(super) seen_failure_ids: HashSet<agena_failure::FailureId>,
     pub(super) sessions: SessionListPresentation,
     pub(super) session_load: SessionListLoadState,

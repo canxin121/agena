@@ -64,7 +64,7 @@ impl App {
             context_help: None,
             seen_permission_request_ids: BTreeSet::new(),
             seen_user_input_request_ids: BTreeSet::new(),
-            notice: None,
+            notifications: crate::notifications::NotificationStore::new(),
             seen_failure_ids: HashSet::new(),
             sessions: SessionListPresentation::new(
                 launch.initial_session_search.unwrap_or_default(),
@@ -304,13 +304,8 @@ impl App {
             self.report_prompt_history_error(error);
         }
 
-        if self
-            .notice
-            .as_ref()
-            .is_some_and(|flash| flash.is_expired_at(Instant::now()))
-        {
-            self.notice = None;
-        }
+        self.notifications
+            .prune_expired(crate::notifications::now_ms());
 
         // A refresh or session-state-load response can be lost (spawned task
         // panicked, message dropped, or a backend call that never resolved).

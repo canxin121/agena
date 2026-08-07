@@ -1,22 +1,20 @@
 use agena_tui_components::{
     BoundedListPanelHeight, ComposerEditorSurfaceSpec, ComposerStatusPlacement,
-    DashboardDetailOverlaySpec,
-    DashboardLeadPanelSpec, DashboardListPanelHeight, DashboardListPanelState,
-    DashboardSplitPanelsSpec, DashboardTextPanelHeight, DashboardTextSection,
-    DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec, DetailTextDialogSpec, DetailTextLine,
-    DetailTextSpec, HeaderBodyFooterTextSurfaceSpec, ListWorkbenchDialogSpec,
-    ListWorkbenchPanelState, SectionedWorkbenchDialogSpec, SurfaceMode, VerticalSectionSize,
-    WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec,
+    DashboardDetailOverlaySpec, DashboardLeadPanelSpec, DashboardListPanelHeight,
+    DashboardListPanelState, DashboardSplitPanelsSpec, DashboardTextPanelHeight,
+    DashboardTextSection, DashboardWorkbenchOverlaySpec, DashboardWorkbenchSpec,
+    DetailTextDialogSpec, DetailTextLine, DetailTextSpec, HeaderBodyFooterTextSurfaceSpec,
+    ListWorkbenchDialogSpec, ListWorkbenchPanelState, SectionedWorkbenchDialogSpec, SurfaceMode,
+    VerticalSectionSize, WorkbenchOverlayDialogSpec, WorkbenchTextSection, WrappedTextSpec,
     build_accented_two_line_list_item, build_detail_two_line_list_item, build_wrapped_text_lines,
     composer_corner_placement_left, composer_corner_placement_right,
-    composer_status_placement_left, format_fixed_columns, format_key_value_segment,
-    inset_rect, join_inline_segments, layout_composer_surface,
-    layout_header_body_footer_surface, pane_header_height, panel_highlight_style,
-    render_composer_editor_surface, render_confirm_dialog,
-    render_dashboard_workbench_dialog, render_header_body_footer_text_surface, render_help_dialog,
-    render_list_workbench_dialog, render_overlay_line_input_dialog,
-    render_sectioned_workbench_dialog, render_wrapped_text, split_vertical_sections,
-    truncate_display_text, workbench_navigation_width,
+    composer_status_placement_left, format_fixed_columns, format_key_value_segment, inset_rect,
+    join_inline_segments, layout_composer_surface, layout_header_body_footer_surface,
+    pane_header_height, panel_highlight_style, render_composer_editor_surface,
+    render_confirm_dialog, render_dashboard_workbench_dialog,
+    render_header_body_footer_text_surface, render_help_dialog, render_list_workbench_dialog,
+    render_overlay_line_input_dialog, render_sectioned_workbench_dialog, render_wrapped_text,
+    split_vertical_sections, truncate_display_text, workbench_navigation_width,
 };
 use ratatui::{
     style::{Modifier, Style},
@@ -25,9 +23,9 @@ use ratatui::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::I18n;
 #[cfg(test)]
 use crate::permission_prompt_content;
-use crate::I18n;
 
 mod view_catalog_helpers;
 mod view_help;

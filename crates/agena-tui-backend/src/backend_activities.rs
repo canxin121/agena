@@ -7,9 +7,7 @@
 use anyhow::{Context, Result, anyhow};
 
 use agena_api::queries::{ActivityLogsParams, GetActivityParams, ListActivitiesParams};
-use agena_api::resource::{
-    BackgroundActivityLogResource, BackgroundActivityResource,
-};
+use agena_api::resource::{BackgroundActivityLogResource, BackgroundActivityResource};
 use agena_application::dispatch;
 
 use super::{Backend, Query, QueryResult, api_error};
@@ -25,12 +23,7 @@ impl Backend {
             session_id: filter.session_id,
             active_only: filter.active_only,
         };
-        match dispatch::dispatch_query(
-            &self.application,
-            Query::ListActivities(params),
-        )
-        .await
-        {
+        match dispatch::dispatch_query(&self.application, Query::ListActivities(params)).await {
             Ok(QueryResult::Activities(items)) => Ok(items),
             Ok(other) => Err(anyhow!("unexpected query result: {:?}", other))
                 .context("failed to list background activities"),
@@ -82,11 +75,9 @@ impl Backend {
     pub async fn stop_activity(&self, activity_id: &str) -> Result<BackgroundActivityResource> {
         let result = dispatch::dispatch_command(
             &self.application,
-            agena_api::commands::Command::StopActivity(
-                agena_api::commands::StopActivityParams {
-                    activity_id: activity_id.to_owned(),
-                },
-            ),
+            agena_api::commands::Command::StopActivity(agena_api::commands::StopActivityParams {
+                activity_id: activity_id.to_owned(),
+            }),
         )
         .await;
         match result {

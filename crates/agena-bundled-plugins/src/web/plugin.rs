@@ -561,7 +561,12 @@ impl BrowserSessionLog {
         self.lines.push_back(line);
     }
 
-    fn read(&self, activity_id: &str, since_seq: u64, limit: Option<u32>) -> BackgroundActivityLogRead {
+    fn read(
+        &self,
+        activity_id: &str,
+        since_seq: u64,
+        limit: Option<u32>,
+    ) -> BackgroundActivityLogRead {
         let mut lines = self
             .lines
             .iter()
@@ -572,10 +577,7 @@ impl BrowserSessionLog {
         if let Some(limit) = limit {
             lines.truncate(limit as usize);
         }
-        let last_seq = lines
-            .last()
-            .map(|line| line.seq)
-            .unwrap_or(since_seq);
+        let last_seq = lines.last().map(|line| line.seq).unwrap_or(since_seq);
         BackgroundActivityLogRead {
             activity_id: activity_id.to_string(),
             status: BackgroundActivityStatus::Running,
@@ -648,8 +650,12 @@ impl BrowserActivityState {
         self.clients.lock().await.remove(target_id);
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         let meta = self.meta.lock().await.remove(target_id);
-        self.append_log(target_id, "event", format!("Closed browser session {target_id}."))
-            .await;
+        self.append_log(
+            target_id,
+            "event",
+            format!("Closed browser session {target_id}."),
+        )
+        .await;
         let now = chrono::Utc::now().timestamp_millis();
         let activity = browser_activity(
             format!("browser_{target_id}"),
@@ -695,9 +701,7 @@ impl ActivitySourceAdapter for BrowserActivitySource {
             .await
             .get(target_id)
             .map(|log| log.read(activity_id, since_seq, limit))
-            .unwrap_or_else(|| {
-                agena_plugin_host::sdk::activity::empty_log_read(activity_id)
-            });
+            .unwrap_or_else(|| agena_plugin_host::sdk::activity::empty_log_read(activity_id));
         read.status = if running {
             BackgroundActivityStatus::Running
         } else {
@@ -1016,7 +1020,10 @@ impl WebPlugin {
         host: Arc<dyn HostClient>,
     ) -> SdkResult<agena_plugin_host::sdk::InitOutcome> {
         self.state
-            .set(WebPluginState::new(parse_web_config(ctx.config)?, host.clone()))
+            .set(WebPluginState::new(
+                parse_web_config(ctx.config)?,
+                host.clone(),
+            ))
             .map_err(|_| PluginError::internal("web plugin initialized more than once"))?;
         self.workspace_root.set(ctx.workspace_root).map_err(|_| {
             PluginError::internal("web plugin workspace root initialized more than once")
@@ -1049,7 +1056,11 @@ impl WebPlugin {
             .collect::<Vec<_>>();
         for (session_id, meta) in sessions {
             self.browser_state
-                .append_log(&session_id, "event", "Plugin shutdown closed the managed browser.")
+                .append_log(
+                    &session_id,
+                    "event",
+                    "Plugin shutdown closed the managed browser.",
+                )
                 .await;
             self.publish_browser_terminal(
                 &session_id,
@@ -1333,11 +1344,7 @@ impl WebPlugin {
                             continue;
                         }
                         state
-                            .append_log(
-                                &session_id,
-                                "event",
-                                format!("Navigated to {url_text}."),
-                            )
+                            .append_log(&session_id, "event", format!("Navigated to {url_text}."))
                             .await;
                         let _ = host
                             .publish_activity(browser_activity(
@@ -1370,11 +1377,7 @@ impl WebPlugin {
                             .unwrap_or_default();
                         if !text.trim().is_empty() {
                             state
-                                .append_log(
-                                    &session_id,
-                                    "console",
-                                    format!("[{level}] {text}"),
-                                )
+                                .append_log(&session_id, "console", format!("[{level}] {text}"))
                                 .await;
                         }
                     }
@@ -1391,11 +1394,7 @@ impl WebPlugin {
                             .unwrap_or_default();
                         if !text.trim().is_empty() {
                             state
-                                .append_log(
-                                    &session_id,
-                                    "log",
-                                    format!("[{level}] {text}"),
-                                )
+                                .append_log(&session_id, "log", format!("[{level}] {text}"))
                                 .await;
                         }
                     }
@@ -1697,7 +1696,8 @@ impl WebPlugin {
             }
         };
         page.command("Page.enable", serde_json::json!({})).await?;
-        page.command("Runtime.enable", serde_json::json!({})).await?;
+        page.command("Runtime.enable", serde_json::json!({}))
+            .await?;
         page.command("Log.enable", serde_json::json!({})).await?;
         let title_target = browser_title_target(&url);
         let started_at_ms = chrono::Utc::now().timestamp_millis();

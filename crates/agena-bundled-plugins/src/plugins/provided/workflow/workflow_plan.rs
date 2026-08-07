@@ -587,9 +587,7 @@ impl WorkflowPlugin {
             }
             None => {
                 let _ = host
-                    .ui_statusline_remove(HostStatuslineRemoveRequest {
-                        segment_id,
-                    })
+                    .ui_statusline_remove(HostStatuslineRemoveRequest { segment_id })
                     .await?;
             }
         }
@@ -1537,10 +1535,7 @@ impl WorkflowPlugin {
                 &plan,
             )
         } else {
-            Self::plan_output_text(
-                format!("Plan review decision: {decision}.").as_str(),
-                &plan,
-            )
+            Self::plan_output_text(format!("Plan review decision: {decision}.").as_str(), &plan)
         };
         let payload = serde_json::json!({
             "plan": Self::plan_without_legacy_ids(&plan),
@@ -1578,16 +1573,15 @@ use super::{
     HostRegisteredToolDescriptor, HostRenameSessionRequest, HostSession,
     HostStatuslineContributeRequest, HostStatuslineRemoveRequest, HostStorageDeleteRequest,
     HostStorageGetRequest, HostStorageScope, HostStorageSetRequest, HostStorageVisibility,
-    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE, PlanReviewKind,
+    OnceLock, PLAN_KEY_ACTIVE, PLAN_NAMESPACE, PLAN_REVIEW_DECISION_APPROVE,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,
     PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT,
-    PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY, PLAN_RUNTIME_AUTO_SIGNATURE_KEY,
-    PLAN_RUNTIME_NAMESPACE, PLAN_STATUSLINE_SEGMENT_ID, Path, PathBuf, PlanGetView,
-    PlanUpdateInput, PlanUpdateTarget, PluginError, RwLock, SdkResult,
-    SessionRenameToolInput, SessionToolResponse, ToolDescriptor, ToolInvokeOutput,
-    ToolSearchDocument, ToolTagRecord, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
-    WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
-    WorkflowPlugin, WorkflowPluginConfig,
+    PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY, PLAN_RUNTIME_AUTO_SIGNATURE_KEY, PLAN_RUNTIME_NAMESPACE,
+    PLAN_STATUSLINE_SEGMENT_ID, Path, PathBuf, PlanGetView, PlanReviewKind, PlanUpdateInput,
+    PlanUpdateTarget, PluginError, RwLock, SdkResult, SessionRenameToolInput, SessionToolResponse,
+    ToolDescriptor, ToolInvokeOutput, ToolSearchDocument, ToolTagRecord, WorkflowPlan,
+    WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase, WorkflowPlanStep,
+    WorkflowPlanStepInput, WorkflowPlanStepStatus, WorkflowPlugin, WorkflowPluginConfig,
 };

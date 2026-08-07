@@ -45,7 +45,7 @@ pub(crate) struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
-        pub(crate) async fn build(
+    pub(crate) async fn build(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
@@ -70,7 +70,7 @@ impl RuntimeSnapshot {
     /// Hot-reload variant that lets the new snapshot reuse plugin transports
     /// from the previous snapshot when the corresponding `plugins.list.<id>`
     /// entry is byte-identical.
-        pub(crate) async fn build_with_previous(
+    pub(crate) async fn build_with_previous(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
@@ -93,7 +93,7 @@ impl RuntimeSnapshot {
         .await
     }
 
-        async fn build_inner(
+    async fn build_inner(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
@@ -194,7 +194,7 @@ impl RuntimeSnapshot {
         .map_err(AppError::Config)?;
         let session_build_config =
             agena_runtime::session_build_config_from_resolved(&resolution.config);
-                let session_manager = database.as_ref().map(|db| {
+        let session_manager = database.as_ref().map(|db| {
             build_or_reconfigure_session_manager(agena_runtime::SessionCompositionInputs {
                 existing: existing_session_manager,
                 database: db,

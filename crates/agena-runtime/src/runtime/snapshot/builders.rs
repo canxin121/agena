@@ -20,7 +20,7 @@ type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
 pub(super) fn build_or_reconfigure_session_manager(
     inputs: SessionCompositionInputs<'_>,
 ) -> Arc<SessionManager> {
-        let agena_runtime::SessionCompositionInputs {
+    let agena_runtime::SessionCompositionInputs {
         existing,
         database: db,
         providers,
@@ -58,7 +58,7 @@ pub(super) fn build_or_reconfigure_session_manager(
                 workspace_root,
                 tool_presentation: build_config.tool_presentation.clone(),
                 session_manager: Some(Arc::clone(&manager)),
-                                database: Arc::clone(db),
+                database: Arc::clone(db),
                 monitor_registry: monitor_registry.clone(),
             },
             permission_inspector,
@@ -74,8 +74,8 @@ pub(super) fn build_or_reconfigure_session_manager(
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
             session_manager: None,
-                            database: Arc::clone(db),
-                monitor_registry: monitor_registry.clone(),
+            database: Arc::clone(db),
+            monitor_registry: monitor_registry.clone(),
         },
         permission_inspector.clone(),
     );
@@ -92,8 +92,8 @@ pub(super) fn build_or_reconfigure_session_manager(
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
             session_manager: Some(Arc::clone(&manager)),
-                            database: Arc::clone(db),
-                monitor_registry: monitor_registry.clone(),
+            database: Arc::clone(db),
+            monitor_registry: monitor_registry.clone(),
         },
         permission_inspector,
     );
@@ -225,7 +225,7 @@ pub(super) fn build_tool_executor(
     inputs: ToolCompositionInputs<'_>,
     permission_inspector: Option<Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>>,
 ) -> ToolExecutor {
-        let agena_runtime::ToolCompositionInputs {
+    let agena_runtime::ToolCompositionInputs {
         plugins,
         lsp_registry,
         workspace_root,
@@ -250,7 +250,7 @@ pub(super) fn build_tool_executor(
         );
     }
 
-        let scheduler = session_manager
+    let scheduler = session_manager
         .map(|session_manager| build_scheduler(session_manager, database.as_ref().clone()));
     let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),

@@ -45,8 +45,8 @@ use ignore::WalkBuilder;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use tokio::sync::mpsc;
 
-mod backend_auth;
 mod backend_activities;
+mod backend_auth;
 mod backend_catalog;
 mod backend_config;
 mod backend_drafts;

@@ -28,9 +28,9 @@ pub mod cdylib_abi;
 #[cfg(any(feature = "cdylib", feature = "stdio", feature = "http"))]
 pub mod drivers;
 
+pub use activity::ActivitySourceAdapter;
 pub use agena_macros::{PluginConfigStore, ToolInput, agena_plugin};
 pub use async_trait::async_trait;
-pub use activity::ActivitySourceAdapter;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
 pub use error::{CONFIGURATION_REQUIRED_MARKER, PluginError, PluginErrorKind, Result};
 pub use hooks::*;

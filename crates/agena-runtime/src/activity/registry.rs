@@ -37,7 +37,9 @@ impl ActivityStore {
     }
 
     fn upsert(&mut self, activity: BackgroundActivity) -> Option<BackgroundActivity> {
-        let previous = self.activities.insert(activity.id.clone(), activity.clone());
+        let previous = self
+            .activities
+            .insert(activity.id.clone(), activity.clone());
         if previous.is_none() {
             self.order.push_front(activity.id.clone());
         }
@@ -96,7 +98,7 @@ impl ActivityStore {
         let mut index = self.order.len();
         while self.order.len() > self.history_limit && index > 0 {
             index -= 1;
-                        let Some(id) = self.order.get(index).cloned() else {
+            let Some(id) = self.order.get(index).cloned() else {
                 break;
             };
             let active = self
@@ -124,7 +126,9 @@ pub(crate) struct ActivityRegistry {
 impl ActivityRegistry {
     pub(crate) fn new(tx: mpsc::UnboundedSender<BackgroundActivityChangedEvent>) -> Self {
         Self {
-            store: Arc::new(Mutex::new(ActivityStore::new(DEFAULT_ACTIVITY_HISTORY_LIMIT))),
+            store: Arc::new(Mutex::new(ActivityStore::new(
+                DEFAULT_ACTIVITY_HISTORY_LIMIT,
+            ))),
             tx,
         }
     }
@@ -213,7 +217,7 @@ mod tests {
         }
     }
 
-        #[test]
+    #[test]
     fn store_orders_newest_first_and_trims_terminal_oldest() {
         let mut store = ActivityStore::new(2);
         store.upsert(activity("a", BackgroundActivityStatus::Succeeded));

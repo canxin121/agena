@@ -57,7 +57,6 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         self.inner.lock().listener = Some(listener);
     }
 
-
     pub(crate) fn list(&self) -> Vec<RuntimeBackgroundTask> {
         let state = self.inner.lock();
         state
@@ -166,7 +165,7 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             (task, token, true)
         };
 
-                        if started {
+        if started {
             let registry = self.clone();
             let task_id = task.id.clone();
             let listener = self.inner.lock().listener.clone();
@@ -219,7 +218,7 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
         RuntimeBackgroundTaskStart { started, task }
     }
 
-            fn finish(&self, task_id: &str, completion: RuntimeBackgroundTaskCompletion) {
+    fn finish(&self, task_id: &str, completion: RuntimeBackgroundTaskCompletion) {
         let finished = {
             let mut state = self.inner.lock();
             if let Some(task) = state.tasks.get_mut(task_id) {
@@ -260,9 +259,8 @@ impl<E> RuntimeBackgroundTaskRegistry<E> {
             }
             state.trim_history(self.history_limit);
         }
-                if let (Some(listener), Some(task)) = (self.inner.lock().listener.clone(), finished) {
+        if let (Some(listener), Some(task)) = (self.inner.lock().listener.clone(), finished) {
             listener.on_finished(&task);
         }
     }
 }
-

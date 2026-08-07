@@ -820,7 +820,10 @@ mod tests {
         let json = serde_json::to_string(&rebuilt).unwrap();
         // The serialized document must carry the two full artifacts and no
         // literal placeholder text (a placeholder ends with `… +N chars]`).
-        assert!(!json.contains("chars]"), "body must not leak a placeholder literal");
+        assert!(
+            !json.contains("chars]"),
+            "body must not leak a placeholder literal"
+        );
         assert_eq!(json.matches("x".repeat(1_000).as_str()).count(), 2);
     }
 }

@@ -31,7 +31,10 @@ pub fn bundled_tools_markdown_reference() -> String {
     plugins.sort_by(|left, right| left.0.cmp(&right.0));
 
     let plugin_count = plugins.len();
-    let tool_count: usize = plugins.iter().map(|(_, manifest, _)| manifest.tools.len()).sum();
+    let tool_count: usize = plugins
+        .iter()
+        .map(|(_, manifest, _)| manifest.tools.len())
+        .sum();
 
     let mut out = String::new();
     render_header(&mut out, plugin_count, tool_count);
@@ -154,7 +157,11 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
         .unwrap_or_else(|_| "\"buffered\"".to_string())
         .trim_matches('"')
         .to_string();
-    let strict = if tool.contract.strict { "strict" } else { "non-strict" };
+    let strict = if tool.contract.strict {
+        "strict"
+    } else {
+        "non-strict"
+    };
     writeln!(
         out,
         "**Runtime**: {concurrency} · streaming `{streaming}` · {strict}"
@@ -202,7 +209,11 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
     if !rows.is_empty() {
         writeln!(out).unwrap();
         writeln!(out, "**Input parameters**:").unwrap();
-        writeln!(out, "| Parameter | Type | Required | Default | Description |").unwrap();
+        writeln!(
+            out,
+            "| Parameter | Type | Required | Default | Description |"
+        )
+        .unwrap();
         writeln!(out, "| --- | --- | --- | --- | --- |").unwrap();
         for (name, ty, required, default, desc) in rows {
             writeln!(
@@ -299,7 +310,11 @@ fn schema_type(schema: &Value) -> String {
             .join(" / "),
         _ => {
             if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-                reference.rsplit('/').next().unwrap_or(reference).to_string()
+                reference
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(reference)
+                    .to_string()
             } else if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
                 any_of
                     .iter()

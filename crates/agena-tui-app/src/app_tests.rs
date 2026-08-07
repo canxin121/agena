@@ -1842,7 +1842,9 @@ mod transcript_activity_copy_tests {
         (51..59).map(|part| reasoning_activity(19, part)).collect()
     }
 
-    fn folded_run_transcript(parts: Vec<agena_api::message_part::MessagePartResource>) -> TranscriptState {
+    fn folded_run_transcript(
+        parts: Vec<agena_api::message_part::MessagePartResource>,
+    ) -> TranscriptState {
         TranscriptState {
             session_id: Some(7),
             messages: vec![MessageResource {
@@ -1872,7 +1874,9 @@ mod transcript_activity_copy_tests {
             .find(|node| {
                 node.key
                     == TranscriptNodeKey::Entry {
-                        entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(message_id),
+                        entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(
+                            message_id,
+                        ),
                     }
             })
             .cloned()
@@ -1921,7 +1925,9 @@ mod transcript_activity_copy_tests {
         let activity_key = |index: usize| TranscriptNodeKey::Activity {
             entry_id: agena_tui_transcript::TranscriptEntryId::StoredMessage(19),
             content_id: agena_tui_transcript::TranscriptContentId::Activity(
-                parts[index].activity_id.expect("reasoning activity identity"),
+                parts[index]
+                    .activity_id
+                    .expect("reasoning activity identity"),
             ),
         };
         let summary_key = TranscriptNodeKey::ActivitySummary {

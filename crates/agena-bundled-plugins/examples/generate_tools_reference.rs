@@ -11,5 +11,8 @@
 //! text. A CI drift test compares the committed file against this output.
 
 fn main() {
-    print!("{}", agena_bundled_plugins::bundled_tools_markdown_reference());
+    print!(
+        "{}",
+        agena_bundled_plugins::bundled_tools_markdown_reference()
+    );
 }

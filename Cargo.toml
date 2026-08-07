@@ -47,6 +47,7 @@ members = [
     "crates/agena-mcp-server",
     "crates/agena-memory-index",
     "crates/agena-marketplace-server",
+    "crates/agena-notification",
     "crates/agena-permission",
     "crates/agena-plugin-host",
     "crates/agena-plugin-marketplace",
@@ -108,6 +109,7 @@ agena-macro-core = { path = "crates/agena-macro-core" }
 agena-mcp-client = { path = "crates/agena-mcp-client" }
 agena-mcp-server = { path = "crates/agena-mcp-server" }
 agena-memory-index = { path = "crates/agena-memory-index" }
+agena-notification = { path = "crates/agena-notification" }
 agena-permission = { path = "crates/agena-permission" }
 agena-plugin-host = { path = "crates/agena-plugin-host" }
 agena-plugin-marketplace = { path = "crates/agena-plugin-marketplace" }

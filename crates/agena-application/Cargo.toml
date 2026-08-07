@@ -15,6 +15,7 @@ agena-storage = { workspace = true }
 agena-tool = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-api = { workspace = true }
+agena-notification = { workspace = true }
 agena-runtime-notifications = { workspace = true }
 agena-scheduler = { workspace = true }
 base64.workspace = true

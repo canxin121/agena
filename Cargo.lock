@@ -193,6 +193,7 @@ dependencies = [
  "agena-api",
  "agena-domain",
  "agena-failure",
+ "agena-notification",
  "agena-plugin-host",
  "agena-provider",
  "agena-runtime",

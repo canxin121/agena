@@ -23,6 +23,7 @@ impl PluginHost {
             runtime_handle: None,
             _host_handle: host_handle,
             transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
+            hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
         })
     }
 
@@ -300,7 +301,9 @@ impl PluginHost {
         let timeout = self.timeouts.tool_hook_or(Duration::from_secs(30));
         let plugins = self.plugins.clone();
         let res = self.block_on_static(async move {
-            await_transport_with_cancellation(
+            let session_id = Some(input.session_id);
+            let mut runs = Vec::new();
+            let result = await_transport_with_cancellation(
                 cancellation,
                 dispatcher::chain_patch_in_context::<ToolAfterInput, ToolAfterPatch, _, _>(
                     &plugins,
@@ -334,9 +337,15 @@ impl PluginHost {
                             Some(input.workspace_root.clone()),
                         ))
                     },
+                    session_id,
+                    &mut runs,
                 ),
             )
-            .await
+            .await;
+            // tool.after activity is intentionally not recorded (not part of
+            // the transcript hook-run scope); the runs are discarded.
+            let _ = runs;
+            result
         });
         res.map_err(transport_to_plugin_error)
     }
@@ -701,7 +710,9 @@ impl PluginHost {
         input: ChatMessageInput,
     ) -> Result<ChatMessageInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        dispatcher::chain_patch::<ChatMessageInput, ChatMessagePatch, _>(
+        let session_id = Some(input.session_id);
+        let mut runs = Vec::new();
+        let result = dispatcher::chain_patch::<ChatMessageInput, ChatMessagePatch, _>(
             &self.plugins,
             method::HOOK_CHAT_MESSAGE,
             HookSubscription::CHAT_MESSAGE,
@@ -715,9 +726,14 @@ impl PluginHost {
                     inp.message.content = serde_json::Value::Null;
                 }
             },
+            session_id,
+            &mut runs,
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        // chat.message activity is intentionally not recorded (not part of
+        // the transcript hook-run scope); the runs are discarded.
+        let _ = runs;
+        result.map_err(transport_to_plugin_error)
     }
 
     pub async fn dispatch_chat_params(
@@ -733,7 +749,9 @@ impl PluginHost {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ChatParamsInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        await_transport_with_cancellation(
+        let session_id = input.session_id;
+        let mut runs = Vec::new();
+        let result = await_transport_with_cancellation(
             cancellation,
             dispatcher::chain_patch::<ChatParamsInput, ChatParamsPatch, _>(
                 &self.plugins,
@@ -746,10 +764,13 @@ impl PluginHost {
                         merge_json(&mut inp.params, p);
                     }
                 },
+                session_id,
+                &mut runs,
             ),
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        self.push_hook_runs(runs);
+        result.map_err(transport_to_plugin_error)
     }
 
     pub async fn dispatch_chat_headers(
@@ -765,7 +786,8 @@ impl PluginHost {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ChatHeadersInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        await_transport_with_cancellation(
+        let mut runs = Vec::new();
+        let result = await_transport_with_cancellation(
             cancellation,
             dispatcher::chain_patch::<ChatHeadersInput, ChatHeadersPatch, _>(
                 &self.plugins,
@@ -781,10 +803,15 @@ impl PluginHost {
                         inp.headers.remove(&k);
                     }
                 },
+                None,
+                &mut runs,
             ),
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        // chat.headers activity is intentionally not recorded (not part of
+        // the transcript hook-run scope); the runs are discarded.
+        let _ = runs;
+        result.map_err(transport_to_plugin_error)
     }
 
     /// Sync variant for code paths driven from a non-async context (the
@@ -809,7 +836,9 @@ impl PluginHost {
         input: ChatSystemTransformInput,
     ) -> Result<ChatSystemTransformInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
-        dispatcher::chain_patch_in_context::<ChatSystemTransformInput, ChatSystemTransformPatch, _, _>(
+        let session_id = Some(input.session_id);
+        let mut runs = Vec::new();
+        let result = dispatcher::chain_patch_in_context::<ChatSystemTransformInput, ChatSystemTransformPatch, _, _>(
             &self.plugins,
             method::HOOK_CHAT_SYSTEM_TRANSFORM,
             HookSubscription::CHAT_SYSTEM_TRANSFORM,
@@ -833,9 +862,14 @@ impl PluginHost {
                     ..Default::default()
                 })
             },
+            session_id,
+            &mut runs,
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        // chat.system.transform activity is intentionally not recorded (not
+        // part of the transcript hook-run scope); the runs are discarded.
+        let _ = runs;
+        result.map_err(transport_to_plugin_error)
     }
 
     pub async fn broadcast_notification(&self, input: NotificationInput) {
@@ -865,26 +899,63 @@ impl PluginHost {
         input: CommandBeforeInput,
     ) -> Result<CommandBeforeOutcome, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
+        let session_id = input.session_id;
         let mut current = input;
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::COMMAND_BEFORE) {
                 continue;
             }
+            let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&current)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_with_timeout(plugin, method::HOOK_COMMAND_BEFORE, params, timeout)
+            let v = match call_with_timeout(plugin, method::HOOK_COMMAND_BEFORE, params, timeout)
                 .await
-                .map_err(transport_to_plugin_error)?;
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        "command.before",
+                        &plugin_id,
+                        session_id,
+                        &err,
+                    )]);
+                    return Err(transport_to_plugin_error(err));
+                }
+            };
             if matches!(&v, serde_json::Value::Null) {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "command.before",
+                    &plugin_id,
+                    session_id,
+                    HookRunStatus::Skipped,
+                    "command.before hook ran (no change)",
+                    None,
+                )]);
                 continue;
             }
             let resp: Option<CommandBeforeResponse> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             match resp {
                 Some(CommandBeforeResponse::Abort { reason }) => {
+                    self.push_hook_runs(vec![HookRunRecord::new(
+                        "command.before",
+                        &plugin_id,
+                        session_id,
+                        HookRunStatus::Applied,
+                        format!("command.before hook aborted command: {reason}"),
+                        Some(reason.clone()),
+                    )]);
                     return Ok(CommandBeforeOutcome::Abort(reason));
                 }
                 Some(CommandBeforeResponse::Patch(p)) => {
+                    self.push_hook_runs(vec![HookRunRecord::new(
+                        "command.before",
+                        &plugin_id,
+                        session_id,
+                        HookRunStatus::Applied,
+                        "command.before hook ran",
+                        None,
+                    )]);
                     if let Some(c) = p.command {
                         current.command = c;
                     }
@@ -900,7 +971,16 @@ impl PluginHost {
                         }
                     }
                 }
-                None => {}
+                None => {
+                    self.push_hook_runs(vec![HookRunRecord::new(
+                        "command.before",
+                        &plugin_id,
+                        session_id,
+                        HookRunStatus::Skipped,
+                        "command.before hook ran (no change)",
+                        None,
+                    )]);
+                }
             }
         }
         Ok(CommandBeforeOutcome::Continue(current))
@@ -919,17 +999,43 @@ impl PluginHost {
             if !plugin.subscribes(HookSubscription::AUTH) {
                 continue;
             }
+            let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_with_timeout(plugin, method::HOOK_AUTH, params, timeout)
-                .await
-                .map_err(transport_to_plugin_error)?;
+            let v = match call_with_timeout(plugin, method::HOOK_AUTH, params, timeout).await {
+                Ok(v) => v,
+                Err(err) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        "auth",
+                        &plugin_id,
+                        None,
+                        &err,
+                    )]);
+                    return Err(transport_to_plugin_error(err));
+                }
+            };
             if matches!(&v, serde_json::Value::Null) {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "auth",
+                    &plugin_id,
+                    None,
+                    HookRunStatus::Skipped,
+                    "auth hook ran (no credentials)",
+                    None,
+                )]);
                 continue;
             }
             let out: Option<AuthOutput> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if out.is_some() {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "auth",
+                    &plugin_id,
+                    None,
+                    HookRunStatus::Applied,
+                    "auth hook provided credentials",
+                    None,
+                )]);
                 return Ok(out);
             }
         }
@@ -947,17 +1053,45 @@ impl PluginHost {
             if !plugin.subscribes(HookSubscription::PROVIDER_LIST) {
                 continue;
             }
+            let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_with_timeout(plugin, method::HOOK_PROVIDER_LIST, params, timeout)
+            let v = match call_with_timeout(plugin, method::HOOK_PROVIDER_LIST, params, timeout)
                 .await
-                .map_err(transport_to_plugin_error)?;
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        "provider.list",
+                        &plugin_id,
+                        None,
+                        &err,
+                    )]);
+                    return Err(transport_to_plugin_error(err));
+                }
+            };
             if matches!(&v, serde_json::Value::Null) {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "provider.list",
+                    &plugin_id,
+                    None,
+                    HookRunStatus::Skipped,
+                    "provider.list hook ran (no change)",
+                    None,
+                )]);
                 continue;
             }
             let patch: Option<ProviderListPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "provider.list",
+                    &plugin_id,
+                    None,
+                    HookRunStatus::Applied,
+                    "provider.list hook ran",
+                    None,
+                )]);
                 add.extend(p.add);
                 remove.extend(p.remove);
             }
@@ -967,7 +1101,8 @@ impl PluginHost {
 
     pub async fn dispatch_config(&self, input: ConfigInput) -> Result<ConfigInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        dispatcher::chain_patch::<ConfigInput, ConfigPatch, _>(
+        let mut runs = Vec::new();
+        let result = dispatcher::chain_patch::<ConfigInput, ConfigPatch, _>(
             &self.plugins,
             method::HOOK_CONFIG,
             HookSubscription::CONFIG,
@@ -978,9 +1113,12 @@ impl PluginHost {
                     merge_json(&mut inp.current, m);
                 }
             },
+            None,
+            &mut runs,
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        self.push_hook_runs(runs);
+        result.map_err(transport_to_plugin_error)
     }
 
     // ── run lifecycle ──────────────────────────────────────────────────────
@@ -1028,23 +1166,52 @@ impl PluginHost {
         input: SessionStartInput,
     ) -> Result<SessionStartPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
+        let session_id = Some(input.session_id);
         let mut additional_context: Option<String> = None;
         let mut initial_user_message = None;
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::SESSION_START) {
                 continue;
             }
+            let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&input)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = call_with_timeout(plugin, method::HOOK_SESSION_START, params, timeout)
+            let v = match call_with_timeout(plugin, method::HOOK_SESSION_START, params, timeout)
                 .await
-                .map_err(transport_to_plugin_error)?;
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        "session.start",
+                        &plugin_id,
+                        session_id,
+                        &err,
+                    )]);
+                    return Err(transport_to_plugin_error(err));
+                }
+            };
             if matches!(&v, serde_json::Value::Null) {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "session.start",
+                    &plugin_id,
+                    session_id,
+                    HookRunStatus::Skipped,
+                    "session.start hook ran (no change)",
+                    None,
+                )]);
                 continue;
             }
             let patch: Option<SessionStartPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "session.start",
+                    &plugin_id,
+                    session_id,
+                    HookRunStatus::Applied,
+                    "session.start hook ran",
+                    None,
+                )]);
                 if let Some(ctx) = p.additional_context {
                     let existing = additional_context.get_or_insert_with(String::new);
                     if !existing.is_empty() {
@@ -1067,12 +1234,14 @@ impl PluginHost {
 
     pub async fn broadcast_session_end(&self, input: SessionEndInput) {
         let timeout = Duration::from_secs(5);
+        let queue = Arc::clone(&self.hook_runs);
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::SESSION_END) {
                 continue;
             }
             let input = input.clone();
             let plugin = plugin.clone();
+            let queue = Arc::clone(&queue);
             tokio::spawn(async move {
                 let params = match serde_json::to_value(&input) {
                     Ok(v) => v,
@@ -1083,7 +1252,7 @@ impl PluginHost {
                     session_id: Some(input.session_id),
                     ..Default::default()
                 };
-                let _ = tokio::time::timeout(
+                let notified = tokio::time::timeout(
                     timeout,
                     host_api::run_in_host_callback_context(
                         context,
@@ -1091,6 +1260,26 @@ impl PluginHost {
                     ),
                 )
                 .await;
+                let record = if notified.is_ok() {
+                    HookRunRecord::new(
+                        "session.end",
+                        plugin.key().to_string(),
+                        Some(input.session_id),
+                        HookRunStatus::Applied,
+                        "session.end hook notified",
+                        None,
+                    )
+                } else {
+                    HookRunRecord::new(
+                        "session.end",
+                        plugin.key().to_string(),
+                        Some(input.session_id),
+                        HookRunStatus::TimedOut,
+                        "session.end hook timed out",
+                        None,
+                    )
+                };
+                push_hook_runs_into(&queue, vec![record]);
             });
         }
     }
@@ -1111,28 +1300,65 @@ impl PluginHost {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<UserPromptSubmitInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
+        let session_id = Some(input.session_id);
         let mut current = input;
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::USER_PROMPT_SUBMIT) {
                 continue;
             }
+            let plugin_id = plugin.key().to_string();
             let params = serde_json::to_value(&current)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
-            let v = await_transport_with_cancellation(
+            let v = match await_transport_with_cancellation(
                 cancellation.clone(),
                 call_with_timeout(plugin, method::HOOK_USER_PROMPT_SUBMIT, params, timeout),
             )
             .await
-            .map_err(transport_to_plugin_error)?;
+            {
+                Ok(v) => v,
+                Err(err) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        "user.prompt.submit",
+                        &plugin_id,
+                        session_id,
+                        &err,
+                    )]);
+                    return Err(transport_to_plugin_error(err));
+                }
+            };
             if matches!(&v, serde_json::Value::Null) {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "user.prompt.submit",
+                    &plugin_id,
+                    session_id,
+                    HookRunStatus::Skipped,
+                    "user.prompt.submit hook ran (no change)",
+                    None,
+                )]);
                 continue;
             }
             let patch: Option<UserPromptSubmitPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
                 if let Some(r) = p.block_reason {
+                    self.push_hook_runs(vec![HookRunRecord::new(
+                        "user.prompt.submit",
+                        &plugin_id,
+                        session_id,
+                        HookRunStatus::Applied,
+                        format!("user.prompt.submit hook blocked prompt: {r}"),
+                        Some(r.clone()),
+                    )]);
                     return Err(PluginError::internal(format!("prompt blocked: {r}")));
                 }
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "user.prompt.submit",
+                    &plugin_id,
+                    session_id,
+                    HookRunStatus::Applied,
+                    "user.prompt.submit hook ran",
+                    None,
+                )]);
                 if let Some(text) = p.prompt {
                     current.prompt = text;
                 }
@@ -1184,7 +1410,8 @@ impl PluginHost {
         input: ToolDefinitionInput,
     ) -> Result<ToolDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        dispatcher::chain_patch_in_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
+        let mut runs = Vec::new();
+        let result = dispatcher::chain_patch_in_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
             &self.plugins,
             method::HOOK_TOOL_DEFINITION,
             HookSubscription::TOOL_DEFINITION,
@@ -1213,9 +1440,12 @@ impl PluginHost {
                     None,
                 ))
             },
+            None,
+            &mut runs,
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        self.push_hook_runs(runs);
+        result.map_err(transport_to_plugin_error)
     }
 
     pub fn dispatch_tool_definition_blocking(
@@ -1286,6 +1516,12 @@ impl PluginHost {
                         error = %err,
                         "agent.stop hook failed; continuing to remaining plugins"
                     );
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        "agent.stop",
+                        &plugin_id,
+                        Some(input.session_id),
+                        &err,
+                    )]);
                     runs.push(AgentStopHookRun {
                         plugin_id,
                         hook: "agent.stop".to_string(),
@@ -1296,12 +1532,46 @@ impl PluginHost {
                 }
             };
             if matches!(&v, serde_json::Value::Null) {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "agent.stop",
+                    &plugin_id,
+                    Some(input.session_id),
+                    HookRunStatus::Skipped,
+                    "agent.stop hook ran (no continuation)",
+                    None,
+                )]);
                 runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
                 continue;
             }
             let patch: Option<AgentStopPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
+                let (summary, detail) = match (&p.continue_with_message, &p.reason) {
+                    (Some(_), Some(reason)) => (
+                        format!("agent.stop hook blocked stop: {reason}"),
+                        p.continue_with_message.clone().or_else(|| p.reason.clone()),
+                    ),
+                    (Some(_), None) => (
+                        "agent.stop hook blocked stop".to_string(),
+                        p.continue_with_message.clone(),
+                    ),
+                    (None, Some(reason)) => (
+                        format!("agent.stop hook ran: {reason}"),
+                        Some(reason.clone()),
+                    ),
+                    (None, None) => (
+                        "agent.stop hook ran (no continuation)".to_string(),
+                        None,
+                    ),
+                };
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "agent.stop",
+                    &plugin_id,
+                    Some(input.session_id),
+                    HookRunStatus::Applied,
+                    summary,
+                    detail,
+                )]);
                 runs.push(AgentStopHookRun {
                     plugin_id,
                     hook: "agent.stop".to_string(),
@@ -1315,6 +1585,14 @@ impl PluginHost {
                     break;
                 }
             } else {
+                self.push_hook_runs(vec![HookRunRecord::new(
+                    "agent.stop",
+                    &plugin_id,
+                    Some(input.session_id),
+                    HookRunStatus::Skipped,
+                    "agent.stop hook ran (no continuation)",
+                    None,
+                )]);
                 runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
             }
         }
@@ -1334,7 +1612,9 @@ impl PluginHost {
         input: CommandAfterInput,
     ) -> Result<CommandAfterInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
-        dispatcher::chain_patch::<CommandAfterInput, CommandAfterPatch, _>(
+        let session_id = input.session_id;
+        let mut runs = Vec::new();
+        let result = dispatcher::chain_patch::<CommandAfterInput, CommandAfterPatch, _>(
             &self.plugins,
             method::HOOK_COMMAND_AFTER,
             HookSubscription::COMMAND_AFTER,
@@ -1351,9 +1631,12 @@ impl PluginHost {
                     inp.exit_code = patch.exit_code;
                 }
             },
+            session_id,
+            &mut runs,
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        self.push_hook_runs(runs);
+        result.map_err(transport_to_plugin_error)
     }
 
     pub fn dispatch_command_after_blocking(
@@ -1370,7 +1653,9 @@ impl PluginHost {
         input: ChatMessagesTransformInput,
     ) -> Result<ChatMessagesTransformInput, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(10));
-        dispatcher::chain_patch::<ChatMessagesTransformInput, ChatMessagesTransformPatch, _>(
+        let session_id = Some(input.session_id);
+        let mut runs = Vec::new();
+        let result = dispatcher::chain_patch::<ChatMessagesTransformInput, ChatMessagesTransformPatch, _>(
             &self.plugins,
             method::HOOK_CHAT_MESSAGES_TRANSFORM,
             HookSubscription::CHAT_MESSAGES_TRANSFORM,
@@ -1381,9 +1666,14 @@ impl PluginHost {
                     inp.messages = msgs;
                 }
             },
+            session_id,
+            &mut runs,
         )
-        .await
-        .map_err(transport_to_plugin_error)
+        .await;
+        // chat.messages.transform activity is intentionally not recorded (not
+        // part of the transcript hook-run scope); the runs are discarded.
+        let _ = runs;
+        result.map_err(transport_to_plugin_error)
     }
 
     /// Push an `EventEnvelope` to every subscribed plugin (best-effort, no
@@ -1613,6 +1903,33 @@ impl PluginHost {
                     .flatten()
             })
     }
+
+    /// Queue observed hook runs for later transcript recording.
+    pub fn push_hook_runs(&self, runs: Vec<HookRunRecord>) {
+        push_hook_runs_into(&self.hook_runs, runs);
+    }
+
+    /// Take every queued hook run attributed to `session_id`, plus runs
+    /// recorded without a session (which the current session operation
+    /// claims). Runs belonging to other sessions stay queued for their own
+    /// consumption.
+    pub fn drain_hook_runs(&self, session_id: i64) -> Vec<HookRunRecord> {
+        let mut pending = self
+            .hook_runs
+            .lock()
+            .expect("hook run queue mutex poisoned");
+        let mut taken = Vec::new();
+        let mut remaining = Vec::new();
+        for run in pending.drain(..) {
+            match run.session_id {
+                Some(sid) if sid == session_id => taken.push(run),
+                Some(_) => remaining.push(run),
+                None => taken.push(run),
+            }
+        }
+        *pending = remaining;
+        taken
+    }
 }
 
 async fn await_transport_with_cancellation<T, F>(
@@ -1637,7 +1954,8 @@ use super::{
     ChatMessagesTransformInput, ChatMessagesTransformPatch, ChatParamsInput, ChatParamsPatch,
     ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch,
     CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch,
-    Duration, EventEnvelope, HashMap, HookSubscription, HostCallbackContext,
+    Duration, EventEnvelope, HashMap, HookRunRecord, HookRunStatus, HookSubscription,
+    HostCallbackContext,
     HostDisplayContribution, HostHandle, HostNotification, HostThemePalette, LoadedPlugin,
     NoopHostClient, NotificationInput, PluginCommandCatalogItem, PluginCommandInvokeInput,
     PluginCommandOutput, PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord,
@@ -1652,5 +1970,84 @@ use super::{
     TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
     block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
     block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
-    merge_json, method, shutdown_transport, tool_hook_context, transport_to_plugin_error,
+    merge_json, method, push_hook_runs_into, shutdown_transport, tool_hook_context,
+    transport_to_plugin_error,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hook_run_queue_drains_by_session_and_claims_unattributed() {
+        let host = PluginHost::new_empty();
+        host.push_hook_runs(vec![
+            HookRunRecord::new(
+                "session.start",
+                "test.p1",
+                Some(1),
+                HookRunStatus::Applied,
+                "session.start hook ran",
+                None,
+            ),
+            HookRunRecord::new(
+                "config",
+                "test.p2",
+                None,
+                HookRunStatus::Applied,
+                "config hook ran",
+                None,
+            ),
+            HookRunRecord::new(
+                "chat.params",
+                "test.p1",
+                Some(2),
+                HookRunStatus::Skipped,
+                "chat.params hook ran (no change)",
+                None,
+            ),
+        ]);
+
+        let s1 = host.drain_hook_runs(1);
+        assert_eq!(
+            s1.len(),
+            2,
+            "session 1 claims its own run plus the unattributed one"
+        );
+        assert!(s1
+            .iter()
+            .all(|r| r.session_id.is_none() || r.session_id == Some(1)));
+
+        let s2 = host.drain_hook_runs(2);
+        assert_eq!(s2.len(), 1);
+        assert_eq!(s2[0].session_id, Some(2));
+
+        assert!(host.drain_hook_runs(1).is_empty());
+        assert!(host.drain_hook_runs(2).is_empty());
+    }
+
+    #[test]
+    fn hook_run_queue_is_bounded_and_drops_oldest() {
+        let host = PluginHost::new_empty();
+        let total = super::super::MAX_PENDING_HOOK_RUNS + 10;
+        let runs = (0..total)
+            .map(|i| {
+                HookRunRecord::new(
+                    "config",
+                    "test.p",
+                    None,
+                    HookRunStatus::Applied,
+                    format!("run {i}"),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        host.push_hook_runs(runs);
+        let drained = host.drain_hook_runs(1);
+        assert_eq!(drained.len(), super::super::MAX_PENDING_HOOK_RUNS);
+        assert_eq!(
+            drained[0].summary,
+            format!("run {}", total - super::super::MAX_PENDING_HOOK_RUNS)
+        );
+    }
+}

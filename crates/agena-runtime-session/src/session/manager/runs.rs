@@ -313,6 +313,17 @@ impl SessionManager {
             .append_history_items(session, user_history_items, state.cache_policy())
             .await?;
 
+        // Record the user.prompt.submit hook runs observed during this
+        // submission (plus any unattributed runs claimed by this session)
+        // before the model turns begin.
+        let hook_runs = state
+            .tool_executor
+            .plugin_manager()
+            .drain_hook_runs(session.id);
+        if !hook_runs.is_empty() {
+            session = self.record_hook_runs(session, hook_runs, state.clone()).await?;
+        }
+
         self.run_until_stable(
             session,
             &options,

@@ -149,6 +149,7 @@ pub(super) fn execute(
     // stdout/stderr; we use the (potentially patched) combined output.
     let patched_after = {
         let hook_input = CommandAfterInput {
+            session_id: context.session_id,
             command: "sh".to_string(),
             args: vec!["-c".to_string(), final_command.clone()],
             cwd: request.cwd.clone(),

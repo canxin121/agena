@@ -38,6 +38,7 @@ impl SessionProcessor {
         &self,
         provider_id: &str,
         model_id: &str,
+        session_id: i64,
         request: &mut CompletionRequest,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) {
@@ -56,6 +57,7 @@ impl SessionProcessor {
             provider: provider_id.to_string(),
             model: model_id.to_string(),
             params: serde_json::Value::Object(params),
+            session_id: Some(session_id),
         };
         match plugins
             .dispatch_chat_params_cancellable(input, cancellation)
@@ -99,6 +101,7 @@ impl SessionProcessor {
         self.apply_chat_params_hook(
             run.model.provider_id.as_ref(),
             run.model.model_id.as_ref(),
+            run.session_id,
             &mut run.completion,
             run.cancel.clone(),
         )

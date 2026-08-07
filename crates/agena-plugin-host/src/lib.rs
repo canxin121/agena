@@ -21,7 +21,8 @@ pub use config::{
 };
 pub use error::{HostError, TransportError};
 pub use host::{
-    AgentStopDispatch, AgentStopHookRun, HostDisplayContribution, HostNotification, LoadedPlugin,
+    AgentStopDispatch, AgentStopHookRun, HookRunRecord, HookRunStatus, HostDisplayContribution,
+    HostNotification, LoadedPlugin,
     PluginCommandCatalogItem, PluginHost, PluginHostBuildConfig, PluginInspect,
     PluginStudioControlCatalogItem, PluginStudioUiCatalog, PluginStudioViewCatalogItem,
     PluginTuiUiCatalog, PluginUiCatalog, PluginUiToolInvokeResponse, PluginUiToolInvokeStatus,

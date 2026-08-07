@@ -227,6 +227,14 @@ impl SessionManager {
             injected_messages.push(user_message);
         }
 
+        // Record the session.start hook runs observed during creation (plus
+        // any unattributed runs, such as config/provider.list, that happened
+        // before this session existed) as transcript activity.
+        let hook_runs = state.tool_executor.plugin_manager().drain_hook_runs(session.id);
+        if !hook_runs.is_empty() {
+            session = self.record_hook_runs(session, hook_runs, state.clone()).await?;
+        }
+
         if injected_messages.is_empty() {
             return Ok(session);
         }

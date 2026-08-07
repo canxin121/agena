@@ -5272,4 +5272,221 @@ mod tests {
         assert!(finished.next_pending_tool().is_none());
         assert!(finished.pending_interactive_requests().is_empty());
     }
+
+    #[derive(Default)]
+    struct HookActivityProbe;
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "hook_activity_probe",
+        version = "0.1.0",
+        summary = "hook run activity recording fixture."
+    )]
+    impl HookActivityProbe {
+        #[hook(session.start)]
+        async fn session_start(
+            &self,
+            _input: agena_plugin_host::SessionStartInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::SessionStartPatch>> {
+            Ok(Some(agena_plugin_host::SessionStartPatch::default()))
+        }
+
+        #[hook(prompt.submit)]
+        async fn user_prompt_submit(
+            &self,
+            _input: agena_plugin_host::UserPromptSubmitInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::UserPromptSubmitPatch>> {
+            Ok(Some(agena_plugin_host::UserPromptSubmitPatch::default()))
+        }
+
+        #[hook(chat.params)]
+        async fn chat_params(
+            &self,
+            _input: agena_plugin_host::ChatParamsInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::ChatParamsPatch>> {
+            Ok(Some(agena_plugin_host::ChatParamsPatch::default()))
+        }
+
+        #[hook(agent.stop)]
+        async fn agent_stop(
+            &self,
+            _input: agena_plugin_host::AgentStopInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::AgentStopPatch>> {
+            Ok(None)
+        }
+
+        #[hook(shell.before)]
+        async fn command_execute_before(
+            &self,
+            _input: agena_plugin_host::CommandBeforeInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::CommandBeforeResponse>> {
+            Ok(None)
+        }
+
+        #[hook(shell.after)]
+        async fn command_execute_after(
+            &self,
+            _input: agena_plugin_host::CommandAfterInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::CommandAfterPatch>> {
+            Ok(None)
+        }
+
+        #[hook(config.resolved)]
+        async fn config_resolved(
+            &self,
+            _input: agena_plugin_host::ConfigInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::ConfigPatch>> {
+            Ok(None)
+        }
+    }
+
+    async fn test_manager_with_hook_activity_probe() -> SessionManager {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            "test.hook_activity_probe".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                "test.hook_activity_probe"
+                    .parse()
+                    .expect("valid probe plugin key"),
+                HookActivityProbe,
+            )],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut providers = ProviderRegistry::new();
+        providers.register(UnfinishedPlainTextProvider {
+            default_model: ModelId::new("unfinished-plain-text-model"),
+            calls: Arc::clone(&calls),
+            dangling_turns: 0,
+            truncate_first: false,
+            always_truncate: false,
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn every_hook_run_is_recorded_as_transcript_activity() {
+        let manager = test_manager_with_hook_activity_probe().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "hook activity".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create hook activity session");
+
+        // Exercise command.before/after and config directly against the host:
+        // command hooks carry a session id, config is unattributed and must be
+        // claimed by the next session drain.
+        let executor = manager.tool_executor();
+        let plugins = executor.plugin_manager();
+        plugins
+            .dispatch_command_before_blocking(agena_plugin_host::CommandBeforeInput {
+                session_id: Some(session.id),
+                call_id: Some(1),
+                workspace_root: Some("/tmp".to_string()),
+                command: "echo".to_string(),
+                args: vec!["hi".to_string()],
+                cwd: std::path::PathBuf::from("/tmp"),
+                env: Default::default(),
+            })
+            .expect("command.before dispatch");
+        plugins
+            .dispatch_command_after_blocking(agena_plugin_host::CommandAfterInput {
+                session_id: Some(session.id),
+                command: "echo".to_string(),
+                args: vec!["hi".to_string()],
+                cwd: std::path::PathBuf::from("/tmp"),
+                exit_code: Some(0),
+                stdout: "hi".to_string(),
+                stderr: String::new(),
+                timed_out: false,
+            })
+            .expect("command.after dispatch");
+        plugins
+            .dispatch_config(agena_plugin_host::ConfigInput {
+                current: serde_json::json!({}),
+            })
+            .await
+            .expect("config dispatch");
+
+        submit_plain_text_user_message(&manager, session.id).await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        let finished = manager
+            .get_session(session.id)
+            .await
+            .expect("load finished session");
+        let mut hook_names = Vec::new();
+        for message in &finished.messages {
+            for part in &message.parts {
+                if let Some(PartContent::Activity(crate::message::RuntimeActivity::Hook(hook))) =
+                    part.content.as_ref()
+                {
+                    hook_names.push(hook.hook.clone());
+                }
+            }
+        }
+        for expected in [
+            "session.start",
+            "user.prompt.submit",
+            "chat.params",
+            "command.before",
+            "command.after",
+            "config",
+            "agent.stop",
+        ] {
+            assert!(
+                hook_names.iter().any(|name| name == expected),
+                "missing hook activity for {expected}; got {hook_names:?}"
+            );
+        }
+    }
 }

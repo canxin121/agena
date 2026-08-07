@@ -69,6 +69,10 @@ pub struct ChatParamsInput {
     pub provider: String,
     pub model: String,
     pub params: serde_json::Value,
+    /// Session the chat.params hook runs for, when known. Used to attribute
+    /// the hook run to the right session transcript.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

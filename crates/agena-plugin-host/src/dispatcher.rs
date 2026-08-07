@@ -9,13 +9,15 @@ use serde::{Serialize, de::DeserializeOwned};
 use tracing::Instrument;
 
 use crate::error::TransportError;
-use crate::host::LoadedPlugin;
+use crate::host::{HookRunRecord, HookRunStatus, LoadedPlugin};
 use crate::sdk::HookSubscription;
 use crate::sdk::host_api::{self, HostCallbackContext};
 use crate::sdk::rpc::method;
 
 /// Sequential `Option<Patch>` chain. Each plugin sees the latest mutated
 /// input; if it returns `Some(patch)`, the patch is merged in via `apply`.
+/// Every plugin invocation is recorded into `runs` so the caller can surface
+/// hook execution as transcript activity (`session_id` attributes the run).
 pub async fn chain_patch<I, P, F>(
     plugins: &[std::sync::Arc<LoadedPlugin>],
     method_name: &str,
@@ -23,6 +25,8 @@ pub async fn chain_patch<I, P, F>(
     timeout: Duration,
     input: I,
     apply: F,
+    session_id: Option<i64>,
+    runs: &mut Vec<HookRunRecord>,
 ) -> Result<I, TransportError>
 where
     I: Serialize + Clone,
@@ -37,10 +41,13 @@ where
         input,
         apply,
         |_, _| None,
+        session_id,
+        runs,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn chain_patch_in_context<I, P, F, C>(
     plugins: &[std::sync::Arc<LoadedPlugin>],
     method_name: &str,
@@ -49,6 +56,8 @@ pub async fn chain_patch_in_context<I, P, F, C>(
     mut input: I,
     mut apply: F,
     context: C,
+    session_id: Option<i64>,
+    runs: &mut Vec<HookRunRecord>,
 ) -> Result<I, TransportError>
 where
     I: Serialize + Clone,
@@ -56,26 +65,114 @@ where
     F: FnMut(&mut I, P),
     C: Fn(&LoadedPlugin, &I) -> Option<HostCallbackContext>,
 {
+    let hook = display_hook_name(method_name);
     for plugin in plugins {
         if !plugin.subscribes(subscription) {
             continue;
         }
+        let plugin_id = plugin.key().to_string();
         let params = serde_json::to_value(&input)?;
         let call = call_with_timeout(plugin, method_name, params, timeout);
         let result = if let Some(context) = context(plugin, &input) {
-            host_api::run_in_host_callback_context(context, call).await?
+            match host_api::run_in_host_callback_context(context, call).await {
+                Ok(v) => v,
+                Err(err) => {
+                    record_transport_failure(runs, &hook, &plugin_id, session_id, &err);
+                    return Err(err);
+                }
+            }
         } else {
-            call.await?
+            match call.await {
+                Ok(v) => v,
+                Err(err) => {
+                    record_transport_failure(runs, &hook, &plugin_id, session_id, &err);
+                    return Err(err);
+                }
+            }
         };
         if matches!(&result, serde_json::Value::Null) {
+            runs.push(HookRunRecord::new(
+                &hook,
+                &plugin_id,
+                session_id,
+                HookRunStatus::Skipped,
+                format!("{hook} hook ran (no change)"),
+                None,
+            ));
             continue;
         }
         let patch: Option<P> = serde_json::from_value(result)?;
-        if let Some(p) = patch {
-            apply(&mut input, p);
+        match patch {
+            Some(p) => {
+                apply(&mut input, p);
+                runs.push(HookRunRecord::new(
+                    &hook,
+                    &plugin_id,
+                    session_id,
+                    HookRunStatus::Applied,
+                    format!("{hook} hook ran"),
+                    None,
+                ));
+            }
+            None => {
+                runs.push(HookRunRecord::new(
+                    &hook,
+                    &plugin_id,
+                    session_id,
+                    HookRunStatus::Skipped,
+                    format!("{hook} hook ran (no change)"),
+                    None,
+                ));
+            }
         }
     }
     Ok(input)
+}
+
+/// Strip the `hooks/` RPC prefix for human-readable hook names. The command
+/// hooks keep their shorter plan names (`command.before` / `command.after`)
+/// instead of the transport method's `command.execute.*`.
+fn display_hook_name(method_name: &str) -> String {
+    if let Some(rest) = method_name.strip_prefix("hooks/command.execute.") {
+        return format!("command.{rest}");
+    }
+    method_name
+        .strip_prefix("hooks/")
+        .unwrap_or(method_name)
+        .to_string()
+}
+
+/// Build a failed/timed-out hook run record for a transport error.
+pub(crate) fn transport_failure_record(
+    hook: &str,
+    plugin_id: &str,
+    session_id: Option<i64>,
+    err: &TransportError,
+) -> HookRunRecord {
+    let (status, summary) = if matches!(err, TransportError::Timeout) {
+        (HookRunStatus::TimedOut, format!("{hook} hook timed out"))
+    } else {
+        (HookRunStatus::Failed, format!("{hook} hook failed: {err}"))
+    };
+    HookRunRecord::new(
+        hook,
+        plugin_id,
+        session_id,
+        status,
+        summary,
+        Some(err.to_string()),
+    )
+}
+
+/// Record a failed/timed-out transport call before propagating the error.
+fn record_transport_failure(
+    runs: &mut Vec<HookRunRecord>,
+    hook: &str,
+    plugin_id: &str,
+    session_id: Option<i64>,
+    err: &TransportError,
+) {
+    runs.push(transport_failure_record(hook, plugin_id, session_id, err));
 }
 
 pub async fn call_with_timeout(

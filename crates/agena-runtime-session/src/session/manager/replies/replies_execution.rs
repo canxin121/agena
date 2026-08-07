@@ -455,10 +455,17 @@ impl SessionManager {
                         // Surface every observed hook run as first-class
                         // transcript activity so users can see whether a stop
                         // hook (for example the workflow plan autorun
-                        // continuation) actually fired.
-                        if !dispatch.runs.is_empty() {
+                        // continuation) actually fired. The dispatch pushed
+                        // HookRunRecords for agent.stop (plus any lingering
+                        // command.before/after runs from the final tool
+                        // batch); drain and record them here.
+                        let hook_runs = state
+                            .tool_executor
+                            .plugin_manager()
+                            .drain_hook_runs(session.id);
+                        if !hook_runs.is_empty() {
                             session = self
-                                .record_agent_stop_hook_runs(session, dispatch.runs, state.clone())
+                                .record_hook_runs(session, hook_runs, state.clone())
                                 .await?;
                         }
                         if dispatch.patch.continue_with_message.is_some() {
@@ -732,31 +739,26 @@ impl SessionManager {
     }
 
     /// Record one System-originated Assistant message with a `Hook` part per
-    /// observed `agent.stop` hook run. This makes hook execution visible in
-    /// the same transcript activity pipeline as tool calls and is persisted
-    /// so a restart keeps the record.
-    async fn record_agent_stop_hook_runs(
+    /// observed hook run. This makes hook execution visible in the same
+    /// transcript activity pipeline as tool calls and is persisted so a
+    /// restart keeps the record. Every session operation that drains
+    /// `PluginHost::drain_hook_runs` (session.start, user.prompt.submit,
+    /// chat.params, command.before/after, agent.stop) records through here.
+    pub(in crate::session::manager) async fn record_hook_runs(
         &self,
         mut session: Session,
-        runs: Vec<agena_plugin_host::AgentStopHookRun>,
+        runs: Vec<agena_plugin_host::HookRunRecord>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let ids = self.store.reserve_message_ids(runs.len()).await?;
         let parts = runs
             .into_iter()
             .map(|run| {
-                let summary = match (&run.continue_with_message, &run.reason) {
-                    (Some(_), Some(reason)) => format!("agent.stop hook blocked stop: {reason}"),
-                    (Some(_), None) => "agent.stop hook blocked stop".to_string(),
-                    (None, Some(reason)) => format!("agent.stop hook ran: {reason}"),
-                    (None, None) => "agent.stop hook ran (no continuation)".to_string(),
-                };
-                let detail = run.continue_with_message.or(run.reason);
                 PartContent::hook(crate::message::HookPart {
                     hook: run.hook,
                     plugin_id: Some(run.plugin_id),
-                    summary,
-                    detail,
+                    summary: run.summary,
+                    detail: run.detail,
                 })
             })
             .collect();
@@ -1023,6 +1025,19 @@ impl SessionManager {
                 .await;
             match run_outcome {
                 Ok(result) => {
+                    // Drain hook runs collected during this model turn
+                    // (chat.params fired at the turn start, plus any lingering
+                    // command.before/after runs from the previous tool batch)
+                    // and record them before this turn's assistant message.
+                    let hook_runs = state
+                        .tool_executor
+                        .plugin_manager()
+                        .drain_hook_runs(session.id);
+                    if !hook_runs.is_empty() {
+                        session = self
+                            .record_hook_runs(session, hook_runs, state.clone())
+                            .await?;
+                    }
                     let run_id = result.run_id;
                     let termination = result.termination;
                     let assistant_message = result

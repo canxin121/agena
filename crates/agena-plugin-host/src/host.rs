@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -99,6 +99,83 @@ impl AgentStopHookRun {
 pub struct AgentStopDispatch {
     pub patch: AgentStopPatch,
     pub runs: Vec<AgentStopHookRun>,
+}
+
+/// Outcome of one plugin hook invocation, collected by `PluginHost` and
+/// drained by the session runtime to surface hook execution as transcript
+/// activity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookRunStatus {
+    /// Hook ran and its patch was applied.
+    Applied,
+    /// Hook ran and returned nothing (no patch / null).
+    Skipped,
+    /// Hook transport call failed.
+    Failed,
+    /// Hook transport call timed out.
+    TimedOut,
+}
+
+/// One observed plugin hook run. Pushed at dispatch time with the session
+/// the hook ran for (when the hook input carried one); drained by the
+/// session runtime and recorded as `HookPart` activity in the transcript.
+#[derive(Debug, Clone)]
+pub struct HookRunRecord {
+    /// The hook identifier that ran, for example `chat.params`.
+    pub hook: String,
+    /// The plugin that ran the hook.
+    pub plugin_id: String,
+    /// Session the hook ran for, when the hook input carried one.
+    pub session_id: Option<i64>,
+    pub status: HookRunStatus,
+    /// Human-readable summary of the run.
+    pub summary: String,
+    /// Optional extra detail (reason, error, injected continuation).
+    pub detail: Option<String>,
+}
+
+impl HookRunRecord {
+    pub fn new(
+        hook: impl Into<String>,
+        plugin_id: impl Into<String>,
+        session_id: Option<i64>,
+        status: HookRunStatus,
+        summary: impl Into<String>,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            hook: hook.into(),
+            plugin_id: plugin_id.into(),
+            session_id,
+            status,
+            summary: summary.into(),
+            detail,
+        }
+    }
+}
+
+/// Upper bound on the pending hook-run queue. Every dispatch pushes one
+/// record per plugin invocation; a host that never opens a session would
+/// otherwise grow the queue without bound. Oldest records are dropped once
+/// the bound is exceeded.
+const MAX_PENDING_HOOK_RUNS: usize = 4096;
+
+/// Push hook runs into the shared queue, dropping the oldest records once
+/// the bounded queue overflows. `pub(crate)` so fire-and-forget broadcast
+/// tasks can enqueue without holding `&PluginHost`.
+pub(crate) fn push_hook_runs_into(
+    queue: &Arc<Mutex<Vec<HookRunRecord>>>,
+    runs: Vec<HookRunRecord>,
+) {
+    if runs.is_empty() {
+        return;
+    }
+    let mut pending = queue.lock().expect("hook run queue mutex poisoned");
+    pending.extend(runs);
+    if pending.len() > MAX_PENDING_HOOK_RUNS {
+        let excess = pending.len() - MAX_PENDING_HOOK_RUNS;
+        pending.drain(..excess);
+    }
 }
 
 pub struct LoadedPlugin {
@@ -379,6 +456,10 @@ pub struct PluginHost {
     /// Plugin ids whose transports we transferred to a successor host;
     /// `shutdown()` skips those so we don't kill what the new host is using.
     transferred_to_successor: tokio::sync::Mutex<std::collections::HashSet<PluginKey>>,
+    /// Observed hook runs awaiting recording by the session runtime. Every
+    /// dispatch pushes one record per plugin invocation; session operations
+    /// drain the queue and attribute runs by `session_id`.
+    hook_runs: Arc<Mutex<Vec<HookRunRecord>>>,
 }
 
 fn tool_hook_context(

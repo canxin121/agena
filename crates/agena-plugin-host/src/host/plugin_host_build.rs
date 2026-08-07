@@ -220,6 +220,7 @@ impl PluginHost {
             runtime_handle: tokio::runtime::Handle::try_current().ok(),
             _host_handle: host_handle,
             transferred_to_successor: tokio::sync::Mutex::new(Default::default()),
+            hook_runs: Arc::new(std::sync::Mutex::new(Vec::new())),
         }))
     }
 }

@@ -256,6 +256,8 @@ pub enum CommandBeforeOutcome {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandAfterInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<i64>,
     pub command: String,
     pub args: Vec<String>,
     pub cwd: PathBuf,

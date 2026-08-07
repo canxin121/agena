@@ -2905,11 +2905,6 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Refresh the running title of a streaming tool and emit a header-only
-    /// checkpoint. This is the only durable write during a stream: it updates
-    /// the compact title (a tiny UPDATE), never the cumulative output, so a
-    /// long stream costs O(1) writes rather than re-persisting the growing
-    /// text every 2s.
     /// Publish one activity v2 live wire event (07 §5.2). In-memory,
     /// non-persistent, fire-and-forget like the legacy detail broadcasts.
     fn broadcast_activity_v2(
@@ -2939,6 +2934,11 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Refresh the running title of a streaming tool and emit a header-only
+    /// checkpoint. This is the only durable write during a stream: it updates
+    /// the compact title (a tiny UPDATE), never the cumulative output, so a
+    /// long stream costs O(1) writes rather than re-persisting the growing
+    /// text every 2s.
     pub(in crate::session::manager) async fn refresh_streaming_title(
         &self,
         session_id: i64,

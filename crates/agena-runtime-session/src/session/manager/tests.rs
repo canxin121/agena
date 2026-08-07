@@ -3772,12 +3772,15 @@ mod tests {
                 {
                     return None;
                 }
-                message.parts.iter().find_map(|part| match part.content.as_ref() {
-                    Some(PartContent::Activity(crate::message::RuntimeActivity::Notice(
-                        notice,
-                    ))) => Some((message, notice)),
-                    _ => None,
-                })
+                message
+                    .parts
+                    .iter()
+                    .find_map(|part| match part.content.as_ref() {
+                        Some(PartContent::Activity(crate::message::RuntimeActivity::Notice(
+                            notice,
+                        ))) => Some((message, notice)),
+                        _ => None,
+                    })
             })
             .expect("exhaustion must produce an Assistant/System Notice message");
         assert_eq!(notice.1.kind, "max_turns_exhausted");
@@ -3869,10 +3872,14 @@ mod tests {
         assert!(finished.next_pending_tool().is_none());
         assert!(
             finished.messages.iter().all(|message| {
-                message.parts.iter().all(|part| !matches!(
-                    part.content.as_ref(),
-                    Some(PartContent::Activity(crate::message::RuntimeActivity::Notice(_)))
-                ))
+                message.parts.iter().all(|part| {
+                    !matches!(
+                        part.content.as_ref(),
+                        Some(PartContent::Activity(
+                            crate::message::RuntimeActivity::Notice(_)
+                        ))
+                    )
+                })
             }),
             "no Notice must be emitted when the run ends without exhausting the budget"
         );

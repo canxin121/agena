@@ -87,11 +87,13 @@ mod tests {
         let resource = event_resource_from_runtime(&event);
         assert_eq!(resource.kind.as_str(), "activity_v2");
         assert_eq!(resource.payload["type"], "detail_delta");
-        assert_eq!(resource.payload["activity_id"], "a1b2c3d4-0000-0000-0000-000000000001");
+        assert_eq!(
+            resource.payload["activity_id"],
+            "a1b2c3d4-0000-0000-0000-000000000001"
+        );
         assert_eq!(resource.payload["block_id"], "out");
         assert_eq!(resource.payload["mode"], "append");
         assert_eq!(resource.payload["view"]["type"], "log");
         assert_eq!(resource.payload["view"]["text"], "done\n");
     }
-
 }

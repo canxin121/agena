@@ -420,11 +420,9 @@ fn project_runtime_presentation_event(
                 force_refresh: true,
             })
         }
-        EventKind::ActivityV2(activity) => {
-            Some(agena_runtime::RuntimePresentationEventKind::ActivityV2(
-                activity.clone(),
-            ))
-        }
+        EventKind::ActivityV2(activity) => Some(
+            agena_runtime::RuntimePresentationEventKind::ActivityV2(activity.clone()),
+        ),
         EventKind::CommandOutputDelta(_) => {
             // Live streaming detail is carried by EventKind::ActivityV2
             // (DetailDelta) so TUI and Web render the same ViewBlock stream;
@@ -1571,15 +1569,13 @@ fn project_operation_block(
     use agena_runtime::SessionProjectedOperationBlock as Projected;
     match value {
         agena_domain::ViewBlock::Text { text, .. } => Projected::Text { text: text.clone() },
-        agena_domain::ViewBlock::Markdown { text, .. } => Projected::Markdown {
-            text: text.clone(),
-        },
+        agena_domain::ViewBlock::Markdown { text, .. } => {
+            Projected::Markdown { text: text.clone() }
+        }
         agena_domain::ViewBlock::Json { value, .. } => Projected::Json {
             value: value.clone(),
         },
-        agena_domain::ViewBlock::Table {
-            columns, rows, ..
-        } => Projected::Table {
+        agena_domain::ViewBlock::Table { columns, rows, .. } => Projected::Table {
             columns: columns
                 .iter()
                 .map(|label| agena_domain::TableColumn {

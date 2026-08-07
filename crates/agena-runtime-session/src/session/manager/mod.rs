@@ -13,8 +13,8 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 use crate::AppError;
 use crate::event::EventKind;
 use crate::message::{
-    AttachmentItem, InteractiveRequestPart, Message, MessageMetadata, MessagePart,
-    OperationPart, PartContent, RequestPart,
+    AttachmentItem, InteractiveRequestPart, Message, MessageMetadata, MessagePart, OperationPart,
+    PartContent, RequestPart,
 };
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;

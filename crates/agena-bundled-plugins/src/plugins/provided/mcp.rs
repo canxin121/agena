@@ -20,12 +20,12 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::message::{AttachmentItem, AttachmentKind, AttachmentSource};
-use base64::Engine as _;
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{
     InitOutcome, NetworkAccessSpec, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch,
     ToolInvokeOutput,
 };
+use base64::Engine as _;
 
 pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
@@ -1047,9 +1047,7 @@ fn get_prompt_output(
     ))
 }
 
-fn view_block_to_attachment_item(
-    block: &agena_domain::ViewBlock,
-) -> Option<AttachmentItem> {
+fn view_block_to_attachment_item(block: &agena_domain::ViewBlock) -> Option<AttachmentItem> {
     let agena_domain::ViewBlock::Media { artifact, .. } = block else {
         return None;
     };
@@ -1115,10 +1113,7 @@ fn content_block_to_result_block(block: &ContentBlock) -> Option<agena_domain::V
             artifact: agena_domain::ArtifactRef {
                 uri: resource.uri.clone(),
                 mime: resource.mime_type.clone().unwrap_or_default(),
-                name: resource
-                    .title
-                    .clone()
-                    .or_else(|| resource.name.clone()),
+                name: resource.title.clone().or_else(|| resource.name.clone()),
                 size_bytes: None,
                 sha256: None,
             },
@@ -1140,7 +1135,10 @@ fn resource_contents_to_result_block(resource: &ResourceContents) -> agena_domai
     } else if let Some(blob) = resource.blob.as_deref().filter(|value| !value.is_empty()) {
         format!(
             "data:{};base64,{}",
-            resource.mime_type.as_deref().unwrap_or("application/octet-stream"),
+            resource
+                .mime_type
+                .as_deref()
+                .unwrap_or("application/octet-stream"),
             blob
         )
     } else {

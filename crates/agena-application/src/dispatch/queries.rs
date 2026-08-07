@@ -112,7 +112,7 @@ pub async fn dispatch_query(
             loaded_at: chrono::Utc::now(),
             database_connected: true,
         })),
-                Query::Runtime => Ok(QueryResult::Runtime(runtime_status_response(state).await)),
+        Query::Runtime => Ok(QueryResult::Runtime(runtime_status_response(state).await)),
         Query::ListActivities(params) => {
             let service = state.runtime_activities()?;
             let filter = activity_filter_from_params(&params);
@@ -246,17 +246,19 @@ pub async fn dispatch_query(
     }
 }
 use super::{
-    ActivityLogsParams, Application, ApplicationError, CursorPaginationQuery,
-    GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams,
-    GetWorkspaceParams, ListActivitiesParams, ListEventsParams, ListPermissionRulesParams,
+    ActivityLogsParams, Application, ApplicationError, CursorPaginationQuery, GetActivityParams,
+    GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
+    ListActivitiesParams, ListEventsParams, ListPermissionRulesParams,
     ListProviderAdapterModelsParams, ListProviderModelsParams,
     ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-        OperationDetailResource, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
+    OperationDetailResource, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
     SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
     runtime_status_response,
 };
 
-fn activity_filter_from_params(params: &ListActivitiesParams) -> agena_domain::BackgroundActivityFilter {
+fn activity_filter_from_params(
+    params: &ListActivitiesParams,
+) -> agena_domain::BackgroundActivityFilter {
     use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
     let parse_kinds = |value: &Option<String>| -> Vec<BackgroundActivityKind> {
         value.as_deref().map_or_else(Vec::new, |csv| {

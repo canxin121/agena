@@ -290,8 +290,7 @@ fn openai_reasoning_items_from_output(
                 "summary": summary,
             });
             if let Some(encrypted_content) = encrypted_content {
-                normalized["encrypted_content"] =
-                    serde_json::Value::String(encrypted_content);
+                normalized["encrypted_content"] = serde_json::Value::String(encrypted_content);
             }
             if !content.is_empty() {
                 normalized["content"] = serde_json::Value::Array(content);
@@ -760,7 +759,10 @@ mod tests {
         }
         // The accumulated arguments must be the complete snapshot.
         let final_arguments = updates.iter().fold(String::new(), |mut acc, update| {
-            if let ToolStreamUpdate::ArgumentsDelta { arguments_delta, .. } = update {
+            if let ToolStreamUpdate::ArgumentsDelta {
+                arguments_delta, ..
+            } = update
+            {
                 acc.push_str(arguments_delta);
             }
             acc
@@ -948,8 +950,7 @@ mod tests {
         let items = openai_reasoning_items_from_output(response.output.as_deref());
         assert_eq!(items.len(), 1);
         assert_eq!(
-            items[0]["content"][0]["text"],
-            "output reasoning",
+            items[0]["content"][0]["text"], "output reasoning",
             "summary text must be replayed as reasoning content"
         );
     }

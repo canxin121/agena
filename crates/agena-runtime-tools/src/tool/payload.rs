@@ -479,8 +479,18 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena.interaction.ask",
         "agena_interaction_ask",
     ),
-    ("web_fetch", "web.fetch", "agena.web.fetch", "agena_web__fetch"),
-    ("web_search", "web.search", "agena.web.search", "agena_web__search"),
+    (
+        "web_fetch",
+        "web.fetch",
+        "agena.web.fetch",
+        "agena_web__fetch",
+    ),
+    (
+        "web_search",
+        "web.search",
+        "agena.web.search",
+        "agena_web__search",
+    ),
     (
         "enter_snapshot",
         "snapshot.enter",
@@ -499,12 +509,42 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena.cron.create",
         "agena_cron_create",
     ),
-    ("cron_list", "cron.list", "agena.cron.list", "agena_cron_list"),
-    ("cron_delete", "cron.delete", "agena.cron.delete", "agena_cron_delete"),
-    ("cron_update", "cron.update", "agena.cron.update", "agena_cron_update"),
-    ("cron_pause", "cron.pause", "agena.cron.pause", "agena_cron_pause"),
-    ("cron_resume", "cron.resume", "agena.cron.resume", "agena_cron_resume"),
-    ("cron_history", "cron.history", "agena.cron.history", "agena_cron_history"),
+    (
+        "cron_list",
+        "cron.list",
+        "agena.cron.list",
+        "agena_cron_list",
+    ),
+    (
+        "cron_delete",
+        "cron.delete",
+        "agena.cron.delete",
+        "agena_cron_delete",
+    ),
+    (
+        "cron_update",
+        "cron.update",
+        "agena.cron.update",
+        "agena_cron_update",
+    ),
+    (
+        "cron_pause",
+        "cron.pause",
+        "agena.cron.pause",
+        "agena_cron_pause",
+    ),
+    (
+        "cron_resume",
+        "cron.resume",
+        "agena.cron.resume",
+        "agena_cron_resume",
+    ),
+    (
+        "cron_history",
+        "cron.history",
+        "agena.cron.history",
+        "agena_cron_history",
+    ),
     (
         "schedule_wakeup",
         "cron.wakeup",
@@ -523,7 +563,12 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena.lsp.references",
         "agena_lsp_references",
     ),
-    ("lsp_hover", "lsp.hover", "agena.lsp.hover", "agena_lsp_hover"),
+    (
+        "lsp_hover",
+        "lsp.hover",
+        "agena.lsp.hover",
+        "agena_lsp_hover",
+    ),
     (
         "lsp_diagnostics",
         "lsp.diagnostics",
@@ -681,43 +726,32 @@ fn payload_name_for_invocation(
         "agena_fs_apply_patch" | "agena.fs.apply_patch" | "apply_patch" => {
             return Some("apply_patch".to_string());
         }
-        "shell.run"
-        | "powershell.run"
-        | "process.run"
-        | "agena_shell_run" | "agena.shell.run" | "agena_process_run" | "agena.process.run" => {
+        "shell.run" | "powershell.run" | "process.run" | "agena_shell_run" | "agena.shell.run"
+        | "agena_process_run" | "agena.process.run" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("run".to_string()),
             );
             return Some("shell".to_string());
         }
-        "shell.list"
-        | "powershell.list"
-        | "process.list"
-        | "agena_shell_list" | "agena.shell.list" | "agena_process_list"
-        | "agena.process.list" => {
+        "shell.list" | "powershell.list" | "process.list" | "agena_shell_list"
+        | "agena.shell.list" | "agena_process_list" | "agena.process.list" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("list".to_string()),
             );
             return Some("shell".to_string());
         }
-        "shell.logs"
-        | "powershell.logs"
-        | "process.logs"
-        | "agena_shell_logs" | "agena.shell.logs" | "agena_process_logs"
-        | "agena.process.logs" => {
+        "shell.logs" | "powershell.logs" | "process.logs" | "agena_shell_logs"
+        | "agena.shell.logs" | "agena_process_logs" | "agena.process.logs" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("logs".to_string()),
             );
             return Some("shell".to_string());
         }
-        "shell.stop"
-        | "powershell.stop"
-        | "process.stop"
-        | "agena_shell_stop" | "agena.shell.stop" | "agena_process_stop"
-        | "agena.process.stop" => {
+        "shell.stop" | "powershell.stop" | "process.stop" | "agena_shell_stop"
+        | "agena.shell.stop" | "agena_process_stop" | "agena.process.stop" => {
             input.insert(
                 "action".to_string(),
                 serde_json::Value::String("stop".to_string()),
@@ -738,15 +772,36 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     if matches!(
         tool_name,
         "shell"
-            | "shell.run" | "shell.list" | "shell.logs" | "shell.stop"
-            | "process" | "process.run" | "process.list" | "process.logs" | "process.stop"
-            | "powershell" | "powershell.run" | "powershell.list" | "powershell.logs"
+            | "shell.run"
+            | "shell.list"
+            | "shell.logs"
+            | "shell.stop"
+            | "process"
+            | "process.run"
+            | "process.list"
+            | "process.logs"
+            | "process.stop"
+            | "powershell"
+            | "powershell.run"
+            | "powershell.list"
+            | "powershell.logs"
             | "powershell.stop"
-            | "agena.shell.run" | "agena.shell.list" | "agena.shell.logs" | "agena.shell.stop"
-            | "agena_shell_run" | "agena_shell_list" | "agena_shell_logs" | "agena_shell_stop"
-            | "agena.process.run" | "agena.process.list" | "agena.process.logs"
-            | "agena.process.stop" | "agena_process_run" | "agena_process_list"
-            | "agena_process_logs" | "agena_process_stop"
+            | "agena.shell.run"
+            | "agena.shell.list"
+            | "agena.shell.logs"
+            | "agena.shell.stop"
+            | "agena_shell_run"
+            | "agena_shell_list"
+            | "agena_shell_logs"
+            | "agena_shell_stop"
+            | "agena.process.run"
+            | "agena.process.list"
+            | "agena.process.logs"
+            | "agena.process.stop"
+            | "agena_process_run"
+            | "agena_process_list"
+            | "agena_process_logs"
+            | "agena_process_stop"
     ) {
         return Some("shell".to_string());
     }

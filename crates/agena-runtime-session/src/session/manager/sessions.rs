@@ -37,8 +37,7 @@ impl SessionManager {
             && !self.execution_registry.is_active(session_id).await
         {
             session.runtime.subtask.status = agena_domain::SubtaskStatus::Interrupted;
-            session.runtime.subtask.finished_at_ms =
-                Some(chrono::Utc::now().timestamp_millis());
+            session.runtime.subtask.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());
             session.runtime.subtask.failure = Some(interrupted_subtask_failure());
             let interrupted_at_ms = session.runtime.subtask.finished_at_ms;
             let lifecycle_event = session.parent_id.zip(session.task_id.clone()).map(

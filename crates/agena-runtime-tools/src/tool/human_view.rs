@@ -11,8 +11,8 @@
 use agena_domain::{CommandOutputStream, RawOutput, ToolOutput, ViewBlock};
 use agena_tool::{RenderContext, RenderError, ToolHumanRenderer};
 
-use agena_domain::WebSearchResult;
 use crate::tool::payload::ToolPayloadOutput;
+use agena_domain::WebSearchResult;
 
 /// A renderer for one built-in tool result. `tool_name` follows the same
 /// resolution rules as [`ToolPayloadOutput::from_tool_output`]; `command` and
@@ -84,7 +84,9 @@ impl BuiltinHumanRenderer {
         // and its output, exit code, and stderr as a distinct human block.
         if let Some(parsed) = ToolPayloadOutput::from_tool_output(tool_name, output) {
             if let ToolPayloadOutput::Shell {
-                exit_code, output: shell_output, ..
+                exit_code,
+                output: shell_output,
+                ..
             } = &parsed
                 && let Some(command) = command.filter(|c| !c.trim().is_empty())
             {
@@ -221,9 +223,7 @@ impl BuiltinHumanRenderer {
                 blocks.push(Self::markdown_block(&lines.join("\n")));
             }
             Some(ToolPayloadOutput::Task {
-                status,
-                final_text,
-                ..
+                status, final_text, ..
             }) => {
                 let mut lines = vec![format!("### task {status}")];
                 if let Some(final_text) = final_text {
@@ -287,7 +287,11 @@ mod tests {
             ..RawOutput::default()
         };
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
-        assert!(blocks.iter().any(|b| matches!(b, ViewBlock::FileChanges { .. })));
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ViewBlock::FileChanges { .. }))
+        );
         assert!(blocks.iter().any(|b| matches!(b, ViewBlock::Diff { .. })));
     }
 
@@ -307,13 +311,15 @@ mod tests {
         };
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
         match blocks.as_slice() {
-            [ViewBlock::Command {
-                command,
-                cwd,
-                exit_code,
-                stdout,
-                ..
-            }] => {
+            [
+                ViewBlock::Command {
+                    command,
+                    cwd,
+                    exit_code,
+                    stdout,
+                    ..
+                },
+            ] => {
                 assert_eq!(command, "cargo test");
                 assert_eq!(cwd.as_deref(), Some("/tmp"));
                 assert_eq!(*exit_code, Some(0));
@@ -332,7 +338,11 @@ mod tests {
             ..RawOutput::default()
         };
         let blocks = renderer.render_human(&ctx(), &raw).expect("render");
-        assert!(blocks.iter().any(|b| matches!(b, ViewBlock::Markdown { .. })));
+        assert!(
+            blocks
+                .iter()
+                .any(|b| matches!(b, ViewBlock::Markdown { .. }))
+        );
 
         let opaque = BuiltinHumanRenderer::new("unknown_tool");
         let raw = RawOutput {

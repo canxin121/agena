@@ -66,15 +66,9 @@ impl ToolActivityResult {
     /// Compose the durable title at the shared boundary. Uses the tool-provided
     /// title when present; otherwise falls back to the composed tool title
     /// (caller supplies name + invocation summary).
-    pub fn durable_title(
-        &self,
-        tool_name: &str,
-        fallback_summary: impl AsRef<str>,
-    ) -> String {
+    pub fn durable_title(&self, tool_name: &str, fallback_summary: impl AsRef<str>) -> String {
         match self.title.as_deref() {
-            Some(title) if !title.trim().is_empty() => {
-                crate::compose_tool_title(tool_name, title)
-            }
+            Some(title) if !title.trim().is_empty() => crate::compose_tool_title(tool_name, title),
             _ => crate::compose_tool_title(tool_name, fallback_summary),
         }
     }
@@ -135,9 +129,15 @@ mod tests {
     #[test]
     fn tool_activity_event_serde_roundtrips() {
         let events = vec![
-            ToolActivityEvent::Title { title: "cargo test".into() },
-            ToolActivityEvent::TitleSuffix { suffix: " · scanning".into() },
-            ToolActivityEvent::Summary { summary: "2 passed".into() },
+            ToolActivityEvent::Title {
+                title: "cargo test".into(),
+            },
+            ToolActivityEvent::TitleSuffix {
+                suffix: " · scanning".into(),
+            },
+            ToolActivityEvent::Summary {
+                summary: "2 passed".into(),
+            },
             ToolActivityEvent::Render(RenderDelta::append(
                 "out",
                 ViewBlock::log("out", CommandOutputStream::Stdout, "ok\n"),
@@ -188,7 +188,10 @@ mod tests {
             title: Some("cargo test".into()),
             ..ToolActivityResult::raw(RawOutput::text("ok"))
         };
-        assert_eq!(result.durable_title("shell.run", "cargo test"), "shell.run · cargo test");
+        assert_eq!(
+            result.durable_title("shell.run", "cargo test"),
+            "shell.run · cargo test"
+        );
 
         let no_title = ToolActivityResult::raw(RawOutput::text("ok"));
         assert_eq!(

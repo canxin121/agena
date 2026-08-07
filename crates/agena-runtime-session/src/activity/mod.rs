@@ -212,7 +212,11 @@ impl ActivityHandler {
 
     /// Assemble the terminal state node. `raw_output` comes from the tool's
     /// terminal result (or the accumulated facts when none was provided).
-    pub fn finish(&mut self, result: ToolActivityResult, state: ActivityState) -> ActivityStateNode {
+    pub fn finish(
+        &mut self,
+        result: ToolActivityResult,
+        state: ActivityState,
+    ) -> ActivityStateNode {
         self.state = state;
         if let Some(title) = result.title.filter(|t| !t.trim().is_empty()) {
             self.title = title;
@@ -232,7 +236,9 @@ impl ActivityHandler {
                 ..RawOutput::default()
             };
         } else if !self.attachments.is_empty() {
-            raw_output.attachments.extend(std::mem::take(&mut self.attachments));
+            raw_output
+                .attachments
+                .extend(std::mem::take(&mut self.attachments));
         }
         ActivityStateNode {
             activity_id: self.activity_id,
@@ -316,7 +322,11 @@ mod tests {
     use agena_domain::{CommandOutputStream, DeltaMode};
 
     fn handler() -> ActivityHandler {
-        ActivityHandler::begin(agena_domain::ActivityId::new(), ActivityKind::Operation, "shell.run")
+        ActivityHandler::begin(
+            agena_domain::ActivityId::new(),
+            ActivityKind::Operation,
+            "shell.run",
+        )
     }
 
     #[test]

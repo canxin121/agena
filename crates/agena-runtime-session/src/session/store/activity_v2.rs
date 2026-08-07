@@ -9,8 +9,8 @@
 
 use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
 
+use crate::{AppError, activity::ActivityStateNode};
 use agena_domain::ActivityState;
-use crate::{activity::ActivityStateNode, AppError};
 
 /// One-shot terminal write for a finished activity (07 §8.2
 /// `upsert_content_node`). Serializes the raw output into `payload_json`
@@ -159,7 +159,9 @@ mod tests {
     async fn upsert_writes_raw_output_with_schema_marker() {
         let db = db().await;
         let n = node(ActivityState::Completed);
-        upsert_content_node(&db, 7, &n).await.expect("upsert succeeds");
+        upsert_content_node(&db, 7, &n)
+            .await
+            .expect("upsert succeeds");
 
         let row = db
             .query_one(sea_orm::Statement::from_sql_and_values(
@@ -190,7 +192,9 @@ mod tests {
     async fn update_activity_label_refreshes_title_column() {
         let db = db().await;
         let n = node(ActivityState::InProgress);
-        upsert_content_node(&db, 7, &n).await.expect("upsert succeeds");
+        upsert_content_node(&db, 7, &n)
+            .await
+            .expect("upsert succeeds");
         update_activity_label(&db, n.activity_id, "cargo test · 5s")
             .await
             .expect("label update succeeds");
@@ -211,13 +215,17 @@ mod tests {
     async fn terminal_upsert_wins_over_earlier_write() {
         let db = db().await;
         let mut n = node(ActivityState::Completed);
-        upsert_content_node(&db, 7, &n).await.expect("first write succeeds");
+        upsert_content_node(&db, 7, &n)
+            .await
+            .expect("first write succeeds");
         let first_revision = current_revision(&db, n.activity_id).await;
 
         // A later terminal write for the same node must win via the revision
         // guard (the v2 payload is the final word for the activity).
         n.title = "cargo test".to_owned();
-        upsert_content_node(&db, 7, &n).await.expect("terminal write succeeds");
+        upsert_content_node(&db, 7, &n)
+            .await
+            .expect("terminal write succeeds");
 
         let row = db
             .query_one(sea_orm::Statement::from_sql_and_values(

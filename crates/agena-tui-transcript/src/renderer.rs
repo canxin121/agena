@@ -1586,7 +1586,10 @@ mod tests {
         let mut table = Vec::new();
         render_markdown_block(&mut table, "", &block, 60);
 
-        let rendered = table.iter().map(|line| line.text.as_str()).collect::<Vec<_>>();
+        let rendered = table
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
         assert!(
             rendered
                 .iter()

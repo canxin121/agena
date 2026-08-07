@@ -488,8 +488,8 @@ impl ToolExecutor {
     }
 }
 use agena_domain::{
-    PluginInvocation, StructuredObject, StructuredValue, ToolApiFunction,
-    TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD,
+    PluginInvocation, StructuredObject, StructuredValue, TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD,
+    ToolApiFunction,
 };
 
 use super::{

@@ -12,8 +12,8 @@ use agena_api::{
 };
 use agena_domain::{
     ActivityNode, ActivityPayload, ActivityState, AssistantReplyStatus, ComposerDocument,
-    ComposerNode, ContentDocument, ContentNode, ResourceKind,
-    ResourceReference, TextSegmentActivity, TranscriptSnapshot,
+    ComposerNode, ContentDocument, ContentNode, ResourceKind, ResourceReference,
+    TextSegmentActivity, TranscriptSnapshot,
 };
 use chrono::{DateTime, Utc};
 
@@ -359,9 +359,7 @@ pub fn pending_user_entry<'a>(
 const fn user_activity_style(payload: &ActivityPayload) -> TranscriptUserActivityStyle {
     match payload {
         ActivityPayload::Resource(_) => TranscriptUserActivityStyle::Resource,
-        ActivityPayload::SkillReference(_) => {
-            TranscriptUserActivityStyle::Skill
-        }
+        ActivityPayload::SkillReference(_) => TranscriptUserActivityStyle::Skill,
         ActivityPayload::TextArtifact(_) => TranscriptUserActivityStyle::TextArtifact,
         _ => TranscriptUserActivityStyle::Other,
     }
@@ -580,10 +578,9 @@ const fn assistant_reply_status(status: AssistantReplyStatus) -> MessageStatus {
 mod tests {
     use agena_domain::{
         ActivityActor, ActivityLifecycle, ActivityOwner, ActivityProvenance, ContentPosition,
-        OperationActivity, OperationActivityError, OperationAuthorization,
-        OperationPermission, PermissionAction, PermissionReply, PermissionReplyKind,
-        PermissionRequest, ResourceActivity, SkillReferenceActivity, StructuredObject, ToolCallId,
-        ToolInvocation,
+        OperationActivity, OperationActivityError, OperationAuthorization, OperationPermission,
+        PermissionAction, PermissionReply, PermissionReplyKind, PermissionRequest,
+        ResourceActivity, SkillReferenceActivity, StructuredObject, ToolCallId, ToolInvocation,
     };
     use agena_failure::{
         Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
@@ -662,7 +659,10 @@ mod tests {
         );
         // The placeholder is the first 12 chars of the pasted text plus the
         // remaining character count, never a generic `paste N chars` label.
-        let placeholder = format!("[The quick br\u{2026} +{} chars]", pasted.chars().count() - 12);
+        let placeholder = format!(
+            "[The quick br\u{2026} +{} chars]",
+            pasted.chars().count() - 12
+        );
         assert!(
             collapsed_placeholder.contains(placeholder.as_str()),
             "placeholder should be `{placeholder}` but was `{collapsed_placeholder}`"
@@ -2035,7 +2035,10 @@ mod tests {
             collapsed_text.contains("agent.stop hook blocked stop: workflow plan autorun"),
             "{collapsed_text}"
         );
-        assert!(!collapsed_text.contains("Continue: next plan step"), "{collapsed_text}");
+        assert!(
+            !collapsed_text.contains("Continue: next plan step"),
+            "{collapsed_text}"
+        );
 
         // Expanded: the detail renders in the Notice section.
         let expanded = crate::render_entry_detailed(
@@ -2051,7 +2054,10 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(expanded_text.contains("Continue: next plan step"), "{expanded_text}");
+        assert!(
+            expanded_text.contains("Continue: next plan step"),
+            "{expanded_text}"
+        );
     }
 
     #[test]

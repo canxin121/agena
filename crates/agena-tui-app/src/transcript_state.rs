@@ -269,15 +269,15 @@ impl TranscriptState {
                 if !self.expanded_operation_activity_ids.contains(activity_id) {
                     return;
                 }
-                let entry = self
-                    .v2_activities
-                    .entry(*activity_id)
-                    .or_insert_with(|| V2LiveActivity {
-                        activity_id: *activity_id,
-                        title: String::new(),
-                        state: agena_domain::ActivityState::InProgress,
-                        live_blocks: Vec::new(),
-                    });
+                let entry =
+                    self.v2_activities
+                        .entry(*activity_id)
+                        .or_insert_with(|| V2LiveActivity {
+                            activity_id: *activity_id,
+                            title: String::new(),
+                            state: agena_domain::ActivityState::InProgress,
+                            live_blocks: Vec::new(),
+                        });
                 merge_v2_delta(&mut entry.live_blocks, delta);
             }
             agena_runtime::session::activity::ActivityLiveEvent::TitleChanged {
@@ -1045,18 +1045,21 @@ impl TranscriptState {
         for activity in self.v2_activities.values() {
             let state_label = format!("{:?}", activity.state).to_ascii_lowercase();
             let headline = format!("\u{25b8} {} \u{00b7} {state_label}", activity.title);
-            lines.push(
-                RenderedLine::dim(headline.clone()).with_copy_projection(headline, 0),
-            );
+            lines.push(RenderedLine::dim(headline.clone()).with_copy_projection(headline, 0));
             line_nodes.push(None);
-            if self.expanded_operation_activity_ids.contains(&activity.activity_id) {
+            if self
+                .expanded_operation_activity_ids
+                .contains(&activity.activity_id)
+            {
                 for block in &activity.live_blocks {
                     for block_line in render_activity_block(block) {
-                        lines.push(RenderedLine::plain(
-                            block_line.clone(),
-                            ratatui::style::Style::default(),
-                        )
-                        .with_copy_projection(block_line.clone(), 0));
+                        lines.push(
+                            RenderedLine::plain(
+                                block_line.clone(),
+                                ratatui::style::Style::default(),
+                            )
+                            .with_copy_projection(block_line.clone(), 0),
+                        );
                         line_nodes.push(None);
                     }
                 }
@@ -2861,7 +2864,10 @@ impl TranscriptState {
     }
 }
 
-fn merge_v2_delta(live_blocks: &mut Vec<agena_domain::ViewBlock>, delta: &agena_domain::RenderDelta) {
+fn merge_v2_delta(
+    live_blocks: &mut Vec<agena_domain::ViewBlock>,
+    delta: &agena_domain::RenderDelta,
+) {
     let block_id = delta.block_id.as_deref().or_else(|| delta.view.block_id());
     match delta.mode {
         agena_domain::DeltaMode::New => live_blocks.push(delta.view.clone()),
@@ -2910,15 +2916,17 @@ pub(crate) fn render_activity_block(block: &agena_domain::ViewBlock) -> Vec<Stri
     match block {
         agena_domain::ViewBlock::Text { text, .. } => vec![text.clone()],
         agena_domain::ViewBlock::Markdown { text, .. } => vec![text.clone()],
-        agena_domain::ViewBlock::Json { value, .. } => vec![
-            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
-        ],
+        agena_domain::ViewBlock::Json { value, .. } => {
+            vec![serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())]
+        }
         agena_domain::ViewBlock::Table { columns, rows, .. } => {
             let mut lines = vec![columns.join(" | ")];
-            lines.extend(
-                rows.iter()
-                    .map(|row| row.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" | ")),
-            );
+            lines.extend(rows.iter().map(|row| {
+                row.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            }));
             lines
         }
         agena_domain::ViewBlock::Log { stream, text, .. } => {
@@ -2981,7 +2989,6 @@ pub(crate) fn render_activity_block(block: &agena_domain::ViewBlock) -> Vec<Stri
         }
     }
 }
-
 
 fn weave_pending_user_entries<'a>(
     snapshot: &'a agena_domain::TranscriptSnapshot,
@@ -3299,14 +3306,12 @@ mod stall_recovery_tests {
 #[cfg(test)]
 mod activity_v2_tests {
     use super::*;
-    use agena_domain::{
-        ActivityId, ActivityState, CommandOutputStream, RenderDelta, ViewBlock,
-    };
+    use agena_domain::EventMeta;
+    use agena_domain::{ActivityId, ActivityState, CommandOutputStream, RenderDelta, ViewBlock};
     use agena_runtime::{
         RuntimePresentationEvent, RuntimePresentationEventKind,
         session::activity::{ActivityKind, ActivityLiveEvent, ActivityStateNode},
     };
-    use agena_domain::EventMeta;
     use chrono::Utc;
     use uuid::Uuid;
 
@@ -3340,9 +3345,27 @@ mod activity_v2_tests {
     #[test]
     fn render_activity_block_handles_all_variants() {
         let cases: Vec<(ViewBlock, &str)> = vec![
-            (ViewBlock::Text { id: None, text: "hello".into() }, "hello"),
-            (ViewBlock::Markdown { id: None, text: "# hi".into() }, "# hi"),
-            (ViewBlock::Json { id: None, value: serde_json::json!({ "a": 1 }) }, "{"),
+            (
+                ViewBlock::Text {
+                    id: None,
+                    text: "hello".into(),
+                },
+                "hello",
+            ),
+            (
+                ViewBlock::Markdown {
+                    id: None,
+                    text: "# hi".into(),
+                },
+                "# hi",
+            ),
+            (
+                ViewBlock::Json {
+                    id: None,
+                    value: serde_json::json!({ "a": 1 }),
+                },
+                "{",
+            ),
             (
                 ViewBlock::Table {
                     id: None,
@@ -3381,7 +3404,14 @@ mod activity_v2_tests {
                 },
                 "a.txt",
             ),
-            (ViewBlock::Diff { id: None, diff: "-a\n+b".into(), language: None }, "-a"),
+            (
+                ViewBlock::Diff {
+                    id: None,
+                    diff: "-a\n+b".into(),
+                    language: None,
+                },
+                "-a",
+            ),
             (
                 ViewBlock::SearchResults {
                     id: None,
@@ -3430,7 +3460,9 @@ mod activity_v2_tests {
     fn activity_v2_events_drive_the_live_overlay() {
         let activity_id = ActivityId::new();
         let mut transcript = state();
-        transcript.expanded_operation_activity_ids.insert(activity_id);
+        transcript
+            .expanded_operation_activity_ids
+            .insert(activity_id);
 
         // New + Append deltas merge into live blocks when expanded.
         transcript.apply_presentation_event(
@@ -3462,7 +3494,10 @@ mod activity_v2_tests {
             80,
             20,
         );
-        let entry = transcript.v2_activities.get(&activity_id).expect("overlay entry");
+        let entry = transcript
+            .v2_activities
+            .get(&activity_id)
+            .expect("overlay entry");
         assert_eq!(entry.live_blocks.len(), 1);
         match &entry.live_blocks[0] {
             ViewBlock::Log { text, .. } => assert_eq!(text, "a\nb\n"),
@@ -3486,7 +3521,11 @@ mod activity_v2_tests {
             20,
         );
         assert_eq!(
-            transcript.v2_activities.get(&activity_id).unwrap().live_blocks[0],
+            transcript
+                .v2_activities
+                .get(&activity_id)
+                .unwrap()
+                .live_blocks[0],
             ViewBlock::log("out", CommandOutputStream::Stdout, "a\nb\n")
         );
 
@@ -3502,7 +3541,10 @@ mod activity_v2_tests {
             80,
             20,
         );
-        assert_eq!(transcript.v2_activities.get(&activity_id).unwrap().title, "cargo test");
+        assert_eq!(
+            transcript.v2_activities.get(&activity_id).unwrap().title,
+            "cargo test"
+        );
 
         transcript.apply_presentation_event(
             &v2_event(
@@ -3530,11 +3572,19 @@ mod activity_v2_tests {
             sections: Vec::new(),
         };
         transcript.apply_presentation_event(
-            &v2_event(ActivityLiveEvent::Upserted { node: Box::new(node) }, 6),
+            &v2_event(
+                ActivityLiveEvent::Upserted {
+                    node: Box::new(node),
+                },
+                6,
+            ),
             80,
             20,
         );
-        let entry = transcript.v2_activities.get(&activity_id).expect("upserted");
+        let entry = transcript
+            .v2_activities
+            .get(&activity_id)
+            .expect("upserted");
         assert_eq!(entry.title, "shell.run");
         assert_eq!(entry.state, ActivityState::Completed);
         assert_eq!(entry.live_blocks.len(), 1, "upsert keeps merged blocks");

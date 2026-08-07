@@ -530,9 +530,9 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
         match arg {
             "-o" | "--output" if args.get(index + 1).is_none_or(|value| value != "-") => {
                 return Some(match args.get(index + 1) {
-                    Some(target) if target != "-" => format!(
-                        "invokes curl output option that writes a local file '{target}'"
-                    ),
+                    Some(target) if target != "-" => {
+                        format!("invokes curl output option that writes a local file '{target}'")
+                    }
                     _ => "invokes curl output option that writes a local file".to_string(),
                 });
             }
@@ -552,7 +552,9 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
             }
             "-K" | "--config" => {
                 return Some(match args.get(index + 1) {
-                    Some(target) => format!("invokes curl config option that reads a local file '{target}'"),
+                    Some(target) => {
+                        format!("invokes curl config option that reads a local file '{target}'")
+                    }
                     None => "invokes curl config option that reads a local file".to_string(),
                 });
             }
@@ -566,9 +568,9 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
             }
             "--cacert" | "--cert" | "--key" => {
                 return Some(match args.get(index + 1) {
-                    Some(target) => format!(
-                        "invokes curl option '{arg}' that reads a local file '{target}'"
-                    ),
+                    Some(target) => {
+                        format!("invokes curl option '{arg}' that reads a local file '{target}'")
+                    }
                     None => format!("invokes curl option '{arg}' that reads a local file"),
                 });
             }
@@ -599,25 +601,37 @@ fn curl_filesystem_reason(args: &[String]) -> Option<String> {
                 if (arg.starts_with("-o") && arg.len() > 2 && &arg[2..] != "-")
                     || (arg.starts_with("--output=") && arg != "--output=-")
                 {
-                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    let target = arg
+                        .split_once('=')
+                        .map(|(_, value)| value)
+                        .unwrap_or(&arg[2..]);
                     return Some(format!(
                         "invokes curl output option that writes a local file '{target}'"
                     ));
                 }
                 if (arg.starts_with("-T") && arg.len() > 2) || arg.starts_with("--upload-file=") {
-                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    let target = arg
+                        .split_once('=')
+                        .map(|(_, value)| value)
+                        .unwrap_or(&arg[2..]);
                     return Some(format!(
                         "invokes curl upload option that reads a local file '{target}'"
                     ));
                 }
                 if (arg.starts_with("-K") && arg.len() > 2) || arg.starts_with("--config=") {
-                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    let target = arg
+                        .split_once('=')
+                        .map(|(_, value)| value)
+                        .unwrap_or(&arg[2..]);
                     return Some(format!(
                         "invokes curl config option that reads a local file '{target}'"
                     ));
                 }
                 if (arg.starts_with("-c") && arg.len() > 2) || arg.starts_with("--cookie-jar=") {
-                    let target = arg.split_once('=').map(|(_, value)| value).unwrap_or(&arg[2..]);
+                    let target = arg
+                        .split_once('=')
+                        .map(|(_, value)| value)
+                        .unwrap_or(&arg[2..]);
                     return Some(format!(
                         "invokes curl cookie-jar option that writes a local file '{target}'"
                     ));
@@ -676,9 +690,7 @@ fn classify_command(command: &str, tokens: &[String]) -> CommandClassification {
             Some(path) => format!("uses shell output redirection writing '{path}'"),
             None => "uses shell output redirection".to_string(),
         };
-        return CommandClassification::Mutating {
-            reason,
-        };
+        return CommandClassification::Mutating { reason };
     }
     let segments = command_segments(tokens);
     if segments.is_empty() {
@@ -943,14 +955,18 @@ mod tests {
         assert!(contains_input_redirection("cat < /etc/passwd"));
         assert!(!contains_input_redirection("cat < /dev/null"));
 
-        assert!(filesystem_effects_required_reason(
-            "which lldb && lldb --version 2>/dev/null | head -2"
-        )
-        .is_none());
-        assert!(filesystem_effects_required_reason(
-            "pkill -f lldb 2>/dev/null; pkill -f debugserver 2>/dev/null; echo done"
-        )
-        .is_none());
+        assert!(
+            filesystem_effects_required_reason(
+                "which lldb && lldb --version 2>/dev/null | head -2"
+            )
+            .is_none()
+        );
+        assert!(
+            filesystem_effects_required_reason(
+                "pkill -f lldb 2>/dev/null; pkill -f debugserver 2>/dev/null; echo done"
+            )
+            .is_none()
+        );
     }
 
     #[test]

@@ -1,7 +1,6 @@
 use super::{
-    AppError, EventKind, Message, MessagePartCheckpointedEvent, PublishContext,
-    SessionProcessor, SessionRunRequest, TranscriptPartUpsertedEvent, Utc,
-    persist_generated_media_artifact,
+    AppError, EventKind, Message, MessagePartCheckpointedEvent, PublishContext, SessionProcessor,
+    SessionRunRequest, TranscriptPartUpsertedEvent, Utc, persist_generated_media_artifact,
 };
 
 impl SessionProcessor {
@@ -17,10 +16,7 @@ impl SessionProcessor {
         let mut persisted = Vec::with_capacity(blocks.len());
         for block in blocks {
             match block {
-                agena_domain::ViewBlock::Media {
-                    id,
-                    mut artifact,
-                } => {
+                agena_domain::ViewBlock::Media { id, mut artifact } => {
                     let mime_type = artifact.mime.clone();
                     let next_block = match persist_generated_media_artifact(
                         workspace_root,
@@ -41,25 +37,16 @@ impl SessionProcessor {
                             if artifact.name.is_none() {
                                 artifact.name = Some(saved.filename);
                             }
-                            agena_domain::ViewBlock::Media {
-                                id,
-                                artifact,
-                            }
+                            agena_domain::ViewBlock::Media { id, artifact }
                         }
-                        Ok(None) => agena_domain::ViewBlock::Media {
-                            id,
-                            artifact,
-                        },
+                        Ok(None) => agena_domain::ViewBlock::Media { id, artifact },
                         Err(err) => {
                             tracing::warn!(
                                 session_id,
                                 call_id,
                                 "failed to persist provider media artifact: {err}"
                             );
-                            agena_domain::ViewBlock::Media {
-                                id,
-                                artifact,
-                            }
+                            agena_domain::ViewBlock::Media { id, artifact }
                         }
                     };
                     persisted.push(next_block);

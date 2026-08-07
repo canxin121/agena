@@ -462,7 +462,8 @@ impl SessionManager {
                                 .await?;
                         }
                         if dispatch.patch.continue_with_message.is_some() {
-                            let follow_up = dispatch.patch.continue_with_message.unwrap_or_default();
+                            let follow_up =
+                                dispatch.patch.continue_with_message.unwrap_or_default();
                             session = self
                                 .inject_continuation_message(
                                     session,
@@ -2560,30 +2561,29 @@ impl SessionManager {
             // The built-in human renderer maps the tool's structured output to
             // ViewBlocks (v2). Shell/process executions carry the command line
             // so the human view renders a `$ command` card.
-            let invocation = session
-                .part(&pending_tool.part)
-                .and_then(|part| match &part.content {
-                    Some(crate::message::PartContent::Activity(
-                        crate::message::RuntimeActivity::Operation(operation),
-                    )) => Some(&operation.invocation),
-                    _ => None,
-                });
-            let command = invocation
-                .and_then(|invocation| {
-                    invocation
-                        .input
-                        .get("command")
-                        .and_then(|value| value.as_text())
-                        .map(ToOwned::to_owned)
-                });
-            let cwd = invocation
-                .and_then(|invocation| {
-                    invocation
-                        .input
-                        .get("workdir")
-                        .and_then(|value| value.as_text())
-                        .map(ToOwned::to_owned)
-                });
+            let invocation =
+                session
+                    .part(&pending_tool.part)
+                    .and_then(|part| match &part.content {
+                        Some(crate::message::PartContent::Activity(
+                            crate::message::RuntimeActivity::Operation(operation),
+                        )) => Some(&operation.invocation),
+                        _ => None,
+                    });
+            let command = invocation.and_then(|invocation| {
+                invocation
+                    .input
+                    .get("command")
+                    .and_then(|value| value.as_text())
+                    .map(ToOwned::to_owned)
+            });
+            let cwd = invocation.and_then(|invocation| {
+                invocation
+                    .input
+                    .get("workdir")
+                    .and_then(|value| value.as_text())
+                    .map(ToOwned::to_owned)
+            });
             let mut renderer = crate::tool::human_view::BuiltinHumanRenderer::new(
                 invocation
                     .map(|invocation| invocation.name.as_str())
@@ -2777,9 +2777,7 @@ impl SessionManager {
         // payload (raw output) is the final word for this node.
         let terminal_node = activity_handler.take().map(|mut handler| {
             handler.finish(
-                agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(
-                    streamed_output,
-                )),
+                agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(streamed_output)),
                 agena_domain::ActivityState::Completed,
             )
         });
@@ -2803,8 +2801,7 @@ impl SessionManager {
         // output lands exactly once, after every legacy checkpoint, and the
         // revision guard lets the v2 payload win over any earlier projection.
         if let Some(node) = &terminal_node {
-            crate::session::store::upsert_content_node(&self.store.db, session.id, node)
-                .await?;
+            crate::session::store::upsert_content_node(&self.store.db, session.id, node).await?;
         }
         Ok(session)
     }
@@ -3282,4 +3279,3 @@ mod should_continue_turn_tests {
         assert!(!super::TRUNCATED_CONTINUATION_PROMPT.is_empty());
     }
 }
-

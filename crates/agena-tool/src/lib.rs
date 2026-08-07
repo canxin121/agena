@@ -9,13 +9,15 @@ use std::time::Duration;
 
 pub use agena_domain::ToolPresentationSection;
 pub mod tool_activity;
-pub use tool_activity::{RenderContext, RenderError, ToolActivityEvent, ToolActivityResult, ToolHumanRenderer};
 use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, PermissionAction,
     PermissionDecision, ToolInvocation, ToolPermissionContract,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+pub use tool_activity::{
+    RenderContext, RenderError, ToolActivityEvent, ToolActivityResult, ToolHumanRenderer,
+};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -177,7 +179,9 @@ mod tool_title_tests {
             "filesystem"
         );
         assert_eq!(
-            invocation_call_summary(&serde_json::json!({"tool": "fs.write", "input": {"path": "notes.txt"}})),
+            invocation_call_summary(
+                &serde_json::json!({"tool": "fs.write", "input": {"path": "notes.txt"}})
+            ),
             "fs.write"
         );
         assert_eq!(invocation_call_summary(&serde_json::json!({})), "");

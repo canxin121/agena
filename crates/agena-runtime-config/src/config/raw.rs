@@ -1408,7 +1408,7 @@ mod openai_protocol_adapter_tests {
         assert!(error.to_string().contains("unknown field `api_mode`"));
     }
 
-        #[test]
+    #[test]
     fn prompt_envelope_tool_mode_is_rejected() {
         let config = config_with_adapter("openai_chat_completions", "").replace(
             r#""gpt-test": {}"#,

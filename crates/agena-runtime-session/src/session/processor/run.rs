@@ -684,10 +684,7 @@ fn provider_native_output_blocks_to_operation_blocks(
     blocks
         .into_iter()
         .map(|block| match block {
-            ProviderNativeToolOutputBlock::Text { text } => ViewBlock::Text {
-                id: None,
-                text,
-            },
+            ProviderNativeToolOutputBlock::Text { text } => ViewBlock::Text { id: None, text },
             ProviderNativeToolOutputBlock::SearchResults { results, .. } => {
                 ViewBlock::SearchResults {
                     id: None,

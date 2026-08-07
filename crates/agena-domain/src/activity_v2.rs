@@ -24,7 +24,8 @@ use crate::{ArtifactRef, CommandOutputStream, FileChangeRecord, WebSearchResult}
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum DeltaMode {
-    #[default] New,
+    #[default]
+    New,
     Append,
     Replace,
 }
@@ -141,7 +142,11 @@ impl ViewBlock {
     }
 
     /// 便捷：带 id 的 Log 块。
-    pub fn log(id: impl Into<String>, stream: CommandOutputStream, text: impl Into<String>) -> Self {
+    pub fn log(
+        id: impl Into<String>,
+        stream: CommandOutputStream,
+        text: impl Into<String>,
+    ) -> Self {
         Self::Log {
             id: Some(id.into()),
             stream,
@@ -265,9 +270,18 @@ mod tests {
     #[test]
     fn view_block_serde_roundtrips_all_variants() {
         let blocks = vec![
-            ViewBlock::Text { id: None, text: "hi".into() },
-            ViewBlock::Markdown { id: Some("m".into()), text: "# t".into() },
-            ViewBlock::Json { id: None, value: json!({ "a": 1 }) },
+            ViewBlock::Text {
+                id: None,
+                text: "hi".into(),
+            },
+            ViewBlock::Markdown {
+                id: Some("m".into()),
+                text: "# t".into(),
+            },
+            ViewBlock::Json {
+                id: None,
+                value: json!({ "a": 1 }),
+            },
             ViewBlock::Table {
                 id: None,
                 columns: vec!["name".into()],
@@ -335,7 +349,10 @@ mod tests {
             text: "hi".into(),
         };
         let encoded = serde_json::to_string(&block).unwrap();
-        assert!(!encoded.contains("id"), "absent id must be skipped: {encoded}");
+        assert!(
+            !encoded.contains("id"),
+            "absent id must be skipped: {encoded}"
+        );
     }
 
     #[test]
@@ -344,15 +361,25 @@ mod tests {
         assert_eq!(new.mode, DeltaMode::New);
         assert_eq!(new.block_id.as_deref(), Some("out"));
 
-        let append = RenderDelta::append("out", ViewBlock::log("out", CommandOutputStream::Stdout, "b"));
+        let append = RenderDelta::append(
+            "out",
+            ViewBlock::log("out", CommandOutputStream::Stdout, "b"),
+        );
         assert_eq!(append.mode, DeltaMode::Append);
         assert_eq!(append.block_id.as_deref(), Some("out"));
 
-        let replace = RenderDelta::replace("out", ViewBlock::Text { id: Some("out".into()), text: "z".into() });
+        let replace = RenderDelta::replace(
+            "out",
+            ViewBlock::Text {
+                id: Some("out".into()),
+                text: "z".into(),
+            },
+        );
         assert_eq!(replace.mode, DeltaMode::Replace);
         assert_eq!(replace.block_id.as_deref(), Some("out"));
 
-        let roundtrip: RenderDelta = serde_json::from_str(&serde_json::to_string(&append).unwrap()).unwrap();
+        let roundtrip: RenderDelta =
+            serde_json::from_str(&serde_json::to_string(&append).unwrap()).unwrap();
         assert_eq!(roundtrip, append);
     }
 

@@ -152,21 +152,11 @@ pub(crate) fn push_expanded_diff_text(
 
 pub(crate) fn diff_line_style(line: &str) -> Style {
     match diff_line_kind(line) {
-        DiffLineKind::Header => {
-            Style::default().fg(agena_tui_components::theme::accent_color())
-        }
-        DiffLineKind::Hunk => {
-            Style::default().fg(agena_tui_components::theme::warning_color())
-        }
-        DiffLineKind::Added => {
-            Style::default().fg(agena_tui_components::theme::success_color())
-        }
-        DiffLineKind::Removed => {
-            Style::default().fg(agena_tui_components::theme::danger_color())
-        }
-        DiffLineKind::Context => {
-            Style::default().fg(agena_tui_components::theme::muted_color())
-        }
+        DiffLineKind::Header => Style::default().fg(agena_tui_components::theme::accent_color()),
+        DiffLineKind::Hunk => Style::default().fg(agena_tui_components::theme::warning_color()),
+        DiffLineKind::Added => Style::default().fg(agena_tui_components::theme::success_color()),
+        DiffLineKind::Removed => Style::default().fg(agena_tui_components::theme::danger_color()),
+        DiffLineKind::Context => Style::default().fg(agena_tui_components::theme::muted_color()),
     }
 }
 
@@ -369,9 +359,14 @@ mod tests {
         let mut lines = Vec::new();
         push_expanded_diff_text(&mut lines, "  ", diff, 48);
 
-        let rendered = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>();
+        let rendered = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
         assert!(
-            rendered.first().is_some_and(|line| line.contains("┌─ diff · rs")),
+            rendered
+                .first()
+                .is_some_and(|line| line.contains("┌─ diff · rs")),
             "card label should include the detected language: {rendered:?}"
         );
         assert!(
@@ -465,7 +460,10 @@ mod tests {
     #[test]
     fn diff_line_kind_classifies_git_diff_lines() {
         assert_eq!(diff_line_kind("diff --git a/x b/x"), DiffLineKind::Header);
-        assert_eq!(diff_line_kind("index 123..456 100644"), DiffLineKind::Header);
+        assert_eq!(
+            diff_line_kind("index 123..456 100644"),
+            DiffLineKind::Header
+        );
         assert_eq!(diff_line_kind("--- a/x"), DiffLineKind::Header);
         assert_eq!(diff_line_kind("+++ b/x"), DiffLineKind::Header);
         assert_eq!(diff_line_kind("new file mode 100644"), DiffLineKind::Header);

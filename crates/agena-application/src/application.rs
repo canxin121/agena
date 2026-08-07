@@ -29,7 +29,7 @@ pub struct Application {
     runtime_control: Arc<dyn agena_runtime::RuntimeControlService>,
     runtime_authentication: Arc<dyn agena_runtime::RuntimeAuthenticationService>,
     runtime_draft_authentication: Arc<dyn agena_runtime::RuntimeDraftAuthenticationService>,
-        runtime_status: Arc<dyn agena_runtime::RuntimeStatusService>,
+    runtime_status: Arc<dyn agena_runtime::RuntimeStatusService>,
     runtime_activities: Option<Arc<dyn agena_runtime::RuntimeActivityService>>,
     event_queries: Option<Arc<dyn agena_runtime::RuntimeEventQueryService>>,
     event_stream: Option<Arc<dyn agena_runtime::RuntimeEventStreamService>>,
@@ -85,7 +85,7 @@ impl Application {
             configuration,
             config_settings,
             control,
-                        authentication,
+            authentication,
             draft_authentication,
             status,
             activities,
@@ -108,7 +108,7 @@ impl Application {
             runtime_control: control,
             runtime_authentication: authentication,
             runtime_draft_authentication: draft_authentication,
-                        runtime_status: status,
+            runtime_status: status,
             runtime_activities: activities,
             event_queries,
             event_stream,
@@ -478,7 +478,7 @@ impl Application {
         &self.runtime_config_settings
     }
 
-        pub fn runtime_control(&self) -> &Arc<dyn agena_runtime::RuntimeControlService> {
+    pub fn runtime_control(&self) -> &Arc<dyn agena_runtime::RuntimeControlService> {
         &self.runtime_control
     }
 
@@ -487,9 +487,9 @@ impl Application {
     pub fn runtime_activities(
         &self,
     ) -> Result<Arc<dyn agena_runtime::RuntimeActivityService>, ApplicationError> {
-        self.runtime_activities.clone().ok_or_else(|| {
-            ApplicationError::internal("background activity service is unavailable")
-        })
+        self.runtime_activities
+            .clone()
+            .ok_or_else(|| ApplicationError::internal("background activity service is unavailable"))
     }
 
     pub fn runtime_draft_authentication(

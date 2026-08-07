@@ -346,9 +346,7 @@ pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Opti
 pub(super) fn filesystem_effects_from_input(
     input: &serde_json::Value,
 ) -> Result<Option<FilesystemEffects>, ToolError> {
-    let reads = input
-        .get("reads")
-        .or_else(|| input.pointer("/args/reads"));
+    let reads = input.get("reads").or_else(|| input.pointer("/args/reads"));
     let writes = input
         .get("writes")
         .or_else(|| input.pointer("/args/writes"));

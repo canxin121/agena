@@ -1638,9 +1638,8 @@ mod parser_contract_tests {
             Some(AgenaCommand::Inspect(args)) if args.json && args.identity_snapshot
         ));
 
-        let reference =
-            AgenaCli::try_parse_from(["agena", "inspect", "--tools-reference"])
-                .expect("parse inspect tools reference command");
+        let reference = AgenaCli::try_parse_from(["agena", "inspect", "--tools-reference"])
+            .expect("parse inspect tools reference command");
         assert!(matches!(
             &reference.command,
             Some(AgenaCommand::Inspect(args)) if args.tools_reference

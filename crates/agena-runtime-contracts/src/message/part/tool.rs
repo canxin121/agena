@@ -6,9 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use agena_domain::{
     ArtifactRef, ExecutionStatus, FilesystemEffects, InteractionNotificationLevel, NetworkEffect,
-    OperationAuthorization, OperationError, ProcessShell,
-    ToolInvocation, ToolManagedOutput, ToolOutput, ToolPresentationSection, ToolResultDisplay,
-    ToolResultState, UserInputQuestion,
+    OperationAuthorization, OperationError, ProcessShell, ToolInvocation, ToolManagedOutput,
+    ToolOutput, ToolPresentationSection, ToolResultDisplay, ToolResultState, UserInputQuestion,
 };
 use agena_tool::{ReadMode, TaskModelSelection, normalize_tool_summary, normalize_tool_title};
 
@@ -91,14 +90,22 @@ impl<'de> Deserialize<'de> for ShellCommandInput {
         #[derive(Deserialize)]
         struct Wire {
             command: String,
-            #[serde(default)] description: String,
-            #[serde(default)] timeout_ms: Option<u64>,
-            #[serde(default)] workdir: Option<String>,
-            #[serde(default)] reads: Vec<String>,
-            #[serde(default)] writes: Vec<String>,
-            #[serde(default)] network: Vec<String>,
-            #[serde(default)] filesystem_effects: Option<FilesystemEffects>,
-            #[serde(default)] network_effects: Option<Vec<NetworkEffect>>,
+            #[serde(default)]
+            description: String,
+            #[serde(default)]
+            timeout_ms: Option<u64>,
+            #[serde(default)]
+            workdir: Option<String>,
+            #[serde(default)]
+            reads: Vec<String>,
+            #[serde(default)]
+            writes: Vec<String>,
+            #[serde(default)]
+            network: Vec<String>,
+            #[serde(default)]
+            filesystem_effects: Option<FilesystemEffects>,
+            #[serde(default)]
+            network_effects: Option<Vec<NetworkEffect>>,
         }
         let wire = Wire::deserialize(deserializer)?;
         let mut reads = wire.reads;
@@ -108,7 +115,9 @@ impl<'de> Deserialize<'de> for ShellCommandInput {
             writes.extend(effects.write);
         }
         let mut network = wire.network;
-        if network.is_empty() && let Some(legacy) = wire.network_effects {
+        if network.is_empty()
+            && let Some(legacy) = wire.network_effects
+        {
             network = legacy.into_iter().map(|effect| effect.target).collect();
         }
         Ok(Self {
@@ -661,7 +670,9 @@ pub struct LspDiagnosticsToolInput {
 /// `agena-domain`; this adapter parses the legacy `content_blocks` JSON shape
 /// (text/markdown/json/table/log/command/diff/file_changes/search_results/
 /// media/custom) into the single ViewBlock render contract.
-pub fn tool_output_content_blocks(output: &agena_domain::ToolOutput) -> Vec<agena_domain::ViewBlock> {
+pub fn tool_output_content_blocks(
+    output: &agena_domain::ToolOutput,
+) -> Vec<agena_domain::ViewBlock> {
     let Some(blocks) = output
         .payload
         .get("content_blocks")
@@ -678,7 +689,9 @@ pub fn tool_output_content_blocks(output: &agena_domain::ToolOutput) -> Vec<agen
 
 fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::ViewBlock, String> {
     let json = serde_json::Value::from(value.clone());
-    let object = json.as_object().ok_or_else(|| "block must be an object".to_owned())?;
+    let object = json
+        .as_object()
+        .ok_or_else(|| "block must be an object".to_owned())?;
     let kind = object
         .get("type")
         .and_then(|value| value.as_str())
@@ -787,9 +800,7 @@ fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::Vie
                             let url = item
                                 .get("url")
                                 .and_then(|value| value.as_str())
-                                .or_else(|| {
-                                    item.get("uri").and_then(|value| value.as_str())
-                                })
+                                .or_else(|| item.get("uri").and_then(|value| value.as_str()))
                                 .unwrap_or_default()
                                 .to_owned();
                             let snippet = item
@@ -823,11 +834,7 @@ fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::Vie
             let mime = object
                 .get("mime")
                 .and_then(|value| value.as_str())
-                .or_else(|| {
-                    object
-                        .get("mime_type")
-                        .and_then(|value| value.as_str())
-                })
+                .or_else(|| object.get("mime_type").and_then(|value| value.as_str()))
                 .unwrap_or_default()
                 .to_owned();
             let name = object
@@ -849,9 +856,18 @@ fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::Vie
         "citation" => agena_domain::ViewBlock::Markdown {
             id: None,
             text: {
-                let title = object.get("title").and_then(|value| value.as_str()).unwrap_or_default();
-                let snippet = object.get("snippet").and_then(|value| value.as_str()).unwrap_or_default();
-                let uri = object.get("uri").and_then(|value| value.as_str()).unwrap_or_default();
+                let title = object
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let snippet = object
+                    .get("snippet")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let uri = object
+                    .get("uri")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
                 format!("{title}\n\n{snippet}\n\n{uri}").trim().to_owned()
             },
         },

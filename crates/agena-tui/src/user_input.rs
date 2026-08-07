@@ -993,7 +993,11 @@ fn review_decision_layout(
         4,
         10,
     );
-    let editor_height = if presentation.review().is_editing_custom() { 3 } else { 0 };
+    let editor_height = if presentation.review().is_editing_custom() {
+        3
+    } else {
+        0
+    };
     let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
     let body_height = area
         .height

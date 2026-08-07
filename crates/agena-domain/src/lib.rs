@@ -75,6 +75,7 @@ mod usage_stats;
 mod user_input;
 
 pub mod activity_v2;
+pub use activity_v2::{ActivityView, DeltaMode, RawOutput, RenderDelta, ViewBlock};
 pub use access::{AccessKind, AccessSelector};
 pub use background_activity::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,

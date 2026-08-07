@@ -8,6 +8,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub use agena_domain::ToolPresentationSection;
+pub mod tool_activity;
+pub use tool_activity::{RenderContext, RenderError, ToolActivityEvent, ToolActivityResult, ToolHumanRenderer};
 use agena_domain::{
     CommandBeginEvent, CommandEndEvent, CommandOutputDeltaEvent, PermissionAction,
     PermissionDecision, ToolInvocation, ToolPermissionContract,

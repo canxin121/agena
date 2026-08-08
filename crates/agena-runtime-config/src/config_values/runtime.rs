@@ -75,6 +75,16 @@ pub struct TuiUiConfig {
     pub graphics: TuiGraphicsModeConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    pub transcript: TuiUiTranscriptConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// Resolved transcript configuration of the TUI.
+pub struct TuiUiTranscriptConfig {
+    /// Default expansion for activities without a kind-specific override.
+    pub activity_default_expanded: bool,
+    /// Per-kind expansion overrides keyed by activity kind id.
+    pub activity_kinds: BTreeMap<String, bool>,
 }
 
 /// Runtime identity settings that affect provider request headers.

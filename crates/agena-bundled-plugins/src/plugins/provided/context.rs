@@ -58,7 +58,6 @@ fn git_facts(workspace: &Path) -> Option<GitFacts> {
     name = "context",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Safe context-window budget, model identity, and compaction status.",
-    display = detailed
 )]
 impl ContextPlugin {
     pub(crate) fn new() -> Self {
@@ -81,7 +80,6 @@ impl ContextPlugin {
         tags(query, discovery),
         summary = "Inspect remaining context budget, model identity, and compaction health without exposing prompts.",
         read_only,
-        display = detailed,
 
         concurrency_safe
     )]
@@ -185,7 +183,6 @@ impl ContextPlugin {
         tags(query, discovery),
         summary = "Inspect the current session environment: working directory, git state, shell, OS, and session identity.",
         read_only,
-        display = detailed,
         concurrency_safe
     )]
     async fn environment(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {

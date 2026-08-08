@@ -315,7 +315,6 @@ impl OpenAiToolsPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "OpenAI official service capabilities exposed as ordinary Agena tools.",
     config_schema = agena_plugin_sdk::macro_support::json_schema_for_default(OpenAiToolsConfig::default()),
-    display = detailed
 )]
 impl OpenAiToolsPlugin {
     #[hook(init)]
@@ -344,7 +343,6 @@ impl OpenAiToolsPlugin {
 
 
         discovery,
-        display = detailed,
         examples(r#"{"query":"Latest Rust language release notes","model":"gpt-4.1"}"#)
     )]
     async fn web_search(&self, input: OpenAiWebSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -399,7 +397,6 @@ impl OpenAiToolsPlugin {
 
 
 
-        display = detailed,
         examples(r#"{"prompt":"A watercolor map of a floating city","size":"1536x1024","quality":"high"}"#)
     )]
     async fn image_generation(&self, input: ImageGenerateInput) -> SdkResult<ToolInvokeOutput> {
@@ -442,7 +439,6 @@ impl OpenAiToolsPlugin {
 
 
 
-        display = detailed,
         path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         examples(r#"{"prompt":"Replace the sky with an aurora","images":["assets/source.png"]}"#)
     )]

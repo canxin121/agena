@@ -100,41 +100,12 @@ pub(crate) fn compact_config_sections_text(
             lines.push(Line::from(Span::styled(padded, style)));
         }
     }
-    Text::from(lines)
-}
-
-pub(crate) fn plugin_text_display_mode_from_declared(
-    value: Option<agena_plugin_host::UiTextDisplayMode>,
-) -> Option<PluginTextDisplayMode> {
-    match value {
-        Some(agena_plugin_host::UiTextDisplayMode::Summary) => Some(PluginTextDisplayMode::Summary),
-        Some(agena_plugin_host::UiTextDisplayMode::Detailed) => {
-            Some(PluginTextDisplayMode::Detailed)
-        }
-        None => None,
-    }
-}
-
-pub(crate) fn plugin_text_display_mode_label(mode: PluginTextDisplayMode) -> &'static str {
-    match mode {
-        PluginTextDisplayMode::Detailed => "detailed",
-        PluginTextDisplayMode::Summary => "summary",
-    }
-}
-
-pub(crate) fn plugin_text_display_source_label(source: PluginTextDisplaySource) -> &'static str {
-    match source {
-        PluginTextDisplaySource::ToolPolicy => "tool-policy",
-        PluginTextDisplaySource::PluginPolicy => "plugin-policy",
-        PluginTextDisplaySource::ToolManifest => "tool-manifest",
-        PluginTextDisplaySource::PluginManifest => "plugin-manifest",
-        PluginTextDisplaySource::GlobalPolicy => "global-policy",
-    }
+        Text::from(lines)
 }
 
 use super::{
-    Line, Modifier, PluginConfigDrilldownOverlay, PluginConfigFocus, PluginTextDisplayMode,
-    PluginTextDisplaySource, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text,
-    config_row_cell_label, fixed_columns, override_leaf_count, pad_to_width,
-    plugin_workbench_selection_highlight_style, selected_config_row_context, wrap_prefixed_text,
+    Line, Modifier, PluginConfigDrilldownOverlay, PluginConfigFocus, PluginWorkbenchOverlay,
+    PluginWorkbenchPlugin, Span, Style, Text, config_row_cell_label, fixed_columns,
+    override_leaf_count, pad_to_width, plugin_workbench_selection_highlight_style,
+    selected_config_row_context, wrap_prefixed_text,
 };

@@ -2155,7 +2155,8 @@ mod transcript_expansion_tests {
                 session_activities: Vec::new(),
             },
             detail_expanded_by_default: agena_tui_transcript::TranscriptDetailDefaults {
-                activity_expanded: false,
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             ..TranscriptState::default()
         };

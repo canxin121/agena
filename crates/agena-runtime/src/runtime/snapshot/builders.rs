@@ -12,7 +12,6 @@ type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
     Arc<PluginHost>,
     Option<Arc<agena_lsp::LspRegistry>>,
     &'a Path,
-    agena_plugin_host::ToolPresentationConfig,
     Option<Arc<SessionManager>>,
     Arc<DatabaseConnection>,
 >;
@@ -56,7 +55,6 @@ pub(super) fn build_or_reconfigure_session_manager(
                 plugins,
                 lsp_registry,
                 workspace_root,
-                tool_presentation: build_config.tool_presentation.clone(),
                 session_manager: Some(Arc::clone(&manager)),
                 database: Arc::clone(db),
                 monitor_registry: monitor_registry.clone(),
@@ -72,7 +70,6 @@ pub(super) fn build_or_reconfigure_session_manager(
             plugins: Arc::clone(&plugins),
             lsp_registry: lsp_registry.clone(),
             workspace_root,
-            tool_presentation: build_config.tool_presentation.clone(),
             session_manager: None,
             database: Arc::clone(db),
             monitor_registry: monitor_registry.clone(),
@@ -90,7 +87,6 @@ pub(super) fn build_or_reconfigure_session_manager(
             plugins,
             lsp_registry,
             workspace_root,
-            tool_presentation: build_config.tool_presentation.clone(),
             session_manager: Some(Arc::clone(&manager)),
             database: Arc::clone(db),
             monitor_registry: monitor_registry.clone(),
@@ -229,7 +225,6 @@ pub(super) fn build_tool_executor(
         plugins,
         lsp_registry,
         workspace_root,
-        tool_presentation,
         session_manager,
         database,
         monitor_registry,
@@ -259,7 +254,6 @@ pub(super) fn build_tool_executor(
         Some(snapshot_registry),
         scheduler,
         lsp_registry,
-        tool_presentation,
     )
     .with_permission_inspector(permission_inspector);
     if let Some(registry) = monitor_registry {

@@ -21,7 +21,8 @@ impl Default for TranscriptState {
         Self::new(
             I18n::english(),
             TranscriptDetailDefaults {
-                activity_expanded: false,
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
         )
     }
@@ -982,8 +983,8 @@ impl TranscriptState {
             let rendered = render_entry_detailed(
                 entry,
                 width,
-                &self.i18n,
-                self.detail_expanded_by_default,
+                                &self.i18n,
+                &self.detail_expanded_by_default,
                 &self.node_expansions,
             );
             let base_line = lines.len();
@@ -3246,7 +3247,8 @@ mod stall_recovery_tests {
         TranscriptState::new(
             I18n::english(),
             TranscriptDetailDefaults {
-                activity_expanded: false,
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
         )
     }
@@ -3326,7 +3328,8 @@ mod activity_v2_tests {
         TranscriptState::new(
             I18n::english(),
             TranscriptDetailDefaults {
-                activity_expanded: false,
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
         )
     }

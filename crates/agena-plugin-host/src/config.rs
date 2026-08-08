@@ -7,15 +7,13 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::sdk::ToolDescriptionMode;
-pub use crate::sdk::manifest::UiTextDisplayMode;
-use crate::sdk::{PluginKey, ToolKey};
+use crate::sdk::PluginKey;
 
 pub use crate::quota::QuotaConfig;
 
 /// Top-level `plugins` config object, parsed from agena's JSON config layer.
 ///
-/// The host only owns transport, presentation policy and lifecycle fields. Plugin-specific
+/// The host only owns transport and lifecycle fields. Plugin-specific
 /// configuration lives in [`ConfiguredPlugin::config`] as JSON and is validated
 /// against the plugin manifest at load time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -31,149 +29,14 @@ pub struct PluginsConfig {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-/// Policy configuration for plugin presentation.
-pub struct PluginPolicyConfig {
-    /// Controls how tool descriptions are shown to the model. Brief mode
-    /// keeps detailed help available through host/tool help APIs.
-    #[serde(default, skip_serializing_if = "ToolPresentationConfig::is_default")]
-    pub tool_presentation: ToolPresentationConfig,
-    /// Controls how plugin and tool metadata is rendered in UI surfaces.
-    #[serde(default, skip_serializing_if = "UiPresentationConfig::is_default")]
-    pub ui_presentation: UiPresentationConfig,
-}
+#[serde(default)]
+/// Policy configuration for plugins (currently reserved; legacy keys are
+/// tolerated and ignored so stale configs keep loading).
+pub struct PluginPolicyConfig {}
 
 impl PluginPolicyConfig {
     pub fn is_default(&self) -> bool {
         self == &Self::default()
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-/// Tool description presentation configuration.
-pub struct ToolPresentationConfig {
-    pub default_mode: ToolDescriptionMode,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins: BTreeMap<PluginKey, ToolDescriptionOverride>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<ToolKey, ToolDescriptionOverride>,
-}
-
-impl Default for ToolPresentationConfig {
-    fn default() -> Self {
-        Self {
-            default_mode: ToolDescriptionMode::Detailed,
-            plugins: BTreeMap::new(),
-            tools: BTreeMap::new(),
-        }
-    }
-}
-
-impl ToolPresentationConfig {
-    pub fn is_default(&self) -> bool {
-        self == &Self::default()
-    }
-
-    pub fn mode_for(
-        &self,
-        plugin_key: &PluginKey,
-        tool_key: &ToolKey,
-        tool_default: Option<ToolDescriptionMode>,
-    ) -> ToolDescriptionMode {
-        if let Some(mode) = self.tools.get(tool_key).copied() {
-            return resolve_tool_description_override(mode, tool_default, self.default_mode);
-        }
-        if let Some(mode) = self.plugins.get(plugin_key).copied() {
-            return resolve_tool_description_override(mode, tool_default, self.default_mode);
-        }
-        tool_default.unwrap_or(self.default_mode)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Override of tool description verbosity.
-pub enum ToolDescriptionOverride {
-    #[default]
-    ToolDefault,
-    Detailed,
-    Brief,
-}
-
-fn resolve_tool_description_override(
-    mode: ToolDescriptionOverride,
-    tool_default: Option<ToolDescriptionMode>,
-    fallback: ToolDescriptionMode,
-) -> ToolDescriptionMode {
-    match mode {
-        ToolDescriptionOverride::ToolDefault => tool_default.unwrap_or(fallback),
-        ToolDescriptionOverride::Detailed => ToolDescriptionMode::Detailed,
-        ToolDescriptionOverride::Brief => ToolDescriptionMode::Brief,
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-/// UI text presentation configuration.
-pub struct UiPresentationConfig {
-    pub default_mode: UiTextDisplayMode,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub plugins: BTreeMap<PluginKey, UiPresentationOverride>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub tools: BTreeMap<ToolKey, UiPresentationOverride>,
-}
-
-impl Default for UiPresentationConfig {
-    fn default() -> Self {
-        Self {
-            default_mode: UiTextDisplayMode::Detailed,
-            plugins: BTreeMap::new(),
-            tools: BTreeMap::new(),
-        }
-    }
-}
-
-impl UiPresentationConfig {
-    pub fn is_default(&self) -> bool {
-        self == &Self::default()
-    }
-
-    pub fn mode_for(
-        &self,
-        plugin_key: &PluginKey,
-        tool_key: &ToolKey,
-        tool_default: Option<UiTextDisplayMode>,
-    ) -> UiTextDisplayMode {
-        if let Some(mode) = self.tools.get(tool_key).copied() {
-            return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
-        }
-        if let Some(mode) = self.plugins.get(plugin_key).copied() {
-            return resolve_ui_presentation_override(mode, tool_default, self.default_mode);
-        }
-        tool_default.unwrap_or(self.default_mode)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Override of UI text display verbosity.
-pub enum UiPresentationOverride {
-    #[default]
-    Default,
-    Detailed,
-    Summary,
-}
-
-fn resolve_ui_presentation_override(
-    mode: UiPresentationOverride,
-    tool_default: Option<UiTextDisplayMode>,
-    fallback: UiTextDisplayMode,
-) -> UiTextDisplayMode {
-    match mode {
-        UiPresentationOverride::Default => tool_default.unwrap_or(fallback),
-        UiPresentationOverride::Detailed => UiTextDisplayMode::Detailed,
-        UiPresentationOverride::Summary => UiTextDisplayMode::Summary,
     }
 }
 
@@ -490,59 +353,3 @@ pub enum HttpAuth {
     },
 }
 
-#[cfg(test)]
-mod presentation_tests {
-    use super::*;
-
-    #[test]
-    fn tool_and_ui_policy_resolve_tool_then_plugin_then_default() {
-        let plugin: PluginKey = "agena.settings".parse().expect("plugin key");
-        let tool: ToolKey = "agena.settings.get".parse().expect("tool key");
-
-        let mut tool_policy = ToolPresentationConfig {
-            default_mode: ToolDescriptionMode::Brief,
-            ..ToolPresentationConfig::default()
-        };
-        assert_eq!(
-            tool_policy.mode_for(&plugin, &tool, None),
-            ToolDescriptionMode::Brief
-        );
-        tool_policy
-            .plugins
-            .insert(plugin.clone(), ToolDescriptionOverride::Detailed);
-        assert_eq!(
-            tool_policy.mode_for(&plugin, &tool, None),
-            ToolDescriptionMode::Detailed
-        );
-        tool_policy
-            .tools
-            .insert(tool.clone(), ToolDescriptionOverride::Brief);
-        assert_eq!(
-            tool_policy.mode_for(&plugin, &tool, None),
-            ToolDescriptionMode::Brief
-        );
-
-        let mut ui_policy = UiPresentationConfig {
-            default_mode: UiTextDisplayMode::Summary,
-            ..UiPresentationConfig::default()
-        };
-        assert_eq!(
-            ui_policy.mode_for(&plugin, &tool, None),
-            UiTextDisplayMode::Summary
-        );
-        ui_policy
-            .plugins
-            .insert(plugin.clone(), UiPresentationOverride::Detailed);
-        assert_eq!(
-            ui_policy.mode_for(&plugin, &tool, None),
-            UiTextDisplayMode::Detailed
-        );
-        ui_policy
-            .tools
-            .insert(tool.clone(), UiPresentationOverride::Summary);
-        assert_eq!(
-            ui_policy.mode_for(&plugin, &tool, None),
-            UiTextDisplayMode::Summary
-        );
-    }
-}

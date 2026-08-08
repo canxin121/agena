@@ -344,7 +344,6 @@ struct SettingsInspectResponse {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Inspect and edit Agena's global and workspace agena.json settings.",
     config_schema = settings_config_schema(),
-    display = brief
 )]
 impl SettingsPlugin {
     pub(crate) fn new() -> Self {
@@ -476,7 +475,6 @@ impl SettingsPlugin {
     #[tool(
         summary = "Read one settings path.",
         help = "Use `source=file` with `layer=global|workspace` for persisted values. Effective reads merge both files plus environment and CLI layers; prefer explicit `scope=config|meta` with a relative path.",
-        display = brief,
         tags(
             ToolTag::Query,
             ToolTag::Discovery,
@@ -538,7 +536,6 @@ impl SettingsPlugin {
 
     #[tool(
         summary = "List settings paths.",
-        display = brief,
         tags(
             ToolTag::Query,
             ToolTag::Discovery,
@@ -611,7 +608,6 @@ impl SettingsPlugin {
     #[tool(
         summary = "Inspect a setting across every config layer.",
         help = "Returns the persisted global value, persisted workspace value, effective merged value, source file paths, and applied-layer metadata. Secret values are always redacted.",
-        display = brief,
         tags(
             ToolTag::Query,
             ToolTag::Discovery,
@@ -649,7 +645,6 @@ impl SettingsPlugin {
     #[tool(
         summary = "Set one settings value.",
         help = "Writes the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing; dry runs request read permission for both config files instead of write permission.",
-        display = brief,
         tags(
             ToolTag::Mutate,
             ToolTag::Filesystem,
@@ -688,7 +683,6 @@ impl SettingsPlugin {
     #[tool(
         summary = "Delete one settings value.",
         help = "Deletes from the global or workspace config selected by `layer` and validates the combined layered configuration. Use `dry_run=true` to preview without writing.",
-        display = brief,
         tags(
             ToolTag::Mutate,
             ToolTag::Filesystem,
@@ -726,7 +720,6 @@ impl SettingsPlugin {
     #[tool(
         summary = "Patch settings in agena.json.",
         help = "Deep-merges a JSON object into the global or workspace config selected by `layer`, then validates the combined layered configuration; null object entries delete keys. Use `dry_run=true` to preview without writing.",
-        display = brief,
         tags(
             ToolTag::Mutate,
             ToolTag::Filesystem,
@@ -764,7 +757,6 @@ impl SettingsPlugin {
 
     #[tool(
         summary = "Validate layered agena.json settings.",
-        display = brief,
         tags(
             ToolTag::Query,
             ToolTag::Filesystem,

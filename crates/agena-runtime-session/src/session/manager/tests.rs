@@ -40,8 +40,8 @@ mod tests {
     use agena_domain::{Model, ModelId, ModelRef};
     use agena_plugin_host::sdk::ToolStreamSink;
     use agena_plugin_host::{
-        ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
-        StaticPluginRegistration, ToolPresentationConfig,
+                ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig,
+        StaticPluginRegistration,
     };
     use agena_provider::CompletionRequest;
     use agena_provider::CompletionResponse;
@@ -447,7 +447,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let mut providers = ProviderRegistry::new();
         providers.register(ReplyTestProvider {
@@ -4423,7 +4423,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();
@@ -4847,7 +4847,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();
@@ -5066,7 +5066,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();
@@ -5286,7 +5286,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let mut providers = ProviderRegistry::new();
         providers.register(FailingRunProvider {
@@ -5543,7 +5543,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let failures_remaining = Arc::new(std::sync::atomic::AtomicUsize::new(failures));
         let mut providers = ProviderRegistry::new();
@@ -5748,7 +5748,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();
@@ -6005,7 +6005,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();
@@ -6163,7 +6163,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();
@@ -6542,7 +6542,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();
@@ -6724,7 +6724,7 @@ mod tests {
             None,
             None,
             None,
-            ToolPresentationConfig::default(),
+            
         );
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut providers = ProviderRegistry::new();

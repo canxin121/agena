@@ -68,7 +68,6 @@ const fn default_true() -> bool {
     name = "notebook",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Revision-safe Jupyter notebook cell editing.",
-    display = detailed
 )]
 impl NotebookPlugin {
     pub(crate) fn new() -> Self {
@@ -82,7 +81,6 @@ impl NotebookPlugin {
         mutating,
 
 
-        display = detailed,
         path(requests = vec![PathRequest::read(input.path.clone()), PathRequest::write(input.path.clone())]),
         concurrency_safe
     )]

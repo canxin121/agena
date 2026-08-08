@@ -32,7 +32,6 @@ pub(crate) struct SnapshotPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Managed snapshot tools backed by Rift or git worktree.",
     config_schema = snapshot_config_schema(),
-    display = brief_detailed
 )]
 impl SnapshotPlugin {
     pub(crate) fn new() -> Self {
@@ -67,7 +66,6 @@ impl SnapshotPlugin {
         summary = "List active managed repository snapshots.",
         read_only,
         snapshot,
-        display = brief,
 
     )]
     async fn status(&self) -> SdkResult<ToolInvokeOutput> {
@@ -105,7 +103,6 @@ impl SnapshotPlugin {
         mutating,
 
         snapshot,
-        display = brief,
 
         path(requests = self.inner.permission_snapshot_enter(input).await?)
     )]
@@ -119,7 +116,6 @@ impl SnapshotPlugin {
         mutating,
 
         snapshot,
-        display = brief,
 
         path(requests = self.inner.permission_snapshot_exit(input).await?)
     )]

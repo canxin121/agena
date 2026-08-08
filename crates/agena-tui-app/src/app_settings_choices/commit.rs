@@ -19,13 +19,13 @@ impl App {
             },
             ChoiceOverlayAction::SettingsField(field) => {
                 let input = choice_selection_value(&selection);
-                match parse_settings_field_input(&self.i18n, field, input.as_str()) {
+                match parse_settings_field_input(&self.i18n, &field, input.as_str()) {
                     Ok(Some(value)) => match self
-                        .block_on_async(self.backend.set_config_setting(field.path, value))
+                        .block_on_async(self.backend.set_config_setting(field.path.as_str(), value))
                     {
                         Ok(_) => {
                             self.flash_success(settings_path_updated_message(
-                                &self.i18n, field.path,
+                                &self.i18n, field.path.as_str(),
                             ));
                             self.refresh_current_route_after_local_edit();
                             true
@@ -36,10 +36,10 @@ impl App {
                         }
                     },
                     Ok(None) => {
-                        match self.block_on_async(self.backend.delete_config_setting(field.path)) {
+                        match self.block_on_async(self.backend.delete_config_setting(field.path.as_str())) {
                             Ok(_) => {
                                 self.flash_success(settings_path_cleared_message(
-                                    &self.i18n, field.path,
+                                    &self.i18n, field.path.as_str(),
                                 ));
                                 self.refresh_current_route_after_local_edit();
                                 true
@@ -326,36 +326,37 @@ impl App {
                 return;
             }
         };
-        let file_value = get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
+        let file_value = get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
         let effective_value =
-            get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
+            get_json_path(&sources.effective, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
         let prefill = if !file_value.is_null() {
             file_value.clone()
         } else {
             JsonValue::Null
         };
-        if let Some(all_items) = self.settings_field_choice_items(field) {
+                if let Some(all_items) = self.settings_field_choice_items(&field) {
             let current_value = (!prefill.is_null()).then(|| setting_value_input_text(&prefill));
+            let overlay_style = Self::settings_field_choice_overlay_style(&field);
             self.open_choice_overlay(self.build_choice_overlay(
                 settings_edit_title(
                     &self.i18n,
-                    settings_field_edit_title(&self.i18n, field).as_str(),
+                    settings_field_edit_title(&self.i18n, &field).as_str(),
                 ),
-                settings_value_edit_prompt(&self.i18n, field, &file_value, &effective_value),
+                settings_value_edit_prompt(&self.i18n, &field, &file_value, &effective_value),
                 current_value,
                 all_items,
                 ChoiceOverlayAction::SettingsField(field),
                 true,
-                Self::settings_field_choice_overlay_style(field),
+                overlay_style,
             ));
             return;
         }
         self.overlay = Some(Overlay::SettingsValueEdit(SettingsValueEditOverlay::new(
             settings_edit_title(
                 &self.i18n,
-                settings_field_edit_title(&self.i18n, field).as_str(),
+                settings_field_edit_title(&self.i18n, &field).as_str(),
             ),
-            settings_value_edit_prompt(&self.i18n, field, &file_value, &effective_value),
+            settings_value_edit_prompt(&self.i18n, &field, &file_value, &effective_value),
             Editor::from_text(setting_value_input_text(&prefill)),
             field,
         )));

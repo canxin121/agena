@@ -4,7 +4,13 @@
   },
   "ui": {
     "tui": {
-      "graphics": "auto"
+      "graphics": "auto",
+      "transcript": {
+        "activity_default_expanded": false,
+        "activity_kinds": {
+          "reasoning": true
+        }
+      }
     }
   },
   "runtime": {
@@ -22,16 +28,7 @@
     },
     "max_turns": 500
   },
-  "plugins": {
-    "policy": {
-      "tool_presentation": {
-        "default_mode": "brief"
-      },
-      "ui_presentation": {
-        "default_mode": "summary"
-      }
-    }
-  },
+  "plugins": {},
   "providers": {
     "default": "anthropic",
     "anthropic": {

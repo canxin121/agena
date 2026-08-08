@@ -17,7 +17,6 @@ pub(crate) struct SessionPlugin {
     name = "session",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Runtime session tools.",
-    display = brief_detailed
 )]
 impl SessionPlugin {
     pub(crate) fn new() -> Self {
@@ -39,7 +38,6 @@ impl SessionPlugin {
         tags(query, discovery),
         summary = "Inspect the current session metadata.",
         read_only,
-        display = brief,
 
         concurrency_safe
     )]
@@ -51,7 +49,6 @@ impl SessionPlugin {
         tags(mutate),
         summary = "Rename the current session.",
         mutating,
-        display = brief,
 
     )]
     async fn rename(&self, input: &SessionRenameToolInput) -> SdkResult<ToolInvokeOutput> {

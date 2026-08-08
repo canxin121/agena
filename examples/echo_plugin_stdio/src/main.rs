@@ -11,7 +11,6 @@ struct EchoPlugin;
     name = "echo_stdio",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Echo via stdio.",
-    display = compact,
     export = stdio
 )]
 impl EchoPlugin {

@@ -42,7 +42,7 @@ pub use crate::manifest::{
     PluginStudioCommand, PluginStudioControl, PluginStudioControlOption,
     PluginStudioUiContributions, PluginStudioView, PluginTuiColor, PluginTuiThemeColors,
     PluginTuiUiContributions, PluginUiAction, PluginUiContributions, PluginUiThemePalette,
-    ToolDefinition, ToolDescriptionMode, ToolDisplayPreset, ToolInput, ToolResultPolicy,
+    ToolDefinition, ToolInput, ToolResultPolicy,
     ToolResultRenderKind, ToolStreamingMode, ToolTag, TransportKind, normalize_tool_tag_name,
     plugin_workbench_tab_id_is_supported,
 };

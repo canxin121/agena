@@ -101,35 +101,6 @@ pub fn expand_plugin_layer_manifest(
         .as_ref()
         .map(|schema| quote! { manifest.config_schema = Some(#schema); })
         .unwrap_or_default();
-    let display_assignment = config
-        .display
-        .as_ref()
-        .map(|display| match display.to_string().as_str() {
-            "brief" | "compact" => {
-                quote! { manifest.set_display(::agena_plugin_sdk::manifest::ToolDisplayPreset::Compact); }
-            }
-            "brief_detailed" => {
-                quote! { manifest.set_display(::agena_plugin_sdk::manifest::ToolDisplayPreset::BriefDetailed); }
-            }
-            "detailed" => {
-                quote! { manifest.set_display(::agena_plugin_sdk::manifest::ToolDisplayPreset::Detailed); }
-            }
-            _ => quote! { compile_error!("unsupported plugin display mode"); },
-        })
-        .unwrap_or_default();
-    let ui_display_assignment = config
-        .ui_display
-        .as_ref()
-        .map(|display| match display.to_string().as_str() {
-            "brief" | "summary" => {
-                quote! { manifest.ui_display_mode = Some(::agena_plugin_sdk::UiTextDisplayMode::Summary); }
-            }
-            "detailed" => {
-                quote! { manifest.ui_display_mode = Some(::agena_plugin_sdk::UiTextDisplayMode::Detailed); }
-            }
-            _ => quote! { compile_error!("unsupported plugin UI display mode"); },
-        })
-        .unwrap_or_default();
     let help_assignment = if let Some(help) = config.help.as_ref() {
         quote! { manifest.help = Some(#help.to_string()); }
     } else if let Some(help) = lit_str_from_text(docs) {
@@ -137,20 +108,15 @@ pub fn expand_plugin_layer_manifest(
     } else {
         quote! {}
     };
-    let skills_assignment = config
+        let skills_assignment = config
         .skills
         .as_ref()
         .map(|skills| quote! { manifest.skills.extend(#skills); })
         .unwrap_or_default();
-    let tool_description_mode_assignment = config
-        .tool_description_mode
+    let activity_kinds_assignment = config
+        .activity_kinds
         .as_ref()
-        .map(|mode| quote! { manifest.tool_description_mode = Some(#mode); })
-        .unwrap_or_default();
-    let ui_display_mode_assignment = config
-        .ui_display_mode
-        .as_ref()
-        .map(|mode| quote! { manifest.ui_display_mode = Some(#mode); })
+        .map(|kinds| quote! { manifest.activity_kinds.extend(#kinds); })
         .unwrap_or_default();
     let plugin_tag_assignments = config
         .plugin_tags
@@ -176,12 +142,9 @@ pub fn expand_plugin_layer_manifest(
             manifest.config_schema = Some(::agena_plugin_sdk::macro_support::empty_config_schema());
             #config_schema_assignment
             #config_schema_value_assignment
-            #display_assignment
-            #ui_display_assignment
-            #help_assignment
+                        #help_assignment
             #skills_assignment
-            #tool_description_mode_assignment
-            #ui_display_mode_assignment
+            #activity_kinds_assignment
             #(#plugin_tag_assignments)*
             #(#tool_definition_assignments)*
             #(#command_definition_assignments)*

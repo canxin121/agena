@@ -469,7 +469,7 @@ fn plan_contribution_survives_real_tool_executor_route() {
         None,
         None,
         None,
-        agena_plugin_host::ToolPresentationConfig::default(),
+        
     );
 
     let invocation = ToolInvocation::plugin_named(

@@ -39,8 +39,9 @@ impl App {
         agena_tui_components::theme::set_active_palette(tui_palette);
         let mut transcript = TranscriptState::new(
             i18n.clone(),
-            TranscriptDetailDefaults {
-                activity_expanded: launch.tui_config.transcript.activity_default_expanded,
+                        TranscriptDetailDefaults {
+                activity_default_expanded: launch.tui_config.transcript.activity_default_expanded,
+                kind_defaults: launch.tui_config.transcript.activity_kinds.clone(),
             },
         );
         transcript.set_math_render_context(math_render_context.clone());

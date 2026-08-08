@@ -25,7 +25,6 @@ pub(crate) struct CronPlugin {
     name = "cron",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Cron-style and one-shot wakeup scheduling tools.",
-    display = brief
 )]
 impl CronPlugin {
     pub(crate) fn new() -> Self {
@@ -63,7 +62,6 @@ impl CronPlugin {
         read_only,
         scheduler,
 
-        display = brief,
         concurrency_safe
     )]
     async fn invoke_list(
@@ -87,7 +85,6 @@ impl CronPlugin {
         mutating,
         scheduler,
 
-        display = brief
     )]
     async fn invoke_create(
         &self,
@@ -110,7 +107,6 @@ impl CronPlugin {
         mutating,
         scheduler,
 
-        display = brief
     )]
     async fn invoke_delete(
         &self,
@@ -133,7 +129,6 @@ impl CronPlugin {
         mutating,
         scheduler,
 
-        display = brief
     )]
     async fn invoke_update(
         &self,
@@ -156,7 +151,6 @@ impl CronPlugin {
         mutating,
         scheduler,
 
-        display = brief
     )]
     async fn invoke_pause(
         &self,
@@ -179,7 +173,6 @@ impl CronPlugin {
         mutating,
         scheduler,
 
-        display = brief
     )]
     async fn invoke_resume(
         &self,
@@ -202,7 +195,6 @@ impl CronPlugin {
         read_only,
         scheduler,
 
-        display = detailed,
         concurrency_safe
     )]
     async fn invoke_history(
@@ -226,7 +218,6 @@ impl CronPlugin {
         mutating,
         scheduler,
 
-        display = brief
     )]
     async fn invoke_wakeup(
         &self,

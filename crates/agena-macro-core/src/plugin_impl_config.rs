@@ -13,17 +13,14 @@ pub struct PluginImplConfig {
     pub version: Option<Expr>,
     pub summary: Option<Expr>,
     pub help: Option<Expr>,
-    pub skills: Option<Expr>,
+        pub skills: Option<Expr>,
+    pub activity_kinds: Option<Expr>,
     pub config_schema: Option<Expr>,
     pub config_schema_type: Option<Type>,
     pub config_schema_default: Option<Expr>,
     pub config_schema_store: bool,
     pub config_field: Option<Ident>,
     pub config_store: bool,
-    pub display: Option<Ident>,
-    pub ui_display: Option<Ident>,
-    pub tool_description_mode: Option<Expr>,
-    pub ui_display_mode: Option<Expr>,
     pub plugin_tags: Vec<Expr>,
     pub export: Option<Ident>,
     pub export_bind: Option<Expr>,
@@ -36,17 +33,14 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
     let mut version = None;
     let mut summary = None;
     let mut help = None;
-    let mut skills = None;
+        let mut skills = None;
+    let mut activity_kinds = None;
     let mut config_schema = None;
     let mut config_schema_type = None;
     let mut config_schema_default = None;
     let mut config_schema_store = false;
     let mut config_field = None;
     let mut config_store = false;
-    let mut display = None;
-    let mut ui_display = None;
-    let mut tool_description_mode = None;
-    let mut ui_display_mode = None;
     let mut plugin_tags = Vec::new();
     let mut export = None;
     let mut export_bind = None;
@@ -62,7 +56,8 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                     "version" => version = Some(value.value),
                     "summary" => summary = Some(value.value),
                     "help" => help = Some(value.value),
-                    "skills" => skills = Some(value.value),
+                                    "skills" => skills = Some(value.value),
+                "activity_kinds" => activity_kinds = Some(value.value),
                     "config" => {
                         config_schema_type = Some(expr_as_type(value.value)?);
                         config_store = true;
@@ -75,10 +70,6 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
                         config_field = Some(expr_path_ident(value.value, "config_field")?)
                     }
                     "config_store" => config_store = expr_bool(value.value, "config_store")?,
-                    "display" => display = Some(expr_path_ident(value.value, "display")?),
-                    "ui_display" => ui_display = Some(expr_path_ident(value.value, "ui_display")?),
-                    "tool_description_mode" => tool_description_mode = Some(value.value),
-                    "ui_display_mode" => ui_display_mode = Some(value.value),
                     "commands" => {
                         return Err(syn::Error::new_spanned(
                             ident,
@@ -174,17 +165,14 @@ pub fn parse_plugin_impl_config(attr: proc_macro2::TokenStream) -> Result<Plugin
         version,
         summary,
         help,
-        skills,
+                skills,
+        activity_kinds,
         config_schema,
         config_schema_type,
         config_schema_default,
         config_schema_store,
         config_field,
         config_store,
-        display,
-        ui_display,
-        tool_description_mode,
-        ui_display_mode,
         plugin_tags,
         export,
         export_bind,

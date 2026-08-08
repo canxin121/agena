@@ -4,6 +4,7 @@
 //! serialized settings into these runtime values before constructing the TUI.
 
 use agena_tui_components::{ColorScheme, TerminalRgb, ThemePalette};
+use std::collections::BTreeMap;
 
 use crate::{input::ComposerKeyBindings, terminal_graphics::GraphicsMode};
 
@@ -59,6 +60,8 @@ pub struct TuiStatusLineConfig {
 /// Transcript configuration.
 pub struct TuiTranscriptConfig {
     pub activity_default_expanded: bool,
+    /// Per-kind expansion overrides keyed by activity kind id.
+    pub activity_kinds: BTreeMap<String, bool>,
 }
 
 impl TuiConfig {

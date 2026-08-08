@@ -82,7 +82,6 @@ struct ReportFindingsInput {
     name = "report",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Structured review and verification findings.",
-    display = detailed
 )]
 impl ReportPlugin {
     pub(crate) fn new() -> Self {
@@ -94,7 +93,6 @@ impl ReportPlugin {
         name = "findings",
         summary = "Publish structured file-and-line findings for UI and integrations.",
         read_only,
-        display = detailed,
         concurrency_safe
     )]
     async fn invoke_findings(&self, input: &ReportFindingsInput) -> SdkResult<ToolInvokeOutput> {

@@ -128,23 +128,6 @@ pub enum PluginConfigView {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Text display mode of a plugin.
-pub enum PluginTextDisplayMode {
-    Detailed,
-    Summary,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Text display source of a plugin.
-pub enum PluginTextDisplaySource {
-    ToolPolicy,
-    PluginPolicy,
-    ToolManifest,
-    PluginManifest,
-    GlobalPolicy,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Focus of a plugin config.
 pub enum PluginConfigFocus {
     Structure,
@@ -158,12 +141,7 @@ pub struct PluginWorkbenchPlugin {
     pub plugin_id: String,
     pub visible_tool: String,
     pub version: String,
-    pub transport: String,
-    pub ui_display_mode: PluginTextDisplayMode,
-    pub ui_display_source: PluginTextDisplaySource,
-    pub tool_ui_display_modes: BTreeMap<String, PluginTextDisplayMode>,
-    pub tool_ui_display_defaults: BTreeMap<String, PluginTextDisplayMode>,
-    pub tool_ui_display_sources: BTreeMap<String, PluginTextDisplaySource>,
+        pub transport: String,
     pub tools: Vec<agena_plugin_host::ToolDefinition>,
     pub commands: Vec<agena_plugin_host::PluginCommandDefinition>,
     pub config_status: PluginConfigStatus,

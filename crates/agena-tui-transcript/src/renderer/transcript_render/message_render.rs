@@ -33,7 +33,7 @@ pub(crate) const TRANSCRIPT_EXPORT_WIDTH: u16 = 120;
 pub fn render_entry_export(
     message: &TranscriptEntry,
     i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
+    defaults: &TranscriptDetailDefaults,
 ) -> Vec<RenderedLine> {
     agena_tui_media::with_text_math_rendering(|| {
         render_entry_detailed(
@@ -75,7 +75,7 @@ pub(crate) fn append_rendered_part_node(
     lines: &mut Vec<RenderedLine>,
     nodes: &mut Vec<RenderedTranscriptNode>,
     i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
+    defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) {
     // Like Markdown blocks, non-text parts start after the message header so
@@ -131,6 +131,51 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
         transcript_part_content(part),
         TranscriptPartContent::Activity(_)
     )
+}
+
+/// Stable activity-kind id for a transcript part, used to resolve default
+/// expansion from transcript settings. Returns `None` for lifecycle-only
+/// markers that have no user-visible activity kind.
+pub(crate) fn activity_kind_id_for_part(part: &TranscriptEntryPart) -> Option<&'static str> {
+    match transcript_part_content(part) {
+        TranscriptPartContent::Text(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
+        // User documents group multiple activities and text; no single kind.
+        TranscriptPartContent::UserDocument(_) => None,
+        TranscriptPartContent::Activity(content) => match content {
+            TranscriptActivityContent::Reasoning(_) => {
+                Some(agena_domain::ACTIVITY_KIND_REASONING)
+            }
+            TranscriptActivityContent::Operation(_) => Some(agena_domain::ACTIVITY_KIND_OPERATION),
+            TranscriptActivityContent::Attachment(_) => Some(agena_domain::ACTIVITY_KIND_RESOURCE),
+            TranscriptActivityContent::SkillReference(_) => {
+                Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE)
+            }
+            TranscriptActivityContent::Error(_) => Some(agena_domain::ACTIVITY_KIND_ERROR),
+            TranscriptActivityContent::Hook(_) => Some(agena_domain::ACTIVITY_KIND_HOOK),
+            TranscriptActivityContent::Request(_) => Some(agena_domain::ACTIVITY_KIND_INTERACTION),
+            TranscriptActivityContent::TextSegment(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
+            TranscriptActivityContent::Canonical(payload) => activity_kind_id_for_payload(payload),
+            TranscriptActivityContent::AssistantReplyLifecycle(_) => None,
+        },
+    }
+}
+
+fn activity_kind_id_for_payload(payload: &agena_domain::ActivityPayload) -> Option<&'static str> {
+    match payload {
+        agena_domain::ActivityPayload::Resource(_) => Some(agena_domain::ACTIVITY_KIND_RESOURCE),
+        agena_domain::ActivityPayload::SkillReference(_) => {
+            Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE)
+        }
+        agena_domain::ActivityPayload::TextArtifact(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
+        agena_domain::ActivityPayload::Reasoning(_) => Some(agena_domain::ACTIVITY_KIND_REASONING),
+        agena_domain::ActivityPayload::TextSegment(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
+        agena_domain::ActivityPayload::Operation(_) => Some(agena_domain::ACTIVITY_KIND_OPERATION),
+        agena_domain::ActivityPayload::Interaction(_) => {
+            Some(agena_domain::ACTIVITY_KIND_INTERACTION)
+        }
+        agena_domain::ActivityPayload::Error(_) => Some(agena_domain::ACTIVITY_KIND_ERROR),
+        agena_domain::ActivityPayload::Notice(_) => Some(agena_domain::ACTIVITY_KIND_NOTICE),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -927,8 +972,9 @@ pub(crate) fn render_transcript_entries_export_markdown(
             render_entry_export(
                 message,
                 i18n,
-                TranscriptDetailDefaults {
-                    activity_expanded: true,
+                &TranscriptDetailDefaults {
+                    activity_default_expanded: true,
+                    kind_defaults: std::collections::BTreeMap::new(),
                 },
             )
             .into_iter()
@@ -1087,7 +1133,7 @@ pub(crate) fn render_part_node(
     width: u16,
     out: &mut Vec<RenderedLine>,
     i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
+    defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) -> RenderedNodeDraft {
     match transcript_part_content(part) {
@@ -1144,12 +1190,21 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-            // Reasoning must never be truncated: it is the model's full
+                        // Reasoning must never be truncated: it is the model's full
             // thought trail, for both the provider and the human reading the
             // transcript. It defaults to expanded (so the full trail is
             // immediately visible) but the user may still collapse it via the
-            // normal toggle.
-            let expanded = expansions.get(&key).copied().unwrap_or(true);
+            // normal toggle or a per-kind expansion setting.
+            let expanded = expansions
+                .get(&key)
+                .copied()
+                .unwrap_or_else(|| {
+                    defaults
+                        .kind_defaults
+                        .get(agena_domain::ACTIVITY_KIND_REASONING)
+                        .copied()
+                        .unwrap_or(true)
+                });
             let summary = reasoning.preferred_text();
             let headline = summary
                 .lines()
@@ -1192,10 +1247,12 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-            let expanded = expansions
+                        let expanded = expansions
                 .get(&key)
                 .copied()
-                .unwrap_or(defaults.activity_expanded);
+                .unwrap_or_else(|| {
+                    defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_OPERATION))
+                });
             render_tool_execution(part, tool, out, width, i18n, expanded);
             RenderedNodeDraft {
                 key,
@@ -1310,10 +1367,12 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-            let expanded = expansions
+                        let expanded = expansions
                 .get(&key)
                 .copied()
-                .unwrap_or(defaults.activity_expanded);
+                .unwrap_or_else(|| {
+                    defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_RESOURCE))
+                });
             let mut labels = Vec::new();
             for item in &attachment.attachments {
                 let label = item
@@ -1365,10 +1424,12 @@ pub(crate) fn render_part_node(
                 entry_id: message.id,
                 content_id: part.id,
             };
-            let expanded = expansions
+                        let expanded = expansions
                 .get(&key)
                 .copied()
-                .unwrap_or(defaults.activity_expanded);
+                .unwrap_or_else(|| {
+                    defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE))
+                });
             let mut labels = Vec::new();
             for skill in &reference.skills {
                 labels.push(skill.name.clone());
@@ -1474,7 +1535,7 @@ fn render_activity_canonical(
     out: &mut Vec<RenderedLine>,
     width: u16,
     i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
+    defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) -> RenderedNodeDraft {
     let key = TranscriptNodeKey::Activity {
@@ -1485,11 +1546,11 @@ fn render_activity_canonical(
     // collapsed until the user opens them, regardless of the global activity
     // default, so a multi-step tool run reads as a stack of blocks with one
     // visible answer at the end.
-    let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
+        let is_text_segment = matches!(payload, agena_domain::ActivityPayload::TextSegment(_));
     let default_expanded = if is_text_segment {
         false
     } else {
-        defaults.activity_expanded
+        defaults.default_expanded(activity_kind_id_for_payload(payload))
     };
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);

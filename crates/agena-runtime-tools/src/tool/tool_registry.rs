@@ -588,39 +588,6 @@ fn bounded_plugin_diagnostic(message: String) -> String {
     output
 }
 
-pub(super) fn present_registered_tool(
-    mut registered_tool: RegisteredTool,
-    presentation: &agena_plugin_host::ToolPresentationConfig,
-) -> RegisteredTool {
-    apply_registered_tool_presentation_mode(&mut registered_tool, presentation);
-    if registered_tool.definition.preferred_description_mode()
-        == Some(agena_plugin_host::ToolDescriptionMode::Brief)
-    {
-        registered_tool.definition.docs.help = None;
-    }
-    registered_tool
-}
-
-pub(super) fn present_registered_tool_detailed(
-    mut registered_tool: RegisteredTool,
-    presentation: &agena_plugin_host::ToolPresentationConfig,
-) -> RegisteredTool {
-    apply_registered_tool_presentation_mode(&mut registered_tool, presentation);
-    registered_tool
-}
-
-fn apply_registered_tool_presentation_mode(
-    registered_tool: &mut RegisteredTool,
-    presentation: &agena_plugin_host::ToolPresentationConfig,
-) {
-    let mode = presentation.mode_for(
-        registered_tool.plugin_key(),
-        registered_tool.tool_key(),
-        registered_tool.definition.preferred_description_mode(),
-    );
-    registered_tool.definition.display.description_mode = Some(mode);
-}
-
 pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
     if let Some(summary) = registered_tool.summary_text() {
         return summary.to_string();
@@ -646,7 +613,6 @@ pub struct ToolExecutor {
     pub(super) snapshot_registry: Option<crate::SnapshotRegistry>,
     pub(super) scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
-    pub(super) tool_presentation: agena_plugin_host::ToolPresentationConfig,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
     pub(super) command_event_sink: Option<agena_tool::ToolRuntimeEventSink>,

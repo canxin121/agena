@@ -292,6 +292,10 @@ pub fn tui_config_from_preferences(ui: &TuiPreferencesResource) -> TuiConfig {
             TuiGraphicsModeResource::Native => GraphicsMode::Native,
             TuiGraphicsModeResource::Unicode => GraphicsMode::Unicode,
         },
+        transcript: agena_tui::presentation_config::TuiTranscriptConfig {
+            activity_default_expanded: ui.transcript_activity_default_expanded,
+            activity_kinds: ui.transcript_activity_kinds.clone(),
+        },
         ..Default::default()
     }
 }
@@ -354,16 +358,26 @@ mod tui_config_tests {
 
     #[test]
     fn persistent_tui_preferences_are_projected_into_the_tui_model() {
-        let persistent = TuiPreferencesResource {
+                let persistent = TuiPreferencesResource {
             locale: Some("en-US".to_owned()),
             color_scheme: TuiColorSchemeResource::Light,
             graphics: TuiGraphicsModeResource::Native,
             theme: Some("ocean".to_owned()),
+            transcript_activity_default_expanded: true,
+            transcript_activity_kinds: std::collections::BTreeMap::from([(
+                "reasoning".to_owned(),
+                false,
+            )]),
         };
 
-        let config = tui_config_from_preferences(&persistent);
+                let config = tui_config_from_preferences(&persistent);
         assert_eq!(config.color_scheme, ColorSchemePreference::Light);
         assert_eq!(config.graphics, GraphicsMode::Native);
         assert_eq!(config.theme.as_deref(), Some("ocean"));
+        assert!(config.transcript.activity_default_expanded);
+        assert_eq!(
+            config.transcript.activity_kinds.get("reasoning"),
+            Some(&false)
+        );
     }
 }

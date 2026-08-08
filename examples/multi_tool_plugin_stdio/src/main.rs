@@ -75,7 +75,6 @@ struct NotesPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Multi-tool stdio plugin example for notes formatting and file writes.",
     config,
-    display = compact,
     export = stdio
 )]
 impl NotesPlugin {

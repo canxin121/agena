@@ -4,8 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::sdk::manifest::UiTextDisplayMode;
-use crate::sdk::{PluginKey, ToolDefinition, ToolDescriptionMode, ToolKey, ToolTag};
+use crate::sdk::{PluginKey, ToolDefinition, ToolKey, ToolTag};
 
 pub fn validate_tool_definition(
     plugin_key: &PluginKey,
@@ -75,8 +74,6 @@ fn validate_schema_shape(
 pub struct PluginToolRegistry {
     by_key: BTreeMap<ToolKey, RegisteredTool>,
     by_canonical_name: BTreeMap<String, ToolKey>,
-    plugin_tool_defaults: BTreeMap<PluginKey, ToolDescriptionMode>,
-    plugin_ui_defaults: BTreeMap<PluginKey, UiTextDisplayMode>,
     generation: u64,
 }
 
@@ -186,8 +183,6 @@ impl PluginToolRegistry {
         Self {
             by_key: BTreeMap::new(),
             by_canonical_name: BTreeMap::new(),
-            plugin_tool_defaults: BTreeMap::new(),
-            plugin_ui_defaults: BTreeMap::new(),
             generation: 0,
         }
     }
@@ -196,23 +191,11 @@ impl PluginToolRegistry {
         &mut self,
         plugin_key: &PluginKey,
         definitions: &[ToolDefinition],
-        plugin_tool_default: Option<ToolDescriptionMode>,
-        plugin_ui_default: Option<UiTextDisplayMode>,
     ) -> Result<(), String> {
         // Validate the whole batch before changing defaults or inserting any
         // tools. A bad manifest must never leave a partially updated registry.
         for definition in definitions {
             validate_tool_definition(plugin_key, definition)?;
-        }
-        if let Some(mode) = plugin_tool_default {
-            self.plugin_tool_defaults.insert(plugin_key.clone(), mode);
-        } else {
-            self.plugin_tool_defaults.remove(plugin_key);
-        }
-        if let Some(mode) = plugin_ui_default {
-            self.plugin_ui_defaults.insert(plugin_key.clone(), mode);
-        } else {
-            self.plugin_ui_defaults.remove(plugin_key);
         }
         for definition in definitions {
             self.upsert_from_plugin(plugin_key, definition.clone())?;
@@ -223,15 +206,8 @@ impl PluginToolRegistry {
     pub fn upsert_from_plugin(
         &mut self,
         plugin_key: &PluginKey,
-        mut definition: ToolDefinition,
+        definition: ToolDefinition,
     ) -> Result<RegisteredTool, String> {
-        if definition.display.description_mode.is_none() {
-            definition.display.description_mode =
-                self.plugin_tool_defaults.get(plugin_key).copied();
-        }
-        if definition.display.ui_display_mode.is_none() {
-            definition.display.ui_display_mode = self.plugin_ui_defaults.get(plugin_key).copied();
-        }
         let key = validate_tool_definition(plugin_key, &definition)?;
         self.by_canonical_name.remove(key.to_string().as_str());
         self.by_key.remove(&key);
@@ -271,8 +247,6 @@ impl PluginToolRegistry {
                 removed.push(tool);
             }
         }
-        self.plugin_tool_defaults.remove(plugin_key);
-        self.plugin_ui_defaults.remove(plugin_key);
         if !removed.is_empty() {
             self.generation += 1;
         }
@@ -343,10 +317,10 @@ mod tests {
         let beta = PluginKey::new("example", "beta").expect("beta key");
         let mut registry = PluginToolRegistry::new();
         registry
-            .extend_from_plugin(&alpha, &[definition("one"), definition("two")], None, None)
+            .extend_from_plugin(&alpha, &[definition("one"), definition("two")])
             .expect("alpha tools");
         registry
-            .extend_from_plugin(&beta, &[definition("one")], None, None)
+            .extend_from_plugin(&beta, &[definition("one")])
             .expect("beta tools");
 
         let removed = registry.remove_plugin(&alpha);

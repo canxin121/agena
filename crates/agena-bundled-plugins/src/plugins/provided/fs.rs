@@ -121,7 +121,6 @@ pub(crate) fn new_plugin() -> FsPlugin {
     name = "fs",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Filesystem command tools for read/search and explicit edits.",
-    display = detailed
 )]
 impl FsPlugin {
     #[tool(
@@ -130,7 +129,6 @@ impl FsPlugin {
         help = "Use `read` for text previews, directory listings, or file attachments via `mode = text|attachment|auto` (default `auto`).",
         read_only,
 
-        display = detailed,
         examples(r#"{"path":"Cargo.toml"}"#),
         concurrency_safe
     )]
@@ -149,7 +147,6 @@ impl FsPlugin {
         read_only,
 
         discovery,
-        display = detailed,
         examples(r#"{"pattern":"**/*.rs","path":"crates"}"#),
         concurrency_safe
     )]
@@ -168,7 +165,6 @@ impl FsPlugin {
         read_only,
 
         discovery,
-        display = detailed,
         examples(r#"{"pattern":"agena_plugin","path":"crates"}"#),
         concurrency_safe
     )]
@@ -186,7 +182,6 @@ impl FsPlugin {
         help = "Use `apply_patch` for explicit text patch operations against workspace files. The `patch` argument is a plain-text patch that MUST start with the exact marker line `*** Begin Patch` and end with the exact marker line `*** End Patch`. Inside, use only these directives: `*** Update File: <path>` followed by `@@`-separated hunks (context lines start with a space, removed lines with `-`, added lines with `+`), `*** Add File: <path>` with every content line prefixed by `+`, or `*** Delete File: <path>`. A patch that does not start with `*** Begin Patch` is rejected. Use paths relative to the workspace root.",
         mutating,
 
-        display = detailed,
         examples(r#"{"patch":"*** Begin Patch\n*** Update File: README.md\n@@\n-old line\n+new line\n*** End Patch"}"#),
         path(requests = permission_paths_internal("apply_patch", input)?),
         concurrency_safe
@@ -205,7 +200,6 @@ impl FsPlugin {
         help = "Creating a new file needs no hash. Replacing an existing file requires expected_sha256 from fs.stat, preventing stale or parallel overwrites.",
         mutating,
 
-        display = detailed,
         path(requests = vec![PathRequest::write(input.path.clone())]),
         concurrency_safe
     )]
@@ -280,7 +274,6 @@ impl FsPlugin {
         mutating,
 
 
-        display = detailed,
         path(requests = vec![PathRequest::read(input.path.clone()), PathRequest::write(input.path.clone())]),
         concurrency_safe
     )]
@@ -347,7 +340,6 @@ impl FsPlugin {
         summary = "Read multiple UTF-8 files within one bounded byte budget.",
         read_only,
 
-        display = detailed,
         path(requests = input.paths.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()),
         concurrency_safe
     )]
@@ -416,7 +408,6 @@ impl FsPlugin {
         summary = "Inspect file metadata and an optional SHA-256 revision.",
         read_only,
 
-        display = detailed,
         path(requests = vec![PathRequest::read(input.path.clone())]),
         concurrency_safe
     )]
@@ -477,7 +468,6 @@ impl FsPlugin {
         summary = "Attach a local image for visual inspection with an explicit detail hint.",
         read_only,
 
-        display = detailed,
         path(requests = vec![PathRequest::read(input.path.clone())]),
         concurrency_safe
     )]

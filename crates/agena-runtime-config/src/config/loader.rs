@@ -282,10 +282,12 @@ mod tests {
     }
 
     #[test]
-    fn client_versions_compaction_and_presentation_policy_resolve() {
+    fn client_versions_compaction_resolve_and_legacy_policy_keys_are_ignored() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
+        // The legacy presentation keys are tolerated and ignored so stale
+        // user configs keep loading.
         std::fs::write(
             config_dir.join("agena.json"),
             r#"{
@@ -343,24 +345,6 @@ mod tests {
             Some(8192)
         );
         assert_eq!(resolution.config.session.max_turns, Some(50));
-        assert_eq!(
-            resolution
-                .config
-                .plugins
-                .policy
-                .tool_presentation
-                .default_mode,
-            agena_plugin_host::ToolDescriptionMode::Brief
-        );
-        assert_eq!(
-            resolution
-                .config
-                .plugins
-                .policy
-                .ui_presentation
-                .default_mode,
-            agena_plugin_host::UiTextDisplayMode::Summary
-        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -455,7 +439,7 @@ mod tests {
     }
 
     #[test]
-    fn removed_runtime_tuning_and_malformed_plugin_policy_are_rejected() {
+    fn removed_runtime_tuning_is_rejected() {
         let root = test_root();
         let config_dir = root.join("agena");
         std::fs::create_dir_all(&config_dir).expect("create test config directory");
@@ -464,30 +448,18 @@ mod tests {
             values: BTreeMap::from([("HOME".to_owned(), root.display().to_string())]),
         };
 
-        for (field, expected_error, document) in [
-            (
-                "http",
-                "http",
-                r#"{"runtime":{"providers":{"http":{"timeout_secs":30}}}}"#,
-            ),
-            (
-                "policy",
-                "UiPresentationConfig",
-                r#"{"plugins":{"policy":{"ui_presentation":"summary"}}}"#,
-            ),
-        ] {
-            std::fs::write(&config_path, document).expect("write invalid config");
-            let error = ConfigLoader::new(env.clone())
-                .load(&LoadConfigRequest {
-                    workspace_root: Some(root.join("workspace")),
-                    ..LoadConfigRequest::default()
-                })
-                .expect_err("unsupported setting should fail validation");
-            assert!(
-                error.to_string().contains(expected_error),
-                "error should name invalid field {field}: {error}"
-            );
-        }
+                std::fs::write(
+            &config_path,
+            r#"{"runtime":{"providers":{"http":{"timeout_secs":30}}}}"#,
+        )
+        .expect("write invalid config");
+        let error = ConfigLoader::new(env)
+            .load(&LoadConfigRequest {
+                workspace_root: Some(root.join("workspace")),
+                ..LoadConfigRequest::default()
+            })
+            .expect_err("unsupported setting should fail validation");
+        assert!(error.to_string().contains("http"));
 
         let _ = std::fs::remove_dir_all(root);
     }

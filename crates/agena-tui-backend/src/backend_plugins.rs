@@ -205,8 +205,29 @@ impl Backend {
         self.application.plugin_runtime().plugin_statuses()
     }
 
-    pub fn plugin_inspect(&self, plugin_id: &str) -> Option<agena_plugin_host::PluginInspect> {
+        pub fn plugin_inspect(&self, plugin_id: &str) -> Option<agena_plugin_host::PluginInspect> {
         self.application.plugin_runtime().plugin_inspect(plugin_id)
+    }
+
+    /// Dynamic activity-kind catalog: built-in kinds merged with every kind
+    /// declared by a loaded plugin manifest. New plugins automatically
+    /// contribute their kinds to transcript expansion settings.
+    pub fn activity_kind_catalog(&self) -> Vec<agena_domain::ActivityKind> {
+        let mut kinds = agena_domain::builtin_activity_kinds();
+        for status in self.plugin_statuses() {
+                        let Some(inspect) = self.plugin_inspect(&status.plugin_id.to_string()) else {
+                continue;
+            };
+            let Some(manifest) = inspect.manifest.as_ref() else {
+                continue;
+            };
+            for kind in &manifest.activity_kinds {
+                if !kinds.iter().any(|existing| existing.id == kind.id) {
+                    kinds.push(kind.clone());
+                }
+            }
+        }
+        kinds
     }
 
     pub fn plugin_logs(

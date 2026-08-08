@@ -22,7 +22,8 @@ use crate::{
     HttpProviderAdapterConfig, ProviderAdapterDefinition, ProviderApiAuthConfig,
     ProviderAuthConfig, ProviderDefaultsConfig, ResolvedConfig, ResolvedProviderAdapterConfig,
     ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig, SessionCompactionConfig,
-    SessionConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, UiConfig,
+        SessionConfig, TuiColorSchemeConfig, TuiGraphicsModeConfig, TuiUiConfig, TuiUiTranscriptConfig,
+    UiConfig,
 };
 use agena_domain::ModelSelectionConfig;
 
@@ -81,15 +82,6 @@ pub struct RawProjectMergeKeys {
     plugins_host_default_quota: bool,
     plugins_host_quotas: bool,
     plugins_host_trusted_keys: bool,
-    plugins_policy: bool,
-    plugins_policy_tool_presentation: bool,
-    plugins_policy_tool_presentation_default_mode: bool,
-    plugins_policy_tool_presentation_plugins: bool,
-    plugins_policy_tool_presentation_tools: bool,
-    plugins_policy_ui_presentation: bool,
-    plugins_policy_ui_presentation_default_mode: bool,
-    plugins_policy_ui_presentation_plugins: bool,
-    plugins_policy_ui_presentation_tools: bool,
 }
 
 impl RawProjectMergeKeys {
@@ -97,15 +89,6 @@ impl RawProjectMergeKeys {
         let plugins = value.get("plugins").and_then(Value::as_object);
         let plugins_host = plugins
             .and_then(|table| table.get("host"))
-            .and_then(Value::as_object);
-        let plugins_policy = plugins
-            .and_then(|table| table.get("policy"))
-            .and_then(Value::as_object);
-        let tool_presentation = plugins_policy
-            .and_then(|table| table.get("tool_presentation"))
-            .and_then(Value::as_object);
-        let ui_presentation = plugins_policy
-            .and_then(|table| table.get("ui_presentation"))
             .and_then(Value::as_object);
         Self {
             plugins_host: plugins.is_some_and(|table| table.contains_key("host")),
@@ -115,23 +98,6 @@ impl RawProjectMergeKeys {
             plugins_host_quotas: plugins_host.is_some_and(|table| table.contains_key("quotas")),
             plugins_host_trusted_keys: plugins_host
                 .is_some_and(|table| table.contains_key("trusted_keys")),
-            plugins_policy: plugins.is_some_and(|table| table.contains_key("policy")),
-            plugins_policy_tool_presentation: plugins_policy
-                .is_some_and(|table| table.contains_key("tool_presentation")),
-            plugins_policy_tool_presentation_default_mode: tool_presentation
-                .is_some_and(|table| table.contains_key("default_mode")),
-            plugins_policy_tool_presentation_plugins: tool_presentation
-                .is_some_and(|table| table.contains_key("plugins")),
-            plugins_policy_tool_presentation_tools: tool_presentation
-                .is_some_and(|table| table.contains_key("tools")),
-            plugins_policy_ui_presentation: plugins_policy
-                .is_some_and(|table| table.contains_key("ui_presentation")),
-            plugins_policy_ui_presentation_default_mode: ui_presentation
-                .is_some_and(|table| table.contains_key("default_mode")),
-            plugins_policy_ui_presentation_plugins: ui_presentation
-                .is_some_and(|table| table.contains_key("plugins")),
-            plugins_policy_ui_presentation_tools: ui_presentation
-                .is_some_and(|table| table.contains_key("tools")),
         }
     }
 }
@@ -423,10 +389,11 @@ impl RawConfig {
         .then_some(RawUiConfig {
             locale,
             tui: (tui_color_scheme.is_some() || tui_graphics.is_some() || tui_theme.is_some())
-                .then_some(RawTuiUiConfig {
+                                .then_some(RawTuiUiConfig {
                     color_scheme: tui_color_scheme,
                     graphics: tui_graphics,
                     theme: tui_theme,
+                    transcript: None,
                 }),
         });
 
@@ -508,13 +475,25 @@ impl RawConfig {
                 .locale
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
-            tui: TuiUiConfig {
+                        tui: TuiUiConfig {
                 color_scheme: raw_tui.color_scheme.unwrap_or_default(),
                 graphics: raw_tui.graphics.unwrap_or_default(),
                 theme: raw_tui
                     .theme
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty()),
+                transcript: TuiUiTranscriptConfig {
+                    activity_default_expanded: raw_tui
+                        .transcript
+                        .as_ref()
+                        .and_then(|transcript| transcript.activity_default_expanded)
+                        .unwrap_or_default(),
+                    activity_kinds: raw_tui
+                        .transcript
+                        .as_ref()
+                        .and_then(|transcript| transcript.activity_kinds.clone())
+                        .unwrap_or_default(),
+                },
             },
         };
         let runtime = RuntimeConfig::from_raw(self.runtime.unwrap_or_default())?;
@@ -678,63 +657,7 @@ fn merge_project_plugin_config(
     if merge_keys.plugins_host {
         merge_project_plugin_host(&mut base.host, overlay.host, merge_keys);
     }
-    if merge_keys.plugins_policy {
-        merge_project_plugin_policy(&mut base.policy, overlay.policy, merge_keys);
-    }
     base.list.extend(overlay.list);
-}
-
-fn merge_project_plugin_policy(
-    base: &mut agena_plugin_host::PluginPolicyConfig,
-    overlay: agena_plugin_host::PluginPolicyConfig,
-    merge_keys: RawProjectMergeKeys,
-) {
-    if merge_keys.plugins_policy_tool_presentation {
-        merge_tool_presentation(
-            &mut base.tool_presentation,
-            overlay.tool_presentation,
-            merge_keys,
-        );
-    }
-    if merge_keys.plugins_policy_ui_presentation {
-        merge_ui_presentation(
-            &mut base.ui_presentation,
-            overlay.ui_presentation,
-            merge_keys,
-        );
-    }
-}
-
-fn merge_tool_presentation(
-    base: &mut agena_plugin_host::ToolPresentationConfig,
-    overlay: agena_plugin_host::ToolPresentationConfig,
-    merge_keys: RawProjectMergeKeys,
-) {
-    if merge_keys.plugins_policy_tool_presentation_default_mode {
-        base.default_mode = overlay.default_mode;
-    }
-    if merge_keys.plugins_policy_tool_presentation_plugins {
-        base.plugins.extend(overlay.plugins);
-    }
-    if merge_keys.plugins_policy_tool_presentation_tools {
-        base.tools.extend(overlay.tools);
-    }
-}
-
-fn merge_ui_presentation(
-    base: &mut agena_plugin_host::UiPresentationConfig,
-    overlay: agena_plugin_host::UiPresentationConfig,
-    merge_keys: RawProjectMergeKeys,
-) {
-    if merge_keys.plugins_policy_ui_presentation_default_mode {
-        base.default_mode = overlay.default_mode;
-    }
-    if merge_keys.plugins_policy_ui_presentation_plugins {
-        base.plugins.extend(overlay.plugins);
-    }
-    if merge_keys.plugins_policy_ui_presentation_tools {
-        base.tools.extend(overlay.tools);
-    }
 }
 
 fn merge_project_plugin_host(
@@ -834,8 +757,20 @@ pub struct RawTuiUiConfig {
     pub color_scheme: Option<TuiColorSchemeConfig>,
     #[merge(strategy = option_override)]
     pub graphics: Option<TuiGraphicsModeConfig>,
-    #[merge(strategy = option_override)]
+        #[merge(strategy = option_override)]
     pub theme: Option<String>,
+    #[merge(strategy = option_struct_merge)]
+    pub transcript: Option<RawTuiUiTranscriptConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
+#[serde(default, deny_unknown_fields)]
+/// Raw transcript configuration of the TUI.
+pub struct RawTuiUiTranscriptConfig {
+    #[merge(strategy = option_override)]
+    pub activity_default_expanded: Option<bool>,
+    #[merge(strategy = option_map_extend)]
+    pub activity_kinds: Option<BTreeMap<String, bool>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
@@ -1032,6 +967,7 @@ impl_local_merge_via_crate!(
     RawTracingConfig,
     RawUiConfig,
     RawTuiUiConfig,
+    RawTuiUiTranscriptConfig,
     RawRuntimeConfig,
     RawRuntimeProvidersConfig,
     RawProviderClientVersionSettings,
@@ -1095,6 +1031,17 @@ where
     K: Ord,
 {
     base.extend(overlay);
+}
+
+pub fn option_map_extend<K, V>(base: &mut Option<BTreeMap<K, V>>, overlay: Option<BTreeMap<K, V>>)
+where
+    K: Ord,
+{
+    match (base.as_mut(), overlay) {
+        (Some(base), Some(overlay)) => base.extend(overlay),
+        (None, Some(overlay)) => *base = Some(overlay),
+        _ => {}
+    }
 }
 
 fn validate_permission_config(

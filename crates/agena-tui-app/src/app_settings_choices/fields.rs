@@ -1,9 +1,9 @@
 impl App {
     pub(crate) fn settings_field_choice_items(
         &self,
-        field: SettingsFieldSpec,
+        field: &SettingsFieldSpec,
     ) -> Option<Vec<ChoiceItem>> {
-        match field.path {
+        match field.path.as_str() {
             "providers.default" => {
                 let fallback_adapter = settings_choice_adapter_fallback(&self.i18n);
                 Some(
@@ -66,57 +66,49 @@ impl App {
                     .map(|level| choice_item(level, "log level"))
                     .collect(),
             ),
-            "session.compaction.auto" => Some(boolean_choice_items(
+                        "session.compaction.auto" => Some(boolean_choice_items(
                 ui_text::t(
                     &self.i18n,
                     "settings-field-session-compaction-auto-description",
                 )
                 .as_str(),
             )),
-            "plugins.policy.tool_presentation.default_mode" => Some(vec![
-                choice_item(
-                    "detailed",
-                    ui_text::t(&self.i18n, "settings-plugin-default-mode-detailed-detail"),
-                ),
-                choice_item(
-                    "brief",
-                    ui_text::t(&self.i18n, "settings-plugin-default-mode-brief-detail"),
-                ),
-            ]),
-            "plugins.policy.ui_presentation.default_mode" => Some(vec![
-                choice_item(
-                    "detailed",
-                    ui_text::t(
-                        &self.i18n,
-                        "settings-plugin-ui-default-mode-detailed-detail",
-                    ),
-                ),
-                choice_item(
-                    "summary",
-                    ui_text::t(&self.i18n, "settings-plugin-ui-default-mode-summary-detail"),
-                ),
-            ]),
+                        "ui.tui.transcript.activity_default_expanded" => Some(boolean_choice_items(
+                ui_text::t(
+                    &self.i18n,
+                    "settings-field-activity-default-expanded-description",
+                )
+                .as_str(),
+            )),
+            path if path.starts_with("ui.tui.transcript.activity_kinds.") => {
+                Some(boolean_choice_items(
+                    ui_text::t(&self.i18n, "settings-field-activity-kind-description").as_str(),
+                ))
+            }
             _ => None,
         }
     }
 
-    pub(crate) fn settings_field_choice_overlay_style(
-        field: SettingsFieldSpec,
+        pub(crate) fn settings_field_choice_overlay_style(
+        field: &SettingsFieldSpec,
     ) -> agena_tui::choice::ChoicePresentationStyle {
-        match field.path {
+        match field.path.as_str() {
             "providers.default" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
             "ui.locale"
             | "ui.tui.color_scheme"
             | "ui.tui.graphics"
-            | "tracing.filter"
+                        | "tracing.filter"
             | "tracing.database"
             | "tracing.adapter"
             | "session.compaction.auto"
-            | "plugins.policy.tool_presentation.default_mode"
-            | "plugins.policy.ui_presentation.default_mode" => {
+            | "ui.tui.transcript.activity_default_expanded"
+            => {
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly
             }
-            "ui.tui.theme" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
+                        "ui.tui.theme" => agena_tui::choice::ChoicePresentationStyle::SearchableSelect,
+            path if path.starts_with("ui.tui.transcript.activity_kinds.") => {
+                agena_tui::choice::ChoicePresentationStyle::SelectOnly
+            }
             _ => agena_tui::choice::ChoicePresentationStyle::Searchable,
         }
     }
@@ -379,17 +371,16 @@ use crate::{
 
 #[cfg(test)]
 mod tests {
-    use crate::{App, SETTINGS_FIELDS};
+        use crate::{App, settings_fields};
 
     #[test]
     fn registered_default_catalogs_do_not_offer_arbitrary_typed_values() {
-        let field = SETTINGS_FIELDS
-            .iter()
-            .copied()
+        let field = settings_fields()
+            .into_iter()
             .find(|field| field.path == "providers.default")
             .expect("settings field");
-        assert_eq!(
-            App::settings_field_choice_overlay_style(field),
+                assert_eq!(
+            App::settings_field_choice_overlay_style(&field),
             agena_tui::choice::ChoicePresentationStyle::SearchableSelect
         );
     }

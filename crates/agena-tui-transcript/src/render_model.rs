@@ -372,10 +372,23 @@ pub struct RenderedCopySegment {
     pub separator_before: String,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 /// Default detail settings of the transcript.
 pub struct TranscriptDetailDefaults {
-    pub activity_expanded: bool,
+    /// Global default expansion for activities without a kind override.
+    pub activity_default_expanded: bool,
+    /// Per-kind default expansion keyed by activity kind id.
+    pub kind_defaults: std::collections::BTreeMap<String, bool>,
+}
+
+impl TranscriptDetailDefaults {
+    /// Effective default expansion for an activity kind. Kind-specific
+    /// settings win; otherwise the global default applies.
+    pub fn default_expanded(&self, kind: Option<&str>) -> bool {
+        kind.and_then(|kind| self.kind_defaults.get(kind))
+            .copied()
+            .unwrap_or(self.activity_default_expanded)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

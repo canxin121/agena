@@ -19,7 +19,6 @@ pub(crate) struct ToolApiPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Tool API discovery functions. The runtime resolves tools_call directly to its execution target.",
     config_schema = tool_discovery_config_schema(),
-    display = brief_detailed
 )]
 impl ToolApiPlugin {
     pub(crate) fn new() -> Self {
@@ -52,7 +51,6 @@ impl ToolApiPlugin {
         summary = "Enumerate current tools.",
         read_only,
         discovery,
-        ui_display = detailed,
 
         concurrency_safe
     )]
@@ -65,7 +63,6 @@ impl ToolApiPlugin {
         summary = "Search the Agena execution tools available in this session.",
         read_only,
         discovery,
-        ui_display = detailed,
 
         concurrency_safe
     )]
@@ -78,7 +75,6 @@ impl ToolApiPlugin {
         summary = "Get reusable schema, examples, and usage notes for one Agena execution tool.",
         read_only,
         discovery,
-        ui_display = detailed,
                 concurrency_safe
     )]
     async fn help(&self, input: &ToolApiHelpInput) -> SdkResult<ToolInvokeOutput> {
@@ -90,7 +86,6 @@ impl ToolApiPlugin {
         summary = "List tool tags with pagination.",
         read_only,
         discovery,
-        ui_display = detailed,
 
         concurrency_safe
     )]
@@ -103,7 +98,6 @@ impl ToolApiPlugin {
         summary = "Enumerate the current live plugin inventory with version, summary, tags, and tool count.",
         read_only,
         discovery,
-        ui_display = detailed,
 
         concurrency_safe
     )]
@@ -116,7 +110,6 @@ impl ToolApiPlugin {
         summary = "Search the loaded plugins by id, summary, or tag.",
         read_only,
         discovery,
-        ui_display = detailed,
 
         concurrency_safe
     )]
@@ -129,7 +122,6 @@ impl ToolApiPlugin {
         summary = "List plugin tags with pagination.",
         read_only,
         discovery,
-        ui_display = detailed,
 
         concurrency_safe
     )]

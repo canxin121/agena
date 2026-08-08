@@ -26,7 +26,6 @@ pub struct EchoPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Sample plugin: echo + before/after/shell hooks.",
     config,
-    display = compact,
     export = cdylib
 )]
 impl EchoPlugin {

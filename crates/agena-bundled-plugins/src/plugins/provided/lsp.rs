@@ -158,7 +158,6 @@ struct LspServerSummary {
     version = env!("CARGO_PKG_VERSION"),
     summary = "LSP read-only observability and navigation tools.",
     config_schema = lsp_config_schema(),
-    display = brief
 )]
 impl LspPlugin {
     #[hook(init)]
@@ -182,7 +181,6 @@ impl LspPlugin {
         read_only,
         lsp,
 
-        display = brief,
         concurrency_safe
     )]
     async fn dispatch_servers(&self) -> SdkResult<ToolInvokeOutput> {
@@ -218,7 +216,6 @@ impl LspPlugin {
 
         lsp,
 
-        display = brief,
         concurrency_safe
     )]
     async fn dispatch_definition(
@@ -236,7 +233,6 @@ impl LspPlugin {
 
         lsp,
 
-        display = brief,
         concurrency_safe
     )]
     async fn dispatch_references(
@@ -254,7 +250,6 @@ impl LspPlugin {
 
         lsp,
 
-        display = brief,
         concurrency_safe
     )]
     async fn dispatch_hover(
@@ -272,7 +267,6 @@ impl LspPlugin {
 
         lsp,
 
-        display = brief,
         concurrency_safe
     )]
     async fn dispatch_diagnostics(

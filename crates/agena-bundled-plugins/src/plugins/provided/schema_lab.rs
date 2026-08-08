@@ -84,7 +84,6 @@ impl SchemaLabPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Deep built-in JSON Schema fixture used to demo and test the structured plugin config editor.",
     config_schema = schema_lab_config_schema(),
-    display = brief
 )]
 impl SchemaLabPlugin {
     #[tool(
@@ -93,7 +92,6 @@ impl SchemaLabPlugin {
         help = "Summarize one schema lab config section. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
         read_only,
         discovery,
-        ui_display = brief,
         concurrency_safe
     )]
     async fn invoke_inspect(&self, input: SchemaLabInspectArgs) -> SdkResult<ToolInvokeOutput> {
@@ -106,7 +104,6 @@ impl SchemaLabPlugin {
         help = "Round-trip a label and arbitrary payload into the tool result. The tool is intentionally inert and exists only to populate the Tools tab for the schema lab demo plugin.",
         read_only,
         discovery,
-        ui_display = brief,
         concurrency_safe
     )]
     async fn invoke_echo(&self, input: SchemaLabEchoArgs) -> SdkResult<ToolInvokeOutput> {

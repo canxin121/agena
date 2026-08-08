@@ -312,7 +312,6 @@ impl ChatGptToolsPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "OpenAI Responses and image service tools exposed as ordinary Agena tools.",
     config_schema = agena_plugin_sdk::macro_support::json_schema_for_default(ChatGptToolsConfig::default()),
-    display = detailed
 )]
 impl ChatGptToolsPlugin {
     #[hook(init)]
@@ -336,7 +335,7 @@ impl ChatGptToolsPlugin {
         )))
     }
 
-    #[tool(tags(network, interactive), summary = "Use OpenAI's current Responses web_search tool.", help = "tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Pending calls and response_id are returned for continuation.", read_only, discovery, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Use OpenAI's current Responses web_search tool.", help = "tool_options accepts the official WebSearchToolParam fields: filters.allowed_domains, search_context_size, user_location, and versioned type-compatible options. Pending calls and response_id are returned for continuation.", read_only, discovery)]
     async fn web_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "web_search",
@@ -347,7 +346,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Use OpenAI's compatibility web_search_preview tool.", help = "Supports official preview fields such as search_content_types, search_context_size, and user_location.", read_only, discovery, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Use OpenAI's compatibility web_search_preview tool.", help = "Supports official preview fields such as search_content_types, search_context_size, and user_location.", read_only, discovery)]
     async fn web_search_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "web_search_preview",
@@ -358,7 +357,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Search OpenAI vector stores with the official file_search tool.", help = "Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.", read_only, discovery, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Search OpenAI vector stores with the official file_search tool.", help = "Set tool_options.vector_store_ids and optional filters, max_num_results, and ranking_options exactly as documented by OpenAI.", read_only, discovery)]
     async fn file_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "file_search",
@@ -369,7 +368,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Run OpenAI's current computer tool and return pending computer calls.", help = "When the response contains computer_call items, execute the requested actions in Agena's browser/computer environment and call this tool again with previous_response_id plus official computer_call_output items in input_items.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Run OpenAI's current computer tool and return pending computer calls.", help = "When the response contains computer_call items, execute the requested actions in Agena's browser/computer environment and call this tool again with previous_response_id plus official computer_call_output items in input_items.", mutating)]
     async fn computer(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "computer",
@@ -380,7 +379,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Run OpenAI's computer_use_preview compatibility tool.", help = "Set display_width, display_height, and environment in tool_options. Continue with computer_call_output items.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Run OpenAI's computer_use_preview compatibility tool.", help = "Set display_width, display_height, and environment in tool_options. Continue with computer_call_output items.", mutating)]
     async fn computer_use_preview(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "computer_use_preview",
@@ -391,7 +390,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Connect OpenAI Responses to an official remote MCP server or connector.", help = "Set server_label and one of server_url, connector_id, or tunnel_id in tool_options. Official allowed_tools, authorization, headers, require_approval, defer_loading, and allowed_callers fields are preserved.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Connect OpenAI Responses to an official remote MCP server or connector.", help = "Set server_label and one of server_url, connector_id, or tunnel_id in tool_options. Official allowed_tools, authorization, headers, require_approval, defer_loading, and allowed_callers fields are preserved.", mutating)]
     async fn mcp(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "mcp",
@@ -402,7 +401,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Run Python with OpenAI's hosted code_interpreter tool.", help = "tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.", read_only, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Run Python with OpenAI's hosted code_interpreter tool.", help = "tool_options.container may be a container id or an auto container object with file_ids, memory_limit, and network_policy.", read_only)]
     async fn code_interpreter(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "code_interpreter",
@@ -413,7 +412,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Enable OpenAI programmatic tool calling.", help = "This official Responses tool lets generated programs invoke eligible tools. Use input_items to continue any resulting calls.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Enable OpenAI programmatic tool calling.", help = "This official Responses tool lets generated programs invoke eligible tools. Use input_items to continue any resulting calls.", mutating)]
     async fn programmatic_tool_calling(
         &self,
         input: ChatGptToolInput,
@@ -427,7 +426,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Generate or edit an image with OpenAI's Responses image_generation tool.", help = "tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.", mutating,  display = detailed)]
+    #[tool(tags(network, interactive), summary = "Generate or edit an image with OpenAI's Responses image_generation tool.", help = "tool_options supports action, model, background, input_fidelity, input_image_mask, moderation, output_compression, output_format, partial_images, quality, and size. Returned base64 images are persisted as managed attachments.", mutating)]
     async fn image_generation(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "image_generation",
@@ -438,7 +437,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Expose OpenAI's local_shell protocol tool as an ordinary Agena request.", help = "The provider returns local_shell_call items. Execute them with Agena shell permissions, then continue using previous_response_id and local_shell_call_output items.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Expose OpenAI's local_shell protocol tool as an ordinary Agena request.", help = "The provider returns local_shell_call items. Execute them with Agena shell permissions, then continue using previous_response_id and local_shell_call_output items.", mutating)]
     async fn local_shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "local_shell",
@@ -449,7 +448,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Expose OpenAI's shell tool with official environment configuration.", help = "tool_options.environment accepts OpenAI local/container environment objects. Execute pending shell_call items under Agena permissions and continue with shell_call_output items.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Expose OpenAI's shell tool with official environment configuration.", help = "tool_options.environment accepts OpenAI local/container environment objects. Execute pending shell_call items under Agena permissions and continue with shell_call_output items.", mutating)]
     async fn shell(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "shell",
@@ -460,7 +459,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Use OpenAI hosted or client tool_search.", help = "Set tool_options.execution to server or client, plus optional description and parameters. Continue client calls with tool_search_output items in input_items.", read_only, discovery, display = detailed)]
+    #[tool(tags(network, interactive), summary = "Use OpenAI hosted or client tool_search.", help = "Set tool_options.execution to server or client, plus optional description and parameters. Continue client calls with tool_search_output items in input_items.", read_only, discovery)]
     async fn tool_search(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "tool_search",
@@ -471,7 +470,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary = "Expose OpenAI's apply_patch protocol tool.", help = "Execute returned apply_patch_call operations through Agena's permission-checked fs.apply_patch path, then continue with apply_patch_call_output items.", mutating,   display = detailed)]
+    #[tool(tags(network, interactive), summary = "Expose OpenAI's apply_patch protocol tool.", help = "Execute returned apply_patch_call operations through Agena's permission-checked fs.apply_patch path, then continue with apply_patch_call_output items.", mutating)]
     async fn apply_patch(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "apply_patch",
@@ -482,7 +481,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), name = "function", summary = "Send an official OpenAI function tool declaration.", help = "Set tool_options.name, description, parameters, and strict. This remains an ordinary Agena wrapper; returned function calls are continued through input_items.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), name = "function", summary = "Send an official OpenAI function tool declaration.", help = "Set tool_options.name, description, parameters, and strict. This remains an ordinary Agena wrapper; returned function calls are continued through input_items.", mutating)]
     async fn function_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "function",
@@ -493,7 +492,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), name = "custom", summary = "Send an official OpenAI custom tool declaration.", help = "Set the official custom tool name, description, and format fields in tool_options; continue custom_tool_call outputs through input_items.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), name = "custom", summary = "Send an official OpenAI custom tool declaration.", help = "Set the official custom tool name, description, and format fields in tool_options; continue custom_tool_call outputs through input_items.", mutating)]
     async fn custom_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "custom",
@@ -504,7 +503,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), name = "namespace", summary = "Send an official OpenAI namespace tool declaration.", help = "Use tool_options to define the namespace and nested tools according to the current Responses schema.", mutating, display = detailed)]
+    #[tool(tags(network, interactive), name = "namespace", summary = "Send an official OpenAI namespace tool declaration.", help = "Use tool_options to define the namespace and nested tools according to the current Responses schema.", mutating)]
     async fn namespace_tool(&self, input: ChatGptToolInput) -> SdkResult<ToolInvokeOutput> {
         self.responses_tool(
             "namespace",
@@ -515,7 +514,7 @@ impl ChatGptToolsPlugin {
         .await
     }
 
-    #[tool(summary = "Edit permitted local images through OpenAI's Images edit endpoint.", help = "This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating,   display = detailed, path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
+    #[tool(summary = "Edit permitted local images through OpenAI's Images edit endpoint.", help = "This convenience entry preserves the official image edit endpoint alongside the Responses image_generation tool. Every input and output path is permission checked.", mutating, path(requests = input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
     async fn image_edit(&self, input: ChatGptImageEditInput) -> SdkResult<ToolInvokeOutput> {
         let model = self.image_model(input.model, "chatgpt.image_edit")?;
         let url = endpoint(self.config()?.base_url.as_str(), "images/edits")?;

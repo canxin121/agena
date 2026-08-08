@@ -302,7 +302,7 @@ impl GeminiToolsPlugin {
     }
 }
 
-#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="gemini", version=env!("CARGO_PKG_VERSION"), summary="Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.", config_schema=agena_plugin_sdk::macro_support::json_schema_for_default(GeminiToolsConfig::default()), display=detailed)]
+#[agena_plugin_host::sdk::agena_plugin(namespace="agena", name="gemini", version=env!("CARGO_PKG_VERSION"), summary="Google Gemini Interactions and image capabilities exposed as ordinary Agena tools.", config_schema=agena_plugin_sdk::macro_support::json_schema_for_default(GeminiToolsConfig::default()))]
 impl GeminiToolsPlugin {
     #[hook(init)]
     async fn init(&self, ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
@@ -325,7 +325,7 @@ impl GeminiToolsPlugin {
         )))
     }
 
-    #[tool(tags(network, interactive), summary="Run Gemini hosted code execution.", help="Uses the official Interactions code_execution declaration. Continue any function calls with function_result steps in input_steps.", read_only, display=detailed)]
+    #[tool(tags(network, interactive), summary="Run Gemini hosted code execution.", help="Uses the official Interactions code_execution declaration. Continue any function calls with function_result steps in input_steps.", read_only)]
     async fn code_execution(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "code_execution",
@@ -336,7 +336,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Fetch and ground URLs with Gemini URL Context.", help="Uses the official url_context tool. Put URLs in the prompt or official request fields.", read_only, discovery, display=detailed)]
+    #[tool(tags(network, interactive), summary="Fetch and ground URLs with Gemini URL Context.", help="Uses the official url_context tool. Put URLs in the prompt or official request fields.", read_only, discovery)]
     async fn url_context(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "url_context",
@@ -347,7 +347,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Search Google with Gemini grounding.", help="tool_options.search_types accepts web_search, image_search, and enterprise_web_search.", read_only, discovery, display=detailed)]
+    #[tool(tags(network, interactive), summary="Search Google with Gemini grounding.", help="tool_options.search_types accepts web_search, image_search, and enterprise_web_search.", read_only, discovery)]
     async fn google_search(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "google_search",
@@ -358,7 +358,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Search Gemini File Search stores.", help="tool_options supports file_search_store_names, metadata_filter, and top_k.", read_only, discovery, display=detailed)]
+    #[tool(tags(network, interactive), summary="Search Gemini File Search stores.", help="tool_options supports file_search_store_names, metadata_filter, and top_k.", read_only, discovery)]
     async fn file_search(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "file_search",
@@ -369,7 +369,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Use Google Maps grounding through Gemini.", help="tool_options supports enable_widget, latitude, and longitude.", read_only, discovery, display=detailed)]
+    #[tool(tags(network, interactive), summary="Use Google Maps grounding through Gemini.", help="tool_options supports enable_widget, latitude, and longitude.", read_only, discovery)]
     async fn google_maps(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "google_maps",
@@ -380,7 +380,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Run Gemini Computer Use and return official pending calls.", help="tool_options supports browser/mobile/desktop environments, safety policy controls, prompt-injection detection, and excluded predefined functions. Continue with function_result steps.", mutating, display=detailed)]
+    #[tool(tags(network, interactive), summary="Run Gemini Computer Use and return official pending calls.", help="tool_options supports browser/mobile/desktop environments, safety policy controls, prompt-injection detection, and excluded predefined functions. Continue with function_result steps.", mutating)]
     async fn computer_use(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "computer_use",
@@ -391,7 +391,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Connect Gemini to a remote MCP server.", help="tool_options supports url, name, headers, and allowed_tools according to the current Interactions MCPServer schema.", mutating, display=detailed)]
+    #[tool(tags(network, interactive), summary="Connect Gemini to a remote MCP server.", help="tool_options supports url, name, headers, and allowed_tools according to the current Interactions MCPServer schema.", mutating)]
     async fn mcp_server(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "mcp_server",
@@ -402,7 +402,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Use Gemini Retrieval across Vertex AI Search, RAG Store, Exa, or Parallel AI Search.", help="Pass retrieval_types and the official *_search_config fields in tool_options.", read_only, discovery, display=detailed)]
+    #[tool(tags(network, interactive), summary="Use Gemini Retrieval across Vertex AI Search, RAG Store, Exa, or Parallel AI Search.", help="Pass retrieval_types and the official *_search_config fields in tool_options.", read_only, discovery)]
     async fn retrieval(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "retrieval",
@@ -413,7 +413,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), name="function", summary="Send an official Gemini function declaration through Interactions.", help="Set the official name, description, and JSON schema fields in tool_options; continue with function_result steps.", mutating, display=detailed)]
+    #[tool(tags(network, interactive), name="function", summary="Send an official Gemini function declaration through Interactions.", help="Set the official name, description, and JSON schema fields in tool_options; continue with function_result steps.", mutating)]
     async fn function_tool(&self, input: GeminiToolInput) -> SdkResult<ToolInvokeOutput> {
         self.interactions_tool(
             "function",
@@ -424,7 +424,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(tags(network, interactive), summary="Generate images with Gemini's image response modality.", help="Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.", mutating,  display=detailed)]
+    #[tool(tags(network, interactive), summary="Generate images with Gemini's image response modality.", help="Uses generateContent with responseModalities TEXT and IMAGE. Configure GEMINI_IMAGE_MODEL or input.model. Inline image data is persisted as managed attachments.", mutating)]
     async fn image_generation(
         &self,
         input: GeminiImageGenerateInput,
@@ -442,7 +442,7 @@ impl GeminiToolsPlugin {
         .await
     }
 
-    #[tool(summary="Edit permitted local images with Gemini multimodal image generation.", help="Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.", mutating,   display=detailed, path(requests=input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
+    #[tool(summary="Edit permitted local images with Gemini multimodal image generation.", help="Uploads permission-checked local images as inlineData and requests an IMAGE response. Returned images are persisted as managed attachments.", mutating, path(requests=input.images.iter().cloned().map(PathRequest::read).collect::<Vec<_>>()))]
     async fn image_edit(&self, input: GeminiImageEditInput) -> SdkResult<ToolInvokeOutput> {
         let model = self.image_model(input.model, "gemini.image_edit")?;
         let mut parts = Vec::new();

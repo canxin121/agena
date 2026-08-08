@@ -8,7 +8,7 @@ use syn::{Attribute, Expr, Ident, LitStr, Meta, Result, Token, parse_quote};
 use crate::{
     PluginToolAttrConfig, PluginToolCommandConfig, PluginToolNetworkPermissionRule,
     PluginToolPathPermissionRule, default_tool_name, empty_tool_spec_config, expr_lit_bool,
-    expr_lit_str, expr_path, expr_path_ident, expr_string_like, parse_expr_list,
+        expr_lit_str, expr_path, expr_path_ident, parse_expr_list,
     parse_item_lit_str_list, parse_item_path_expr_constraint, parse_item_path_expr_list_constraint,
     parse_item_path_format_constraint, parse_item_path_lit_str_constraint,
     parse_item_path_pattern_constraint, parse_item_path_usize_constraint, parse_lit_str_list,
@@ -61,23 +61,11 @@ fn parse_plugin_inline_tool_config(
                     }
                     "normalize" => spec.normalize = Some(expr_path(&value.value, "normalize")?),
                     "validate" => spec.validate = Some(expr_path(&value.value, "validate")?),
-                    "display" => spec.display = Some(expr_string_like(&value.value, "display")?),
-                    "ui_display" => {
-                        spec.ui_display = Some(expr_string_like(&value.value, "ui_display")?)
-                    }
                     "output" => {
                         return Err(syn::Error::new_spanned(
                             ident,
                             "use `output(Type)` instead of `output = Type`",
                         ));
-                    }
-                    "description_mode" => {
-                        spec.description_mode =
-                            Some(expr_string_like(&value.value, "description_mode")?)
-                    }
-                    "ui_display_mode" => {
-                        spec.ui_display_mode =
-                            Some(expr_string_like(&value.value, "ui_display_mode")?)
                     }
                     "stream" => {
                         if stream_method

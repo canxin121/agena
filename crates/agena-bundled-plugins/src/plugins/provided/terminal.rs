@@ -87,7 +87,6 @@ fn notify_request(kind: TerminalNotify) -> PluginNotifyRequest {
     name = "terminal",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Terminal window title and attention notification integration.",
-    display = brief
 )]
 impl TerminalPlugin {
     pub(crate) fn new() -> Self {

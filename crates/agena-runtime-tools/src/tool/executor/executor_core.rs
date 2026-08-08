@@ -6,7 +6,6 @@ impl ToolExecutor {
         snapshot_registry: Option<crate::SnapshotRegistry>,
         scheduler: Option<Arc<agena_scheduler::Scheduler>>,
         lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
-        tool_presentation: agena_plugin_host::ToolPresentationConfig,
     ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
@@ -18,7 +17,6 @@ impl ToolExecutor {
             snapshot_registry,
             scheduler,
             lsp_registry,
-            tool_presentation,
             cancellation_token: None,
             permission_inspector: None,
             command_event_sink: None,
@@ -247,18 +245,16 @@ impl ToolExecutor {
             tools = tools
                 .into_iter()
                 .map(|mut entry| {
-                    let input = PluginToolDefinitionInput {
+                                        let input = PluginToolDefinitionInput {
                         tool: entry.tool_key().clone(),
                         summary: tool_summary(&entry),
                         help: entry.definition.docs.help.clone(),
-                        description_mode: entry.definition.display.description_mode,
                         input_schema: entry.input_schema(),
                     };
                     match self.plugins.dispatch_tool_definition_blocking(input) {
                         Ok(patched) => {
                             entry.definition.docs.summary = Some(patched.summary);
                             entry.definition.docs.help = patched.help;
-                            entry.definition.display.description_mode = patched.description_mode;
                             entry.definition.contract.input_schema = patched.input_schema;
                             entry
                         }
@@ -321,9 +317,6 @@ impl ToolExecutor {
 
     pub fn detailed_tools(&self) -> Vec<RegisteredTool> {
         self.available_registered_tools()
-            .into_iter()
-            .map(|entry| present_registered_tool_detailed(entry, &self.tool_presentation))
-            .collect()
     }
 
     /// Return every ordinary execution tool visible to this session. There is
@@ -338,9 +331,6 @@ impl ToolExecutor {
 
     pub fn available_tools(&self) -> Vec<RegisteredTool> {
         self.available_registered_tools()
-            .into_iter()
-            .map(|entry| present_registered_tool(entry, &self.tool_presentation))
-            .collect()
     }
 
     pub fn available_execution_tools(&self) -> Vec<crate::tool::ExecutionTool> {
@@ -401,7 +391,7 @@ impl ToolExecutor {
 
 use super::{
     Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PluginHost,
-    PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor, present_registered_tool,
-    present_registered_tool_detailed, suggest_tool_names, tool_summary, unknown_tool_hint,
+    PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor, suggest_tool_names,
+    tool_summary, unknown_tool_hint,
 };
 use crate::tool::ToolApiBinding;

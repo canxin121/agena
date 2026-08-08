@@ -147,7 +147,6 @@ fn default_mcp_config() -> McpConfig {
     version = env!("CARGO_PKG_VERSION"),
     summary = "MCP discovery and bridge tools.",
     config_schema = mcp_config_schema(),
-    display = brief
 )]
 impl McpPlugin {
     pub(crate) fn new(manager: Arc<McpConnectionManager>) -> Self {
@@ -171,7 +170,6 @@ impl McpPlugin {
         summary = "List MCP resources from one server.",
         read_only,
         mcp,
-        ui_display = brief,
         network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
@@ -192,7 +190,6 @@ impl McpPlugin {
         summary = "List MCP resource templates from one server.",
         read_only,
         mcp,
-        ui_display = brief,
         network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
@@ -219,7 +216,6 @@ impl McpPlugin {
         summary = "Read one MCP resource by URI.",
         read_only,
         mcp,
-        ui_display = brief,
         network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
@@ -246,7 +242,6 @@ impl McpPlugin {
         summary = "List MCP prompt templates from one server.",
         read_only,
         mcp,
-        ui_display = brief,
         network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
@@ -267,7 +262,6 @@ impl McpPlugin {
         summary = "Fetch one MCP prompt template.",
         read_only,
         mcp,
-        ui_display = brief,
         network(connects = self.server_network_targets(input.server.as_str()).await?),
         concurrency_safe
     )]
@@ -291,7 +285,6 @@ impl McpPlugin {
         summary = "Call one discovered MCP tool.",
         mutating,
         mcp,
-        ui_display = brief,
         network(connects = self.server_network_targets(input.server.as_str()).await?)
     )]
     async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -319,7 +312,6 @@ impl McpPlugin {
         read_only,
         mcp,
         discovery,
-        ui_display = brief,
         concurrency_safe
     )]
     async fn invoke_tools_search(&self, input: &McpToolSearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -412,7 +404,6 @@ impl McpPlugin {
         summary = "Inspect configured MCP connection health and discovered tool counts.",
         read_only,
         mcp,
-        ui_display = brief,
         concurrency_safe
     )]
     async fn invoke_servers_status(&self) -> SdkResult<ToolInvokeOutput> {
@@ -497,7 +488,6 @@ impl McpPlugin {
         summary = "Reconnect one configured MCP server and refresh its tool cache.",
         mutating,
         mcp,
-        ui_display = brief,
         network(connects = self.server_network_targets(input.server.as_str()).await?)
     )]
     async fn invoke_servers_reconnect(
@@ -604,7 +594,6 @@ impl McpPlugin {
         Ok(Some(ToolDefinitionPatch {
             summary,
             help: Some(lines.join("\n")),
-            description_mode: None,
             input_schema: None,
         }))
     }

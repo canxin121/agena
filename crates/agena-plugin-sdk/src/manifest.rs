@@ -10,7 +10,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 pub use super::manifest_support::normalize_tool_tag_name;
 use super::manifest_support::{hook_subscription_for_name, normalize_schema_json, normalize_tags};
 pub use agena_domain::{
-    InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
+    ActivityKind, InputNetworkSpec, InputPathSpec, NetworkAccessSpec, PathAccessSpec, PathKind,
     ToolPermissionContract,
 };
 
@@ -27,15 +27,6 @@ pub struct PluginManifest {
     /// Detailed plugin help shown by inspect/catalog surfaces when available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
-    /// Preferred default presentation mode for tools published by this plugin
-    /// when an individual tool definition does not specify its own mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_description_mode: Option<ToolDescriptionMode>,
-    /// Preferred default text density for UI surfaces that render this plugin
-    /// or its tools when an individual tool definition does not specify its
-    /// own mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ui_display_mode: Option<UiTextDisplayMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub authors: Vec<String>,
     #[serde(default)]
@@ -44,8 +35,13 @@ pub struct PluginManifest {
     pub hooks: HookSubscription,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolDefinition>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<PluginCommandDefinition>,
+    /// Activity kinds contributed by this plugin. Hosts merge these into the
+    /// built-in catalog so new kinds appear in transcript expansion settings
+    /// automatically while the plugin is loaded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activity_kinds: Vec<ActivityKind>,
     /// Metadata tags describing what this plugin does for discovery/search/UI.
     /// Tags are metadata only and never carry authority.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -237,8 +233,6 @@ pub struct ToolDefinition {
     pub runtime: ToolRuntimePolicy,
     #[serde(default)]
     pub permissions: ToolPermissionContract,
-    #[serde(default)]
-    pub display: ToolDisplay,
 
     ///
     /// Tags are metadata only and never carry authority. Permission decisions
@@ -293,15 +287,6 @@ pub struct ToolRuntimePolicy {
     pub streaming: ToolStreamingMode,
     #[serde(default, skip_serializing_if = "ToolResultPolicy::is_default")]
     pub result_policy: ToolResultPolicy,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-/// Display preferences of a tool.
-pub struct ToolDisplay {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description_mode: Option<ToolDescriptionMode>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ui_display_mode: Option<UiTextDisplayMode>,
 }
 
 impl Default for ToolContract {
@@ -462,14 +447,6 @@ impl ToolDefinition {
         self.model.examples.as_slice()
     }
 
-    pub fn preferred_description_mode(&self) -> Option<ToolDescriptionMode> {
-        self.display.description_mode
-    }
-
-    pub fn preferred_ui_display_mode(&self) -> Option<UiTextDisplayMode> {
-        self.display.ui_display_mode
-    }
-
     pub fn input_schema(&self) -> serde_json::Value {
         let schema = normalize_schema_json(self.contract.input_schema.clone());
         if schema.is_null() {
@@ -510,24 +487,6 @@ pub enum ToolStreamingMode {
     Streaming,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Description verbosity of a tool.
-pub enum ToolDescriptionMode {
-    #[default]
-    Detailed,
-    Brief,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-/// Text display verbosity for UI.
-pub enum UiTextDisplayMode {
-    #[default]
-    Detailed,
-    Summary,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 /// Policy for rendering tool results.
 pub struct ToolResultPolicy {
@@ -563,32 +522,6 @@ pub enum ToolResultRenderKind {
     Log,
     Diff,
     Hidden,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-/// Preset display style of a tool.
-pub enum ToolDisplayPreset {
-    #[default]
-    Detailed,
-    Compact,
-    BriefDetailed,
-}
-
-impl ToolDisplayPreset {
-    pub fn tool_description_mode(self) -> ToolDescriptionMode {
-        match self {
-            Self::Detailed => ToolDescriptionMode::Detailed,
-            Self::Compact => ToolDescriptionMode::Brief,
-            Self::BriefDetailed => ToolDescriptionMode::Brief,
-        }
-    }
-
-    pub fn ui_display_mode(self) -> UiTextDisplayMode {
-        match self {
-            Self::Detailed | Self::BriefDetailed => UiTextDisplayMode::Detailed,
-            Self::Compact => UiTextDisplayMode::Summary,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -1144,24 +1077,18 @@ impl PluginManifest {
             version: version.into(),
             summary: None,
             help: None,
-            tool_description_mode: None,
-            ui_display_mode: None,
             authors: Vec::new(),
             transports: Vec::new(),
             hooks: HookSubscription::INIT | HookSubscription::SHUTDOWN,
-            tools: Vec::new(),
+                        tools: Vec::new(),
             commands: Vec::new(),
+            activity_kinds: Vec::new(),
             tags: Vec::new(),
             skills: Vec::new(),
             ui: PluginUiContributions::default(),
             config_schema: None,
             config_schema_i18n: BTreeMap::new(),
         }
-    }
-
-    pub fn set_display(&mut self, preset: ToolDisplayPreset) {
-        self.tool_description_mode = Some(preset.tool_description_mode());
-        self.ui_display_mode = Some(preset.ui_display_mode());
     }
 
     pub fn summary_text(&self) -> Option<&str> {

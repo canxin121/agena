@@ -76,7 +76,7 @@ pub fn render_entry_detailed(
     message: &TranscriptEntry,
     width: u16,
     i18n: &I18n,
-    defaults: TranscriptDetailDefaults,
+    defaults: &TranscriptDetailDefaults,
     expansions: &std::collections::BTreeMap<TranscriptNodeKey, bool>,
 ) -> RenderedMessageBlock {
     let mut lines = Vec::new();
@@ -143,10 +143,10 @@ pub fn render_entry_detailed(
                             entry_id: message.id,
                             content_id: part.id,
                         };
-                        let activity_expanded = expansions
+                                                let activity_expanded = expansions
                             .get(&activity_key)
                             .copied()
-                            .unwrap_or(defaults.activity_expanded);
+                            .unwrap_or_else(|| defaults.default_expanded(activity_kind_id_for_part(part)));
                         foldable_index < collapsed_prefix_len && !activity_expanded
                     })
                     .collect::<Vec<_>>();
@@ -417,8 +417,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: true,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: true,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -470,8 +471,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: true,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: true,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -580,8 +582,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -624,8 +627,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &expansion,
         );
@@ -693,8 +697,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -778,8 +783,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -856,8 +862,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -898,8 +905,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(summary_key, true)]),
         );
@@ -944,10 +952,11 @@ mod tests {
         };
         let expansions = std::collections::BTreeMap::from([(summary_key.clone(), true)]);
         let defaults = TranscriptDetailDefaults {
-            activity_expanded: false,
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
         };
 
-        let before = render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions);
+        let before = render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions);
         assert!(
             before
                 .nodes
@@ -957,7 +966,7 @@ mod tests {
         );
 
         message.parts.push(activity(37));
-        let after = render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions);
+        let after = render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions);
         assert!(
             after
                 .nodes
@@ -1004,10 +1013,11 @@ mod tests {
         };
         let expansions = std::collections::BTreeMap::from([(activity_key.clone(), true)]);
         let defaults = TranscriptDetailDefaults {
-            activity_expanded: false,
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
         };
         assert!(
-            render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions,)
+            render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions,)
                 .nodes
                 .iter()
                 .find(|node| node.key == activity_key)
@@ -1015,7 +1025,7 @@ mod tests {
         );
 
         message.parts.extend([activity(46), activity(47)]);
-        let after = render_entry_detailed(&message, 80, &I18n::english(), defaults, &expansions);
+        let after = render_entry_detailed(&message, 80, &I18n::english(), &defaults, &expansions);
         assert!(
             after
                 .nodes
@@ -1063,8 +1073,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -1162,8 +1173,9 @@ mod tests {
             &message,
             80,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: false,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -1730,8 +1742,9 @@ mod tests {
         let rendered = render_entry_export(
             &message,
             &I18n::english(),
-            TranscriptDetailDefaults {
-                activity_expanded: true,
+            &TranscriptDetailDefaults {
+                activity_default_expanded: true,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
         );
         assert!(rendered.iter().all(|line| {

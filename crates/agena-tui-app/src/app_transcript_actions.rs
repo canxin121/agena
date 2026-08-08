@@ -133,11 +133,12 @@ impl App {
         entries
             .iter()
             .map(|entry| {
-                render_entry_export(
+                                render_entry_export(
                     entry,
                     &self.i18n,
-                    TranscriptDetailDefaults {
-                        activity_expanded: true,
+                    &TranscriptDetailDefaults {
+                        activity_default_expanded: true,
+                        kind_defaults: std::collections::BTreeMap::new(),
                     },
                 )
                 .into_iter()

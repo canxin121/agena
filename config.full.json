@@ -8,7 +8,13 @@
     "tui": {
       "color_scheme": "auto",
       "graphics": "auto",
-      "theme": null
+      "theme": null,
+      "transcript": {
+        "activity_default_expanded": false,
+        "activity_kinds": {
+          "reasoning": true
+        }
+      }
     }
   },
   "runtime": {
@@ -71,14 +77,6 @@
     }
   },
   "plugins": {
-    "policy": {
-      "tool_presentation": {
-        "default_mode": "detailed"
-      },
-      "ui_presentation": {
-        "default_mode": "detailed"
-      }
-    },
     "list": {
       "agena.skills": {
         "package": {

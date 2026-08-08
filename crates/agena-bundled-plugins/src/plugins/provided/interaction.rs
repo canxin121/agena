@@ -16,7 +16,6 @@ pub(crate) struct InteractionPlugin {
     name = "interaction",
     version = env!("CARGO_PKG_VERSION"),
     summary = "User interaction tools.",
-    display = brief_detailed
 )]
 impl InteractionPlugin {
     pub(crate) fn new() -> Self {
@@ -39,7 +38,6 @@ impl InteractionPlugin {
         summary = "Ask the user for short structured input.",
         help = "Use only when you are blocked on a decision that belongs to the user: a preference, a direction choice, or a choice with no reasonable default. If a sensible default exists or you can verify the answer yourself, proceed instead of asking. Ask all necessary clarifying questions at once. Never use this tool to ask whether you should proceed or to seek plan approval.",
         interactive,
-        display = brief,
 
     )]
     async fn ask(&self, input: &AskUserToolInput) -> SdkResult<ToolInvokeOutput> {
@@ -49,7 +47,6 @@ impl InteractionPlugin {
     #[tool(
         tags(interactive),
         summary = "Show a non-blocking Markdown notification to the user.",
-        display = detailed,
         concurrency_safe
     )]
     fn notify(&self, input: &InteractionNotifyToolInput) -> SdkResult<ToolInvokeOutput> {

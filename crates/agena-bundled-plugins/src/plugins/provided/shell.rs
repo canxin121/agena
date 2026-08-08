@@ -56,7 +56,6 @@ pub(crate) struct ProcessStopInput {
     name = "shell",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Shell command execution and background process tools.",
-    display = brief_detailed
 )]
 impl ShellPlugin {
     #[tool(
@@ -65,7 +64,6 @@ impl ShellPlugin {
         help = "Run one shell process. Always pass the required `reads` and `writes` path arrays declaring every file or directory the command reads or modifies - empty arrays `[]` when the command touches only its executables (never list the executables). Pass the `network` array of outbound targets (host names, `host:port`, or URLs) the command may connect to - empty array `[]` when none. Set `background = true` to keep the process attached to the session. Add `monitor` for success/failure regex or literal conditions, quiet-period completion, bounded capture, and timeout. Both modes return one `process_id` used by shell.list/logs/stop.",
         mutating,
         shell,
-        display = detailed,
         network(connects = run_network_targets(input)?)
     )]
     async fn invoke_run(
@@ -91,7 +89,6 @@ impl ShellPlugin {
         summary = "List active background processes.",
         read_only,
         shell,
-        display = detailed,
         concurrency_safe
     )]
     async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
@@ -108,7 +105,6 @@ impl ShellPlugin {
         summary = "Read background process logs.",
         read_only,
         shell,
-        display = detailed,
         concurrency_safe
     )]
     async fn invoke_logs(
@@ -134,7 +130,6 @@ impl ShellPlugin {
         summary = "Stop one background process.",
         mutating,
         shell,
-        display = detailed
     )]
     async fn invoke_stop(
         &self,

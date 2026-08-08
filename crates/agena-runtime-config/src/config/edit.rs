@@ -840,7 +840,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_edits_cover_client_compaction_and_presentation_paths() {
+    fn settings_edits_cover_client_compaction_paths() {
         let root = test_root();
         let config_path = root.join("agena/agena.json");
         std::fs::create_dir_all(config_path.parent().expect("config parent"))
@@ -863,22 +863,6 @@ mod tests {
             ("session.compaction.auto", JsonValue::from(false)),
             ("session.compaction.reserved_tokens", JsonValue::from(8192)),
             ("session.max_turns", JsonValue::from(42)),
-            (
-                "plugins.policy.tool_presentation.default_mode",
-                JsonValue::from("brief"),
-            ),
-            (
-                "plugins.policy.ui_presentation.default_mode",
-                JsonValue::from("summary"),
-            ),
-            (
-                "plugins.policy.tool_presentation.plugins.\"agena.settings\"",
-                JsonValue::from("detailed"),
-            ),
-            (
-                "plugins.policy.ui_presentation.tools.\"agena.settings.get\"",
-                JsonValue::from("summary"),
-            ),
         ] {
             set_file_setting_with_env(
                 &config_path,
@@ -901,24 +885,6 @@ mod tests {
         assert_eq!(resolved.session.compaction.reserved_tokens, Some(8192));
         assert_eq!(resolved.session.max_turns, Some(42));
         assert_eq!(resolved.runtime.providers.client_versions.codex, "0.200.1");
-        assert_eq!(
-            resolved
-                .plugins
-                .policy
-                .tool_presentation
-                .plugins
-                .get(&"agena.settings".parse().expect("plugin key")),
-            Some(&agena_plugin_host::ToolDescriptionOverride::Detailed)
-        );
-        assert_eq!(
-            resolved
-                .plugins
-                .policy
-                .ui_presentation
-                .tools
-                .get(&"agena.settings.get".parse().expect("tool key")),
-            Some(&agena_plugin_host::UiPresentationOverride::Summary)
-        );
         let _ = std::fs::remove_dir_all(root);
     }
 

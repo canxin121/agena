@@ -809,7 +809,8 @@ mod tests {
         })]);
         let entry = user_document_entry(turn_id, 1, &document);
         let defaults = crate::TranscriptDetailDefaults {
-            activity_expanded: false,
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
         };
         let activity_key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::TurnInput(turn_id),
@@ -819,14 +820,14 @@ mod tests {
             &entry,
             80,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &Default::default(),
         );
         let expanded = crate::render_entry_detailed(
             &entry,
             80,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &std::collections::BTreeMap::from([(activity_key, true)]),
         );
         let body_of = |rendered: &crate::renderer::RenderedMessageBlock| -> Vec<String> {
@@ -925,8 +926,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -1046,8 +1048,9 @@ mod tests {
             &entries[1],
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -1082,8 +1085,9 @@ mod tests {
             &entries[1],
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -1122,8 +1126,9 @@ mod tests {
             &entries[1],
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key, true), (permissions_key.clone(), true)]),
         );
@@ -1234,8 +1239,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -1257,8 +1263,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -1346,8 +1353,9 @@ mod tests {
             &entries[0],
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -1850,8 +1858,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -1887,8 +1896,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -1936,8 +1946,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key, true), (input_key.clone(), true)]),
         );
@@ -2032,8 +2043,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -2054,8 +2066,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -2081,8 +2094,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true), (input_key, true)]),
         );
@@ -2170,8 +2184,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -2200,8 +2215,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -2244,8 +2260,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true), (result_key.clone(), false)]),
         );
@@ -2283,8 +2300,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key, true), (input_key, true)]),
         );
@@ -2373,8 +2391,9 @@ mod tests {
             &entry,
             400,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -2434,8 +2453,9 @@ mod tests {
             &entry,
             400,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key, true), (error_key.clone(), false)]),
         );
@@ -2515,8 +2535,9 @@ mod tests {
             &entry,
             200,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -2592,8 +2613,9 @@ mod tests {
             &entry,
             160,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key.clone(), true)]),
         );
@@ -2655,7 +2677,8 @@ mod tests {
             content_id: TranscriptContentId::Activity(activity_id),
         };
         let defaults = crate::TranscriptDetailDefaults {
-            activity_expanded: false,
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
         };
 
         // Collapsed: the row carries the hook headline and human summary; the
@@ -2664,7 +2687,7 @@ mod tests {
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &Default::default(),
         );
         let collapsed_text = collapsed
@@ -2688,7 +2711,7 @@ mod tests {
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &std::collections::BTreeMap::from([(key, true)]),
         );
         let expanded_text = expanded
@@ -2752,8 +2775,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -2774,8 +2798,9 @@ mod tests {
             &entry,
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &std::collections::BTreeMap::from([(key, true)]),
         );
@@ -2847,8 +2872,9 @@ mod tests {
             &ordinary,
             80,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -2877,8 +2903,9 @@ mod tests {
             &long,
             120,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -3138,8 +3165,9 @@ mod tests {
             &entries[0],
             100,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -3169,8 +3197,9 @@ mod tests {
             &entries[0],
             18,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -3239,7 +3268,8 @@ mod tests {
             None,
         );
         let defaults = crate::TranscriptDetailDefaults {
-            activity_expanded: false,
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
         };
 
         // Collapsed: the row carries the readable failure summary.
@@ -3247,7 +3277,7 @@ mod tests {
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &Default::default(),
         );
         let collapsed_text = collapsed
@@ -3278,7 +3308,7 @@ mod tests {
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &std::collections::BTreeMap::from([(key, true)]),
         );
         let expanded_text = expanded
@@ -3331,7 +3361,8 @@ mod tests {
             provenance: ActivityProvenance::default(),
         })]);
         let defaults = crate::TranscriptDetailDefaults {
-            activity_expanded: false,
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
         };
 
         // A reply that recovered keeps its durable Error Activity in content
@@ -3350,7 +3381,7 @@ mod tests {
             &recovered,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &Default::default(),
         );
         let text = rendered
@@ -3381,7 +3412,7 @@ mod tests {
             &failed,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &Default::default(),
         )
         .lines
@@ -3441,7 +3472,8 @@ It has two lines.";
             TranscriptPartContent::Text(text) if text.text == "final answer"
         ));
         let defaults = crate::TranscriptDetailDefaults {
-            activity_expanded: false,
+            activity_default_expanded: false,
+            kind_defaults: std::collections::BTreeMap::new(),
         };
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
@@ -3451,7 +3483,7 @@ It has two lines.";
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &Default::default(),
         );
         let collapsed_lines = collapsed
@@ -3483,7 +3515,7 @@ It has two lines.";
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            defaults,
+            &defaults,
             &std::collections::BTreeMap::from([(key, true)]),
         );
         let text = rendered
@@ -3553,8 +3585,9 @@ It has two lines.";
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -3632,8 +3665,9 @@ It has two lines.";
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );
@@ -3727,8 +3761,9 @@ It has two lines.";
             &entry,
             120,
             &agena_tui::i18n::I18n::english(),
-            crate::TranscriptDetailDefaults {
-                activity_expanded: false,
+            &crate::TranscriptDetailDefaults {
+                activity_default_expanded: false,
+                kind_defaults: std::collections::BTreeMap::new(),
             },
             &Default::default(),
         );

@@ -162,13 +162,17 @@ pub(crate) enum PermissionRuleStudioChoiceField {
     Mode,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct SettingsFieldSpec {
     pub(crate) section: SettingsStudioSectionId,
-    pub(crate) path: &'static str,
+    pub(crate) path: String,
     pub(crate) label_key: &'static str,
     pub(crate) description_key: &'static str,
     pub(crate) kind: SettingsFieldKind,
+    /// Dynamic label override (e.g. a plugin-contributed activity kind).
+    pub(crate) label_override: Option<String>,
+    /// Dynamic description override (e.g. a plugin-contributed activity kind).
+    pub(crate) description_override: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]

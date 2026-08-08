@@ -178,7 +178,6 @@ struct MemoryRecordOutput {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Persistent memory with searchable retrieval and write tools.",
     config_schema = memory_config_schema(),
-    display = brief
 )]
 impl MemoryPlugin {
     pub fn new() -> Self {
@@ -293,7 +292,6 @@ impl MemoryPlugin {
         tags(query, filesystem, discovery),
         summary = "Search durable memory records.",
         read_only,
-        display = brief,
         path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_search(&self, input: &MemorySearchInput) -> SdkResult<ToolInvokeOutput> {
@@ -335,7 +333,6 @@ impl MemoryPlugin {
         tags(query, filesystem),
         summary = "Read one durable memory record.",
         read_only,
-        display = brief,
         path(read = self.store_dir_permission_path()?)
     )]
     async fn invoke_get(&self, input: &MemoryGetInput) -> SdkResult<ToolInvokeOutput> {
@@ -360,7 +357,6 @@ impl MemoryPlugin {
         tags(query, filesystem, discovery),
         summary = "List durable memory records.",
         read_only,
-        display = brief,
         path(read = self.store_dir_permission_path()?)
     )]
     async fn invoke_list(&self, input: &MemoryListInput) -> SdkResult<ToolInvokeOutput> {
@@ -412,7 +408,6 @@ impl MemoryPlugin {
         tags(mutate, filesystem),
         summary = "Write one durable memory record.",
         mutating,
-        display = brief,
         path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_write(&self, input: &MemoryWriteInput) -> SdkResult<ToolInvokeOutput> {
@@ -450,7 +445,6 @@ impl MemoryPlugin {
         tags(mutate, filesystem),
         summary = "Delete one durable memory record.",
         mutating,
-        display = brief,
         path(write = self.store_dir_permission_path()?)
     )]
     async fn invoke_delete(&self, input: &MemoryDeleteInput) -> SdkResult<ToolInvokeOutput> {

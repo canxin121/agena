@@ -1,12 +1,18 @@
-pub(crate) fn settings_field_display_description(i18n: &I18n, field: SettingsFieldSpec) -> String {
-    ui_text::t(i18n, field.description_key)
+pub(crate) fn settings_field_display_description(i18n: &I18n, field: &SettingsFieldSpec) -> String {
+    field
+        .description_override
+        .clone()
+        .unwrap_or_else(|| ui_text::t(i18n, field.description_key))
 }
 
-pub(crate) fn settings_field_display_label(i18n: &I18n, field: SettingsFieldSpec) -> String {
-    ui_text::t(i18n, field.label_key)
+pub(crate) fn settings_field_display_label(i18n: &I18n, field: &SettingsFieldSpec) -> String {
+    field
+        .label_override
+        .clone()
+        .unwrap_or_else(|| ui_text::t(i18n, field.label_key))
 }
 
-pub(crate) fn settings_field_edit_title(i18n: &I18n, field: SettingsFieldSpec) -> String {
+pub(crate) fn settings_field_edit_title(i18n: &I18n, field: &SettingsFieldSpec) -> String {
     format!(
         "{} ({})",
         settings_field_display_label(i18n, field),
@@ -150,19 +156,86 @@ pub(crate) fn settings_source_rows_for_workspace_config_path(
     ]
 }
 
+/// Dynamic Interface items for each activity kind in the catalog (built-in
+/// plus plugin-contributed). Each kind toggles its default expansion state at
+/// `ui.tui.transcript.activity_kinds.<id>`.
+pub(crate) fn settings_studio_activity_kind_items(
+    i18n: &I18n,
+    backend: &crate::Backend,
+    sources: &ConfigJsonSources,
+) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
+    let mut items = Vec::new();
+    for kind in backend.activity_kind_catalog() {
+        let path = format!("ui.tui.transcript.activity_kinds.{}", kind.id);
+        let label_key = format!("settings-activity-kind-{}-label", kind.id);
+        let description_key = format!("settings-activity-kind-{}-description", kind.id);
+        // Missing locale keys fall back to the key itself, so resolve now and
+        // use the human label (or kind label) as the dynamic override.
+        let label = ui_text::t(i18n, &label_key);
+        let description = ui_text::t(i18n, &description_key);
+        let label_override = if label != label_key {
+            Some(label)
+        } else {
+            Some(kind.label.clone())
+        };
+        let description_override = if description != description_key {
+            Some(description)
+        } else {
+            Some(kind.label.clone())
+        };
+        let field = SettingsFieldSpec {
+            section: SettingsStudioSectionId::Interface,
+            path: path.clone(),
+            label_key: "settings-activity-kind-label",
+            description_key: "settings-activity-kind-description",
+            kind: SettingsFieldKind::Bool,
+            label_override,
+            description_override,
+        };
+        let file_value =
+            get_json_path(&sources.file, Some(path.as_str())).unwrap_or(JsonValue::Null);
+        let effective_value =
+            get_json_path(&sources.effective, Some(path.as_str())).unwrap_or(JsonValue::Null);
+        let effective_summary = settings_field_effective_summary(&effective_value);
+        let current_summary = if file_value.is_null() {
+            ui_text::t(i18n, "settings-source-unset")
+        } else {
+            format_setting_value_inline(&file_value)
+        };
+        let source_rows = settings_source_rows_for_config_path(
+            i18n,
+            sources,
+            path.as_str(),
+            current_summary.clone(),
+            effective_summary.clone(),
+        );
+        items.push(SettingsStudioItem::from_parts(
+            settings_field_display_label(i18n, &field),
+            effective_summary.clone(),
+            settings_field_display_description(i18n, &field),
+            Some(path.clone()),
+            Some(current_summary),
+            Some(effective_summary),
+            source_rows,
+            SettingsPickerAction::EditField(field.clone()),
+        ));
+    }
+    items
+}
+
 pub(crate) fn settings_studio_field_items(
     i18n: &I18n,
     sources: &ConfigJsonSources,
     section: SettingsStudioSectionId,
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
-    SETTINGS_FIELDS
-        .iter()
+        settings_fields()
+        .into_iter()
         .filter(|field| field.section == section)
         .map(|field| {
             let file_value =
-                get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
-            let effective_value =
-                get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
+                get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
+            let effective_value = get_json_path(&sources.effective, Some(field.path.as_str()))
+                .unwrap_or(JsonValue::Null);
             let effective_summary = settings_field_effective_summary(&effective_value);
             let current_summary = if file_value.is_null() {
                 ui_text::t(i18n, "settings-source-unset")
@@ -172,19 +245,19 @@ pub(crate) fn settings_studio_field_items(
             let source_rows = settings_source_rows_for_config_path(
                 i18n,
                 sources,
-                field.path,
+                field.path.as_str(),
                 current_summary.clone(),
                 effective_summary.clone(),
             );
             SettingsStudioItem::from_parts(
-                settings_field_display_label(i18n, *field),
+                settings_field_display_label(i18n, &field),
                 effective_summary.clone(),
-                settings_field_display_description(i18n, *field),
-                Some(field.path.to_string()),
+                settings_field_display_description(i18n, &field),
+                Some(field.path.clone()),
                 Some(current_summary),
                 Some(effective_summary),
                 source_rows,
-                SettingsPickerAction::EditField(*field),
+                SettingsPickerAction::EditField(field.clone()),
             )
         })
         .collect()
@@ -219,15 +292,14 @@ pub(crate) fn settings_studio_provider_default_item(
     sources: &ConfigJsonSources,
     providers: &[ProviderSummaryResource],
 ) -> SettingsStudioItem<SettingsPickerAction> {
-    let field = SETTINGS_FIELDS
-        .iter()
+        let field = settings_fields()
+        .into_iter()
         .find(|field| field.path == "providers.default")
-        .copied()
         .expect("providers.default settings field must exist");
     let file_provider_value =
-        get_json_path(&sources.file, Some(field.path)).unwrap_or(JsonValue::Null);
-    let effective_provider_value =
-        get_json_path(&sources.effective, Some(field.path)).unwrap_or(JsonValue::Null);
+        get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
+    let effective_provider_value = get_json_path(&sources.effective, Some(field.path.as_str()))
+        .unwrap_or(JsonValue::Null);
     let file_value = get_json_path(&sources.file, Some("providers.default_selection"))
         .ok()
         .filter(|value| !value.is_null())
@@ -245,15 +317,15 @@ pub(crate) fn settings_studio_provider_default_item(
     let source_rows = settings_source_rows_for_config_path(
         i18n,
         sources,
-        field.path,
+        field.path.as_str(),
         current_summary.clone(),
         effective_summary.clone(),
     );
     SettingsStudioItem::from_parts(
-        settings_field_display_label(i18n, field),
+        settings_field_display_label(i18n, &field),
         effective_summary.clone(),
-        settings_field_display_description(i18n, field),
-        Some(field.path.to_string()),
+        settings_field_display_description(i18n, &field),
+        Some(field.path.clone()),
         Some(current_summary),
         Some(effective_summary),
         source_rows,
@@ -465,9 +537,10 @@ pub(crate) fn settings_config_path_display_label(i18n: &I18n, path: &str) -> Str
 }
 
 use super::{
-    ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SETTINGS_FIELDS,
-    SessionModelModeStep, SettingsFieldSpec, SettingsPickerAction, SettingsStudioItem,
+    ConfigJsonSources, I18n, JsonValue, ProviderSummaryResource, SessionModelModeStep,
+    SettingsFieldSpec, SettingsFieldKind, SettingsPickerAction, SettingsStudioItem,
     SettingsStudioSectionId, SettingsStudioSourceRow, get_json_path, join_inline_segments,
+    settings_fields,
 };
 use crate::ui_text;
 use crate::{format_setting_value_inline, settings_studio_provider_workbench_item};

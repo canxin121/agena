@@ -1,22 +1,12 @@
 use super::super::{
-    Line, Modifier, PluginTextDisplayMode, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span,
-    Style, Text, clean, command_argument_count, command_schema_and_value, default_value_for_schema,
-    fixed_columns, plugin_package_preview, plugin_text_display_mode_label,
-    plugin_text_display_source_label, schema_property_count,
+    Line, Modifier, PluginWorkbenchOverlay, PluginWorkbenchPlugin, Span, Style, Text, clean,
+    command_argument_count, command_schema_and_value, default_value_for_schema, fixed_columns,
+    plugin_package_preview, schema_property_count,
 };
 use super::append_schema_editor_lines;
 use super::diagnostics_text;
 
 pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static> {
-    let summary_tools = plugin
-        .tool_ui_display_modes
-        .values()
-        .filter(|mode| **mode == PluginTextDisplayMode::Summary)
-        .count();
-    let detailed_tools = plugin
-        .tool_ui_display_modes
-        .len()
-        .saturating_sub(summary_tools);
     Text::from(vec![
         Line::from(format!(
             "{}        {}        v{}        {}",
@@ -30,13 +20,6 @@ pub(crate) fn plugin_header_text(plugin: &PluginWorkbenchPlugin) -> Text<'static
             plugin.tools.len(),
             plugin.commands.len(),
             clean(plugin.config_status.label.as_str())
-        )),
-        Line::from(format!(
-            "UI: {} via {}        detailed tools: {}        summary tools: {}",
-            plugin_text_display_mode_label(plugin.ui_display_mode),
-            plugin_text_display_source_label(plugin.ui_display_source),
-            detailed_tools,
-            summary_tools,
         )),
         Line::from(format!(
             "Package: {}",
@@ -54,35 +37,17 @@ pub(crate) fn plugin_tools_text(
     dialog: &PluginWorkbenchOverlay,
     plugin: &PluginWorkbenchPlugin,
 ) -> Text<'static> {
-    if plugin.tools.is_empty() {
+        if plugin.tools.is_empty() {
         return Text::from("No tools.");
     }
-    let summary_tools = plugin
-        .tool_ui_display_modes
-        .values()
-        .filter(|mode| **mode == PluginTextDisplayMode::Summary)
-        .count();
-    let mut lines = vec![Line::from(Span::styled(
-        format!(
-            "Effective UI mode: {} via {}. {} of {} tools currently render in summary mode.",
-            plugin_text_display_mode_label(plugin.ui_display_mode),
-            plugin_text_display_source_label(plugin.ui_display_source),
-            summary_tools,
-            plugin.tools.len(),
-        ),
-        Style::default().fg(agena_tui_components::theme::muted_color()),
-    ))];
-    lines.push(Line::from(
+    let mut lines = vec![Line::from(
         "Up/Down selects a tool. Enter opens the host-owned Schema form; Ctrl+S validates and runs it.",
-    ));
+    )];
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         fixed_columns(
             &[
                 ("Tool", 24),
-                ("UI", 10),
-                ("Source", 16),
-                ("Default", 12),
                 ("Description", 54),
                 ("Inputs", 8),
             ],
@@ -90,40 +55,14 @@ pub(crate) fn plugin_tools_text(
         ),
         Style::default().add_modifier(Modifier::BOLD),
     )));
-    for (index, tool) in plugin.tools.iter().enumerate() {
+        for (index, tool) in plugin.tools.iter().enumerate() {
         let inputs = schema_property_count(&tool.contract.input_schema);
-        let mode = plugin
-            .tool_ui_display_modes
-            .get(tool.name.as_str())
-            .copied()
-            .unwrap_or(plugin.ui_display_mode);
-        let ui_label = plugin_text_display_mode_label(mode);
-        let default_label = plugin
-            .tool_ui_display_defaults
-            .get(&tool.name)
-            .copied()
-            .map(plugin_text_display_mode_label)
-            .unwrap_or("global");
-        let source_label = plugin
-            .tool_ui_display_sources
-            .get(&tool.name)
-            .copied()
-            .map(plugin_text_display_source_label)
-            .unwrap_or("sdk-fallback");
-        let description = match mode {
-            PluginTextDisplayMode::Detailed => tool
-                .docs
-                .help
-                .as_deref()
-                .or(tool.docs.summary.as_deref())
-                .unwrap_or(""),
-            PluginTextDisplayMode::Summary => tool
-                .docs
-                .summary
-                .as_deref()
-                .or(tool.docs.help.as_deref())
-                .unwrap_or(""),
-        };
+        let description = tool
+            .docs
+            .help
+            .as_deref()
+            .or(tool.docs.summary.as_deref())
+            .unwrap_or("");
         let marker = if index == dialog.selected_tool {
             ">> "
         } else {
@@ -134,9 +73,6 @@ pub(crate) fn plugin_tools_text(
             fixed_columns(
                 &[
                     (tool.name.as_str(), 24),
-                    (ui_label, 10),
-                    (source_label, 16),
-                    (default_label, 12),
                     (description, 54),
                     (inputs.to_string().as_str(), 8),
                 ],

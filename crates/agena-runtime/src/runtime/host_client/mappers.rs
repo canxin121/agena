@@ -52,18 +52,9 @@ pub(super) fn render_tool_descriptor(
         help_parts.push(after_help.to_string());
     }
     let help = (!help_parts.is_empty()).then(|| help_parts.join("\n\n"));
-    let summary = match tool.definition.preferred_description_mode() {
-        Some(agena_plugin_host::ToolDescriptionMode::Detailed) => {
-            let mut parts = brief_summary.into_iter().collect::<Vec<_>>();
-            if let Some(help) = help.as_deref()
-                && !parts.iter().any(|part| part.trim() == help.trim())
-            {
-                parts.push(help.to_owned());
-            }
-            (!parts.is_empty()).then(|| parts.join("\n\n"))
-        }
-        Some(agena_plugin_host::ToolDescriptionMode::Brief) | None => brief_summary,
-    };
+    // Fixed presentation: list/search always show the brief summary and
+    // tools_help always returns the full help text.
+    let summary = brief_summary;
     let input_schema = Some(tool.input_schema());
     ToolDescriptor {
         name: crate::tool::compact_tool_call_name(tool.canonical_name().as_str()),

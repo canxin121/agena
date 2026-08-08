@@ -67,7 +67,6 @@ const fn default_interval_ms() -> u64 {
     name = "environment",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Wait for filesystem, TCP, or HTTP environment readiness.",
-    display = detailed
 )]
 impl EnvironmentPlugin {
     pub(crate) fn new() -> Self {
@@ -92,7 +91,6 @@ impl EnvironmentPlugin {
         read_only,
 
 
-        display = detailed,
         concurrency_safe
     )]
     async fn wait(&self, input: &EnvironmentWaitInput) -> SdkResult<ToolInvokeOutput> {

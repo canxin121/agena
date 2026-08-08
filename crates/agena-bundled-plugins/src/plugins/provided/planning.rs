@@ -22,7 +22,6 @@ pub(crate) struct PlanPlugin {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Plan orchestration and plan-autorun tools.",
     config_schema = planning_plugin_config_schema(),
-    display = brief_detailed
 )]
 impl PlanPlugin {
     pub(crate) fn new() -> Self {
@@ -55,7 +54,6 @@ impl PlanPlugin {
         summary = "Inspect the current plan state.",
         planning,
         read_only,
-        display = brief,
 
         concurrency_safe
     )]
@@ -69,7 +67,6 @@ impl PlanPlugin {
         help = "Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine. By default the plan must be approved by the user before it becomes active: pass `request_approval: true` (or omit it) unless the user has already declared that the plan can be created directly without approval, in which case pass `request_approval: false`. Present the finished plan for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.",
         planning,
         mutating,
-        display = brief,
 
     )]
     async fn set(&self, input: &PlanSetInput) -> SdkResult<ToolInvokeOutput> {
@@ -82,7 +79,6 @@ impl PlanPlugin {
                         help = "Keep plan-level updates separate from step/check updates: do not send `phase` / `request_approval` together with `step`, `check`, `status`, or `note`. Address steps and checks by 1-based index (`step`, `check`). For plan-level phase changes, pass `request_approval: true` (or omit it) to ask the user to approve the transition, unless the user has already declared it needs no approval, in which case pass `request_approval: false`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
         planning,
         mutating,
-        display = brief,
 
     )]
     async fn update(&self, input: &PlanUpdateInput) -> SdkResult<ToolInvokeOutput> {
@@ -94,7 +90,6 @@ impl PlanPlugin {
         summary = "Remove the current plan.",
         planning,
         mutating,
-        display = brief,
 
     )]
     async fn clear(&self) -> SdkResult<ToolInvokeOutput> {

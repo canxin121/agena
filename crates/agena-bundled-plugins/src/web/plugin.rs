@@ -1012,7 +1012,6 @@ struct CrawlWebSearchOutput {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
     config_schema = web_config_schema(),
-    display = brief_detailed
 )]
 impl WebPlugin {
     pub(crate) fn new() -> Self {
@@ -1499,7 +1498,6 @@ impl WebPlugin {
         read_only,
 
 
-        display = detailed,
         examples(
             r#"{"url":"https://openai.com"}"#,
             r#"{"url":"https://example.com/docs","prompt":"extract the release date and breaking changes"}"#
@@ -1536,7 +1534,6 @@ impl WebPlugin {
 
 
         discovery,
-        ui_display = detailed,
         path(write = self.store_write_permission_path()?),
         network(connect = prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?.to_string())
     )]
@@ -1597,7 +1594,6 @@ impl WebPlugin {
 
 
         discovery,
-        display = detailed,
         examples(
             r#"{"query":"Agena plugin architecture","max_results":5}"#,
             r#"{"query":"Rust schemars derive examples","allowed_domains":["docs.rs","github.com"]}"#
@@ -1672,7 +1668,6 @@ impl WebPlugin {
         read_only,
 
 
-        display = detailed
     )]
     async fn browser_open(&self, input: &BrowserOpenInput) -> SdkResult<ToolInvokeOutput> {
         let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
@@ -1782,7 +1777,6 @@ impl WebPlugin {
         summary = "List open page targets in the managed interactive browser.",
         read_only,
 
-        display = detailed,
         concurrency_safe
     )]
     async fn browser_list(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
@@ -1849,7 +1843,6 @@ impl WebPlugin {
         summary = "Close one page target in the managed interactive browser.",
         mutating,
 
-        display = detailed
     )]
     async fn browser_close(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
         let host = self.state()?.host.clone();
@@ -1882,7 +1875,6 @@ impl WebPlugin {
         summary = "Shut down the managed browser process and all its sessions.",
         help = "Closes the underlying Chrome/Chromium process used for rendered fetches and interactive browsing, and removes its temporary profile. All browser sessions are discarded; the next browser_open starts a fresh browser. Use this to release memory without exiting Agena.",
         mutating,
-        display = detailed
     )]
     async fn browser_shutdown(&self, _input: &BrowserListInput) -> SdkResult<ToolInvokeOutput> {
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
@@ -1930,7 +1922,6 @@ impl WebPlugin {
         summary = "Inspect visible text and interactive elements in a browser session.",
         read_only,
 
-        display = detailed,
         concurrency_safe
     )]
     async fn browser_snapshot(&self, input: &BrowserSessionInput) -> SdkResult<ToolInvokeOutput> {
@@ -1957,7 +1948,6 @@ impl WebPlugin {
         summary = "Click a browser element selected by CSS or the latest snapshot ref.",
         mutating,
 
-        display = detailed
     )]
     async fn browser_click(&self, input: &BrowserClickInput) -> SdkResult<ToolInvokeOutput> {
         let target = browser_element_expression(input.selector.as_deref(), input.element_ref)?;
@@ -1983,7 +1973,6 @@ impl WebPlugin {
         summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
         mutating,
 
-        display = detailed
     )]
     async fn browser_type(&self, input: &BrowserTypeInput) -> SdkResult<ToolInvokeOutput> {
         let expression = browser_type_expression(
@@ -2011,7 +2000,6 @@ impl WebPlugin {
         summary = "Wait for page readiness, a CSS selector, or visible text.",
         read_only,
 
-        display = detailed,
         concurrency_safe
     )]
     async fn browser_wait(&self, input: &BrowserWaitInput) -> SdkResult<ToolInvokeOutput> {
@@ -2044,7 +2032,6 @@ impl WebPlugin {
         mutating,
 
 
-        display = detailed
     )]
     async fn browser_screenshot(
         &self,
@@ -2127,7 +2114,6 @@ impl WebPlugin {
         mutating,
 
 
-        display = detailed
     )]
     async fn browser_download(&self, input: &BrowserDownloadInput) -> SdkResult<ToolInvokeOutput> {
         const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;

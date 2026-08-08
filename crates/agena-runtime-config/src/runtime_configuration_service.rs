@@ -1,5 +1,6 @@
 //! Read-only configuration projection from a composed runtime.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -33,6 +34,10 @@ pub struct RuntimeUiConfiguration {
     pub theme: Option<String>,
     pub color_scheme: RuntimeTuiColorScheme,
     pub graphics: RuntimeTuiGraphicsMode,
+    /// Default transcript expansion for activities without a kind override.
+    pub transcript_activity_default_expanded: bool,
+    /// Per-kind transcript expansion overrides keyed by activity kind id.
+    pub transcript_activity_kinds: BTreeMap<String, bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

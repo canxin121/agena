@@ -195,9 +195,7 @@ pub(super) fn validate_plugin_manifest_value(
             "version",
             "description",
             "summary",
-            "help",
-            "tool_description_mode",
-            "ui_display_mode",
+                        "help",
             "authors",
             "transports",
             "hooks",
@@ -325,9 +323,8 @@ pub(super) fn validate_tool_manifest_value(
             "contract",
             "model",
             "docs",
-            "runtime",
+                        "runtime",
             "permissions",
-            "display",
             "capabilities",
         ],
         "tool.unknown_field",
@@ -398,16 +395,7 @@ pub(super) fn validate_tool_manifest_value(
             output,
         );
     }
-    if let Some(display) = value.get("display") {
-        check_object_keys(
-            display,
-            &format!("{path}.display"),
-            &["description_mode", "ui_display_mode"],
-            "tool.display.unknown_field",
-            output,
-        );
-    }
-    if let Some(tool) = parsed_tool.as_ref() {
+        if let Some(tool) = parsed_tool.as_ref() {
         validate_tool_segment(
             plugin_namespace,
             plugin_name,

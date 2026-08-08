@@ -7,14 +7,14 @@ impl App {
         match drive_input_dialog_key(dialog, key) {
             InputDialogKeyResult::Close => true,
             InputDialogKeyResult::Submit(action, input) => {
-                match parse_settings_field_input(&self.i18n, action, input.as_str()) {
+                match parse_settings_field_input(&self.i18n, &action, input.as_str()) {
                     Ok(Some(value)) => match self
-                        .block_on_async(self.backend.set_config_setting(action.path, value))
+                        .block_on_async(self.backend.set_config_setting(action.path.as_str(), value))
                     {
                         Ok(_) => {
                             self.flash_success(settings_path_updated_message(
                                 &self.i18n,
-                                action.path,
+                                action.path.as_str(),
                             ));
                             self.refresh_current_route_after_local_edit();
                             true
@@ -25,11 +25,11 @@ impl App {
                         }
                     },
                     Ok(None) => {
-                        match self.block_on_async(self.backend.delete_config_setting(action.path)) {
+                        match self.block_on_async(self.backend.delete_config_setting(action.path.as_str())) {
                             Ok(_) => {
                                 self.flash_success(settings_path_cleared_message(
                                     &self.i18n,
-                                    action.path,
+                                    action.path.as_str(),
                                 ));
                                 self.refresh_current_route_after_local_edit();
                                 true

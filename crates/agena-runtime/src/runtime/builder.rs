@@ -1007,13 +1007,19 @@ impl agena_runtime::RuntimeConfigurationService for AgenaRuntime {
                     TuiColorSchemeConfig::Dark => agena_runtime::RuntimeTuiColorScheme::Dark,
                     TuiColorSchemeConfig::Light => agena_runtime::RuntimeTuiColorScheme::Light,
                 },
-                graphics: match snapshot.ui_config().tui.graphics {
+                                graphics: match snapshot.ui_config().tui.graphics {
                     TuiGraphicsModeConfig::Auto => agena_runtime::RuntimeTuiGraphicsMode::Auto,
                     TuiGraphicsModeConfig::Native => agena_runtime::RuntimeTuiGraphicsMode::Native,
                     TuiGraphicsModeConfig::Unicode => {
                         agena_runtime::RuntimeTuiGraphicsMode::Unicode
                     }
                 },
+                transcript_activity_default_expanded: snapshot
+                    .ui_config()
+                    .tui
+                    .transcript
+                    .activity_default_expanded,
+                transcript_activity_kinds: snapshot.ui_config().tui.transcript.activity_kinds.clone(),
             },
             effective_config,
             configuration_document,
@@ -1617,7 +1623,6 @@ impl AgenaRuntime {
             None,
             None,
             None,
-            snapshot.plugin_config().policy.tool_presentation.clone(),
         )
     }
 

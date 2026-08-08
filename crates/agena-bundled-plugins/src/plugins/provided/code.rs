@@ -44,7 +44,6 @@ struct CodeSyntaxTreeInput {
     name = "code",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Structured code search and syntax inspection tools.",
-    display = brief
 )]
 impl CodePlugin {
     #[tool(
@@ -54,7 +53,6 @@ impl CodePlugin {
         read_only,
 
         discovery,
-        display = brief,
         concurrency_safe
     )]
     async fn dispatch_search_ast(
@@ -72,7 +70,6 @@ impl CodePlugin {
         read_only,
 
         discovery,
-        display = brief,
         concurrency_safe
     )]
     async fn dispatch_syntax_tree(

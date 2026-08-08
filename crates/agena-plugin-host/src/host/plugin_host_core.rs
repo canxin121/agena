@@ -1387,9 +1387,6 @@ impl PluginHost {
                     if patch.help.is_some() {
                         inp.help = patch.help;
                     }
-                    if patch.description_mode.is_some() {
-                        inp.description_mode = patch.description_mode;
-                    }
                     if let Some(s) = patch.input_schema {
                         inp.input_schema = s;
                     }

@@ -111,15 +111,15 @@ pub(crate) fn setting_value_input_text(value: &JsonValue) -> String {
 
 pub(crate) fn settings_value_edit_prompt(
     i18n: &I18n,
-    field: SettingsFieldSpec,
+    field: &SettingsFieldSpec,
     file_value: &JsonValue,
     effective_value: &JsonValue,
 ) -> String {
-    let mut lines = vec![
+        let mut lines = vec![
         settings_field_display_description(i18n, field),
         i18n.text_args(
             "overlay-settings-detail-path",
-            &agena_tui::fl_args!("path" => field.path),
+            &agena_tui::fl_args!("path" => field.path.as_str()),
         ),
     ];
     if !file_value.is_null() {
@@ -306,7 +306,7 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
         ChoiceOverlayAction::InsertContent => String::new(),
         ChoiceOverlayAction::SettingsField(field) => i18n.text_args(
             "overlay-choice-clear-settings-detail",
-            &agena_tui::fl_args!("field" => field.path),
+            &agena_tui::fl_args!("field" => field.path.as_str()),
         ),
         ChoiceOverlayAction::SessionModelMode(step) => i18n.text_args(
             "overlay-choice-clear-runtime-detail",
@@ -353,7 +353,7 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
 
 pub(crate) fn parse_settings_field_input(
     i18n: &I18n,
-    field: SettingsFieldSpec,
+    field: &SettingsFieldSpec,
     input: &str,
 ) -> std::result::Result<Option<JsonValue>, String> {
     let trimmed = input.trim();
@@ -369,7 +369,7 @@ pub(crate) fn parse_settings_field_input(
                 _ => {
                     return Err(i18n.text_args(
                         "settings-field-parse-bool",
-                        &agena_tui::fl_args!("field" => field.path),
+                        &agena_tui::fl_args!("field" => field.path.as_str()),
                     ));
                 }
             };
@@ -379,7 +379,7 @@ pub(crate) fn parse_settings_field_input(
             let value = trimmed.parse::<u64>().map_err(|_| {
                 i18n.text_args(
                     "settings-field-parse-integer",
-                    &agena_tui::fl_args!("field" => field.path),
+                    &agena_tui::fl_args!("field" => field.path.as_str()),
                 )
             })?;
             Ok(Some(JsonValue::from(value)))

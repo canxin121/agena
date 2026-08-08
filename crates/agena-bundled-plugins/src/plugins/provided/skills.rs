@@ -907,7 +907,6 @@ fn skills_config_schema() -> serde_json::Value {
     version = env!("CARGO_PKG_VERSION"),
     summary = "Discover and read plain-text skills and slash commands.",
     config_schema = skills_config_schema(),
-    display = brief
 )]
 impl SkillsPlugin {
     pub(crate) fn new() -> Self {
@@ -1511,7 +1510,6 @@ impl SkillsPlugin {
         Ok(Some(ToolDefinitionPatch {
             summary,
             help: Some(lines.join("\n")),
-            description_mode: None,
             input_schema: None,
         }))
     }
@@ -1521,7 +1519,6 @@ impl SkillsPlugin {
         summary = "List discovered skills and slash commands.",
         read_only,
         discovery,
-        ui_display = detailed,
         concurrency_safe
     )]
     async fn invoke_list(&self, input: &SkillsListInput) -> SdkResult<ToolInvokeOutput> {
@@ -1604,7 +1601,6 @@ impl SkillsPlugin {
         summary = "Read one discovered skill or slash command.",
         read_only,
         discovery,
-        ui_display = detailed,
         concurrency_safe
     )]
     async fn invoke_get(&self, input: &SkillsGetInput) -> SdkResult<ToolInvokeOutput> {
@@ -1653,7 +1649,6 @@ impl SkillsPlugin {
         help = "Creates `.agena/skills/<name>/SKILL.md` from a complete SKILL.md document. Only workspace-local Skills are mutable; built-in, plugin, user-global, and compatibility Skills remain read-only.",
         mutating,
 
-        display = detailed
     )]
     async fn invoke_create(&self, input: &SkillsCreateInput) -> SdkResult<ToolInvokeOutput> {
         let result = self.create_managed_skill(input.document.as_str())?;
@@ -1671,7 +1666,6 @@ impl SkillsPlugin {
         help = "Replaces an existing `.agena/skills/<name>/SKILL.md` document. The replacement frontmatter must keep the same canonical name.",
         mutating,
 
-        display = detailed
     )]
     async fn invoke_update(&self, input: &SkillsUpdateInput) -> SdkResult<ToolInvokeOutput> {
         let result = self.update_managed_skill(input.name.as_str(), input.document.as_str())?;
@@ -1689,7 +1683,6 @@ impl SkillsPlugin {
         help = "Deletes only `.agena/skills/<name>/SKILL.md`; bundled, plugin, user-global, and compatibility Skills cannot be deleted through this tool.",
         mutating,
 
-        display = detailed
     )]
     async fn invoke_delete(&self, input: &SkillsDeleteInput) -> SdkResult<ToolInvokeOutput> {
         let result = self.delete_managed_skill(input.name.as_str())?;
@@ -1706,7 +1699,6 @@ impl SkillsPlugin {
         summary = "Read a bounded UTF-8 resource contained by one skill package.",
         read_only,
 
-        ui_display = detailed,
         concurrency_safe
     )]
     async fn invoke_read_resource(
@@ -1752,7 +1744,6 @@ impl SkillsPlugin {
         summary = "Rescan filesystem-backed Skills and report the catalog generation.",
         read_only,
         discovery,
-        ui_display = detailed,
         concurrency_safe
     )]
     async fn invoke_refresh(&self, input: &SkillsRefreshInput) -> SdkResult<ToolInvokeOutput> {

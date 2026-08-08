@@ -182,89 +182,6 @@ pub fn expand_plugin_tool_definition(
         let examples = &spec.examples;
         quote! { vec![#(#examples.to_string()),*] }
     };
-    let display_preset = match spec.display.as_ref().map(LitStr::value).as_deref() {
-        Some("brief") | Some("compact") => {
-            Some(quote! { ::agena_plugin_sdk::manifest::ToolDisplayPreset::Compact })
-        }
-        Some("brief_detailed") => {
-            Some(quote! { ::agena_plugin_sdk::manifest::ToolDisplayPreset::BriefDetailed })
-        }
-        Some("detailed") => {
-            Some(quote! { ::agena_plugin_sdk::manifest::ToolDisplayPreset::Detailed })
-        }
-        Some(other) => {
-            let invalid = spec.display.clone().expect("display was matched as Some");
-            return Err(syn::Error::new_spanned(
-                invalid,
-                format!("unsupported tool display preset '{other}'"),
-            ));
-        }
-        None => None,
-    };
-    let ui_display_override = match spec.ui_display.as_ref().map(LitStr::value).as_deref() {
-        Some("brief") | Some("summary") => {
-            Some(quote! { ::agena_plugin_sdk::UiTextDisplayMode::Summary })
-        }
-        Some("detailed") => Some(quote! { ::agena_plugin_sdk::UiTextDisplayMode::Detailed }),
-        Some(other) => {
-            let invalid = spec
-                .ui_display
-                .clone()
-                .expect("ui_display was matched as Some");
-            return Err(syn::Error::new_spanned(
-                invalid,
-                format!("unsupported ui display mode '{other}'"),
-            ));
-        }
-        None => None,
-    };
-    let description_mode_override =
-        match spec.description_mode.as_ref().map(LitStr::value).as_deref() {
-            Some("brief") => Some(quote! { ::agena_plugin_sdk::ToolDescriptionMode::Brief }),
-            Some("detailed") => Some(quote! { ::agena_plugin_sdk::ToolDescriptionMode::Detailed }),
-            Some(other) => {
-                let invalid = spec
-                    .description_mode
-                    .clone()
-                    .expect("description_mode was matched as Some");
-                return Err(syn::Error::new_spanned(
-                    invalid,
-                    format!("unsupported tool description mode '{other}'"),
-                ));
-            }
-            None => None,
-        };
-    let ui_display_mode_override = match spec.ui_display_mode.as_ref().map(LitStr::value).as_deref()
-    {
-        Some("summary") => Some(quote! { ::agena_plugin_sdk::UiTextDisplayMode::Summary }),
-        Some("detailed") => Some(quote! { ::agena_plugin_sdk::UiTextDisplayMode::Detailed }),
-        Some(other) => {
-            let invalid = spec
-                .ui_display_mode
-                .clone()
-                .expect("ui_display_mode was matched as Some");
-            return Err(syn::Error::new_spanned(
-                invalid,
-                format!("unsupported tool ui display mode '{other}'"),
-            ));
-        }
-        None => None,
-    };
-    let description_mode_expr = if let Some(mode) = description_mode_override {
-        quote! { Some(#mode) }
-    } else if let Some(preset) = display_preset.as_ref() {
-        quote! { Some(#preset.tool_description_mode()) }
-    } else {
-        quote! { None }
-    };
-    let ui_display_mode_expr = if let Some(mode) = ui_display_mode_override.or(ui_display_override)
-    {
-        quote! { Some(#mode) }
-    } else if let Some(preset) = display_preset.as_ref() {
-        quote! { Some(#preset.ui_display_mode()) }
-    } else {
-        quote! { None }
-    };
     let spec_input_paths_expr = expand_input_path_specs(&spec.input_paths);
     let spec_input_networks_expr = expand_input_network_specs(&spec.input_networks);
     let nested_paths_expr = expand_nested_shape_path_specs_expr(&nested_shapes, false);
@@ -358,10 +275,6 @@ pub fn expand_plugin_tool_definition(
                 read_only: #read_only_flag,
                 task: #task_flag,
                 mutating: #mutating_flag,
-            },
-            display: ::agena_plugin_sdk::manifest::ToolDisplay {
-                description_mode: #description_mode_expr,
-                ui_display_mode: #ui_display_mode_expr,
             },
             tags: #tags_expr,
         }

@@ -13,8 +13,7 @@ use crate::{
 };
 use agena_domain::PermissionMode;
 use agena_plugin_host::{
-    ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
-    ToolPresentationConfig,
+        ConfiguredPlugin, PluginHost, PluginHostBuildConfig, PluginsConfig, StaticPluginRegistration,
 };
 use agena_tool::SnapshotBackend;
 
@@ -235,7 +234,7 @@ async fn compact_builtin_targets_execute_through_the_orchestrator() {
         None,
         None,
         None,
-        ToolPresentationConfig::default(),
+        
     );
 
     let shell_input = StructuredObject::try_from(serde_json::json!({
@@ -350,7 +349,7 @@ async fn grep_targets_a_single_file_or_a_directory() {
         None,
         None,
         None,
-        ToolPresentationConfig::default(),
+        
     );
 
     let file_invocation = ToolInvocation::new(
@@ -454,7 +453,7 @@ async fn snapshot_internal_dispatch_does_not_depend_on_public_tool_registration(
         Some(Arc::clone(&registry)),
         None,
         None,
-        ToolPresentationConfig::default(),
+        
     );
 
     let entered = executor
@@ -543,7 +542,7 @@ async fn only_five_gateway_functions_are_provider_visible() {
         None,
         None,
         None,
-        ToolPresentationConfig::default(),
+        
     );
 
     let bindings = executor.available_tool_api_bindings();
@@ -651,7 +650,7 @@ async fn read_only_access_filters_live_tools_and_preserves_gateway_discovery() {
         None,
         None,
         None,
-        ToolPresentationConfig::default(),
+        
     )
     .for_session_context(&TestSessionContext {
         access: agena_domain::ExecutionAccess::ReadOnly,
@@ -779,7 +778,7 @@ async fn gateway_tools_call_without_a_target_is_rejected_as_invalid_input() {
         None,
         None,
         None,
-        ToolPresentationConfig::default(),
+        
     );
 
     // A `tools_call` that still names the gateway function itself (no `tool`
@@ -846,7 +845,7 @@ async fn gateway_tools_call_surfaces_the_arguments_shape_diagnostic() {
         None,
         None,
         None,
-        ToolPresentationConfig::default(),
+        
     );
 
     // A diagnostic stamped by the session processor (string-encoded or

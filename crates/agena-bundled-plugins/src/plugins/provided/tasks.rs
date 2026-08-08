@@ -170,7 +170,6 @@ fn run_subtask_access(access: TaskAccess) -> RunSubtaskAccess {
     name = "tasks",
     version = env!("CARGO_PKG_VERSION"),
     summary = "Delegated subtask orchestration tools.",
-    display = brief_detailed
 )]
 impl TasksPlugin {
     pub(crate) fn new() -> Self {
@@ -195,7 +194,6 @@ impl TasksPlugin {
         help = "Reach for this tool when the work matches an available Skill or subagent type, when you have independent work to run in parallel, or when answering would mean reading across several files — delegate it and you keep the conclusion, not the file dumps. For a single-fact lookup where you already know the file, symbol, or value, search directly; once you have delegated a search, do not also run it yourself — wait for the result. Do small tasks yourself instead of delegating; do not fan out a single task into many subtasks; verify inline instead of delegating when you can; do not redo work you already delegated. Never delegate understanding: brief the subagent with concrete file paths, line numbers, and what to change, then check its result. Delegates a bounded task to a subagent session. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
         task,
         subtask,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -209,7 +207,6 @@ impl TasksPlugin {
         help = "Creates a delegated background task. Set `skills` to Skill names or aliases (for example a read-only review skill for a review task, or an explore skill for an exploration task); the child session receives the resolved Skill instructions and should follow them. Unknown Skill names are rejected before the subtask starts. Use `agena.skills.list` to discover available Skills.",
         task,
         subtask,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -304,7 +301,6 @@ impl TasksPlugin {
         summary = "List delegated background tasks.",
         read_only,
         task,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -341,7 +337,6 @@ impl TasksPlugin {
         summary = "Get delegated task metadata and terminal result.",
         read_only,
         task,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -366,7 +361,6 @@ impl TasksPlugin {
         summary = "Read incremental delegated-task transcript output after a cursor.",
         read_only,
         task,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -434,7 +428,6 @@ impl TasksPlugin {
         summary = "Cancel a running delegated task and its child execution.",
         task,
         subtask,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -482,7 +475,6 @@ impl TasksPlugin {
         summary = "Send additional guidance to a running delegated task.",
         task,
         subtask,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -521,7 +513,6 @@ impl TasksPlugin {
         summary = "Resume a terminal delegated task with a follow-up prompt.",
         task,
         subtask,
-        display = detailed,
         concurrency_safe,
 
     )]
@@ -593,7 +584,6 @@ impl TasksPlugin {
         summary = "Wait for any or all delegated tasks to finish.",
         read_only,
         task,
-        display = detailed,
         concurrency_safe,
 
     )]

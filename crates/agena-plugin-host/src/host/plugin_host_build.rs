@@ -126,8 +126,6 @@ impl PluginHost {
                     .extend_from_plugin(
                         &reused.key(),
                         &reused.manifest.tools,
-                        reused.manifest.tool_description_mode,
-                        reused.manifest.ui_display_mode,
                     )
                     .map_err(|message| HostError::Load {
                         plugin: reused.key().to_string(),
@@ -173,8 +171,6 @@ impl PluginHost {
                         .extend_from_plugin(
                             &plugin.key(),
                             &plugin.manifest.tools,
-                            plugin.manifest.tool_description_mode,
-                            plugin.manifest.ui_display_mode,
                         )
                         .map_err(|message| HostError::Load {
                             plugin: plugin.key().to_string(),

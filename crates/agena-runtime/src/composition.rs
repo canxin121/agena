@@ -68,7 +68,6 @@ pub(crate) struct RuntimeSessionBuildConfig {
     /// manager's fallback (`DEFAULT_MAX_MODEL_TURNS`). Not yet wired to TOML;
     /// runtime keeps the default so behavior matches the session default.
     pub(crate) max_turns: Option<usize>,
-    pub(crate) tool_presentation: agena_plugin_host::ToolPresentationConfig,
 }
 
 /// Project the resolved configuration values needed by session composition.
@@ -90,16 +89,14 @@ pub(crate) fn session_build_config_from_resolved(
         // agena-runtime-session; `Some(0)` means unlimited (handled in
         // `replies_execution.rs`).
         max_turns: config.session.max_turns,
-        tool_presentation: config.plugins.policy.tool_presentation.clone(),
     }
 }
 
 /// Typed inputs for tool-executor construction.
-pub(crate) struct ToolCompositionInputs<Plugins, Lsp, Workspace, Presentation, Session, Database> {
+pub(crate) struct ToolCompositionInputs<Plugins, Lsp, Workspace, Session, Database> {
     pub(crate) plugins: Plugins,
     pub(crate) lsp_registry: Lsp,
     pub(crate) workspace_root: Workspace,
-    pub(crate) tool_presentation: Presentation,
     pub(crate) session_manager: Session,
     pub(crate) database: Database,
     /// Background-process registry installed into the tool executor. When

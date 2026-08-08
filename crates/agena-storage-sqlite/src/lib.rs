@@ -15,6 +15,7 @@
 //! The `schema_invariants` module installs database triggers that keep
 //! invariants enforced at the storage layer.
 
+mod engine;
 mod model_catalog_repository;
 mod permission_rule_repository;
 mod schema;
@@ -23,6 +24,7 @@ mod schema_lifecycle;
 mod transaction;
 mod workspace_repository;
 
+pub use engine::SqliteEngine;
 pub use model_catalog_repository::SeaModelCatalogRepository;
 pub use permission_rule_repository::{
     SeaPermissionRuleRepository, SeaPermissionRuleTransactionWriter,
@@ -37,3 +39,5 @@ pub use workspace_repository::SeaWorkspaceRepository;
 
 #[cfg(test)]
 mod concurrency_tests;
+#[cfg(test)]
+mod engine_tests;

@@ -32,6 +32,8 @@ use serde::{Deserialize, Serialize};
 mod memory_store;
 pub use memory_store::MemoryStore;
 
+pub mod store;
+
 /// Unified database storage configuration.
 ///
 /// Resolves the SQLite database URL from (in priority order): an explicit

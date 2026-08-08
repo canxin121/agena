@@ -302,8 +302,9 @@ fn assistant_reply_document_parts<'a>(
 /// `started_at_ms` (or, when trailing, to the reply's finished time, which
 /// keeps a live trailing body after any activity fired so far). The injected
 /// activities render as the same Notice/Hook blocks they do as standalone
-/// entries; the renderer treats them as run boundaries so they are never
-/// folded into a collapsed tool-activity run.
+/// entries; the renderer keeps them visible inside the single folded run so
+/// they are never hidden and never split one tool-activity run into several
+/// fold blocks.
 fn inject_session_activities_into_reply_parts<'a>(
     parts: &mut Vec<TranscriptEntryPart<'a>>,
     nodes: &[ContentNode],

@@ -1296,6 +1296,7 @@ pub(crate) fn activity_payload(
                 summary: hook.summary.clone(),
                 detail: hook.detail.clone(),
                 occurred_at_ms: None,
+                title: None,
             }))
         }
         PartContent::Activity(crate::message::RuntimeActivity::Notice(notice)) => {
@@ -1304,6 +1305,7 @@ pub(crate) fn activity_payload(
                 summary: notice.summary.clone(),
                 detail: notice.detail.clone(),
                 occurred_at_ms: None,
+                title: notice.title.clone(),
             }))
         }
     }
@@ -1529,6 +1531,7 @@ where
             payload.execution_id, payload.activity.after_tokens
         )),
         occurred_at_ms: None,
+        title: None,
     });
     // v10 unified content node mirror for maintenance activities.
     db.execute(Statement::from_sql_and_values(

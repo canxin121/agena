@@ -410,6 +410,7 @@ mod tests {
             kind: "max_turns_exhausted".to_owned(),
             summary: "Model-turn budget exhausted; the run stopped.".to_owned(),
             detail: Some("Raise the cap via session.max_turns.".to_owned()),
+            title: None,
         };
         let part = MessagePart::from_content(
             1,

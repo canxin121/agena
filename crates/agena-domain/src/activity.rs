@@ -647,6 +647,11 @@ pub struct NoticeActivity {
     /// fired. Older records omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurred_at_ms: Option<i64>,
+    /// Optional display headline chosen by the producer. Consumers render
+    /// this verbatim when present and fall back to a kind-derived title
+    /// otherwise, so the title vocabulary is not owned by any single UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 /// One body of assistant reply text that is not the opening paragraph — a

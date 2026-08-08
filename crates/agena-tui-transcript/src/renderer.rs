@@ -668,6 +668,7 @@ mod tests {
             summary: "mid-reply hook fired".to_owned(),
             detail: None,
             occurred_at_ms: Some(1_700_000_000_000),
+            title: None,
         });
         parts.push(TranscriptFixture::canonical_activity(
             200,

@@ -1081,6 +1081,7 @@ mod notification_aggregator_tests {
                 kind: "max_turns_exhausted".to_owned(),
                 summary: "Turn budget exhausted".to_owned(),
                 detail: Some("Reduce scope".to_owned()),
+                title: None,
             })),
         );
         let payload = MessagePartCheckpointedEvent {

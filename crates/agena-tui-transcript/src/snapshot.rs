@@ -635,12 +635,13 @@ pub(crate) fn activity_presentation(
             error.problem.user.fallback.clone(),
             Some(error.problem.clone()),
         ),
-        ActivityPayload::Notice(notice) => (
-            "notice".to_owned(),
-            notice_kind_title(notice.kind.as_str()).to_owned(),
-            notice.summary.clone(),
-            None,
-        ),
+        ActivityPayload::Notice(notice) => {
+            let title = notice
+                .title
+                .clone()
+                .unwrap_or_else(|| notice_kind_title(notice.kind.as_str()).to_owned());
+            ("notice".to_owned(), title, notice.summary.clone(), None)
+        }
     }
 }
 
@@ -738,6 +739,28 @@ mod tests {
         // Unknown or plugin-supplied kinds stay generic.
         assert_eq!(notice_kind_title("session_notice"), "Notice");
         assert_eq!(notice_kind_title(""), "Notice");
+    }
+
+    #[test]
+    fn notice_title_overrides_kind_derived_headline() {
+        let title_of = |title: Option<String>, kind: &str| {
+            activity_presentation(&agena_domain::ActivityPayload::Notice(
+                agena_domain::NoticeActivity {
+                    kind: kind.to_owned(),
+                    summary: "summary".to_owned(),
+                    detail: None,
+                    occurred_at_ms: None,
+                    title,
+                },
+            ))
+            .1
+        };
+        // A producer-supplied title wins verbatim.
+        assert_eq!(title_of(Some("Workflow".to_owned()), "hook"), "Workflow");
+        // Without one, the kind-derived headline is used.
+        assert_eq!(title_of(None, "hook"), "Hook");
+        assert_eq!(title_of(None, "compaction"), "Compaction");
+        assert_eq!(title_of(None, "custom_kind"), "Notice");
     }
 
     #[test]
@@ -1290,6 +1313,7 @@ mod tests {
                     summary: "Session notice".to_owned(),
                     detail: Some("Background state changed".to_owned()),
                     occurred_at_ms: None,
+                    title: None,
                 }),
                 provenance: ActivityProvenance::default(),
             }],
@@ -1344,6 +1368,7 @@ mod tests {
                 summary: format!("hook@{started_at_ms}"),
                 detail: None,
                 occurred_at_ms: Some(started_at_ms),
+                title: None,
             }),
             provenance: ActivityProvenance::default(),
         }
@@ -2591,6 +2616,7 @@ mod tests {
                 summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
                 detail: Some("Continue: next plan step".to_owned()),
                 occurred_at_ms: None,
+                title: None,
             }),
             provenance: ActivityProvenance::default(),
         })]);
@@ -2626,7 +2652,7 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-                assert!(collapsed_text.contains("Hook"), "{collapsed_text}");
+        assert!(collapsed_text.contains("Hook"), "{collapsed_text}");
         assert!(
             collapsed_text.contains("agent.stop hook blocked stop: workflow plan autorun"),
             "{collapsed_text}"

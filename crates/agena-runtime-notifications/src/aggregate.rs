@@ -56,6 +56,7 @@ pub fn from_activity_payload(
                 kind: notice.kind.clone(),
                 summary: notice.summary.clone(),
                 detail: notice.detail.clone(),
+                title: notice.title.clone(),
             },
             scope,
             now_ms,
@@ -159,6 +160,7 @@ mod tests {
             kind: "max_turns_exhausted".into(),
             summary: "Turn budget exhausted".into(),
             detail: Some("Reduce scope".into()),
+            title: None,
         };
         let n = from_notice_part(&part, NotificationScope::Session(1), 42);
         assert_eq!(
@@ -179,6 +181,7 @@ mod tests {
             summary: "hi".into(),
             detail: None,
             occurred_at_ms: None,
+            title: None,
         });
         assert!(from_activity_payload(&payload, NotificationScope::Global, 1).is_some());
     }

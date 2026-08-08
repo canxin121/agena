@@ -1249,6 +1249,7 @@ pub(crate) fn render_part_node(
                     summary: hook.summary.clone(),
                     detail: hook.detail.clone(),
                     occurred_at_ms: None,
+                    title: None,
                 }),
                 None,
                 out,

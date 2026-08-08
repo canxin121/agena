@@ -881,6 +881,7 @@ impl SessionManager {
                 kind: "max_turns_exhausted".to_string(),
                 summary: SUMMARY.to_string(),
                 detail,
+                title: None,
             })],
             MessageMetadata {
                 source: MessageSource::System,

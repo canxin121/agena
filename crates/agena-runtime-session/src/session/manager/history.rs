@@ -456,6 +456,7 @@ fn project_runtime_presentation_event(
                     summary: title,
                     detail: Some(update.message.clone()),
                     occurred_at_ms: Some(update.ts_ms),
+                    title: None,
                 }),
                 state: agena_domain::ActivityState::InProgress,
                 position: agena_domain::ContentPosition { index: 0 },

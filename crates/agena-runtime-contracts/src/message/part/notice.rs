@@ -14,4 +14,9 @@ pub struct NoticePart {
     /// Optional human-facing detail rendered when expanded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Optional display headline chosen by the producer. Consumers render
+    /// this verbatim when present and fall back to a kind-derived title
+    /// otherwise, so the title vocabulary is not owned by any single UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }

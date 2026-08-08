@@ -177,9 +177,9 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             "INSERT OR IGNORE INTO agena_sessions \
-             (id, parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, \
-              creation_failure_json, runtime_state_json, created_at_ms, updated_at_ms) \
-             VALUES (1, NULL, 0, 0, 1, 'parent', 1, 'ready', NULL, '{}', 1, 1)"
+             (id, parent_id, depth, root_id, workspace_id, relation_kind, title, version, \
+              lifecycle_state, created_at_ms, updated_at_ms) \
+             VALUES (1, NULL, 0, 0, 1, 'root', 'parent', 1, 'ready', 1, 1)"
                 .to_owned(),
         ))
         .await
@@ -208,9 +208,9 @@ async fn concurrent_read_before_write_transactions_never_hit_sqlite_busy() {
             txn.execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "INSERT INTO agena_sessions \
-                 (id, parent_id, depth, root_id, workspace_id, title, version, lifecycle_state, \
-                  creation_failure_json, runtime_state_json, created_at_ms, updated_at_ms) \
-                 VALUES (?, 1, ?, ?, 1, ?, 1, 'ready', NULL, '{}', ?, ?)",
+                 (id, parent_id, depth, root_id, workspace_id, relation_kind, title, version, \
+                  lifecycle_state, created_at_ms, updated_at_ms) \
+                 VALUES (?, 1, ?, ?, 1, 'child', ?, 1, 'ready', ?, ?)",
                 [
                     (id_offset + attempt).into(),
                     (depth + 1).into(),

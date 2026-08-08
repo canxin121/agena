@@ -272,13 +272,13 @@ fn attachment_part_summary(part: &AttachmentPart) -> Option<String> {
     }
 }
 
-/// Human-readable, persisted Operation title. This becomes the `name` header
-/// in `agena_model_message_parts`, so collapsed transcript queries need not
-/// load the operation payload merely to explain the action. The header is the
-/// composed tool title the runtime produced ("fs.read · Read README.md",
-/// "tools.list · List tools · 2/133"); fall back to the direct execution-tool
-/// name when no title was generated yet (very early streaming or a malformed
-/// call).
+/// Human-readable, persisted Operation title. This becomes the `summary`
+/// header on the operation's `tool_call` part, so collapsed transcript queries
+/// need not load the operation payload merely to explain the action. The
+/// header is the composed tool title the runtime produced ("fs.read · Read
+/// README.md", "tools.list · List tools · 2/133"); fall back to the direct
+/// execution-tool name when no title was generated yet (very early streaming
+/// or a malformed call).
 fn operation_header_title(operation: &super::OperationPart) -> String {
     let title = operation.title.trim();
     if title.is_empty() {

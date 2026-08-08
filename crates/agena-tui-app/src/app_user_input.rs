@@ -100,7 +100,7 @@ impl App {
                 return Ok(UserInputReply {
                     request_id: dialog.request.request_id.clone(),
                     kind: UserInputReplyKind::Submit,
-                    answers: BTreeMap::from([(question.id.clone(), vec![custom_text])]),
+                    answers: BTreeMap::from([("0".to_string(), vec![custom_text])]),
                     reason: None,
                 });
             }
@@ -113,7 +113,7 @@ impl App {
             return Ok(UserInputReply {
                 request_id: dialog.request.request_id.clone(),
                 kind: UserInputReplyKind::Submit,
-                answers: BTreeMap::from([(question.id.clone(), vec![option.label.clone()])]),
+                answers: BTreeMap::from([("0".to_string(), vec![option.label.clone()])]),
                 reason: None,
             });
         }
@@ -123,7 +123,7 @@ impl App {
             let question = &dialog.request.questions[index];
             let values = dialog
                 .presentation
-                .answer(&question.id)
+                .answer(index)
                 .map(|draft| user_input_answer_values(question, draft))
                 .unwrap_or_default();
             if values.is_empty() {
@@ -134,7 +134,7 @@ impl App {
                     &agena_tui::fl_args!("label" => label),
                 ));
             }
-            answers.insert(question.id.clone(), values);
+            answers.insert(index.to_string(), values);
         }
 
         Ok(UserInputReply {

@@ -433,13 +433,10 @@ pub fn composer_missing_staged_item_error(i18n: &I18n, placeholder: &str) -> Str
     )
 }
 
-pub fn message_question_line(i18n: &I18n, question: &str, id: &str) -> String {
+pub fn message_question_line(i18n: &I18n, question: &str) -> String {
     format!(
         "    {}",
-        i18n.text_args(
-            "message-question-line",
-            &fl_args!("question" => question, "id" => id),
-        )
+        i18n.text_args("message-question-line", &fl_args!("question" => question),)
     )
 }
 

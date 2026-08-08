@@ -324,7 +324,10 @@ impl Harness {
                         let answers = request
                             .questions
                             .iter()
-                            .map(|question| (question.id.clone(), vec!["TEST_OK".to_string()]))
+                            .enumerate()
+                            .map(|(index, _question)| {
+                                (index.to_string(), vec!["TEST_OK".to_string()])
+                            })
                             .collect::<BTreeMap<_, _>>();
                         self.execution_commands
                             .reply_user_input(SessionExecutionReplyRequest::new(

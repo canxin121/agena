@@ -5145,11 +5145,8 @@ User interaction tools.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `auto_resolution_ms` | `integer / null` | — | — | Automatically continue without an answer after this many milliseconds.<br>Values are limited to 60 seconds through 10 minutes. |
-| `body_markdown` | `string` | — | — |  |
-| `cancel_label` | `string` | — | — |  |
 | `kind` | `string` | — | — |  |
 | `questions` | `array<UserInputQuestion>` | — | — |  |
-| `submit_label` | `string` | — | — |  |
 | `title` | `string` | — | — |  |
 
 **Input schema**:
@@ -5164,10 +5161,6 @@ User interaction tools.
         },
         "label": {
           "minLength": 1,
-          "type": "string"
-        },
-        "preview_markdown": {
-          "maxLength": 16000,
           "type": "string"
         }
       },
@@ -5186,10 +5179,6 @@ User interaction tools.
           "maxLength": 12,
           "type": "string"
         },
-        "id": {
-          "minLength": 1,
-          "type": "string"
-        },
         "multiple": {
           "type": "boolean"
         },
@@ -5206,7 +5195,6 @@ User interaction tools.
         }
       },
       "required": [
-        "id",
         "question"
       ],
       "type": "object"
@@ -5223,19 +5211,11 @@ User interaction tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000005"
-    },
-    "body_markdown": {
-      "type": "string",
-      "x-agena-order": "000001"
-    },
-    "cancel_label": {
-      "type": "string",
-      "x-agena-order": "000004"
+      "x-agena-order": "000002"
     },
     "kind": {
       "type": "string",
-      "x-agena-order": "000002"
+      "x-agena-order": "000001"
     },
     "questions": {
       "items": {
@@ -5244,10 +5224,6 @@ User interaction tools.
       "maxItems": 3,
       "minItems": 1,
       "type": "array",
-      "x-agena-order": "000006"
-    },
-    "submit_label": {
-      "type": "string",
       "x-agena-order": "000003"
     },
     "title": {
@@ -5258,7 +5234,6 @@ User interaction tools.
   "type": "object",
   "x-agena-relations": [
     "required_unless_present `questions[].allow_custom` unless `questions[].options` present",
-    "distinct_trimmed `questions[].id`",
     "distinct_trimmed_within `questions[].options[].label` within `questions[]`"
   ]
 }
@@ -6343,13 +6318,6 @@ Plan orchestration and plan-autorun tools.
           "default": "",
           "description": "Human-readable step title.",
           "type": "string"
-        },
-        "wait_until_ms": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
         }
       },
       "type": "object"
@@ -6426,7 +6394,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Keep plan-level updates separate from step/check updates: do not send `phase` / `request_approval` together with `step`, `check`, `status`, `wait_until_ms`, or `note`. Address steps and checks by 1-based index (`step`, `check`). For plan-level phase changes, pass `request_approval: true` (or omit it) to ask the user to approve the transition, unless the user has already declared it needs no approval, in which case pass `request_approval: false`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.
+> Keep plan-level updates separate from step/check updates: do not send `phase` / `request_approval` together with `step`, `check`, `status`, or `note`. Address steps and checks by 1-based index (`step`, `check`). For plan-level phase changes, pass `request_approval: true` (or omit it) to ask the user to approve the transition, unless the user has already declared it needs no approval, in which case pass `request_approval: false`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6439,7 +6407,6 @@ Plan orchestration and plan-autorun tools.
 | `status` | `WorkflowPlanStepStatus / null` | — | — |  |
 | `step` | `integer / null` | — | — | 1-based index of the step to update (1 = first step). |
 | `summary` | `string / null` | — | — | Optional completion summary. This is only applied when `phase` is `completed`. |
-| `wait_until_ms` | `integer / null` | — | — |  |
 
 **Input schema**:
 ```json
@@ -6492,7 +6459,7 @@ Plan orchestration and plan-autorun tools.
         "string",
         "null"
       ],
-      "x-agena-order": "000008"
+      "x-agena-order": "000007"
     },
     "phase": {
       "anyOf": [
@@ -6542,14 +6509,6 @@ Plan orchestration and plan-autorun tools.
         "null"
       ],
       "x-agena-order": "000003"
-    },
-    "wait_until_ms": {
-      "format": "int64",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "x-agena-order": "000007"
     }
   },
   "type": "object"

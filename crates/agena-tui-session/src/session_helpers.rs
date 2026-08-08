@@ -97,10 +97,8 @@ pub fn user_input_question_label(question: &UserInputQuestion) -> &str {
     let header = question.header.trim();
     if !header.is_empty() {
         header
-    } else if !question.question.trim().is_empty() {
-        question.question.trim()
     } else {
-        question.id.as_str()
+        question.question.as_str()
     }
 }
 

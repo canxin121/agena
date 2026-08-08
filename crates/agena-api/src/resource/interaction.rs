@@ -8,13 +8,7 @@ pub struct UserInputRequest {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body_markdown: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub submit_label: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub cancel_label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     /// Durable presentation acknowledgement set when a client has shown this

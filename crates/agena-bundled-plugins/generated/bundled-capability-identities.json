@@ -849,9 +849,9 @@
         {
           "canonical_name": "agena.interaction.ask",
           "conditional": null,
-          "definition_identity": "29d1d0bc6968b7f74dc475f99bb6f75f5ae3f5f39fad20a1de9c374f421de322",
+          "definition_identity": "9ba4a865d11b8141b9631f9f5cc3ca8a7351b2f44a505860c8b73d0dbbdaec54",
           "gateway": false,
-          "input_schema_sha256": "b7dc7761111e4554b2e5ac2c0014b839bc0244f6783961f42e12013a75fc3a24",
+          "input_schema_sha256": "3ef5c4bcb9dee767f67d682f7dde51d3680b60d452069cbcc37f5049f743399e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "interactive"
@@ -1206,9 +1206,9 @@
         {
           "canonical_name": "agena.plan.set",
           "conditional": null,
-          "definition_identity": "247737dbc7c9afc6d3f4611931c88239a94a7755712f54ea5d1d8a00d59d149e",
+          "definition_identity": "1619298827d1eefde7da0bda4d1dd1628a65675fb8ac64ebe2005d21c663b58c",
           "gateway": false,
-          "input_schema_sha256": "51b5db5affb48547c8c42a7b005e9396ee8070e4d2ffa56ac5fef906a221f9f4",
+          "input_schema_sha256": "e45e05dd97577d6e0280e97b490916733bbc6a07d5763535541bb0d0d9de511c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",
@@ -1218,9 +1218,9 @@
         {
           "canonical_name": "agena.plan.update",
           "conditional": null,
-          "definition_identity": "f6dd254e27e4a5267dc10f409ba34401ce0f411b8d3ecd77d2c0e5498d17333c",
+          "definition_identity": "0ece1075c24cbdd654e470cf4a73f16b2df263e073e2bf1bcaaeb87a7499d73a",
           "gateway": false,
-          "input_schema_sha256": "4f693a9e0524a17709c5f84128f8e98801c6ad024483b96e3474a28804dbac9c",
+          "input_schema_sha256": "3d790c000a558be59d1b175f19e62b2cad3687004360cc15bab00b5d1031ea22",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
           "tags": [
             "mutate",

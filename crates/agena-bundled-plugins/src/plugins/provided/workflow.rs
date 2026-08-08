@@ -23,7 +23,7 @@ use agena_runtime_tools::tool::{
     ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput, ask_user,
 };
 use agena_tool::tool_search::{ToolSearchDocument, search_tools};
-use chrono::Utc;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -407,12 +407,6 @@ impl WorkflowPlugin {
             return Ok(None);
         };
         if step.executor != WorkflowPlanExecutor::Ai {
-            return Ok(None);
-        }
-        if step
-            .wait_until_ms
-            .is_some_and(|wait_until_ms| wait_until_ms > Utc::now().timestamp_millis())
-        {
             return Ok(None);
         }
         let signature = Self::plan_auto_signature(&plan, step_index)?;
@@ -830,7 +824,6 @@ mod tests {
                     description: String::new(),
                     executor: WorkflowPlanExecutor::Ai,
                     status: WorkflowPlanStepStatus::Pending,
-                    wait_until_ms: None,
                     note: String::new(),
                     checkpoints: vec![
                         WorkflowPlanCheckpoint {
@@ -851,7 +844,6 @@ mod tests {
                     description: String::new(),
                     executor: WorkflowPlanExecutor::Human,
                     status: WorkflowPlanStepStatus::Pending,
-                    wait_until_ms: None,
                     note: String::new(),
                     checkpoints: Vec::new(),
                 },
@@ -1060,10 +1052,8 @@ mod tests {
         );
         assert_eq!(request.title, "Approve New Plan");
         assert!(request.allow_free_text);
-        assert!(request.body_markdown.contains("Proposed Plan"));
-        assert!(request.body_markdown.contains("waiting for your approval"));
         let question = request.questions.first().expect("one decision question");
-        assert_eq!(question.id, "decision");
+        assert_eq!(question.header, "Decision");
         assert!(question.allow_custom);
     }
 

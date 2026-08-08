@@ -162,12 +162,8 @@ pub(crate) async fn run_runtime_cases(
             "interaction.ask",
             json!({
                 "title": "Tool API input probe",
-                "body_markdown": "Return TEST_OK.",
                 "kind": "text",
-                "submit_label": "Submit",
-                "cancel_label": "Cancel",
                 "questions": [{
-                    "id": "answer",
                     "header": "Answer",
                     "question": "Reply TEST_OK",
                     "allow_custom": true

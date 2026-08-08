@@ -2664,10 +2664,7 @@ impl SessionManager {
             request_id,
             session_id: Some(session.id),
             title: input.title,
-            body_markdown: input.body_markdown,
             kind: input.kind,
-            submit_label: input.submit_label,
-            cancel_label: input.cancel_label,
             auto_resolution_ms: super::super::helpers::effective_user_input_timeout_ms(
                 input.auto_resolution_ms,
             ),

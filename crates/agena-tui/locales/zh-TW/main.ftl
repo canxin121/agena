@@ -80,7 +80,7 @@ overlay-attach-footer = Tab 填入選中路徑
 overlay-user-input-title = 待處理使用者輸入
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 允許自訂值
-overlay-user-input-reply-format = 回覆格式：question_id=value;other_id=value1,value2
+overlay-user-input-reply-format = 回覆格式：0=value;1=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X 取消此請求
 overlay-user-input-footer = Ctrl+X 取消
 

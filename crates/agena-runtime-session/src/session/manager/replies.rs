@@ -1225,10 +1225,7 @@ impl SessionManager {
                     let execution = crate::tool::ask_user::execution_from_timeout(
                         &crate::message::AskUserToolInput {
                             title: user_input_request.title.clone(),
-                            body_markdown: user_input_request.body_markdown.clone(),
                             kind: user_input_request.kind.clone(),
-                            submit_label: user_input_request.submit_label.clone(),
-                            cancel_label: user_input_request.cancel_label.clone(),
                             auto_resolution_ms: user_input_request.auto_resolution_ms,
                             questions: user_input_request.questions.clone(),
                         },

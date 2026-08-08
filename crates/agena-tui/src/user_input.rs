@@ -11,7 +11,6 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{ListItem, Paragraph},
 };
-use tui_markdown::from_str as markdown_to_text;
 
 use crate::i18n::I18n;
 use crate::keymap::{KeyAction, KeyContext, resolve};
@@ -21,6 +20,7 @@ use agena_tui_components::{
     framed_overlay_height, render_framed_surface, render_question_flow_dialog_scrollable,
     wrapped_text_height_for_text,
 };
+use tui_markdown::from_str as markdown_to_text;
 
 /// A display-only option in an interactive question. Domain request mapping,
 /// validation, reply construction, and submission remain outside the TUI.
@@ -28,13 +28,11 @@ use agena_tui_components::{
 pub struct UserInputOptionPresentation {
     pub label: String,
     pub description: String,
-    pub preview_markdown: String,
 }
 
 /// A display-only interactive question used by the TUI reducer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserInputQuestionPresentation {
-    pub id: String,
     pub header: String,
     pub question: String,
     pub options: Vec<UserInputOptionPresentation>,
@@ -48,9 +46,6 @@ pub struct UserInputQuestionPresentation {
 pub struct UserInputOverlayPresentation {
     pub request_id: String,
     pub title: String,
-    pub body_markdown: String,
-    pub submit_label: String,
-    pub cancel_label: String,
     pub auto_resolution_ms: Option<u64>,
     pub created_at_ms: i64,
     pub review_decision: bool,
@@ -72,12 +67,6 @@ pub struct UserInputAnswerDraft {
 /// before choosing.
 #[derive(Debug, Clone, Default)]
 pub struct UserInputReviewPresentation {
-    /// Chat-style pre-rendered plan rows (wrapped to `content_width`), set by
-    /// the App through [`UserInputPresentation::set_review_plan`].
-    plan_lines: Vec<Line<'static>>,
-    /// Width used to pre-render `plan_lines`; decision rows wrap at this width
-    /// too so cursor arithmetic stays consistent.
-    content_width: u16,
     /// Cursor row inside the flat review document.
     cursor_line: usize,
     /// First visible row of the review document.
@@ -127,7 +116,7 @@ impl UserInputReviewPresentation {
 pub struct UserInputPresentation {
     overlay: UserInputOverlayPresentation,
     questions: Vec<UserInputQuestionPresentation>,
-    answers: BTreeMap<String, UserInputAnswerDraft>,
+    answers: BTreeMap<usize, UserInputAnswerDraft>,
     state: QuestionFlowState,
     editing_custom: bool,
     custom_input: Editor,
@@ -163,12 +152,12 @@ impl UserInputPresentation {
         &self.questions
     }
 
-    pub fn answers(&self) -> &BTreeMap<String, UserInputAnswerDraft> {
+    pub fn answers(&self) -> &BTreeMap<usize, UserInputAnswerDraft> {
         &self.answers
     }
 
-    pub fn answer(&self, question_id: &str) -> Option<&UserInputAnswerDraft> {
-        self.answers.get(question_id)
+    pub fn answer(&self, index: usize) -> Option<&UserInputAnswerDraft> {
+        self.answers.get(&index)
     }
 
     pub fn screen(&self) -> QuestionFlowScreen {
@@ -213,23 +202,10 @@ impl UserInputPresentation {
                 .unwrap_or(false)
     }
 
-    /// Stores chat-style pre-rendered plan rows for a review-decision overlay.
-    /// The App renders `body_markdown` through the transcript Markdown pipeline
-    /// (inside `with_text_math_rendering`) at `content_width` columns.
-    pub fn set_review_plan(&mut self, lines: Vec<Line<'static>>, content_width: u16) {
-        self.review.plan_lines = lines;
-        self.review.content_width = content_width;
-    }
-
-    /// Number of plan rows (at least one placeholder row so an empty body
-    /// still gives the cursor a document to move through).
-    fn review_plan_rows(&self) -> usize {
-        self.review.plan_lines.len().max(1)
-    }
-
-    /// First row of the decision block inside the flat review document.
+    /// First row of the decision block inside the flat review document: the
+    /// separator row is row zero, so decisions begin at row one.
     fn review_decision_start(&self) -> usize {
-        self.review_plan_rows().saturating_add(1)
+        1
     }
 
     /// Number of decision rows (label + detail per option, plus the feedback
@@ -621,6 +597,14 @@ impl UserInputPresentation {
                 self.move_flow_scroll(page_size.max(1) as i16 / 2);
                 UserInputEffect::KeepOpen
             }
+            Some(KeyAction::ScrollLineUp) => {
+                self.move_flow_scroll(-1);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ScrollLineDown) => {
+                self.move_flow_scroll(1);
+                UserInputEffect::KeepOpen
+            }
             Some(KeyAction::NextTab) => {
                 self.move_tab(1);
                 UserInputEffect::KeepOpen
@@ -672,6 +656,14 @@ impl UserInputPresentation {
             }
             Some(KeyAction::HalfPageDown) => {
                 self.move_flow_scroll(page_size.max(1) as i16 / 2);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ScrollLineUp) => {
+                self.move_flow_scroll(-1);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ScrollLineDown) => {
+                self.move_flow_scroll(1);
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::NextTab) => {
@@ -750,7 +742,7 @@ impl UserInputPresentation {
         }
         let preferred = self
             .answers
-            .get(&question.id)
+            .get(&self.state.selected_question())
             .map(|draft| preferred_option_row(question, draft))
             .unwrap_or(0);
         self.state.set_selected_option(preferred);
@@ -799,13 +791,12 @@ impl UserInputPresentation {
     }
 
     fn toggle_option(&mut self) {
-        let (is_custom, question_id, allow_custom, multiple, option_count) = {
+        let (is_custom, allow_custom, multiple, option_count) = {
             let Some(question) = self.questions.get(self.state.selected_question()) else {
                 return;
             };
             (
                 self.selected_row_is_custom(question),
-                question.id.clone(),
                 question.allow_custom,
                 question.multiple,
                 question.options.len(),
@@ -817,7 +808,10 @@ impl UserInputPresentation {
             }
             return;
         }
-        let draft = self.answers.entry(question_id).or_default();
+        let draft = self
+            .answers
+            .entry(self.state.selected_question())
+            .or_default();
         if multiple {
             if !draft.option_indexes.insert(self.state.selected_option()) {
                 draft.option_indexes.remove(&self.state.selected_option());
@@ -830,16 +824,19 @@ impl UserInputPresentation {
     }
 
     fn select_option(&mut self) {
-        let (is_custom, question_id) = {
+        let is_custom = {
             let Some(question) = self.questions.get(self.state.selected_question()) else {
                 return;
             };
-            (self.selected_row_is_custom(question), question.id.clone())
+            self.selected_row_is_custom(question)
         };
         if is_custom {
             return;
         }
-        let draft = self.answers.entry(question_id).or_default();
+        let draft = self
+            .answers
+            .entry(self.state.selected_question())
+            .or_default();
         draft.option_indexes.clear();
         draft.option_indexes.insert(self.state.selected_option());
         draft.custom_values.clear();
@@ -850,17 +847,17 @@ impl UserInputPresentation {
             return false;
         };
         let allow_custom = question.allow_custom;
-        let question_id = question.id.clone();
+        let question_index = self.state.selected_question();
         let selected_option = question.options.len();
         if !allow_custom {
             return false;
         }
         self.state
-            .focus_question(self.state.selected_question(), self.questions.len());
+            .focus_question(question_index, self.questions.len());
         self.state.set_selected_option(selected_option);
         let existing = self
             .answers
-            .get(&question_id)
+            .get(&question_index)
             .map(|draft| draft.custom_values.join(", "))
             .unwrap_or_default();
         self.custom_input.set_text(existing);
@@ -869,13 +866,13 @@ impl UserInputPresentation {
     }
 
     fn commit_custom_values(&mut self) -> bool {
-        let (question_id, multiple, custom_row) = {
+        let (question_index, multiple, custom_row) = {
             let Some(question) = self.questions.get(self.state.selected_question()) else {
                 self.editing_custom = false;
                 return false;
             };
             (
-                question.id.clone(),
+                self.state.selected_question(),
                 question.multiple,
                 question.options.len(),
             )
@@ -888,7 +885,7 @@ impl UserInputPresentation {
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
-        let draft = self.answers.entry(question_id).or_default();
+        let draft = self.answers.entry(question_index).or_default();
         draft.custom_values = if multiple {
             parsed
         } else {
@@ -903,14 +900,10 @@ impl UserInputPresentation {
     }
 
     fn clear_answer(&mut self) {
-        let Some(question_id) = self
-            .questions
-            .get(self.state.selected_question())
-            .map(|question| question.id.clone())
-        else {
+        if self.questions.get(self.state.selected_question()).is_none() {
             return;
-        };
-        self.answers.remove(&question_id);
+        }
+        self.answers.remove(&self.state.selected_question());
         self.custom_input.clear();
         self.editing_custom = false;
     }
@@ -964,16 +957,13 @@ pub fn render_overlay(
     let title = display_title(overlay, i18n);
     if presentation.screen() == QuestionFlowScreen::Review {
         let nav_body = navigation_body(presentation, i18n);
-        let mut review_lines = markdown_lines(overlay.body_markdown.as_str());
-        if !review_lines.is_empty() {
-            review_lines.push(Line::default());
-        }
+        let mut review_lines: Vec<Line<'static>> = Vec::new();
         review_lines.push(Line::from(Span::styled(
             i18n.text("overlay-user-input-review-intro"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
         for (index, question) in presentation.questions().iter().enumerate() {
-            let values = answer_values(question, presentation.answer(question.id.as_str()));
+            let values = answer_values(question, presentation.answer(index));
             let answered = !values.is_empty();
             let style = if index == presentation.selected_question() {
                 selection_style()
@@ -1023,13 +1013,9 @@ pub fn render_overlay(
         .questions()
         .get(presentation.selected_question())
     else {
-        let body = if overlay.body_markdown.trim().is_empty() {
-            Text::from(vec![Line::from(
-                i18n.text("overlay-user-input-no-questions"),
-            )])
-        } else {
-            Text::from(markdown_lines(overlay.body_markdown.as_str()))
-        };
+        let body = Text::from(vec![Line::from(
+            i18n.text("overlay-user-input-no-questions"),
+        )]);
         render_question_flow_dialog_scrollable(
             frame,
             area,
@@ -1052,52 +1038,13 @@ pub fn render_overlay(
 
     let nav_body = navigation_body(presentation, i18n);
     let draft = presentation
-        .answer(question.id.as_str())
+        .answer(presentation.selected_question())
         .cloned()
         .unwrap_or_default();
-    let values = answer_values(question, Some(&draft));
-    let unanswered = i18n.text("overlay-user-input-unanswered");
-    let answer_summary = if values.is_empty() {
-        unanswered.clone()
-    } else {
-        values.join(", ")
-    };
-    let mut prompt_lines = markdown_lines(overlay.body_markdown.as_str());
-    if !prompt_lines.is_empty() {
-        prompt_lines.push(Line::default());
-    }
-    prompt_lines.extend([
-        Line::from(Span::styled(
-            sanitize_display_text(question.question.as_str()),
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!(
-                "{} · id={}",
-                i18n.text(if question.multiple {
-                    "overlay-user-input-choice-multiple"
-                } else {
-                    "overlay-user-input-choice-single"
-                }),
-                question.id
-            ),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )),
-        Line::from(vec![
-            Span::styled(
-                format!("{} ", i18n.text("overlay-user-input-current-answer")),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                sanitize_display_text(answer_summary.as_str()),
-                if answer_summary == unanswered {
-                    Style::default().fg(agena_tui_components::theme::muted_color())
-                } else {
-                    Style::default().fg(agena_tui_components::theme::info_color())
-                },
-            ),
-        ]),
-    ]);
+    let prompt_lines = vec![Line::from(Span::styled(
+        sanitize_display_text(question.question.as_str()),
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
     let prompt_body = Text::from(prompt_lines);
     let choice_width = area.width.saturating_sub(8);
     let mut choice_items = Vec::new();
@@ -1162,18 +1109,6 @@ pub fn render_overlay(
         }
         choice_items.push(ListItem::new(lines));
     }
-    let preview = question
-        .options
-        .get(presentation.selected_option())
-        .filter(|option| !option.preview_markdown.trim().is_empty());
-    let preview_title = preview.map(|option| {
-        i18n.text_args(
-            "overlay-user-input-preview",
-            &crate::fl_args!("label" => sanitize_display_text(option.label.as_str())),
-        )
-    });
-    let preview_body =
-        preview.map(|option| Text::from(markdown_lines(option.preview_markdown.as_str())));
     let footer = Text::from(footer_text(
         overlay,
         i18n,
@@ -1199,13 +1134,22 @@ pub fn render_overlay(
             i18n.text("overlay-user-input-questions").into(),
             Some(&nav_body),
             QuestionFlowDialogMode::question(
-                i18n.text("overlay-user-input-prompt-panel").into(),
+                format!(
+                    "{} ({})",
+                    i18n.text("overlay-user-input-prompt-panel"),
+                    i18n.text(if question.multiple {
+                        "overlay-user-input-choice-multiple-short"
+                    } else {
+                        "overlay-user-input-choice-single-short"
+                    })
+                )
+                .into(),
                 &prompt_body,
                 i18n.text("overlay-user-input-choices").into(),
                 choice_items.as_slice(),
                 Some(selected_row),
-                preview_title.map(Into::into),
-                preview_body.as_ref(),
+                None,
+                None,
                 custom_input,
                 &footer,
             ),
@@ -1217,9 +1161,8 @@ pub fn render_overlay(
     }
 }
 
-/// The width at which the review-decision document is laid out. The App
-/// pre-renders the plan body at this width so cursor arithmetic matches the
-/// rendered rows.
+/// The width at which the review-decision document is laid out. Used by the
+/// renderer and paging logic so cursor arithmetic matches the rendered rows.
 pub fn user_input_review_content_width(area: Rect) -> u16 {
     SurfaceMode::Overlay.content_width(area, 92).max(1)
 }
@@ -1239,10 +1182,7 @@ fn review_decision_layout(
     area: Rect,
 ) -> ReviewDecisionLayout {
     let overlay = presentation.overlay();
-    let content_width = presentation
-        .review()
-        .content_width
-        .max(user_input_review_content_width(area));
+    let content_width = user_input_review_content_width(area);
     let footer = Text::from(review_footer_lines(overlay, i18n));
     let footer_height =
         usize::from(wrapped_text_height_for_text(&footer, content_width).clamp(1, 2));
@@ -1296,15 +1236,6 @@ fn build_review_document(
     content_width: u16,
 ) -> Vec<Line<'static>> {
     let mut document = Vec::new();
-    let plan = presentation.review().plan_lines.clone();
-    if plan.is_empty() {
-        document.push(Line::from(Span::styled(
-            i18n.text("overlay-user-input-no-questions"),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )));
-    } else {
-        document.extend(plan);
-    }
     document.push(Line::from(Span::styled(
         "─".repeat(usize::from(content_width.max(1))),
         Style::default().fg(agena_tui_components::theme::muted_color()),
@@ -1402,10 +1333,7 @@ fn render_review_decision(
     let Some(question) = presentation.questions().first() else {
         return;
     };
-    let content_width = presentation
-        .review()
-        .content_width
-        .max(user_input_review_content_width(area));
+    let content_width = user_input_review_content_width(area);
     let layout = review_decision_layout(presentation, i18n, area);
     let scroll = presentation
         .review()
@@ -1490,8 +1418,7 @@ fn navigation_body(presentation: &UserInputPresentation, i18n: &I18n) -> Text<'s
     let overlay = presentation.overlay();
     let mut spans = Vec::new();
     for (index, question) in presentation.questions().iter().enumerate() {
-        let answered =
-            !answer_values(question, presentation.answer(question.id.as_str())).is_empty();
+        let answered = !answer_values(question, presentation.answer(index)).is_empty();
         let label = if question.header.trim().is_empty() {
             format!("Q{}", index + 1)
         } else {
@@ -1520,7 +1447,7 @@ fn navigation_body(presentation: &UserInputPresentation, i18n: &I18n) -> Text<'s
     }
     if !presentation.review_is_hidden() {
         spans.push(Span::styled(
-            format!(" [>] {} ", submit_label(overlay, i18n)),
+            format!(" [>] {} ", i18n.text("overlay-user-input-submit")),
             if presentation.screen() == QuestionFlowScreen::Review {
                 selection_style()
             } else {
@@ -1555,21 +1482,8 @@ fn display_title(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> String 
     }
 }
 
-fn submit_label(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> String {
-    if !overlay.submit_label.trim().is_empty() {
-        sanitize_display_text(overlay.submit_label.as_str())
-    } else {
-        i18n.text("overlay-user-input-submit")
-    }
-}
-
-fn footer_text(overlay: &UserInputOverlayPresentation, i18n: &I18n, key: &str) -> String {
-    let mut footer = i18n.text(key);
-    if !overlay.cancel_label.trim().is_empty() {
-        footer.push_str(" · Esc ");
-        footer.push_str(sanitize_display_text(overlay.cancel_label.as_str()).as_str());
-    }
-    footer
+fn footer_text(_overlay: &UserInputOverlayPresentation, i18n: &I18n, key: &str) -> String {
+    i18n.text(key)
 }
 
 fn timeout_text(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> Option<String> {
@@ -1621,10 +1535,8 @@ fn answer_values(
 fn question_label(question: &UserInputQuestionPresentation) -> String {
     if !question.header.trim().is_empty() {
         sanitize_display_text(question.header.as_str())
-    } else if !question.question.trim().is_empty() {
-        sanitize_display_text(question.question.as_str())
     } else {
-        sanitize_display_text(question.id.as_str())
+        sanitize_display_text(question.question.as_str())
     }
 }
 
@@ -1706,20 +1618,18 @@ fn sanitize_display_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Line, UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
+        UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
         UserInputQuestionPresentation,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     fn question(multiple: bool, allow_custom: bool) -> UserInputQuestionPresentation {
         UserInputQuestionPresentation {
-            id: "question".into(),
             header: String::new(),
             question: "Choose".into(),
             options: vec![UserInputOptionPresentation {
                 label: "One".into(),
                 description: String::new(),
-                preview_markdown: String::new(),
             }],
             multiple,
             allow_custom,
@@ -1730,9 +1640,6 @@ mod tests {
         super::UserInputOverlayPresentation {
             request_id: "request".into(),
             title: String::new(),
-            body_markdown: String::new(),
-            submit_label: String::new(),
-            cancel_label: String::new(),
             auto_resolution_ms: None,
             created_at_ms: 0,
             review_decision,
@@ -1750,7 +1657,7 @@ mod tests {
         );
         assert!(
             presentation
-                .answer("question")
+                .answer(0)
                 .is_some_and(|draft| draft.option_indexes.contains(&0))
         );
     }
@@ -1766,10 +1673,7 @@ mod tests {
             UserInputEffect::Submit
         );
         assert_eq!(
-            presentation
-                .answer("question")
-                .expect("custom answer")
-                .custom_values,
+            presentation.answer(0).expect("custom answer").custom_values,
             vec!["custom value".to_string()]
         );
     }
@@ -1808,7 +1712,7 @@ mod tests {
 
         // G jumps to the bottom of the document.
         presentation.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT), 10);
-        assert_eq!(presentation.review().cursor_line(), 3);
+        assert_eq!(presentation.review().cursor_line(), 2);
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
             UserInputEffect::Submit
@@ -1830,23 +1734,12 @@ mod tests {
     fn review_decision_page_keys_step_by_page_size() {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, false)]);
-        presentation.set_review_plan(
-            (0..40)
-                .map(|index| Line::from(format!("line {index}")))
-                .collect(),
-            60,
-        );
 
-        // total = 40 plan rows + separator + 2 decision rows = 43.
+        // total = separator row + 2 decision rows = 3; the viewport (page
+        // size 10) is taller than the document so scroll stays clamped to 0.
         presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
-        assert_eq!(presentation.review().cursor_line(), 10);
-        assert_eq!(presentation.review().scroll(), 10);
-        presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
-        assert_eq!(presentation.review().cursor_line(), 20);
-        assert_eq!(presentation.review().scroll(), 20);
-        presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
-        assert_eq!(presentation.review().cursor_line(), 10);
-        assert_eq!(presentation.review().scroll(), 1);
+        assert_eq!(presentation.review().cursor_line(), 2);
+        assert_eq!(presentation.review().scroll(), 0);
         presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
         assert_eq!(presentation.review().cursor_line(), 0);
         assert_eq!(presentation.review().scroll(), 0);
@@ -1897,7 +1790,7 @@ mod tests {
         );
         assert!(!presentation.review().is_editing_custom());
         assert_eq!(presentation.review().selected_option(), 1);
-        assert_eq!(presentation.review().cursor_line(), 4);
+        assert_eq!(presentation.review().cursor_line(), 3);
     }
 
     #[test]
@@ -1927,5 +1820,24 @@ mod tests {
         assert_eq!(presentation.flow_scroll(), 10);
         presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 5);
         assert_eq!(presentation.flow_scroll(), 5);
+    }
+
+    #[test]
+    fn question_flow_ctrl_e_y_scroll_the_dialog_one_line_at_a_time() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(false), vec![question(false, false)]);
+
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL), 10);
+        assert_eq!(presentation.flow_scroll(), 1);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL), 10);
+        assert_eq!(presentation.flow_scroll(), 3);
+        // Ctrl+Y scrolls back up one line at a time, never below zero.
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
+        assert_eq!(presentation.flow_scroll(), 2);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL), 10);
+        assert_eq!(presentation.flow_scroll(), 0);
     }
 }

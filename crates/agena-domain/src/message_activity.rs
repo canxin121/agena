@@ -82,14 +82,11 @@ pub struct UserInputOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub preview_markdown: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
 /// Question asked to the user with selectable options.
 pub struct UserInputQuestion {
-    pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub header: String,
     pub question: String,
@@ -138,13 +135,7 @@ pub struct UserInputRequest {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body_markdown: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub submit_label: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub cancel_label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     /// Durable presentation acknowledgement: set when a client has shown this

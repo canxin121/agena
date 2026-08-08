@@ -109,29 +109,23 @@ mod tests {
     }
 
     #[test]
-    fn ask_supports_bounded_auto_resolution_and_markdown_previews() {
+    fn ask_supports_bounded_auto_resolution_without_ids_or_previews() {
         let parsed = AskUserToolInput::parse_input(serde_json::json!({
             "auto_resolution_ms": 60_000,
             "questions": [{
-                "id": "choice",
                 "question": "Choose",
                 "options": [{
-                    "label": "A",
-                    "preview_markdown": "  **Preview**  "
+                    "label": "A"
                 }]
             }]
         }))
         .expect("valid ask input");
         assert_eq!(parsed.auto_resolution_ms, Some(60_000));
-        assert_eq!(
-            parsed.questions[0].options[0].preview_markdown,
-            "**Preview**"
-        );
+        assert_eq!(parsed.questions[0].options[0].label, "A");
 
         let err = AskUserToolInput::parse_input(serde_json::json!({
             "auto_resolution_ms": 59_999,
             "questions": [{
-                "id": "choice",
                 "question": "Choose",
                 "allow_custom": true
             }]

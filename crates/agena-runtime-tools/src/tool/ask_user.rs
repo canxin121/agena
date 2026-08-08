@@ -25,9 +25,9 @@ pub fn execution_from_answers(
     answers: BTreeMap<String, Vec<String>>,
 ) -> ToolPayloadExecution {
     let mut lines = vec!["Answers:".to_string()];
-    for question in &input.questions {
-        if let Some(answer) = answers.get(question.id.as_str()) {
-            lines.push(format!("- {}: {}", question.id, answer.join(", ")));
+    for (index, _question) in input.questions.iter().enumerate() {
+        if let Some(answer) = answers.get(index.to_string().as_str()) {
+            lines.push(format!("- {index}: {}", answer.join(", ")));
         }
     }
 
@@ -83,13 +83,9 @@ mod tests {
     fn timeout_is_a_successful_structured_result() {
         let input = AskUserToolInput {
             title: "Decision".to_string(),
-            body_markdown: String::new(),
             kind: String::new(),
-            submit_label: String::new(),
-            cancel_label: String::new(),
             auto_resolution_ms: Some(60_000),
             questions: vec![UserInputQuestion {
-                id: "decision".to_string(),
                 header: String::new(),
                 question: "Choose".to_string(),
                 options: Vec::new(),

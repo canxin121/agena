@@ -156,7 +156,7 @@ pub(crate) fn render_user_input_request(
         push_multiline(
             out,
             "    ",
-            &ui_text::message_question_line(i18n, question.question.as_str(), question.id.as_str()),
+            &ui_text::message_question_line(i18n, question.question.as_str()),
             Style::default(),
             width,
         );

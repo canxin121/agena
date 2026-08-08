@@ -113,7 +113,6 @@ impl WorkflowPlugin {
             .questions
             .iter()
             .map(|question| HostAskUserQuestion {
-                id: question.id.clone(),
                 header: question.header.clone(),
                 question: question.question.clone(),
                 options: question
@@ -122,7 +121,6 @@ impl WorkflowPlugin {
                     .map(|option| HostAskUserOption {
                         label: option.label.clone(),
                         description: option.description.clone(),
-                        preview_markdown: option.preview_markdown.clone(),
                     })
                     .collect(),
                 multiple: question.multiple,
@@ -690,7 +688,6 @@ impl WorkflowPlugin {
                 description: description.to_string(),
                 executor: step.executor,
                 status: step.status.unwrap_or_default(),
-                wait_until_ms: step.wait_until_ms,
                 note: step.note.clone().unwrap_or_default().trim().to_string(),
                 checkpoints,
             });
@@ -1165,12 +1162,7 @@ impl WorkflowPlugin {
         let check = input.check;
 
         if phase_update_requested {
-            if step.is_some()
-                || check.is_some()
-                || input.status.is_some()
-                || input.wait_until_ms.is_some()
-                || input.note.is_some()
-            {
+            if step.is_some() || check.is_some() || input.status.is_some() || input.note.is_some() {
                 return Err(PluginError::invalid_params(
                     "plan.update must target either the plan itself or a step/check, not both"
                         .to_string(),
@@ -1208,10 +1200,9 @@ impl WorkflowPlugin {
                     "plan.update check updates require `status`".to_string(),
                 ));
             }
-            if input.wait_until_ms.is_some() || input.note.is_some() {
+            if input.note.is_some() {
                 return Err(PluginError::invalid_params(
-                    "plan.update check updates do not support `wait_until_ms` or `note`"
-                        .to_string(),
+                    "plan.update check updates do not support `note`".to_string(),
                 ));
             }
             return Ok(PlanUpdateTarget::Check {
@@ -1220,10 +1211,9 @@ impl WorkflowPlugin {
             });
         }
 
-        if input.status.is_none() && input.wait_until_ms.is_none() && input.note.is_none() {
+        if input.status.is_none() && input.note.is_none() {
             return Err(PluginError::invalid_params(
-                "plan.update step updates require at least one of `status`, `wait_until_ms`, or `note`"
-                    .to_string(),
+                "plan.update step updates require at least one of `status` or `note`".to_string(),
             ));
         }
 
@@ -1378,71 +1368,11 @@ impl WorkflowPlugin {
         Ok(())
     }
 
-    pub(in crate::plugins::provided::workflow) fn phase_review_transition_summary(
-        phase: WorkflowPlanPhase,
-        effective_autorun: bool,
-    ) -> String {
-        match phase {
-            WorkflowPlanPhase::Active => format!(
-                "Move the plan to `active` with autorun {}.",
-                if effective_autorun { "on" } else { "off" }
-            ),
-            WorkflowPlanPhase::Blocked => {
-                "Move the plan to `blocked` after review approval.".to_string()
-            }
-            WorkflowPlanPhase::Completed => {
-                "Mark the plan `completed` after review approval.".to_string()
-            }
-            WorkflowPlanPhase::Planning => {
-                "Return the plan to `planning` after review approval.".to_string()
-            }
-            WorkflowPlanPhase::Cancelled => {
-                "Move the plan to `cancelled` after review approval.".to_string()
-            }
-        }
-    }
-
-    pub(in crate::plugins::provided::workflow) fn phase_review_body_markdown(
-        plan: &WorkflowPlan,
-        phase: WorkflowPlanPhase,
-        requested_autorun: Option<bool>,
-        completion_summary: Option<&str>,
-        review_kind: PlanReviewKind,
-    ) -> String {
-        let effective_autorun = requested_autorun.unwrap_or(plan.autorun);
-        let mut sections = match review_kind {
-            PlanReviewKind::Creation => vec![
-                "## Proposed Plan".to_string(),
-                String::new(),
-                "The agent prepared a new plan and is waiting for your approval before it becomes active."
-                    .to_string(),
-            ],
-            PlanReviewKind::StatusChange => vec![
-                "## Requested Status Change".to_string(),
-                String::new(),
-                Self::phase_review_transition_summary(phase, effective_autorun),
-            ],
-        };
-        if phase == WorkflowPlanPhase::Completed
-            && let Some(summary) = completion_summary
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        {
-            sections.push(String::new());
-            sections.push("### Completion Summary".to_string());
-            sections.push(String::new());
-            sections.push(summary.to_string());
-        }
-        sections.push(String::new());
-        sections.push(Self::workflow_plan_markdown(plan));
-        sections.join("\n")
-    }
-
     pub(in crate::plugins::provided::workflow) fn phase_review_request(
         plan: &WorkflowPlan,
         phase: WorkflowPlanPhase,
         requested_autorun: Option<bool>,
-        completion_summary: Option<&str>,
+        _completion_summary: Option<&str>,
         review_kind: PlanReviewKind,
     ) -> AskUserRequest {
         let requested_auto = requested_autorun.unwrap_or(plan.autorun);
@@ -1451,13 +1381,11 @@ impl WorkflowPlugin {
                 label: PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON.to_string(),
                 description: "Approve the plan, move it to active, and keep autorun on."
                     .to_string(),
-                preview_markdown: String::new(),
             };
             let approve_off = HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF.to_string(),
                 description: "Approve the plan, move it to active, and keep autorun off."
                     .to_string(),
-                preview_markdown: String::new(),
             };
             if requested_auto {
                 vec![approve_on, approve_off]
@@ -1480,24 +1408,20 @@ impl WorkflowPlugin {
                     WorkflowPlanPhase::Cancelled => "Approve the plan and cancel it.".to_string(),
                     WorkflowPlanPhase::Active => unreachable!(),
                 },
-                preview_markdown: String::new(),
             }]
         };
         options.extend([
             HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_KEEP_PLANNING.to_string(),
                 description: "Return to planning so the plan can be edited further.".to_string(),
-                preview_markdown: String::new(),
             },
             HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_REJECT.to_string(),
                 description: "Reject the current plan and mark the review as rejected.".to_string(),
-                preview_markdown: String::new(),
             },
             HostAskUserOption {
                 label: PLAN_REVIEW_DECISION_CANCELLED.to_string(),
                 description: "Cancel the plan entirely and stop work on it.".to_string(),
-                preview_markdown: String::new(),
             },
         ]);
         AskUserRequest {
@@ -1505,19 +1429,9 @@ impl WorkflowPlugin {
                 PlanReviewKind::Creation => "Approve New Plan".to_string(),
                 PlanReviewKind::StatusChange => "Review Plan Status Change".to_string(),
             },
-            body_markdown: Self::phase_review_body_markdown(
-                plan,
-                phase,
-                requested_autorun,
-                completion_summary,
-                review_kind,
-            ),
             kind: "review".to_string(),
-            submit_label: "Submit decision".to_string(),
-            cancel_label: "Keep in planning".to_string(),
             auto_resolution_ms: None,
             questions: vec![HostAskUserQuestion {
-                id: "decision".to_string(),
                 header: "Decision".to_string(),
                 question: format!(
                     "Choose whether this plan should move to {}, or type feedback for the agent to revise the plan.",

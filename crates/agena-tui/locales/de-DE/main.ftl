@@ -80,7 +80,7 @@ overlay-attach-footer = Tab uebernimmt den Pfad
 overlay-user-input-title = Ausstehende Benutzereingabe
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = benutzerdefinierter Wert erlaubt
-overlay-user-input-reply-format = Antwortformat: question_id=value;other_id=value1,value2
+overlay-user-input-reply-format = Antwortformat: 0=value;1=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X bricht die Anfrage ab
 overlay-user-input-footer = Ctrl+X abbrechen
 

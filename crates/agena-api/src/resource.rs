@@ -1852,14 +1852,11 @@ pub struct UserInputOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub preview_markdown: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// A question asked to the user.
 pub struct UserInputQuestion {
-    pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub header: String,
     pub question: String,

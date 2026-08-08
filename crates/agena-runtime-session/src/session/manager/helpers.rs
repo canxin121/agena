@@ -392,9 +392,9 @@ pub(super) fn user_input_execution(
 ) -> Result<ToolInvocationExecution, AppError> {
     let answers = validate_user_input_reply(request, reply)?;
     let mut lines = vec!["Answers:".to_string()];
-    for question in &request.questions {
-        if let Some(answer) = answers.get(question.id.as_str()) {
-            lines.push(format!("- {}: {}", question.id, answer.join(", ")));
+    for (index, _question) in request.questions.iter().enumerate() {
+        if let Some(answer) = answers.get(index.to_string().as_str()) {
+            lines.push(format!("- {index}: {}", answer.join(", ")));
         }
     }
 
@@ -440,18 +440,19 @@ pub(super) fn host_user_input_response(
         }),
         UserInputReplyKind::Submit => {
             let answers = validate_user_input_reply(request, reply)?;
-            let question = request.questions.first().ok_or_else(|| {
-                AppError::Internal("host user input request is missing its question".to_string())
-            })?;
+            if request.questions.is_empty() {
+                return Err(AppError::Internal(
+                    "host user input request is missing its question".to_string(),
+                ));
+            }
             let answer = answers
-                .get(question.id.as_str())
+                .get("0")
                 .and_then(|values| values.first())
                 .cloned()
                 .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "host user input reply missing answer for question {}",
-                        question.id
-                    ))
+                    AppError::Internal(
+                        "host user input reply missing answer for question 0".to_string(),
+                    )
                 })?;
             Ok(agena_plugin_host::sdk::host_api::AskUserResponse {
                 reply: answer,
@@ -469,16 +470,13 @@ pub(super) fn validate_user_input_reply(
 ) -> Result<std::collections::BTreeMap<String, Vec<String>>, AppError> {
     let mut answers = std::collections::BTreeMap::new();
 
-    for question in &request.questions {
+    for (index, question) in request.questions.iter().enumerate() {
         let raw_answers = reply
             .answers
-            .get(question.id.as_str())
+            .get(index.to_string().as_str())
             .cloned()
             .ok_or_else(|| {
-                AppError::Internal(format!(
-                    "missing answer for user input question {}",
-                    question.id
-                ))
+                AppError::Internal(format!("missing answer for user input question {index}"))
             })?;
         let mut normalized = Vec::new();
         for value in raw_answers {
@@ -496,14 +494,12 @@ pub(super) fn validate_user_input_reply(
 
         if normalized.is_empty() {
             return Err(AppError::Internal(format!(
-                "missing answer for user input question {}",
-                question.id
+                "missing answer for user input question {index}"
             )));
         }
         if !question.multiple && normalized.len() != 1 {
             return Err(AppError::Internal(format!(
-                "question {} accepts exactly one answer",
-                question.id
+                "question {index} accepts exactly one answer"
             )));
         }
 
@@ -519,20 +515,19 @@ pub(super) fn validate_user_input_reply(
                 .find(|value| !allowed.contains(value.as_str()))
         {
             return Err(AppError::Internal(format!(
-                "unsupported answer '{}' for question {}",
-                answer, question.id
+                "unsupported answer '{}' for question {index}",
+                answer
             )));
         }
 
-        answers.insert(question.id.clone(), normalized);
+        answers.insert(index.to_string(), normalized);
     }
 
     for answer_id in reply.answers.keys() {
-        if !request
-            .questions
-            .iter()
-            .any(|question| question.id == *answer_id)
-        {
+        let is_valid_index = answer_id
+            .parse::<usize>()
+            .is_ok_and(|index| index < request.questions.len());
+        if !is_valid_index {
             return Err(AppError::Internal(format!(
                 "unexpected answer for unknown user input question {answer_id}"
             )));

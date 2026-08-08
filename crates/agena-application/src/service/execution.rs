@@ -603,17 +603,13 @@ pub(crate) fn pending_interactive_request_from_domain(
                     request_id: request.request_id,
                     session_id: request.session_id,
                     title: request.title,
-                    body_markdown: request.body_markdown,
                     kind: request.kind,
-                    submit_label: request.submit_label,
-                    cancel_label: request.cancel_label,
                     auto_resolution_ms: request.auto_resolution_ms,
                     presented_at: request.presented_at,
                     questions: request
                         .questions
                         .into_iter()
                         .map(|question| wire::UserInputQuestion {
-                            id: question.id,
                             header: question.header,
                             question: question.question,
                             options: question
@@ -622,7 +618,6 @@ pub(crate) fn pending_interactive_request_from_domain(
                                 .map(|option| wire::UserInputOption {
                                     label: option.label,
                                     description: option.description,
-                                    preview_markdown: option.preview_markdown,
                                 })
                                 .collect(),
                             multiple: question.multiple,
@@ -838,10 +833,7 @@ mod pending_interactive_projection_tests {
                 request_id: "host-input:1:98:0".to_owned(),
                 session_id: Some(1),
                 title: "Continue?".to_owned(),
-                body_markdown: String::new(),
                 kind: "single".to_owned(),
-                submit_label: String::new(),
-                cancel_label: String::new(),
                 auto_resolution_ms: Some(60_000),
                 presented_at,
                 questions: Vec::new(),

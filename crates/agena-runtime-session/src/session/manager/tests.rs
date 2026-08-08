@@ -2156,13 +2156,9 @@ mod tests {
                 &pending,
                 crate::message::AskUserToolInput {
                     title: "Continue?".to_owned(),
-                    body_markdown: "Host tool is waiting.".to_owned(),
                     kind: "single".to_owned(),
-                    submit_label: String::new(),
-                    cancel_label: String::new(),
                     auto_resolution_ms: Some(60_000),
                     questions: vec![UserInputQuestion {
-                        id: "continue".to_owned(),
                         header: String::new(),
                         question: "Continue?".to_owned(),
                         options: Vec::new(),
@@ -2299,13 +2295,9 @@ mod tests {
                 call_id,
                 crate::message::AskUserToolInput {
                     title: "Continue?".to_owned(),
-                    body_markdown: "Host tool is waiting.".to_owned(),
                     kind: "single".to_owned(),
-                    submit_label: String::new(),
-                    cancel_label: String::new(),
                     auto_resolution_ms: Some(300),
                     questions: vec![UserInputQuestion {
-                        id: "continue".to_owned(),
                         header: String::new(),
                         question: "Continue?".to_owned(),
                         options: Vec::new(),
@@ -6851,13 +6843,9 @@ mod tests {
                 &pending,
                 crate::message::AskUserToolInput {
                     title: "Continue?".to_owned(),
-                    body_markdown: "Host tool is waiting.".to_owned(),
                     kind: "single".to_owned(),
-                    submit_label: String::new(),
-                    cancel_label: String::new(),
                     auto_resolution_ms: Some(60_000),
                     questions: vec![UserInputQuestion {
-                        id: "continue".to_owned(),
                         header: String::new(),
                         question: "Continue?".to_owned(),
                         options: Vec::new(),

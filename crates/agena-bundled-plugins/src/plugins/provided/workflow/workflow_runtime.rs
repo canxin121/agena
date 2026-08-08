@@ -291,9 +291,6 @@ impl WorkflowPlugin {
                     step.status = status;
                     Self::cascade_terminal_step_status(step, status);
                 }
-                if let Some(wait_until_ms) = input.wait_until_ms {
-                    step.wait_until_ms = Some(wait_until_ms);
-                }
                 if let Some(note) = input.note.as_deref() {
                     step.note = note.to_string();
                 }
@@ -415,10 +412,7 @@ impl WorkflowPlugin {
         let response = host
             .ask_user(AskUserRequest {
                 title: input.title.clone(),
-                body_markdown: input.body_markdown.clone(),
                 kind: input.kind.clone(),
-                submit_label: input.submit_label.clone(),
-                cancel_label: input.cancel_label.clone(),
                 auto_resolution_ms: input.auto_resolution_ms,
                 questions: Self::host_ask_user_questions(input),
                 prompt: String::new(),
@@ -443,10 +437,10 @@ impl WorkflowPlugin {
 
         let mut answers = response.answers;
         if answers.is_empty()
-            && let Some(question) = input.questions.first()
+            && let Some(_question) = input.questions.first()
             && !response.reply.trim().is_empty()
         {
-            answers.insert(question.id.clone(), vec![response.reply]);
+            answers.insert("0".to_string(), vec![response.reply]);
         }
 
         let execution = ask_user::execution_from_answers(input, answers);

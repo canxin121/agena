@@ -484,14 +484,11 @@ pub struct AskUserOption {
     pub label: String,
     #[serde(default)]
     pub description: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub preview_markdown: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A question asked to the user by a plugin.
 pub struct AskUserQuestion {
-    pub id: String,
     #[serde(default)]
     pub header: String,
     pub question: String,
@@ -509,13 +506,7 @@ pub struct AskUserRequest {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body_markdown: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub submit_label: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub cancel_label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_resolution_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

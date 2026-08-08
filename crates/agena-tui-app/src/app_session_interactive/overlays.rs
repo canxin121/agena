@@ -10,12 +10,8 @@ impl App {
         // forced open again after a restart or on another client; it stays
         // reachable through the awaiting-input hint.
         self.present_pending_interactive_request(session_id, request.request_id.clone());
-        let review_content_width =
-            agena_tui::user_input::user_input_review_content_width(self.layout.overlay_area);
         self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-            session_id,
-            request,
-            review_content_width,
+            session_id, request,
         )));
     }
 
@@ -44,16 +40,12 @@ impl App {
     pub(crate) fn build_user_input_overlay(
         session_id: i64,
         request: UserInputRequest,
-        review_content_width: u16,
     ) -> UserInputOverlay {
         let review_decision = Self::user_input_review_question(&request).is_some();
-        let mut presentation = agena_tui::user_input::UserInputPresentation::new(
+        let presentation = agena_tui::user_input::UserInputPresentation::new(
             agena_tui::user_input::UserInputOverlayPresentation {
                 request_id: request.request_id.clone(),
                 title: request.title.clone(),
-                body_markdown: request.body_markdown.clone(),
-                submit_label: request.submit_label.clone(),
-                cancel_label: request.cancel_label.clone(),
                 auto_resolution_ms: request.auto_resolution_ms,
                 created_at_ms: request.created_at.timestamp_millis(),
                 review_decision,
@@ -63,7 +55,6 @@ impl App {
                 .iter()
                 .map(
                     |question| agena_tui::user_input::UserInputQuestionPresentation {
-                        id: question.id.clone(),
                         header: question.header.clone(),
                         question: question.question.clone(),
                         options: question
@@ -73,7 +64,6 @@ impl App {
                                 |option| agena_tui::user_input::UserInputOptionPresentation {
                                     label: option.label.clone(),
                                     description: option.description.clone(),
-                                    preview_markdown: option.preview_markdown.clone(),
                                 },
                             )
                             .collect(),
@@ -83,28 +73,6 @@ impl App {
                 )
                 .collect(),
         );
-        if review_decision {
-            // Pre-render the plan body with the exact chat/transcript Markdown
-            // pipeline so the approval window looks like assistant prose and
-            // shares the line-based cursor model with the main interface.
-            let rendered = agena_tui_media::with_text_math_rendering(|| {
-                agena_tui_transcript::render_markdown_document(
-                    request.body_markdown.as_str(),
-                    review_content_width,
-                )
-            });
-            let plan_lines = rendered
-                .into_iter()
-                .map(|line| {
-                    line.rich_line.unwrap_or_else(|| {
-                        ratatui::text::Line::from(ratatui::text::Span::styled(
-                            line.text, line.style,
-                        ))
-                    })
-                })
-                .collect::<Vec<_>>();
-            presentation.set_review_plan(plan_lines, review_content_width);
-        }
         UserInputOverlay {
             session_id,
             request,
@@ -264,13 +232,8 @@ impl App {
                 self.seen_user_input_request_ids
                     .insert(request.request_id.clone());
                 self.present_pending_interactive_request(session_id, request.request_id.clone());
-                let review_content_width = agena_tui::user_input::user_input_review_content_width(
-                    self.layout.overlay_area,
-                );
                 self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-                    session_id,
-                    *request,
-                    review_content_width,
+                    session_id, *request,
                 )));
                 self.queue_user_input_notification();
             }
@@ -622,17 +585,13 @@ fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) ->
         request_id: value.request_id,
         session_id: value.session_id,
         title: value.title,
-        body_markdown: value.body_markdown,
         kind: value.kind,
-        submit_label: value.submit_label,
-        cancel_label: value.cancel_label,
         auto_resolution_ms: value.auto_resolution_ms,
         presented_at: value.presented_at,
         questions: value
             .questions
             .into_iter()
             .map(|question| UserInputQuestion {
-                id: question.id,
                 header: question.header,
                 question: question.question,
                 options: question
@@ -641,7 +600,6 @@ fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) ->
                     .map(|option| agena_domain::UserInputOption {
                         label: option.label,
                         description: option.description,
-                        preview_markdown: option.preview_markdown,
                     })
                     .collect(),
                 multiple: question.multiple,

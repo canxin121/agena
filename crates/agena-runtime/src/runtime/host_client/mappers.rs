@@ -165,7 +165,6 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
             .questions
             .into_iter()
             .map(|question| UserInputQuestion {
-                id: question.id,
                 header: question.header,
                 question: question.question,
                 options: question
@@ -174,7 +173,6 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
                     .map(|option| UserInputOption {
                         label: option.label,
                         description: option.description,
-                        preview_markdown: option.preview_markdown,
                     })
                     .collect(),
                 multiple: question.multiple,
@@ -183,10 +181,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
             .collect();
         let input = AskUserToolInput {
             title: req.title,
-            body_markdown: req.body_markdown,
             kind: req.kind,
-            submit_label: req.submit_label,
-            cancel_label: req.cancel_label,
             auto_resolution_ms: req.auto_resolution_ms,
             questions,
         };
@@ -202,18 +197,13 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
         .map(|label| UserInputOption {
             label,
             description: String::new(),
-            preview_markdown: String::new(),
         })
         .collect();
     let input = AskUserToolInput {
         title: req.title,
-        body_markdown: req.body_markdown,
         kind: req.kind,
-        submit_label: req.submit_label,
-        cancel_label: req.cancel_label,
         auto_resolution_ms: req.auto_resolution_ms,
         questions: vec![UserInputQuestion {
-            id: "reply".to_string(),
             header: String::new(),
             question: req.prompt,
             options,

@@ -80,7 +80,7 @@ overlay-attach-footer = Tab で選択パスを入力
 overlay-user-input-title = 保留中のユーザー入力
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = カスタム値を許可
-overlay-user-input-reply-format = 返信形式: question_id=value;other_id=value1,value2
+overlay-user-input-reply-format = 返信形式: 0=value;1=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X でリクエストをキャンセル
 overlay-user-input-footer = Ctrl+X でキャンセル
 

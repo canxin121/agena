@@ -371,28 +371,21 @@ pub enum ShellToolInput {
 #[input(
     trim(
         "title",
-        "body_markdown",
         "kind",
-        "submit_label",
-        "cancel_label",
-        "questions[].id",
         "questions[].header",
         "questions[].question",
         "questions[].options[].label",
-        "questions[].options[].description",
-        "questions[].options[].preview_markdown"
+        "questions[].options[].description"
     ),
     min_items("questions", 1),
     max_items("questions", 3),
     max_items("questions[].options", 8),
     max_chars("questions[].header", 12),
-    max_chars("questions[].options[].preview_markdown", 16000),
     minimum("auto_resolution_ms", 60000),
     maximum("auto_resolution_ms", 600000),
     required_unless_present("questions[].allow_custom", "questions[].options"),
-    non_empty("questions[].id", "questions[].question"),
+    non_empty("questions[].question"),
     non_empty_if_present("questions[].options[].label"),
-    distinct_trimmed("questions[].id"),
     distinct_trimmed_within("questions[].options[].label", "questions[]")
 )]
 /// Input of the ask-user tool.
@@ -400,13 +393,7 @@ pub struct AskUserToolInput {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub body_markdown: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub submit_label: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub cancel_label: String,
     /// Automatically continue without an answer after this many milliseconds.
     /// Values are limited to 60 seconds through 10 minutes.
     #[serde(default, skip_serializing_if = "Option::is_none")]

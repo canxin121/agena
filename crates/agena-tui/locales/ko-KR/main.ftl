@@ -80,7 +80,7 @@ overlay-attach-footer = Tab 선택 경로 채우기
 overlay-user-input-title = 대기 중인 사용자 입력
 overlay-user-input-request-id = request_id: {$request_id}
 overlay-user-input-custom-allowed = 사용자 정의 값 허용
-overlay-user-input-reply-format = 답변 형식: question_id=value;other_id=value1,value2
+overlay-user-input-reply-format = 답변 형식: 0=value;1=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X 로 요청 취소
 overlay-user-input-footer = Ctrl+X 취소
 

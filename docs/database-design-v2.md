@@ -629,12 +629,22 @@ ownership (origin session); visibility is available for fork-aware UIs.
 
 | v1 API | v2 replacement |
 |--------|----------------|
-| `list_session_events` / `stream_session_events` (REST, event envelopes) | ordered parts of the session + in-memory live patch bus; wire format changes |
+| `list_session_events` / `stream_session_events` (REST, event envelopes) | persisted history = ordered parts (no event concept remains); live updates = part-patch stream over the in-memory bus plus ephemeral runtime signals (retry/progress) that are never persisted; wire format changes from event envelopes to part patches |
 | `latest_event_seq` | `sessions.version` or `MAX(session_parts.seq)` |
 | `export_session_jsonl` | serialize session meta + ordered parts (markers carry provider_state; anchors from 13.3); one part per line |
 | `import_session_jsonl` | re-create session + parts + membership with fresh ids; remap `parent_part_id`/`run_id` chains; restore provider_state/anchors; drop subtask lineage (matches v1) |
 | `TranscriptSnapshot`/`TranscriptPatch` (turns) | marker-grouped parts (turns = run marker + its parts); UI renders markers as turn boundaries |
 | `ActivityId`/`TextSegmentId`/`MessageId` | dissolve into `part_id` (API uses part ids) |
+
+Note — 「events/timeline」 conflates three needs, and only the first disappears:
+(1) persisted history → ordered parts (no event concept remains);
+(2) live incremental updates → a UI/transport requirement that survives as part
+patches (new/updated/removed part) plus ephemeral bus signals (retry/progress)
+that are never persisted — the in-memory bus stays, its payload language changes;
+(3) catch-up after reconnect / cross-process refresh → `sessions.version` /
+`MAX(session_parts.seq)` based 「parts after seq X」. Consumers: TUI
+(TranscriptPatch → part patches), web UI session timeline command (reads ordered
+parts grouped by run markers).
 
 ### 13.8 Usage queries need session context (SHOULD)
 

@@ -185,8 +185,10 @@ const selectedSkillIds = computed(() => props.state.skillReferences.value.map((s
       <ChatComposerPanel
         :attachments="props.state.attachments.value"
         :skills="props.state.skillReferences.value"
+        :text-artifacts="props.state.textArtifacts.value"
         :attachment-loading="props.state.attachmentLoading.value"
         :add-files="props.state.addComposerFiles"
+        :add-text-artifact="props.state.addTextArtifact"
         :composer="props.state.composer.value"
         :queue="props.state.composerQueue.value"
         :slash-suggestions="props.state.slashSuggestions.value"
@@ -196,6 +198,7 @@ const selectedSkillIds = computed(() => props.state.skillReferences.value.map((s
         :send-prompt="props.state.sendPrompt"
         :remove-attachment="props.state.removeComposerAttachment"
         :remove-skill="props.state.removeComposerSkill"
+        :remove-text-artifact="props.state.removeTextArtifact"
         :clear-queue="props.state.clearComposerQueue"
         :pop-queue="props.state.popComposerQueue"
         @update:composer="props.state.composer.value = $event"

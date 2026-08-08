@@ -811,6 +811,14 @@ export type WorkspaceFileTreeResource = {
   entries: WorkspaceFileNode[]
 }
 
+export type WorkspaceFileUploadResource = {
+  workspace_id: number
+  path: string
+  name: string
+  mime?: string | null
+  size_bytes: number
+}
+
 export type GitStatusResource = {
   workspace_root: string
   git_available: boolean
@@ -948,6 +956,19 @@ export type AttachmentItemInput = {
   size_bytes?: number | null
   width?: number | null
   height?: number | null
+}
+
+export type WorkspaceAttachmentInput = {
+  kind: AttachmentKind
+  path: string
+  name: string
+  mime?: string | null
+  sizeBytes?: number | null
+}
+
+export type TextArtifactInput = {
+  text: string
+  label?: string | null
 }
 
 export type SkillReferenceInput = {
@@ -1821,6 +1842,23 @@ export async function deleteWorkspace(workspaceId: number): Promise<WorkspaceRes
   })
 }
 
+export async function uploadWorkspaceFile(input: {
+  workspaceId: number
+  filename: string
+  dataBase64: string
+  mime?: string
+}): Promise<WorkspaceFileUploadResource> {
+  return await apiJson<WorkspaceFileUploadResource>(`/api/v1/workspaces/${input.workspaceId}/files`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      filename: input.filename,
+      data_base64: input.dataBase64,
+      ...(input.mime?.trim() ? { mime: input.mime.trim() } : {}),
+    }),
+  })
+}
+
 export async function listPermissionRules(search = ''): Promise<PermissionRuleResource[]> {
   return await collectPagedItems(
     (cursor) => {
@@ -2594,6 +2632,85 @@ function buildSessionRunOptionsBody(input: SessionRunOptionsInput): Record<strin
   return body
 }
 
+function newUuid(): string {
+  try {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+  } catch {
+    // fall through to the timestamp-based fallback
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (character) => {
+    const random = (Math.random() * 16) | 0
+    const value = character === 'x' ? random : (random & 0x3) | 0x8
+    return value.toString(16)
+  })
+}
+
+function buildComposerDocument(input: {
+  text: string
+  attachments?: WorkspaceAttachmentInput[]
+  skills?: SkillReferenceInput[]
+  textArtifacts?: TextArtifactInput[]
+}): Array<Record<string, unknown>> {
+  const document: Array<Record<string, unknown>> = []
+  for (const skill of input.skills ?? []) {
+    document.push({
+      type: 'activity',
+      activity: {
+        id: newUuid(),
+        payload: {
+          activity_type: 'skill_reference',
+          name: skill.name,
+          ...(skill.description ? { description: skill.description } : {}),
+          instructions: skill.instructions,
+          content_hash: skill.content_hash,
+          source: skill.source,
+          ...(skill.aliases?.length ? { aliases: skill.aliases } : {}),
+        },
+        provenance: {
+          source: skill.source,
+          content_hash: skill.content_hash,
+          plugin_id: 'agena.skills',
+        },
+      },
+    })
+  }
+  if (input.text.trim()) {
+    document.push({ type: 'text', text: input.text })
+  }
+  for (const attachment of input.attachments ?? []) {
+    document.push({
+      type: 'activity',
+      activity: {
+        id: newUuid(),
+        payload: {
+          activity_type: 'resource',
+          kind: attachment.kind,
+          reference: { reference_type: 'workspace_path', path: attachment.path },
+          name: attachment.name,
+          ...(attachment.mime ? { media_type: attachment.mime } : {}),
+          ...(attachment.sizeBytes != null ? { size_bytes: attachment.sizeBytes } : {}),
+        },
+        provenance: { source: 'upload' },
+      },
+    })
+  }
+  for (const artifact of input.textArtifacts ?? []) {
+    document.push({
+      type: 'activity',
+      activity: {
+        id: newUuid(),
+        payload: {
+          activity_type: 'text_artifact',
+          text: artifact.text,
+          ...(artifact.label ? { label: artifact.label } : {}),
+        },
+        provenance: { source: 'paste' },
+      },
+    })
+  }
+  return document
+}
+
 export async function continueSession(input: {
   sessionId: number
   providerId?: string
@@ -2654,8 +2771,9 @@ export async function listRewindCheckpoints(sessionId: number): Promise<RewindCh
 export async function submitTurn(input: {
   sessionId: number
   text: string
-  attachments?: AttachmentItemInput[]
+  attachments?: WorkspaceAttachmentInput[]
   skills?: SkillReferenceInput[]
+  textArtifacts?: TextArtifactInput[]
   providerId?: string
   adapterId?: string
   modelId?: string
@@ -2667,13 +2785,9 @@ export async function submitTurn(input: {
   maxOutputTokens?: number
   system?: string
 }): Promise<SessionExecutionResource> {
-  const parts: Array<Record<string, unknown>> = []
-  if (input.skills?.length) parts.push({ type: 'skill_reference', skills: input.skills })
-  if (input.text.trim()) parts.push({ type: 'text', text: input.text })
-  if (input.attachments?.length) parts.push({ type: 'attachment', attachments: input.attachments })
   const body: Record<string, unknown> = {
     ...buildSessionRunOptionsBody(input),
-    parts,
+    document: buildComposerDocument(input),
   }
 
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${input.sessionId}/messages`, {

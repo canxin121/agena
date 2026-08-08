@@ -50,6 +50,27 @@ pub struct WorkspaceFileDownloadQuery {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+/// Request to upload a file into a workspace's managed uploads directory.
+pub struct WorkspaceFileUploadRequest {
+    pub filename: String,
+    pub data_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+/// A file uploaded into a workspace. `path` is relative to the workspace root
+/// and is the value clients should reference as a workspace attachment.
+pub struct WorkspaceFileUploadResource {
+    pub workspace_id: i64,
+    pub path: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    pub size_bytes: u64,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// Kind of a workspace file entry.

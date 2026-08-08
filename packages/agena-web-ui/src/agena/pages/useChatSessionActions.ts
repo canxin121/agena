@@ -34,11 +34,13 @@ import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import { composerQueuePreview, createComposerQueueItem, type ComposerQueueItem } from './chatQueueModel'
 import { rewindMessageComposerText } from './chatRenderModel'
 import type { ComposerSkillDraft } from './chatSkillModel'
+import type { ComposerTextArtifactDraft } from './chatTextArtifactModel'
 import type { NotificationsHandle } from '../lib/notifications/types'
 
 export type ChatSessionActionsInput = {
   attachments: Ref<ComposerAttachmentDraft[]>
   skillReferences: Ref<ComposerSkillDraft[]>
+  textArtifacts: Ref<ComposerTextArtifactDraft[]>
   composerQueue: Ref<ComposerQueueItem[]>
   queueDraining: Ref<boolean>
   confirm: (message: string) => boolean
@@ -508,6 +510,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     text: string,
     attachments = input.attachments.value,
     skills = input.skillReferences.value,
+    textArtifacts = input.textArtifacts.value,
     clearComposerOnSuccess = true,
   ): Promise<boolean> {
     input.sending.value = true
@@ -518,8 +521,18 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       const state = await deps.submitTurn({
         sessionId,
         text,
-        attachments: attachments.map((attachment) => attachment.item),
+        attachments: attachments.map((attachment) => ({
+          kind: attachment.kind,
+          path: attachment.path,
+          name: attachment.name,
+          mime: attachment.mime,
+          sizeBytes: attachment.size,
+        })),
         skills: skills.map((skill) => skill.item),
+        textArtifacts: textArtifacts.map((artifact) => ({
+          text: artifact.text,
+          ...(artifact.label ? { label: artifact.label } : {}),
+        })),
         ...selectedRunOptions(),
       })
       input.sessionState.value = state
@@ -528,6 +541,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
         input.composer.value = ''
         input.attachments.value = []
         input.skillReferences.value = []
+        input.textArtifacts.value = []
       }
       input.syncEventStream()
       await input.refreshConversation(false)
@@ -541,11 +555,17 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
   }
 
   function queueCurrentPrompt(text: string) {
-    const item = createComposerQueueItem(text, input.attachments.value, input.skillReferences.value)
+    const item = createComposerQueueItem(
+      text,
+      input.attachments.value,
+      input.skillReferences.value,
+      input.textArtifacts.value,
+    )
     input.composerQueue.value = [...input.composerQueue.value, item]
     input.composer.value = ''
     input.attachments.value = []
     input.skillReferences.value = []
+    input.textArtifacts.value = []
     input.notify.notice(`Queued message ${input.composerQueue.value.length}: ${composerQueuePreview(item)}`)
   }
 
@@ -565,6 +585,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.composer.value = item.text
     input.attachments.value = item.attachments
     input.skillReferences.value = item.skills
+    input.textArtifacts.value = item.textArtifacts
     input.notify.notice(`Moved queued message back to the composer: ${composerQueuePreview(item)}`)
   }
 
@@ -581,7 +602,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
     input.queueDraining.value = true
     input.composerQueue.value = rest
     try {
-      const submitted = await submitPromptText(item.text, item.attachments, item.skills, false)
+      const submitted = await submitPromptText(item.text, item.attachments, item.skills, item.textArtifacts, false)
       if (!submitted) input.composerQueue.value = [item, ...input.composerQueue.value]
     } finally {
       input.queueDraining.value = false
@@ -590,10 +611,16 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
 
   async function sendPrompt() {
     const text = input.composer.value.trim()
-    if (!text && !input.attachments.value.length && !input.skillReferences.value.length) return
+    if (
+      !text &&
+      !input.attachments.value.length &&
+      !input.skillReferences.value.length &&
+      !input.textArtifacts.value.length
+    )
+      return
 
     const slashResult =
-      input.attachments.value.length || input.skillReferences.value.length
+      input.attachments.value.length || input.skillReferences.value.length || input.textArtifacts.value.length
         ? { matched: false as const, command: undefined, result: undefined }
         : await input.runSlashCommand(text)
     if (slashResult.matched) {
@@ -790,6 +817,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       input.composer.value = messageText
       input.attachments.value = []
       input.skillReferences.value = []
+      input.textArtifacts.value = []
       input.notify.notice(`Restored canonical turn ${turnId} to the composer.`)
     } catch (err) {
       input.notify.error(userErrorMessage(err))

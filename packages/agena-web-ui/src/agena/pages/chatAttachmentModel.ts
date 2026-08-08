@@ -1,4 +1,4 @@
-import type { AttachmentItemInput, AttachmentKind } from '../lib/agenaApi'
+import type { AttachmentKind } from '../lib/agenaApi'
 
 export const MAX_COMPOSER_ATTACHMENT_BYTES = 50 * 1024 * 1024
 export const MAX_COMPOSER_ATTACHMENTS = 8
@@ -10,7 +10,7 @@ export type ComposerAttachmentDraft = {
   mime: string
   size: number
   kind: AttachmentKind
-  item: AttachmentItemInput
+  path: string
 }
 
 export function detectComposerAttachmentKind(mime: string, filename: string): AttachmentKind {
@@ -36,7 +36,7 @@ export function validateComposerAttachment(
   return null
 }
 
-function readFileBase64(file: File): Promise<string> {
+export function readFileBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(reader.error || new Error(`Failed to read ${file.name}.`))
@@ -53,10 +53,9 @@ function readFileBase64(file: File): Promise<string> {
   })
 }
 
-export async function createComposerAttachmentDraft(file: File): Promise<ComposerAttachmentDraft> {
+export async function createComposerAttachmentDraft(file: File, path: string): Promise<ComposerAttachmentDraft> {
   const mime = file.type.trim() || 'application/octet-stream'
   const kind = detectComposerAttachmentKind(mime, file.name)
-  const data = await readFileBase64(file)
   const id = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${file.name}`
   return {
     id,
@@ -64,13 +63,7 @@ export async function createComposerAttachmentDraft(file: File): Promise<Compose
     mime,
     size: file.size,
     kind,
-    item: {
-      kind,
-      mime,
-      source: { source: 'base64', data },
-      filename: file.name,
-      size_bytes: file.size,
-    },
+    path,
   }
 }
 

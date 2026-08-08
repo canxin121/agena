@@ -52,6 +52,14 @@ pub async fn list_workspace_files(
     json_http(state.service().list_workspace_files(workspace_id, query)).await
 }
 
+pub async fn upload_workspace_file(
+    State(state): State<AppState>,
+    Path(workspace_id): Path<i64>,
+    Json(request): Json<WorkspaceFileUploadRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    json_http(state.service().upload_workspace_file(workspace_id, request)).await
+}
+
 pub async fn download_workspace_file(
     State(state): State<AppState>,
     Path(workspace_id): Path<i64>,
@@ -75,6 +83,6 @@ pub async fn download_workspace_file(
 }
 use super::{
     AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, WorkspaceFileDownloadQuery,
-    WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
-    json_http, json_http_found, server_error_from_application,
+    WorkspaceFileTreeQuery, WorkspaceFileUploadRequest, WorkspaceListQuery, WorkspacePathRequest,
+    WorkspaceResolveRequest, json_http, json_http_found, server_error_from_application,
 };

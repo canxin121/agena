@@ -36,8 +36,8 @@ use crate::{
         SessionRunOptionsRequest, SessionUpdateRequest, SessionUsageResource,
         SnapshotBackendSupportResource, SnapshotStatusResource, SubtaskStatus,
         WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeQuery,
-        WorkspaceFileTreeResource, WorkspaceListQuery, WorkspacePathRequest,
-        WorkspaceResolveRequest, WorkspaceResource,
+        WorkspaceFileTreeResource, WorkspaceFileUploadRequest, WorkspaceFileUploadResource,
+        WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource,
     },
     pagination::{
         PageInfo, PageOrder, PaginatedResponse, decode_cursor, encode_cursor, normalize_limit,

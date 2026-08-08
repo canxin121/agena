@@ -238,7 +238,7 @@ pub fn router(state: AppState) -> Router {
             )
             .route(
                 "/api/v1/workspaces/{workspace_id}/files",
-                get(rest::list_workspace_files),
+                get(rest::list_workspace_files).post(rest::upload_workspace_file),
             )
             .route(
                 "/api/v1/workspaces/{workspace_id}/download",

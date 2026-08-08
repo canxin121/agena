@@ -10,6 +10,7 @@ import {
   permissionRiskLabel,
 } from '@/agena/lib/permissionFormatting'
 import { openGlobalCommandPalette } from '@/agena/lib/commandPaletteRegistry'
+import { uploadWorkspaceFile } from '@/agena/lib/agenaApi'
 import { useNotifications } from '@/agena/lib/notifications/useNotifications'
 import ChatPageContent from './ChatPageContent.vue'
 import { createChatPageContentState } from './chatPageContentModel'
@@ -23,12 +24,18 @@ import { useChatPageUiState } from './useChatPageUiState'
 import { formatUsageCount, formatUsageUsd } from './chatUsageModel'
 import {
   createComposerAttachmentDraft,
+  readFileBase64,
   MAX_COMPOSER_ATTACHMENT_TOTAL_BYTES,
   MAX_COMPOSER_ATTACHMENTS,
   validateComposerAttachment,
 } from './chatAttachmentModel'
 import { useChatSidebarState } from './useChatSidebarState'
 import { MAX_COMPOSER_SKILLS, type ComposerSkillDraft } from './chatSkillModel'
+import {
+  createComposerTextArtifactDraft,
+  MAX_COMPOSER_TEXT_ARTIFACTS,
+  textArtifactPlaceholder,
+} from './chatTextArtifactModel'
 
 const route = useRoute()
 const router = useRouter()
@@ -72,6 +79,7 @@ const {
   sessionTree,
   skillPickerOpen,
   skillReferences,
+  textArtifacts,
   timelineEvents,
   userInputDrafts,
   workspacePath,
@@ -96,13 +104,25 @@ async function addComposerFiles(files: File[], imageOnly = false) {
     notify.error('Attachments for one message cannot exceed 64 MB in total.')
     return
   }
+  const workspaceId = selectedWorkspaceId.value
+  if (!workspaceId) {
+    notify.error('Select a workspace before attaching files.')
+    return
+  }
   attachmentLoading.value = true
   try {
     const next = []
     for (const file of selectedFiles) {
       const validationError = validateComposerAttachment(file, imageOnly)
       if (validationError) throw new Error(validationError)
-      next.push(await createComposerAttachmentDraft(file))
+      const dataBase64 = await readFileBase64(file)
+      const uploaded = await uploadWorkspaceFile({
+        workspaceId,
+        filename: file.name,
+        dataBase64,
+        mime: file.type.trim() || undefined,
+      })
+      next.push(await createComposerAttachmentDraft(file, uploaded.path))
     }
     attachments.value = [...attachments.value, ...next]
     if (files.length > available) {
@@ -141,6 +161,20 @@ function addComposerSkill(skill: ComposerSkillDraft) {
 
 function removeComposerSkill(id: string) {
   skillReferences.value = skillReferences.value.filter((skill) => skill.id !== id)
+}
+
+function addTextArtifact(text: string): string | null {
+  if (textArtifacts.value.length >= MAX_COMPOSER_TEXT_ARTIFACTS) {
+    notify.error(`A maximum of ${MAX_COMPOSER_TEXT_ARTIFACTS} pasted text artifacts can be attached to one message.`)
+    return null
+  }
+  const draft = createComposerTextArtifactDraft(text)
+  textArtifacts.value = [...textArtifacts.value, draft]
+  return textArtifactPlaceholder(textArtifacts.value.length)
+}
+
+function removeTextArtifact(id: string) {
+  textArtifacts.value = textArtifacts.value.filter((artifact) => artifact.id !== id)
 }
 
 watch(
@@ -325,6 +359,7 @@ const {
 } = useChatSessionActions({
   attachments,
   skillReferences,
+  textArtifacts,
   composerQueue,
   confirm: (message) => (typeof window === 'undefined' ? false : window.confirm(message)),
   composer,
@@ -468,6 +503,7 @@ const sidebar = useChatSidebarState({
 const pageContent = createChatPageContentState({
   addComposerFiles,
   addComposerSkill,
+  addTextArtifact,
   attachments,
   attachmentLoading,
   ancestorSessions,
@@ -523,6 +559,7 @@ const pageContent = createChatPageContentState({
   readUserAnswer,
   removeComposerAttachment,
   removeComposerSkill,
+  removeTextArtifact,
   refreshConversation,
   renameCurrentSession,
   rewindCheckpointFacts,
@@ -557,6 +594,7 @@ const pageContent = createChatPageContentState({
   skillReferences,
   slashSuggestions,
   submitUserAnswers,
+  textArtifacts,
   providerAdapterOptions,
   providerDefaultAdapter,
   timelineEvents,

@@ -1,5 +1,7 @@
 use agena_storage::WorkspaceListQuery as StorageWorkspaceListQuery;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use path_clean::PathClean;
+use uuid::Uuid;
 
 impl ApplicationService {
     pub async fn list_workspaces(
@@ -203,6 +205,76 @@ impl ApplicationService {
             .collect();
 
         Ok((filename, bytes))
+    }
+
+    pub async fn upload_workspace_file(
+        &self,
+        workspace_id: i64,
+        request: WorkspaceFileUploadRequest,
+    ) -> ApplicationResult<WorkspaceFileUploadResource> {
+        const MAX_UPLOAD_BYTES: u64 = 50 * 1024 * 1024;
+
+        let root_path = PathBuf::from(
+            self.workspace_repository
+                .path_by_id(workspace_id)
+                .await
+                .map_err(|error| ApplicationError::internal(error.to_string()))?
+                .ok_or_else(|| {
+                    ApplicationError::not_found_with_diagnostic(
+                        "The workspace was not found.",
+                        format!("workspace not found: {workspace_id}"),
+                    )
+                })?,
+        );
+        let root = root_path
+            .canonicalize()
+            .map_err(|error| workspace_fs_error(root_path.as_path(), error))?;
+        if !root.is_dir() {
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The workspace root is not a directory.",
+                format!("workspace root is not a directory: {}", root.display()),
+            ));
+        }
+
+        let filename = sanitize_upload_filename(request.filename.as_str());
+        if filename.is_empty() {
+            return Err(ApplicationError::bad_request(
+                "The uploaded file needs a non-empty filename.",
+            ));
+        }
+
+        let decoded = BASE64_STANDARD
+            .decode(request.data_base64.trim().as_bytes())
+            .map_err(|_| {
+                ApplicationError::bad_request("The uploaded file data is not valid base64.")
+            })?;
+        if decoded.is_empty() {
+            return Err(ApplicationError::bad_request(
+                "The uploaded file is empty.",
+            ));
+        }
+        if decoded.len() as u64 > MAX_UPLOAD_BYTES {
+            return Err(ApplicationError::bad_request_with_diagnostic(
+                "The uploaded file exceeds the 50 MiB upload limit.",
+                format!("uploaded file is {} bytes", decoded.len()),
+            ));
+        }
+
+        let upload_dir = root.join(".agena").join("uploads");
+        fs::create_dir_all(upload_dir.as_path())
+            .map_err(|error| workspace_fs_error(upload_dir.as_path(), error))?;
+        let stored_name = format!("{}-{}", Uuid::new_v4().simple(), filename);
+        let target = upload_dir.join(&stored_name);
+        fs::write(target.as_path(), decoded.as_slice())
+            .map_err(|error| workspace_fs_error(target.as_path(), error))?;
+
+        Ok(WorkspaceFileUploadResource {
+            workspace_id,
+            path: format!(".agena/uploads/{stored_name}"),
+            name: filename,
+            mime: non_empty(request.mime.as_deref()).map(ToOwned::to_owned),
+            size_bytes: decoded.len() as u64,
+        })
     }
 
     pub async fn create_workspace(
@@ -448,6 +520,30 @@ fn workspace_relative_path(path: &Path) -> String {
         .join("/")
 }
 
+fn sanitize_upload_filename(filename: &str) -> String {
+    let trimmed = filename.trim();
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return String::new();
+    }
+    // Keep only the final path component so a client-provided path can never
+    // smuggle directory traversal into the managed uploads directory.
+    let base = trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(trimmed);
+    base.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | ' ') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .to_owned()
+}
+
 fn workspace_fs_error(path: &Path, error: io::Error) -> ApplicationError {
     match error.kind() {
         io::ErrorKind::NotFound => ApplicationError::not_found_with_diagnostic(
@@ -493,7 +589,7 @@ fn is_windows_drive_root(path: &str) -> bool {
 mod tests {
     use std::path::PathBuf;
 
-    use super::clean_workspace_relative_path;
+    use super::{clean_workspace_relative_path, sanitize_upload_filename};
 
     #[test]
     fn workspace_file_paths_reject_escape_and_absolute_components() {
@@ -505,11 +601,23 @@ mod tests {
         assert!(clean_workspace_relative_path(Some("src/../../secret")).is_err());
         assert!(clean_workspace_relative_path(Some("/etc/passwd")).is_err());
     }
+
+    #[test]
+    fn upload_filenames_strip_directories_and_keep_safe_characters() {
+        assert_eq!(sanitize_upload_filename("report.pdf"), "report.pdf");
+        assert_eq!(sanitize_upload_filename("docs/../secret.txt"), "secret.txt");
+        assert_eq!(sanitize_upload_filename("C:\\Users\\alice\\notes.md"), "notes.md");
+        assert_eq!(sanitize_upload_filename("a b+c!.png"), "a b_c_.png");
+        assert_eq!(sanitize_upload_filename("  "), "");
+        assert_eq!(sanitize_upload_filename("."), "");
+        assert_eq!(sanitize_upload_filename(".."), "");
+    }
 }
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, HashMap, PageOrder, PaginatedResponse,
     Path, PathBuf, WorkspaceCursor, WorkspaceFileDownloadQuery, WorkspaceFileKind,
-    WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceListQuery,
-    WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource, build_page, decode_cursor,
-    fs, io, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
+    WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceFileUploadRequest,
+    WorkspaceFileUploadResource, WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
+    WorkspaceResource, build_page, decode_cursor, fs, io, non_empty, normalize_limit,
+    timestamp_millis_to_utc, trim_page,
 };

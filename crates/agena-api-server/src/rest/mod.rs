@@ -28,8 +28,8 @@ use agena_application::dto::{
     RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
     SessionCreateRequest, SessionEventStreamQuery, SessionListQuery, SessionMessageRequest,
     SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
-    WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceListQuery, WorkspacePathRequest,
-    WorkspaceResolveRequest,
+    WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceFileUploadRequest,
+    WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
 };
 use agena_domain::{UsagePeriod, UsageStatsQuery, get_json_path};
 use agena_runtime::{

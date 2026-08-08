@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  createComposerAttachmentDraft,
   detectComposerAttachmentKind,
   formatComposerAttachmentSize,
   MAX_COMPOSER_ATTACHMENT_BYTES,
@@ -29,5 +30,15 @@ describe('chatAttachmentModel', () => {
     expect(formatComposerAttachmentSize(12)).toBe('12 B')
     expect(formatComposerAttachmentSize(2048)).toBe('2.0 KB')
     expect(formatComposerAttachmentSize(2 * 1024 * 1024)).toBe('2.0 MB')
+  })
+
+  test('creates a workspace-path draft without embedding file contents', async () => {
+    const file = new File(['hello'], 'notes.txt', { type: 'application/octet-stream' })
+    const draft = await createComposerAttachmentDraft(file, '.agena/uploads/abc-notes.txt')
+    expect(draft.path).toBe('.agena/uploads/abc-notes.txt')
+    expect(draft.name).toBe('notes.txt')
+    expect(draft.kind).toBe('file')
+    expect(draft.size).toBe(5)
+    expect(draft.mime).toBe('application/octet-stream')
   })
 })

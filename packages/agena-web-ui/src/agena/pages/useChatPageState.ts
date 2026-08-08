@@ -16,6 +16,7 @@ import type {
 import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import type { ComposerQueueItem } from './chatQueueModel'
 import type { ComposerSkillDraft } from './chatSkillModel'
+import type { ComposerTextArtifactDraft } from './chatTextArtifactModel'
 
 export function useChatPageState() {
   const runtime = ref<RuntimeStatus | null>(null)
@@ -61,6 +62,7 @@ export function useChatPageState() {
   const attachmentLoading = ref(false)
   const skillReferences = ref<ComposerSkillDraft[]>([])
   const skillPickerOpen = ref(false)
+  const textArtifacts = ref<ComposerTextArtifactDraft[]>([])
   const composerQueue = ref<ComposerQueueItem[]>([])
   const queueDraining = ref(false)
 
@@ -104,6 +106,7 @@ export function useChatPageState() {
     sessionTree,
     skillPickerOpen,
     skillReferences,
+    textArtifacts,
     timelineEvents,
     userInputDrafts,
     workspacePath,

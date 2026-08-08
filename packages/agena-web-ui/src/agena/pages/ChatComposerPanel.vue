@@ -5,12 +5,19 @@ import { sourceLabel, type CommandItem } from '@/agena/lib/commandPalette'
 import { formatComposerAttachmentSize, type ComposerAttachmentDraft } from './chatAttachmentModel'
 import { composerQueuePreview, type ComposerQueueItem } from './chatQueueModel'
 import type { ComposerSkillDraft } from './chatSkillModel'
+import {
+  composerTextArtifactPreview,
+  TEXT_ARTIFACT_PASTE_THRESHOLD,
+  type ComposerTextArtifactDraft,
+} from './chatTextArtifactModel'
 
 const props = defineProps<{
   attachments: ComposerAttachmentDraft[]
   skills: ComposerSkillDraft[]
+  textArtifacts: ComposerTextArtifactDraft[]
   attachmentLoading: boolean
   addFiles: (files: File[], imageOnly?: boolean) => void | Promise<void>
+  addTextArtifact: (text: string) => string | null
   composer: string
   queue: ComposerQueueItem[]
   slashSuggestions: CommandItem[]
@@ -20,6 +27,7 @@ const props = defineProps<{
   sendPrompt: () => void | Promise<void>
   removeAttachment: (id: string) => void
   removeSkill: (id: string) => void
+  removeTextArtifact: (id: string) => void
   clearQueue: () => void
   popQueue: () => void
 }>()
@@ -36,7 +44,7 @@ const selectedSuggestion = computed(
 )
 const canSubmit = computed(() => {
   const text = props.composer.trim()
-  return Boolean(text || props.attachments.length || props.skills.length)
+  return Boolean(text || props.attachments.length || props.skills.length || props.textArtifacts.length)
 })
 
 function selectFiles(event: Event, imageOnly: boolean) {
@@ -122,6 +130,25 @@ function handleComposerKeydown(event: KeyboardEvent) {
     }
   }
 }
+
+function handlePaste(event: ClipboardEvent) {
+  const clipboardText = event.clipboardData?.getData('text/plain') || ''
+  if (clipboardText.length < TEXT_ARTIFACT_PASTE_THRESHOLD) return
+  const placeholder = props.addTextArtifact(clipboardText)
+  if (!placeholder) return
+  event.preventDefault()
+  const textarea = event.target as HTMLTextAreaElement | null
+  const current = props.composer
+  const start = textarea?.selectionStart ?? current.length
+  const end = textarea?.selectionEnd ?? current.length
+  const next = current.slice(0, start) + placeholder + current.slice(end)
+  emit('update:composer', next)
+  requestAnimationFrame(() => {
+    textarea?.focus()
+    const position = start + placeholder.length
+    textarea?.setSelectionRange(position, position)
+  })
+}
 </script>
 
 <template>
@@ -143,6 +170,7 @@ function handleComposerKeydown(event: KeyboardEvent) {
         :aria-expanded="slashSearchActive"
         @input="emit('update:composer', ($event.target as HTMLTextAreaElement | null)?.value || '')"
         @keydown="handleComposerKeydown"
+        @paste="handlePaste"
       />
     </div>
     <input id="composer-file-input" class="visually-hidden" type="file" multiple @change="selectFiles($event, false)" />
@@ -187,6 +215,27 @@ function handleComposerKeydown(event: KeyboardEvent) {
         </button>
       </article>
     </div>
+    <div v-if="props.textArtifacts.length" class="composer-attachment-list">
+      <article
+        v-for="artifact in props.textArtifacts"
+        :key="artifact.id"
+        class="composer-attachment-chip composer-text-artifact-chip"
+      >
+        <div>
+          <div class="composer-skill-title">
+            <span class="badge">Pasted text</span><strong>{{ composerTextArtifactPreview(artifact, 40) }}</strong>
+          </div>
+          <div class="muted mono">{{ artifact.text.length.toLocaleString() }} chars</div>
+        </div>
+        <button
+          class="button ghost"
+          :disabled="props.sending || props.attachmentLoading"
+          @click="props.removeTextArtifact(artifact.id)"
+        >
+          Remove
+        </button>
+      </article>
+    </div>
     <div v-if="props.queue.length" class="composer-queue">
       <div class="settings-panel-header">
         <div>
@@ -200,6 +249,9 @@ function handleComposerKeydown(event: KeyboardEvent) {
           <span class="mono">{{ composerQueuePreview(item) }}</span>
           <span v-if="item.attachments.length" class="badge neutral">{{ item.attachments.length }} file(s)</span>
           <span v-if="item.skills.length" class="badge">{{ item.skills.length }} Skill(s)</span>
+          <span v-if="item.textArtifacts.length" class="badge neutral">
+            {{ item.textArtifacts.length }} text artifact(s)
+          </span>
         </li>
       </ol>
       <div class="button-row">

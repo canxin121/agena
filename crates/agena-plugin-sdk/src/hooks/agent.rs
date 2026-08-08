@@ -14,6 +14,12 @@ pub struct AgentStopInput {
     /// The final assistant message text, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_assistant_message: Option<String>,
+    /// When present, the run just failed with this error before stopping.
+    /// Hooks can inspect it to decide whether to continue (for example the
+    /// workflow plan autorun keeps retrying after a failed run instead of
+    /// aborting the plan).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

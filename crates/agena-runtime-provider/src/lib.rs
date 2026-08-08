@@ -73,7 +73,16 @@ impl ProviderError {
             Self::HttpStatus { retryable, .. } | Self::ProviderClassified { retryable, .. } => {
                 *retryable
             }
-            Self::Http(error) => error.is_timeout() || error.is_connect(),
+            Self::Http(error) => {
+                // Body/decode failures (connection dropped mid-response, invalid
+                // chunk encoding) are transient transport conditions exactly like
+                // timeouts and connect failures: they must enter the retry loop
+                // instead of failing the run immediately.
+                error.is_timeout()
+                    || error.is_connect()
+                    || error.is_body()
+                    || error.is_decode()
+            }
             _ => false,
         }
     }
@@ -100,7 +109,23 @@ impl From<agena_provider::ProviderToolModeViolation> for ProviderError {
 
 impl From<ProviderJsonStreamError> for ProviderError {
     fn from(error: ProviderJsonStreamError) -> Self {
-        Self::Provider(error.to_string())
+        match error {
+            ProviderJsonStreamError::Http(error) => Self::Http(error),
+            // A malformed SSE/JSON-lines payload is normally a transient stream
+            // corruption (truncated chunk, proxy mangling) worth resampling,
+            // not a permanent rejection of the request. Adapters additionally
+            // classify through `utils::json_stream_error` with the real
+            // provider id; this fallback keeps the conversion retryable for
+            // any remaining `?` call sites.
+            ProviderJsonStreamError::InvalidJson { format, source } => {
+                Self::ProviderClassified {
+                    provider: "stream".to_owned(),
+                    message: format!("invalid {format} payload: {source}"),
+                    kind: ProviderErrorKind::MalformedResponse,
+                    retryable: true,
+                }
+            }
+        }
     }
 }
 
@@ -115,4 +140,23 @@ impl From<agena_runtime_config::ConfigError> for ProviderError {
 pub struct ProviderRequestContext {
     pub provider_id: String,
     pub model_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_json_stream_error_is_retryable_malformed_response() {
+        let err: ProviderError = ProviderJsonStreamError::InvalidJson {
+            format: "SSE",
+            source: serde_json::from_str::<serde_json::Value>("{broken").unwrap_err(),
+        }
+        .into();
+        assert!(err.retryable());
+        assert_eq!(
+            err.provider_error_kind(),
+            Some(ProviderErrorKind::MalformedResponse)
+        );
+    }
 }

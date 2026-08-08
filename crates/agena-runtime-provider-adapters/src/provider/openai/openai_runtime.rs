@@ -711,7 +711,8 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             let mut streaming_reasoning_text = String::new();
 
             while let Some(event) = events.next().await {
-                let event = event?;
+                let event =
+                    event.map_err(|err| utils::json_stream_error(provider_name.as_str(), err))?;
                 utils::adapter_log_stream_event(
                     provider_name.as_str(),
                     RESPONSES_ADAPTER_KIND,

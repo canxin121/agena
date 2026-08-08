@@ -1462,7 +1462,9 @@ impl AmazonBedrockAdapter {
             let mut copilot_reasoning_opaque: Option<String> = None;
 
             while let Some(event) = events.next().await {
-                let event = match event? {
+                let event = match event
+                    .map_err(|err| utils::json_stream_error(PROVIDER_ID, err))?
+                {
                     sse::JsonEventPayload::Event(event) => event,
                     sse::JsonEventPayload::Done => {
                         done_seen = true;

@@ -267,7 +267,8 @@ impl ModelRuntime for OllamaAdapter {
             let mut completed = false;
 
             while let Some(event) = events.next().await {
-                let event = event?;
+                let event = event
+                    .map_err(|err| utils::json_stream_error(provider_label.as_str(), err))?;
                 utils::adapter_log_stream_event(
                     provider_label.as_str(),
                     ADAPTER_KIND,

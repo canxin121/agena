@@ -185,6 +185,29 @@ pub fn parse_json_value<T: DeserializeOwned>(
     })
 }
 
+/// Classify a provider JSON stream error (SSE / JSON-lines) into a
+/// [`ProviderError`] carrying the real provider id. Transport/body errors map
+/// to `ProviderError::Http` (retryable for timeout/connect/body/decode); a
+/// malformed payload is treated as transient and retryable
+/// (`MalformedResponse`) so the registry's backoff loop resamples the request
+/// instead of failing the run immediately.
+pub fn json_stream_error(
+    provider_id: &str,
+    error: crate::ProviderJsonStreamError,
+) -> ProviderError {
+    match error {
+        crate::ProviderJsonStreamError::Http(error) => ProviderError::Http(error),
+        crate::ProviderJsonStreamError::InvalidJson { format, source } => {
+            ProviderError::ProviderClassified {
+                provider: provider_id.to_owned(),
+                message: format!("invalid {format} payload: {source}"),
+                kind: ProviderErrorKind::MalformedResponse,
+                retryable: true,
+            }
+        }
+    }
+}
+
 pub async fn http_status_error_from_response_logged(
     provider_id: &str,
     adapter_kind: &str,
@@ -1486,5 +1509,29 @@ mod tests {
         assert!(error.retryable());
         require_terminal_stream_event("compatible", "chat completions", true)
             .expect("terminal stream should pass");
+    }
+
+    #[test]
+    fn json_stream_error_carries_provider_id_and_retryable_malformed_kind() {
+        let error = json_stream_error(
+            "my-provider",
+            crate::ProviderJsonStreamError::InvalidJson {
+                format: "SSE",
+                source: serde_json::from_str::<serde_json::Value>("{broken").unwrap_err(),
+            },
+        );
+        match error {
+            ProviderError::ProviderClassified {
+                provider,
+                kind,
+                retryable,
+                ..
+            } => {
+                assert_eq!(provider, "my-provider");
+                assert_eq!(kind, ProviderErrorKind::MalformedResponse);
+                assert!(retryable);
+            }
+            other => panic!("expected ProviderClassified, got {other:?}"),
+        }
     }
 }

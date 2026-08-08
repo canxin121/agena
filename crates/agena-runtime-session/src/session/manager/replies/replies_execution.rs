@@ -284,6 +284,10 @@ impl SessionManager {
         let mut model_turns_taken: usize = 0;
         // Doom-loop recoveries already injected (see `MAX_DOOM_LOOP_RECOVERIES`).
         let mut doom_loop_recoveries: usize = 0;
+        // Backoff before retrying a failed model turn through an agent.stop
+        // continuation. Grows geometrically up to a cap so a persistently
+        // failing run does not hammer the provider with immediate retries.
+        let mut failure_retry_backoff_ms: u64 = 250;
         // Bounded safety net for model turns that were cut off by the output
         // limit (`finish_reason == max_tokens`). Each firing consumes budget;
         // a degenerate model that always truncates cannot loop forever.
@@ -463,6 +467,7 @@ impl SessionManager {
                     session_id: session.id,
                     stop_hook_active: false,
                     last_assistant_message: last_assistant_text.clone(),
+                    run_error: None,
                 };
                 match state
                     .tool_executor
@@ -632,6 +637,7 @@ impl SessionManager {
             {
                 Ok((next_session, outcome)) => {
                     session = next_session;
+                    failure_retry_backoff_ms = 250;
                     model_requested = false;
                     match should_continue_turn(
                         &outcome,
@@ -725,7 +731,81 @@ impl SessionManager {
                             continue;
                         }
                     }
-                    return Err(err);
+                    // A failed model turn is retryable when an agent.stop
+                    // hook (for example the workflow plan autorun) asks to
+                    // continue. Surface the error to the hook so it can
+                    // decide, and rate-limit retries with backoff.
+                    if control.cancel.is_cancelled() {
+                        return Err(AppError::Cancelled);
+                    }
+                    let run_error = err.public_message();
+                    let stop_input = agena_plugin_host::AgentStopInput {
+                        session_id,
+                        stop_hook_active: false,
+                        last_assistant_message: None,
+                        run_error: Some(run_error.to_string()),
+                    };
+                    session = self
+                        .store
+                        .load_session(session_id, state.cache_policy())
+                        .await?;
+                    match state
+                        .tool_executor
+                        .plugin_manager()
+                        .dispatch_agent_stop_cancellable(stop_input, Some(control.cancel.clone()))
+                        .await
+                    {
+                        Ok(dispatch) => {
+                            let hook_runs = state
+                                .tool_executor
+                                .plugin_manager()
+                                .drain_hook_runs(session.id);
+                            if !hook_runs.is_empty() {
+                                session = self
+                                    .record_hook_runs(session, hook_runs, state.clone())
+                                    .await?;
+                            }
+                            if let Some(follow_up) = dispatch.patch.continue_with_message {
+                                session = self
+                                    .inject_continuation_message(
+                                        session,
+                                        &current_options,
+                                        follow_up,
+                                        state.clone(),
+                                    )
+                                    .await?;
+                                let delay = failure_retry_backoff_ms;
+                                failure_retry_backoff_ms =
+                                    (failure_retry_backoff_ms * 2).min(5_000);
+                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                                model_requested = true;
+                                continue;
+                            }
+                            return Err(err);
+                        }
+                        Err(dispatch_err) => {
+                            if control.cancel.is_cancelled() {
+                                return Err(AppError::Cancelled);
+                            }
+                            tracing::warn!(
+                                target: "agena_plugin_host::agent_stop",
+                                "agent.stop hook failed after run error: {dispatch_err}"
+                            );
+                            let hook_runs = state
+                                .tool_executor
+                                .plugin_manager()
+                                .drain_hook_runs(session.id);
+                            if !hook_runs.is_empty() {
+                                // The hook activity is already persisted; the
+                                // reloaded session is not needed on this path,
+                                // which returns the original run error.
+                                let _ = self
+                                    .record_hook_runs(session, hook_runs, state.clone())
+                                    .await?;
+                            }
+                            return Err(err);
+                        }
+                    }
                 }
             }
         }

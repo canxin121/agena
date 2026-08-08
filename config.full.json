@@ -123,7 +123,8 @@
           "kind": "static"
         },
         "config": {
-          "default_autorun": true
+          "default_autorun": true,
+          "max_autorun_continuations": null
         }
       },
       "agena.memory": {

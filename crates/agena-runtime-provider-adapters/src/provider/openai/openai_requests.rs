@@ -309,7 +309,9 @@ impl OpenAiTransport {
             let mut done_seen = false;
 
             while let Some(event) = events.next().await {
-                let event = match event? {
+                let event = match event
+                    .map_err(|err| utils::json_stream_error(provider_name.as_str(), err))?
+                {
                     sse::JsonEventPayload::Event(event) => event,
                     sse::JsonEventPayload::Done => {
                         done_seen = true;

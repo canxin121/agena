@@ -109,6 +109,7 @@ impl WorkflowPlugin {
         plan: &WorkflowPlan,
         step_index: usize,
         step: &WorkflowPlanStep,
+        run_error: Option<&str>,
     ) -> String {
         let mut lines = vec![
             "<plan_context>".to_string(),
@@ -117,6 +118,9 @@ impl WorkflowPlugin {
             format!("Objective: {}", plan.objective),
             format!("Current step {}: {}", step_index + 1, step.title),
         ];
+        if let Some(run_error) = run_error {
+            lines.push(format!("Previous run error: {run_error}"));
+        }
         if !step.description.trim().is_empty() {
             lines.push(format!("Step details: {}", step.description.trim()));
         }

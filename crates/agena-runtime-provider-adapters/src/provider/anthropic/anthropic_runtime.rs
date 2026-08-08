@@ -476,7 +476,8 @@ impl ModelRuntime for AnthropicAdapter {
             let mut stream_tool_call_seen = false;
 
             while let Some(event) = events.next().await {
-                let event = event?;
+                let event = event
+                    .map_err(|err| utils::json_stream_error(provider_id.as_ref(), err))?;
                 utils::adapter_log_stream_event(
                     provider_id.as_ref(),
                     ADAPTER_KIND,

@@ -694,6 +694,8 @@ fn retry_reason(err: &ProviderError) -> &'static str {
     match err {
         ProviderError::Http(inner) if inner.is_timeout() => "http_timeout",
         ProviderError::Http(inner) if inner.is_connect() => "http_connect",
+        ProviderError::Http(inner) if inner.is_body() => "http_body",
+        ProviderError::Http(inner) if inner.is_decode() => "http_decode",
         ProviderError::HttpStatus {
             kind, retryable, ..
         }
@@ -787,5 +789,17 @@ mod tests {
         let estimated =
             estimate_total_cost_from_metadata(&metadata, &usage).expect("estimated cost");
         assert!((estimated - 0.000_080).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn retry_reason_labels_malformed_response_as_retryable() {
+        let err = crate::ProviderError::ProviderClassified {
+            provider: "p1".to_owned(),
+            message: "invalid SSE payload".to_owned(),
+            kind: agena_provider::ProviderErrorKind::MalformedResponse,
+            retryable: true,
+        };
+        assert_eq!(super::retry_reason(&err), "malformed_response");
+        assert!(err.retryable());
     }
 }

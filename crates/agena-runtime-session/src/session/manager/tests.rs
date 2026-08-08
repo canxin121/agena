@@ -4283,6 +4283,436 @@ mod tests {
         assert!(finished.pending_interactive_requests().is_empty());
     }
 
+    // A provider whose stream fails immediately with a non-retryable provider
+    // error. `ProviderError::Provider` never enters the registry retry loop, so
+    // the run fails on the first attempt and must still project a durable,
+    // visible Error activity for the failed run.
+    #[derive(Clone)]
+    struct FailingRunProvider {
+        default_model: ModelId,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for FailingRunProvider {
+        fn id(&self) -> &str {
+            "failing-run-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            Err(agena_runtime_provider::ProviderError::Provider(
+                "failing-run-provider complete failed".to_owned(),
+            ))
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<
+                                agena_provider::CompletionStreamEvent,
+                                agena_runtime_provider::ProviderError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            agena_runtime_provider::ProviderError,
+        > {
+            Err(agena_runtime_provider::ProviderError::Provider(
+                "failing-run-provider stream failed".to_owned(),
+            ))
+        }
+    }
+
+    async fn test_manager_with_failing_provider() -> SessionManager {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![],
+            config: PluginsConfig::default(),
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let mut providers = ProviderRegistry::new();
+        providers.register(FailingRunProvider {
+            default_model: ModelId::new("failing-run-model"),
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_run_projects_visible_error_activity() {
+        let manager = test_manager_with_failing_provider().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "failing run error activity".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create failing-run session");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "this will fail".to_owned(),
+        }]);
+        let outcome = manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new("failing-run-provider", "failing-run-model"),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+        let receipt = outcome.receipt.expect("accepted run receipt");
+        let reply_id = receipt.reply_id.to_string();
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        let backend = manager.store.db.get_database_backend();
+        let nodes = manager
+            .store
+            .db
+            .query_all(Statement::from_sql_and_values(
+                backend,
+                "SELECT node_type, state, payload_json \
+                 FROM agena_content_nodes \
+                 WHERE owner_kind = 'assistant_reply' AND owner_id = ?",
+                [reply_id.into()],
+            ))
+            .await
+            .expect("query error activity");
+        assert_eq!(nodes.len(), 1, "failed run must project one error activity");
+        assert_eq!(
+            nodes[0].try_get::<String>("", "node_type").unwrap(),
+            "activity"
+        );
+        assert_eq!(nodes[0].try_get::<String>("", "state").unwrap(), "failed");
+        let payload: agena_domain::ActivityPayload =
+            serde_json::from_value(nodes[0].try_get("", "payload_json").unwrap()).unwrap();
+        assert!(
+            matches!(payload, agena_domain::ActivityPayload::Error(_)),
+            "payload must be an Error activity"
+        );
+    }
+
+    // A provider that fails the first `failures_remaining` stream calls with a
+    // non-retryable provider error and then streams a plain-text completion.
+    // Exercises the failed-run agent.stop continuation path: the failure must
+    // surface to agent.stop hooks (run_error), and a continuation patch must
+    // make the run retry instead of aborting.
+    #[derive(Clone)]
+    struct FailsThenSucceedsProvider {
+        default_model: ModelId,
+        failures_remaining: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl ModelRuntime for FailsThenSucceedsProvider {
+        fn id(&self) -> &str {
+            "fails-then-succeeds-provider"
+        }
+
+        fn default_model(&self) -> &ModelId {
+            &self.default_model
+        }
+
+        async fn list_models(&self) -> Result<Vec<Model>, agena_runtime_provider::ProviderError> {
+            Ok(Vec::new())
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
+            if self.failures_remaining.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                self.failures_remaining
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(agena_runtime_provider::ProviderError::Provider(
+                    "fails-then-succeeds-provider complete failed".to_owned(),
+                ));
+            }
+            Ok(CompletionResponse {
+                provider_id: agena_domain::ProviderId::new(self.id()),
+                model: self.default_model.clone(),
+                text: "recovered".to_owned(),
+                reasoning_text: None,
+                finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                tool_calls: Vec::new(),
+                usage: None,
+                provider_metadata: None,
+            })
+        }
+
+        async fn complete_stream(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<
+            std::pin::Pin<
+                Box<
+                    dyn futures_util::Stream<
+                            Item = Result<
+                                agena_provider::CompletionStreamEvent,
+                                agena_runtime_provider::ProviderError,
+                            >,
+                        > + Send,
+                >,
+            >,
+            agena_runtime_provider::ProviderError,
+        > {
+            if self.failures_remaining.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+                self.failures_remaining
+                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                return Err(agena_runtime_provider::ProviderError::Provider(
+                    "fails-then-succeeds-provider stream failed".to_owned(),
+                ));
+            }
+            Ok(Box::pin(futures_util::stream::iter(vec![
+                Ok(agena_provider::CompletionStreamEvent::TextDelta {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    delta: "recovered".to_owned(),
+                }),
+                Ok(agena_provider::CompletionStreamEvent::Completed {
+                    provider_id: agena_domain::ProviderId::new(self.id()),
+                    model: self.default_model.clone(),
+                    finish_reason: Some(agena_provider::CompletionFinishReason::Stop),
+                    usage: None,
+                    provider_metadata: None,
+                    end_turn: None,
+                }),
+            ])))
+        }
+    }
+
+    #[derive(Default)]
+    struct AgentStopRetryOnErrorProbe;
+
+    static RETRY_ON_ERROR_HOOK_SAW_RUN_ERROR: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    #[agena_plugin_host::sdk::agena_plugin(
+        namespace = "test",
+        name = "retry_on_error_probe",
+        version = "0.1.0",
+        summary = "agent.stop retry-on-run-error regression fixture."
+    )]
+    impl AgentStopRetryOnErrorProbe {
+        #[hook(agent.stop)]
+        async fn agent_stop(
+            &self,
+            input: agena_plugin_host::AgentStopInput,
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::AgentStopPatch>> {
+            if input.run_error.is_some() {
+                RETRY_ON_ERROR_HOOK_SAW_RUN_ERROR.store(
+                    true,
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+                return Ok(Some(agena_plugin_host::AgentStopPatch {
+                    continue_with_message: Some("retry the failed run".to_owned()),
+                    reason: Some("test retry on run error".to_owned()),
+                }));
+            }
+            Ok(None)
+        }
+    }
+
+    async fn test_manager_with_retry_on_error_probe(
+        failures: usize,
+    ) -> (
+        SessionManager,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        let workspace_root = std::env::current_dir().expect("resolve test workspace");
+        let mut plugins_config = PluginsConfig::default();
+        plugins_config.list.insert(
+            "test.retry_on_error_probe".to_string(),
+            ConfiguredPlugin::static_default(),
+        );
+        let plugins = PluginHost::new(PluginHostBuildConfig {
+            static_plugins: vec![StaticPluginRegistration::new(
+                "test.retry_on_error_probe"
+                    .parse()
+                    .expect("valid retry probe plugin key"),
+                AgentStopRetryOnErrorProbe,
+            )],
+            config: plugins_config,
+            workspace_root: workspace_root.clone(),
+            agena_version: "test".to_string(),
+            callback_base_url: None,
+            host_client: None,
+            previous: None,
+            previous_plugins: HashMap::new(),
+        })
+        .await
+        .expect("build test plugin host");
+        let executor = ToolExecutor::new(
+            workspace_root.clone(),
+            ExecutionPrincipal::new(
+                PermissionPolicy::allow_all(),
+                ToolPermissionPolicy::allow_all(),
+            ),
+            Arc::clone(&plugins),
+            None,
+            None,
+            None,
+            ToolPresentationConfig::default(),
+        );
+        let failures_remaining = Arc::new(std::sync::atomic::AtomicUsize::new(failures));
+        let mut providers = ProviderRegistry::new();
+        providers.register(FailsThenSucceedsProvider {
+            default_model: ModelId::new("fails-then-succeeds-model"),
+            failures_remaining: Arc::clone(&failures_remaining),
+        });
+        let processor = SessionProcessor::new(
+            Arc::new(providers),
+            ContextGovernor::new(agena_domain::ContextPolicy::default()),
+            plugins,
+            workspace_root,
+        );
+        let database = Database::connect("sqlite::memory:")
+            .await
+            .expect("open in-memory database");
+        agena_storage_sqlite::initialize_schema(&database)
+            .await
+            .expect("migrate in-memory database");
+        let manager = SessionManager::new(
+            database,
+            processor,
+            executor,
+            RuntimeSessionManagerConfig::default(),
+        );
+        (manager, failures_remaining)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_run_retries_through_agent_stop_continuation() {
+        RETRY_ON_ERROR_HOOK_SAW_RUN_ERROR.store(false, std::sync::atomic::Ordering::SeqCst);
+        let (manager, failures_remaining) = test_manager_with_retry_on_error_probe(1).await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "retry on run error".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create retry session");
+        let document = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "please recover".to_owned(),
+        }]);
+        let outcome = manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                SessionRunOptions {
+                    model: ModelRef::new(
+                        "fails-then-succeeds-provider",
+                        "fails-then-succeeds-model",
+                    ),
+                    thinking_mode: None,
+                    speed_mode: None,
+                    verbosity: None,
+                    thinking: None,
+                    request_override: Default::default(),
+                    system: None,
+                    temperature: None,
+                    max_output_tokens: None,
+                },
+                document,
+            ))
+            .await
+            .expect("submit user message");
+        let _receipt = outcome.receipt.expect("accepted run receipt");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        assert!(
+            RETRY_ON_ERROR_HOOK_SAW_RUN_ERROR.load(std::sync::atomic::Ordering::SeqCst),
+            "agent.stop hook must have observed the run error"
+        );
+        assert_eq!(
+            failures_remaining.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the run must have retried and succeeded after the provider recovered"
+        );
+        let finished = manager
+            .store
+            .load_session(session.id, manager.execution_state().cache_policy())
+            .await
+            .expect("load finished session");
+        assert!(
+            finished.messages.iter().any(|m| {
+                m.role == agena_domain::Role::Assistant
+                    && m.metadata.source == agena_domain::MessageSource::Assistant
+            }),
+            "a successful assistant reply must exist after the retry"
+        );
+    }
+
     // A provider that always streams plain text with no tool call and no
     // explicit end_turn. A normal user submission stops after one turn; a
     // continue-driven run exercises the bounded goal-continuation driver.

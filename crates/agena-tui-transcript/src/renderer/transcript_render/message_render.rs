@@ -106,9 +106,17 @@ pub(crate) fn collapsed_activity_run_end(
     start: usize,
 ) -> Option<usize> {
     is_activity_node(parts.get(start)?).then(|| {
+        // Session activities injected mid-reply render as standalone
+        // Notice/Hook blocks and are never folded into a collapsed
+        // tool-activity run, so a run stops at them (both as the run start
+        // and when one appears between tool activities).
+        if is_run_boundary_activity(parts.get(start).expect("checked")) {
+            return start.saturating_add(1);
+        }
         let mut end = start.saturating_add(1);
         while parts.get(end).is_some_and(|part| {
-            is_activity_node(part) || is_invisible_activity_run_bridge(parts, end)
+            (is_activity_node(part) && !is_run_boundary_activity(part))
+                || is_invisible_activity_run_bridge(parts, end)
         }) {
             end = end.saturating_add(1);
         }
@@ -129,6 +137,18 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
     matches!(
         transcript_part_content(part),
         TranscriptPartContent::Activity(_)
+    )
+}
+
+/// Whether an Activity part must stay visible as a standalone block instead of
+/// joining a collapsed run. Session activities injected mid-reply (hook runs,
+/// background notices) project as `Canonical` Notice payloads; hiding them
+/// inside a tool-run fold would bury where the hook actually fired.
+fn is_run_boundary_activity(part: &TranscriptEntryPart) -> bool {
+    matches!(
+        transcript_part_content(part),
+        TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
+            if matches!(payload, agena_domain::ActivityPayload::Notice(_))
     )
 }
 

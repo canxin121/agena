@@ -57,24 +57,30 @@ pub fn transcript_entries<'a>(snapshot: &'a TranscriptSnapshot) -> Vec<Transcrip
                 &turn.input,
             ));
         }
-        // Activities that began while the assistant was composing (before the
-        // reply finished) render between the user input and the reply; the
-        // finished timestamp falls back to the reply creation time while the
-        // reply is still streaming.
-        let reply_boundary_ms = turn.reply.finished_at_ms.unwrap_or(turn.reply.created_at_ms);
+        // Activities that began at/after the user input and no later than the
+        // reply's finished time render inside the reply at their timestamp
+        // position, so a stop-hook or command hook that fired mid-reply lands
+        // exactly where it fired instead of piling under the user input or
+        // under every later activity. While the reply is still streaming its
+        // finished time is unknown, so every activity since the user input is
+        // considered inside the reply: it pins to the current stream extent
+        // and stays there once later content passes it.
+        let mid_boundary_ms = turn.reply.finished_at_ms.unwrap_or(i64::MAX);
+        let mut mid_activities = Vec::new();
         while activity_index < activities.len()
-            && activities[activity_index].lifecycle.started_at_ms <= reply_boundary_ms
+            && activities[activity_index].lifecycle.started_at_ms <= mid_boundary_ms
         {
-            pending.push(activities[activity_index]);
+            mid_activities.push(activities[activity_index]);
             activity_index += 1;
         }
-        entries.extend(pending.drain(..).map(session_activity_entry));
         entries.push(assistant_reply_document_entry(
             turn.reply.id,
             assistant_reply_status(turn.reply.status),
             turn.reply.created_at_ms,
             &turn.reply.content,
             turn.reply.failure.clone(),
+            &mid_activities,
+            turn.reply.finished_at_ms,
         ));
     }
     // Anything still pending started after the last turn's reply; keep it at
@@ -141,14 +147,22 @@ fn user_document_entry(
     }
 }
 
-fn assistant_reply_document_entry(
+fn assistant_reply_document_entry<'a>(
     reply_id: agena_domain::AssistantReplyId,
     state: MessageStatus,
     created_at_ms: i64,
-    document: &ContentDocument,
+    document: &'a ContentDocument,
     failure: Option<agena_failure::UserProblem>,
-) -> TranscriptEntry<'_> {
-    let mut parts = assistant_reply_document_parts(document, state);
+    mid_activities: &[&'a ActivityNode],
+    reply_finished_at_ms: Option<i64>,
+) -> TranscriptEntry<'a> {
+    let mut parts = assistant_reply_document_parts(
+        document,
+        state,
+        mid_activities,
+        created_at_ms,
+        reply_finished_at_ms,
+    );
     // A reply-level failure is now persisted as a durable Error Activity in
     // the reply content (like a failed tool call), so it renders through the
     // shared canonical Activity path. Only fall back to the legacy
@@ -178,10 +192,13 @@ fn assistant_reply_document_entry(
     }
 }
 
-fn assistant_reply_document_parts(
-    document: &ContentDocument,
+fn assistant_reply_document_parts<'a>(
+    document: &'a ContentDocument,
     state: MessageStatus,
-) -> Vec<TranscriptEntryPart<'_>> {
+    mid_activities: &[&'a ActivityNode],
+    reply_created_at_ms: i64,
+    reply_finished_at_ms: Option<i64>,
+) -> Vec<TranscriptEntryPart<'a>> {
     let nodes = document.nodes();
     // One reply can span many assistant messages: an opening paragraph, tool
     // calls, interstitial text, and a closing summary. Only the final body
@@ -208,7 +225,7 @@ fn assistant_reply_document_parts(
     } else {
         nodes.iter().rposition(is_body_text_node)
     };
-    nodes
+    let mut parts = nodes
         .iter()
         .enumerate()
         .map(|(index, node)| match node {
@@ -265,7 +282,71 @@ fn assistant_reply_document_parts(
             }
             ContentNode::Activity { activity } => activity_entry_part(activity),
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if !mid_activities.is_empty() {
+        inject_session_activities_into_reply_parts(
+            &mut parts,
+            nodes,
+            mid_activities,
+            reply_created_at_ms,
+            reply_finished_at_ms,
+        );
+    }
+    parts
+}
+
+/// Insert mid-reply session activities (hook runs, background notices, …) into
+/// the reply's part list at their timestamp position. Reply content is one
+/// document, so node times are approximated: Activity nodes use their
+/// `started_at_ms`; a text segment is anchored to the next Activity's
+/// `started_at_ms` (or, when trailing, to the reply's finished time, which
+/// keeps a live trailing body after any activity fired so far). The injected
+/// activities render as the same Notice/Hook blocks they do as standalone
+/// entries; the renderer treats them as run boundaries so they are never
+/// folded into a collapsed tool-activity run.
+fn inject_session_activities_into_reply_parts<'a>(
+    parts: &mut Vec<TranscriptEntryPart<'a>>,
+    nodes: &[ContentNode],
+    mid_activities: &[&'a ActivityNode],
+    reply_created_at_ms: i64,
+    reply_finished_at_ms: Option<i64>,
+) {
+    // Trailing text (no later Activity anchor) is anchored to the reply's
+    // finished time once known; while the reply is still streaming it is
+    // pinned to the reply's creation time so an activity fired so far lands
+    // after the live body (the current stream extent) instead of before it.
+    let trailing_text_time = reply_finished_at_ms.unwrap_or(reply_created_at_ms);
+    let node_times = nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| match node {
+            ContentNode::Activity { activity } => activity.lifecycle.started_at_ms,
+            ContentNode::Text { .. } => nodes[index + 1..]
+                .iter()
+                .find_map(|next| match next {
+                    ContentNode::Activity { activity } => Some(activity.lifecycle.started_at_ms),
+                    ContentNode::Text { .. } => None,
+                })
+                .unwrap_or(trailing_text_time),
+        })
+        .collect::<Vec<_>>();
+    let mut inserts = mid_activities
+        .iter()
+        .map(|activity| {
+            let started_at = activity.lifecycle.started_at_ms;
+            let position = node_times
+                .iter()
+                .position(|node_time| *node_time > started_at)
+                .unwrap_or(nodes.len());
+            (position, activity_entry_part(activity))
+        })
+        .collect::<Vec<_>>();
+    // mid_activities is already timestamp-sorted, so positions never move
+    // backwards; inserting from the back keeps earlier indices valid.
+    inserts.sort_by_key(|(position, _)| *position);
+    for (position, part) in inserts.into_iter().rev() {
+        parts.insert(position, part);
+    }
 }
 
 fn is_body_text_node(node: &ContentNode) -> bool {
@@ -746,6 +827,8 @@ mod tests {
             1,
             &document,
             None,
+            &[],
+            None,
         );
         assert!(matches!(
             entry.parts.as_slice(),
@@ -1061,6 +1144,8 @@ mod tests {
             1,
             &document,
             None,
+            &[],
+            None,
         );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
@@ -1264,24 +1349,38 @@ mod tests {
         };
 
         let entries = transcript_entries(&snapshot);
-        let ids = entries
-            .iter()
-            .map(|entry| entry.id)
-            .collect::<Vec<_>>();
+        let ids = entries.iter().map(|entry| entry.id).collect::<Vec<_>>();
         assert_eq!(
             ids,
             vec![
                 TranscriptEntryId::SessionActivity(before),
                 TranscriptEntryId::TurnInput(turn_id),
-                TranscriptEntryId::SessionActivity(mid),
                 TranscriptEntryId::AssistantReply(reply_id),
                 TranscriptEntryId::SessionActivity(after),
             ]
         );
+        // The mid-reply activity (started 200; reply created 100 and finished
+        // 300) no longer gets its own entry: it is absorbed into the reply and
+        // placed before the reply body, whose trailing text is anchored to the
+        // reply's finished time.
+        let reply = entries
+            .iter()
+            .find(|entry| entry.id == TranscriptEntryId::AssistantReply(reply_id))
+            .expect("reply entry");
+        assert_eq!(reply.parts.len(), 2);
+        assert_eq!(reply.parts[0].id, TranscriptContentId::Activity(mid));
+        assert!(matches!(
+            reply.parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(_))
+        ));
+        assert!(matches!(
+            reply.parts[1].content,
+            TranscriptPartContent::Text(_)
+        ));
     }
 
     #[test]
-    fn session_activities_land_between_turns_and_streaming_reply_falls_back_to_created() {
+    fn session_activities_land_between_turns_and_streaming_reply_absorbs_remaining() {
         let first_turn = agena_domain::TurnId::new();
         let first_reply = agena_domain::AssistantReplyId::new();
         let second_turn = agena_domain::TurnId::new();
@@ -1315,8 +1414,9 @@ mod tests {
                     session_id: 7,
                     sequence: 2,
                     input: ContentDocument::new(vec![ContentNode::text("second")]),
-                    // Still streaming: finished_at_ms is None, so the reply
-                    // creation time is the boundary for inside-turn placement.
+                    // Still streaming: finished_at_ms is None, so every
+                    // activity since the user input is absorbed into the reply
+                    // until it finishes.
                     reply: agena_domain::AssistantReplySnapshot {
                         id: second_reply,
                         turn_id: second_turn,
@@ -1334,19 +1434,17 @@ mod tests {
                 // Started after the first reply finished but before the second
                 // turn was created: lands between the two turns.
                 session_notice_activity(between, 400),
-                // Started at the streaming reply's creation time: inside the
-                // second turn (before its reply entry).
+                // Started at the streaming reply's creation time: absorbed
+                // into the reply (its finished time is unknown).
                 session_notice_activity(inside_streaming, 500),
-                // Started after the last reply boundary: stays at the tail.
+                // Started well after the streaming reply began: still absorbed
+                // while the reply has no finished time.
                 session_notice_activity(tail, 900),
             ],
         };
 
         let entries = transcript_entries(&snapshot);
-        let ids = entries
-            .iter()
-            .map(|entry| entry.id)
-            .collect::<Vec<_>>();
+        let ids = entries.iter().map(|entry| entry.id).collect::<Vec<_>>();
         assert_eq!(
             ids,
             vec![
@@ -1354,11 +1452,107 @@ mod tests {
                 TranscriptEntryId::AssistantReply(first_reply),
                 TranscriptEntryId::SessionActivity(between),
                 TranscriptEntryId::TurnInput(second_turn),
-                TranscriptEntryId::SessionActivity(inside_streaming),
                 TranscriptEntryId::AssistantReply(second_reply),
-                TranscriptEntryId::SessionActivity(tail),
             ]
         );
+        // While streaming the reply has no finished time, so both absorbed
+        // activities pin after the live body (the current stream extent,
+        // anchored to the reply's creation time) in timestamp order.
+        let second = entries
+            .iter()
+            .find(|entry| entry.id == TranscriptEntryId::AssistantReply(second_reply))
+            .expect("second reply entry");
+        assert_eq!(second.parts.len(), 3);
+        assert!(matches!(
+            second.parts[0].content,
+            TranscriptPartContent::Text(_)
+        ));
+        assert_eq!(
+            second.parts[1].id,
+            TranscriptContentId::Activity(inside_streaming)
+        );
+        assert_eq!(second.parts[2].id, TranscriptContentId::Activity(tail));
+    }
+
+    #[test]
+    fn mid_reply_session_activities_place_between_document_nodes_by_timestamp() {
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let tool_activity = agena_domain::ActivityId::new();
+        let m1 = agena_domain::ActivityId::new();
+        let m2 = agena_domain::ActivityId::new();
+        let m3 = agena_domain::ActivityId::new();
+        // The reply document already carries a tool Activity between two body
+        // segments. Mid-reply session activities must land by timestamp:
+        // before the opening (anchored to the tool call at 200), between the
+        // tool call and the trailing body (anchored to the reply's finished
+        // time at 400), and after the trailing body.
+        let document = ContentDocument::new(vec![
+            ContentNode::text("opening"),
+            ContentNode::activity(ActivityNode {
+                id: tool_activity,
+                owner: ActivityOwner::AssistantReply { reply_id },
+                actor: ActivityActor::Tool,
+                state: ActivityState::Completed,
+                position: ContentPosition { index: 1 },
+                revision_seq: 1,
+                lifecycle: ActivityLifecycle {
+                    started_at_ms: 200,
+                    finished_at_ms: Some(200),
+                },
+                payload: ActivityPayload::Operation(OperationActivity {
+                    call_id: ToolCallId::new("call-mid-placement"),
+                    invocation: ToolInvocation {
+                        tool_api_call: None,
+                        name: "fs.read".to_owned(),
+                        plugin_name: None,
+                        input: StructuredObject::try_from(serde_json::json!({
+                            "file_path": "a"
+                        }))
+                        .expect("structured mid-placement input"),
+                    },
+                    title: "Read a".to_owned(),
+                    summary: String::new(),
+                    data: serde_json::json!({}),
+                    markdown: String::new(),
+                    authorization: Default::default(),
+                    error: None,
+                }),
+                provenance: ActivityProvenance::default(),
+            }),
+            ContentNode::text("closing"),
+        ]);
+        let m1_node = session_notice_activity(m1, 150);
+        let m2_node = session_notice_activity(m2, 250);
+        let m3_node = session_notice_activity(m3, 450);
+        let parts = assistant_reply_document_parts(
+            &document,
+            MessageStatus::Completed,
+            &[&m1_node, &m2_node, &m3_node],
+            100,
+            Some(400),
+        );
+        let text_ids = document
+            .nodes()
+            .iter()
+            .filter_map(|node| match node {
+                ContentNode::Text { segment } => Some(TranscriptContentId::Text(segment.id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let position = |id: &TranscriptContentId| {
+            parts
+                .iter()
+                .position(|part| &part.id == id)
+                .expect("part present")
+        };
+        assert!(position(&TranscriptContentId::Activity(m1)) < position(&text_ids[0]));
+        assert!(position(&text_ids[0]) < position(&TranscriptContentId::Activity(tool_activity)));
+        assert!(
+            position(&TranscriptContentId::Activity(tool_activity))
+                < position(&TranscriptContentId::Activity(m2))
+        );
+        assert!(position(&TranscriptContentId::Activity(m2)) < position(&text_ids[1]));
+        assert!(position(&text_ids[1]) < position(&TranscriptContentId::Activity(m3)));
     }
 
     #[test]
@@ -1411,6 +1605,8 @@ mod tests {
             MessageStatus::Completed,
             1,
             &document,
+            None,
+            &[],
             None,
         );
         let key = crate::TranscriptNodeKey::Activity {
@@ -1591,6 +1787,8 @@ mod tests {
             1,
             &document,
             None,
+            &[],
+            None,
         );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
@@ -1721,6 +1919,8 @@ mod tests {
             MessageStatus::Completed,
             1,
             &document,
+            None,
+            &[],
             None,
         );
         let key = crate::TranscriptNodeKey::Activity {
@@ -1923,8 +2123,15 @@ mod tests {
             }),
             provenance: ActivityProvenance::default(),
         })]);
-        let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document, None);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Failed,
+            1,
+            &document,
+            None,
+            &[],
+            None,
+        );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -2063,8 +2270,15 @@ mod tests {
             }),
             provenance: ActivityProvenance::default(),
         })]);
-        let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document, None);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Failed,
+            1,
+            &document,
+            None,
+            &[],
+            None,
+        );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -2133,8 +2347,15 @@ mod tests {
             }),
             provenance: ActivityProvenance::default(),
         })]);
-        let entry =
-            assistant_reply_document_entry(response_id, MessageStatus::Failed, 1, &document, None);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::Failed,
+            1,
+            &document,
+            None,
+            &[],
+            None,
+        );
         let key = crate::TranscriptNodeKey::Activity {
             entry_id: TranscriptEntryId::AssistantReply(response_id),
             content_id: TranscriptContentId::Activity(activity_id),
@@ -2195,6 +2416,8 @@ mod tests {
             MessageStatus::Completed,
             1,
             &document,
+            None,
+            &[],
             None,
         );
         let key = crate::TranscriptNodeKey::Activity {
@@ -2286,6 +2509,8 @@ mod tests {
             MessageStatus::Completed,
             1,
             &document,
+            None,
+            &[],
             None,
         );
         let key = crate::TranscriptNodeKey::Activity {
@@ -2385,6 +2610,8 @@ mod tests {
             1,
             &ordinary_document,
             None,
+            &[],
+            None,
         );
         let ordinary_rendered = crate::render_entry_detailed(
             &ordinary,
@@ -2412,6 +2639,8 @@ mod tests {
             MessageStatus::Completed,
             1,
             &long_document,
+            None,
+            &[],
             None,
         );
         let long_rendered = crate::render_entry_detailed(
@@ -2776,6 +3005,8 @@ mod tests {
             1,
             &document,
             Some(problem),
+            &[],
+            None,
         );
         let defaults = crate::TranscriptDetailDefaults {
             activity_expanded: false,
@@ -2882,6 +3113,8 @@ mod tests {
             2,
             &document,
             None,
+            &[],
+            None,
         );
         let rendered = crate::render_entry_detailed(
             &recovered,
@@ -2911,6 +3144,8 @@ mod tests {
             1,
             &document,
             Some(problem),
+            &[],
+            None,
         );
         let failed_text = crate::render_entry_detailed(
             &failed,
@@ -2961,6 +3196,8 @@ It has two lines.";
             MessageStatus::Completed,
             1,
             &document,
+            None,
+            &[],
             None,
         );
         assert_eq!(entry.parts.len(), 2);
@@ -3065,6 +3302,8 @@ It has two lines.";
             1,
             &document,
             None,
+            &[],
+            None,
         );
         assert_eq!(entry.parts.len(), 2);
         // The opening body segment is not the answer: it projects as an
@@ -3144,6 +3383,8 @@ It has two lines.";
             1,
             &document,
             None,
+            &[],
+            None,
         );
         assert_eq!(entry.parts.len(), 2);
         assert!(matches!(
@@ -3194,6 +3435,8 @@ It has two lines.";
             MessageStatus::InProgress,
             1,
             &document,
+            None,
+            &[],
             None,
         );
         assert!(matches!(

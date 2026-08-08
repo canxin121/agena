@@ -625,6 +625,82 @@ mod tests {
     }
 
     #[test]
+    fn session_notice_activity_never_folds_into_a_tool_activity_run() {
+        let now = Utc::now();
+        let mut parts = (0..7)
+            .map(|index| {
+                TranscriptFixture::operation_part(
+                    100 + index,
+                    7,
+                    now,
+                    ExecutionStatus::Completed,
+                    fixture_operation(index, "agena.fs.read", &format!("Read file {index}")),
+                )
+            })
+            .collect::<Vec<_>>();
+        // A session Notice injected mid-reply (hook run, background notice)
+        // must stay visible and split the tool calls into separate runs.
+        let notice_payload = agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
+            kind: "hook".to_owned(),
+            summary: "mid-reply hook fired".to_owned(),
+            detail: None,
+        });
+        parts.push(TranscriptFixture::canonical_activity(
+            200,
+            7,
+            now,
+            ExecutionStatus::Completed,
+            &notice_payload,
+        ));
+        parts.extend((0..2).map(|index| {
+            TranscriptFixture::operation_part(
+                210 + index,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                fixture_operation(10 + index, "agena.fs.write", "Write file"),
+            )
+        }));
+        let message = entry(
+            7,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::Completed,
+            now,
+            parts,
+        );
+
+        let rendered = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The seven leading tool calls fold to five visible blocks plus a
+        // summary; the notice stays visible and the trailing tool calls form
+        // their own run instead of being hidden behind the same fold.
+        assert!(text.contains("mid-reply hook fired"), "{text}");
+        assert!(text.contains("2 older activity blocks collapsed"), "{text}");
+        assert!(!text.contains("Read file 1"), "{text}");
+        assert!(
+            rendered.nodes.iter().any(|node| node.key
+                == TranscriptNodeKey::Activity {
+                    entry_id: TranscriptEntryId::StoredMessage(7),
+                    content_id: TranscriptContentId::StoredPart(200),
+                }),
+            "injected session notice must render as its own Activity node"
+        );
+    }
+
+    #[test]
     fn expanded_activity_run_stays_expanded_when_the_assistant_appends_an_activity() {
         let now = Utc::now();
         let activity = |part_id: i64| {

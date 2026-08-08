@@ -44,7 +44,7 @@ pub enum QuestionFlowDialogMode<'a> {
         summary_body: &'a Text<'a>,
         footer: &'a Text<'a>,
     },
-        Question {
+    Question {
         prompt_title: Cow<'a, str>,
         prompt_body: &'a Text<'a>,
         choices_title: Cow<'a, str>,
@@ -82,8 +82,8 @@ impl<'a> QuestionFlowDialogMode<'a> {
         }
     }
 
-        #[allow(clippy::too_many_arguments)]
-        pub fn question(
+    #[allow(clippy::too_many_arguments)]
+    pub fn question(
         prompt_title: Cow<'a, str>,
         prompt_body: &'a Text<'a>,
         choices_title: Cow<'a, str>,
@@ -210,7 +210,7 @@ pub fn render_question_flow_dialog_scrollable(
                 alignment: None,
             }));
         }
-                QuestionFlowDialogMode::Question {
+        QuestionFlowDialogMode::Question {
             prompt_title,
             prompt_body,
             choices_title,
@@ -272,7 +272,7 @@ pub fn render_question_flow_dialog_scrollable(
         }
     }
 
-        render_stacked_dialog_scrollable(
+    render_stacked_dialog_scrollable(
         frame,
         area,
         surface,

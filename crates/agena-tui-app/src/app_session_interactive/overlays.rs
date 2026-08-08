@@ -10,8 +10,12 @@ impl App {
         // forced open again after a restart or on another client; it stays
         // reachable through the awaiting-input hint.
         self.present_pending_interactive_request(session_id, request.request_id.clone());
+        let review_content_width =
+            agena_tui::user_input::user_input_review_content_width(self.layout.overlay_area);
         self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-            session_id, request,
+            session_id,
+            request,
+            review_content_width,
         )));
     }
 
@@ -40,9 +44,10 @@ impl App {
     pub(crate) fn build_user_input_overlay(
         session_id: i64,
         request: UserInputRequest,
+        review_content_width: u16,
     ) -> UserInputOverlay {
         let review_decision = Self::user_input_review_question(&request).is_some();
-        let presentation = agena_tui::user_input::UserInputPresentation::new(
+        let mut presentation = agena_tui::user_input::UserInputPresentation::new(
             agena_tui::user_input::UserInputOverlayPresentation {
                 request_id: request.request_id.clone(),
                 title: request.title.clone(),
@@ -78,6 +83,28 @@ impl App {
                 )
                 .collect(),
         );
+        if review_decision {
+            // Pre-render the plan body with the exact chat/transcript Markdown
+            // pipeline so the approval window looks like assistant prose and
+            // shares the line-based cursor model with the main interface.
+            let rendered = agena_tui_media::with_text_math_rendering(|| {
+                agena_tui_transcript::render_markdown_document(
+                    request.body_markdown.as_str(),
+                    review_content_width,
+                )
+            });
+            let plan_lines = rendered
+                .into_iter()
+                .map(|line| {
+                    line.rich_line.unwrap_or_else(|| {
+                        ratatui::text::Line::from(ratatui::text::Span::styled(
+                            line.text, line.style,
+                        ))
+                    })
+                })
+                .collect::<Vec<_>>();
+            presentation.set_review_plan(plan_lines, review_content_width);
+        }
         UserInputOverlay {
             session_id,
             request,
@@ -236,12 +263,14 @@ impl App {
             }) => {
                 self.seen_user_input_request_ids
                     .insert(request.request_id.clone());
-                self.present_pending_interactive_request(
-                    session_id,
-                    request.request_id.clone(),
+                self.present_pending_interactive_request(session_id, request.request_id.clone());
+                let review_content_width = agena_tui::user_input::user_input_review_content_width(
+                    self.layout.overlay_area,
                 );
                 self.overlay = Some(Overlay::UserInputReply(Self::build_user_input_overlay(
-                    session_id, *request,
+                    session_id,
+                    *request,
+                    review_content_width,
                 )));
                 self.queue_user_input_notification();
             }

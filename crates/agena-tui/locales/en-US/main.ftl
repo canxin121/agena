@@ -809,8 +809,8 @@ overlay-user-input-custom-empty = Press Enter or e to type a custom answer
 overlay-user-input-review-feedback = Feedback to agent
 overlay-user-input-review-feedback-empty = Press Enter or e to type feedback, or pick a decision
 overlay-user-input-missing-answer = missing answer for {$label}
-overlay-user-input-footer-review = Tab/Shift+Tab pages | e edit | Ctrl+D clear | Ctrl+X cancel
-overlay-user-input-footer-question = Tab/Shift+Tab pages | Space toggle | Ctrl+D clear | Ctrl+X cancel
+overlay-user-input-footer-review = j/k ↑/↓ move | Enter choose | e edit | PgUp/PgDn scroll | Ctrl+X cancel
+overlay-user-input-footer-question = Tab/Shift+Tab pages | Space toggle | Ctrl+D clear | PgUp/PgDn scroll | Ctrl+X cancel
 overlay-user-input-custom-allowed = custom value allowed
 overlay-user-input-reply-format = Reply format: question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X cancels the request

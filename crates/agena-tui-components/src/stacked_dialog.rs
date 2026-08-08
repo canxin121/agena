@@ -12,7 +12,7 @@ use ratatui::{
 
 use crate::{
     Editor, EditorPanelSpec, FramedSurfaceSpec,
-        layout::{
+    layout::{
         SurfaceMode, VerticalSectionSize, editor_input_panel_height, framed_overlay_height,
         list_panel_height, split_vertical_sections,
     },
@@ -117,11 +117,10 @@ impl<'a> StackedDialogSection<'a> {
                 section.title.is_some(),
             ),
             Self::TextPanel(section) => section.height.resolve_text_panel(section.spec.body, width),
-                        Self::ListPanel(section) => section.height.resolve_list_panel(section.spec.items.len()),
-            Self::ChoicePanel(section) => section.height.resolve_choice_panel(
-                section.items.len(),
-                section.inline_editor.is_some(),
-            ),
+            Self::ListPanel(section) => section.height.resolve_list_panel(section.spec.items.len()),
+            Self::ChoicePanel(section) => section
+                .height
+                .resolve_choice_panel(section.items.len(), section.inline_editor.is_some()),
             Self::EditorPanel(section) => section.height.resolve_editor(section.input),
         }
     }
@@ -168,7 +167,7 @@ impl StackedDialogSectionHeight {
         }
     }
 
-        fn resolve_editor(self, input: &Editor) -> u16 {
+    fn resolve_editor(self, input: &Editor) -> u16 {
         match self {
             Self::Fixed(height) => height,
             Self::AutoEditor { multiline } => editor_input_panel_height(input, multiline),
@@ -282,7 +281,7 @@ pub fn render_stacked_dialog_scrollable(
         },
     );
 
-    if surface == SurfaceMode::Route {
+    if matches!(surface, SurfaceMode::Route) {
         // Full-canvas routes keep the historical flexible-last-section layout;
         // scroll has no meaning on an unbounded canvas.
         return render_route_sections(frame, frame_surface.inner, spec, &heights);
@@ -385,7 +384,8 @@ fn render_stacked_section(
             render_list_panel_with_offset(frame, section_area, &section.spec, section_scroll);
         }
         StackedDialogSection::ChoicePanel(section) => {
-            if let Some(position) = render_choice_panel(frame, section_area, section, section_scroll)
+            if let Some(position) =
+                render_choice_panel(frame, section_area, section, section_scroll)
             {
                 *cursor = Some(position);
             }
@@ -449,7 +449,7 @@ fn render_choice_panel(
         paragraph = paragraph.style(section.highlight_style);
     }
     frame.render_widget(paragraph, editor_area);
-        section.set_cursor.then(|| {
+    section.set_cursor.then(|| {
         (
             editor_area.x.saturating_add(view.cursor_x),
             editor_area.y.saturating_add(view.cursor_y),
@@ -460,11 +460,7 @@ fn render_choice_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{
-        Terminal,
-        backend::TestBackend,
-        text::Line as TextLine,
-    };
+    use ratatui::{Terminal, backend::TestBackend, text::Line as TextLine};
 
     fn fixed_paragraph(height: u16, text: &str) -> StackedDialogSection<'static> {
         StackedDialogSection::Paragraph(ParagraphSection {
@@ -499,8 +495,7 @@ mod tests {
             ],
         };
         let area = Rect::new(0, 0, 40, 10);
-        let metrics =
-            stacked_dialog_scroll_metrics(area, SurfaceMode::Overlay, &spec);
+        let metrics = stacked_dialog_scroll_metrics(area, SurfaceMode::Overlay, &spec);
         assert!(
             metrics.max_scroll > 0,
             "overflowing dialog must be scrollable"
@@ -538,7 +533,7 @@ mod tests {
             !buffer_contains(&terminal, 'd'),
             "middle section scrolled out with its text"
         );
-        assert!(buffer_contains(&terminal, 'm'), "bottom section revealed");
+        assert!(buffer_contains(&terminal, 'b'), "bottom section revealed");
     }
 
     #[test]
@@ -561,10 +556,10 @@ mod tests {
         };
         let area = Rect::new(0, 0, 30, 10);
         let mut terminal = Terminal::new(TestBackend::new(30, 10)).unwrap();
-        let mut render_result = None;
+        let mut rendered = None;
         terminal
             .draw(|frame| {
-                render_result = Some(render_stacked_dialog_scrollable(
+                rendered = Some(render_stacked_dialog_scrollable(
                     frame,
                     area,
                     SurfaceMode::Overlay,
@@ -573,7 +568,7 @@ mod tests {
                 ));
             })
             .unwrap();
-        let cursor = render_result
+        let cursor = rendered
             .expect("render must run")
             .cursor
             .expect("inline editor must report a terminal cursor");

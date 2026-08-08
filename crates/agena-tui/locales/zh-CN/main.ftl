@@ -838,8 +838,8 @@ overlay-user-input-custom-empty = 按 Enter 或 e 输入自定义回答
 overlay-user-input-review-feedback = 给 Agent 的反馈
 overlay-user-input-review-feedback-empty = 按 Enter 或 e 输入反馈，或选择一个决定
 overlay-user-input-missing-answer = {$label} 还没有回答
-overlay-user-input-footer-review = Tab/Shift+Tab 页面 | e 编辑 | Ctrl+D 清除 | Ctrl+X 取消
-overlay-user-input-footer-question = Tab/Shift+Tab 页面 | Space 切换 | Ctrl+D 清除 | Ctrl+X 取消
+overlay-user-input-footer-review = j/k ↑/↓ 移动 | Enter 选择 | e 编辑 | PgUp/PgDn 滚动 | Ctrl+X 取消
+overlay-user-input-footer-question = Tab/Shift+Tab 页面 | Space 切换 | Ctrl+D 清除 | PgUp/PgDn 滚动 | Ctrl+X 取消
 overlay-user-input-custom-allowed = 允许自定义值
 overlay-user-input-reply-format = 回复格式：question_id=value;other_id=value1,value2
 overlay-user-input-cancel-hint = Ctrl+X 取消此请求

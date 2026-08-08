@@ -295,7 +295,7 @@ pub(crate) fn push_markdown_document(
                     .with_copy_projection(String::new(), UnicodeWidthStr::width(prefix)),
             );
         }
-                render_markdown_block(out, prefix, block, width);
+        render_markdown_block(out, prefix, block, width);
     }
 }
 
@@ -752,7 +752,7 @@ mod syntax_highlight_tests {
         let palette = agena_tui_components::ThemePalette::for_unknown_background();
         let highlighted = syntax_highlight_lines("rust", &["let answer = 42;"], palette);
 
-                for span in highlighted.iter().flatten() {
+        for span in highlighted.iter().flatten() {
             assert_eq!(span.style.fg, Some(ratatui::style::Color::Reset));
             assert_eq!(span.style.bg, Some(ratatui::style::Color::Reset));
         }
@@ -784,7 +784,10 @@ mod markdown_document_tests {
             .collect::<String>();
         assert!(plain.contains("Plan"), "heading text must appear: {plain}");
         assert!(plain.contains("step one"), "list item must appear: {plain}");
-        assert!(plain.contains("fn main()"), "code line must appear: {plain}");
+        assert!(
+            plain.contains("fn main()"),
+            "code line must appear: {plain}"
+        );
         for line in &lines {
             assert!(
                 line.rich_line.is_some(),

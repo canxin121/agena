@@ -9,19 +9,17 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Borders, ListItem},
+    widgets::{ListItem, Paragraph},
 };
 use tui_markdown::from_str as markdown_to_text;
 
 use crate::i18n::I18n;
 use crate::keymap::{KeyAction, KeyContext, resolve};
 use agena_tui_components::{
-    Editor, EditorPanelSpec, EditorSection, ListPanelSection, ListPanelSpec, ParagraphSection,
-    QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    QuestionFlowScreen, QuestionFlowState, StackedDialogSection, StackedDialogSectionHeight,
-    StackedDialogSpec, SurfaceMode, TextPanelSection, TextPanelSpec,
-    build_detail_two_line_list_item, list_panel_height, render_question_flow_dialog,
-    render_stacked_dialog, wrapped_text_height_for_text,
+    Editor, FramedSurfaceSpec, QuestionFlowCustomInputSpec, QuestionFlowDialogMode,
+    QuestionFlowDialogSpec, QuestionFlowScreen, QuestionFlowState, SurfaceMode,
+    framed_overlay_height, render_framed_surface, render_question_flow_dialog_scrollable,
+    wrapped_text_height_for_text,
 };
 
 /// A display-only option in an interactive question. Domain request mapping,
@@ -66,10 +64,31 @@ pub struct UserInputAnswerDraft {
 }
 
 /// Presentation-only state for a single-question review decision.
+///
+/// The review overlay is one flat document: the chat-style plan rows
+/// (pre-rendered by the App), a separator row, and the decision rows. The
+/// cursor moves through the whole document with vim-style keys, and the
+/// decisions are only reachable at the very bottom, so the user reads the plan
+/// before choosing.
 #[derive(Debug, Clone, Default)]
 pub struct UserInputReviewPresentation {
+    /// Chat-style pre-rendered plan rows (wrapped to `content_width`), set by
+    /// the App through [`UserInputPresentation::set_review_plan`].
+    plan_lines: Vec<Line<'static>>,
+    /// Width used to pre-render `plan_lines`; decision rows wrap at this width
+    /// too so cursor arithmetic stays consistent.
+    content_width: u16,
+    /// Cursor row inside the flat review document.
+    cursor_line: usize,
+    /// First visible row of the review document.
+    scroll: usize,
+    /// Set while the user is between `g` and the completing `g`/`G`.
+    pending_goto: bool,
+    /// Set while the user is between `z` and the completing `z`/`t`/`b`.
+    pending_viewport: bool,
+    /// Last decision row selected while the cursor was inside the decision
+    /// block. Used to map a submit back to the chosen option.
     selected_option: usize,
-    scroll: u16,
     custom_input: Editor,
     editing_custom: bool,
 }
@@ -79,7 +98,11 @@ impl UserInputReviewPresentation {
         self.selected_option
     }
 
-    pub fn scroll(&self) -> u16 {
+    pub fn cursor_line(&self) -> usize {
+        self.cursor_line
+    }
+
+    pub fn scroll(&self) -> usize {
         self.scroll
     }
 
@@ -110,6 +133,8 @@ pub struct UserInputPresentation {
     custom_input: Editor,
     review: UserInputReviewPresentation,
     review_decision: bool,
+    /// Whole-dialog scroll for the question-flow overlays.
+    flow_scroll: u16,
 }
 
 impl UserInputPresentation {
@@ -126,6 +151,7 @@ impl UserInputPresentation {
             editing_custom: false,
             custom_input: Editor::default(),
             review: UserInputReviewPresentation::default(),
+            flow_scroll: 0,
         }
     }
 
@@ -169,6 +195,11 @@ impl UserInputPresentation {
         &self.review
     }
 
+    /// Whole-dialog scroll of the question-flow overlays.
+    pub fn flow_scroll(&self) -> u16 {
+        self.flow_scroll
+    }
+
     pub fn is_review_decision(&self) -> bool {
         self.review_decision
     }
@@ -180,6 +211,43 @@ impl UserInputPresentation {
                 .first()
                 .map(|question| !question.multiple)
                 .unwrap_or(false)
+    }
+
+    /// Stores chat-style pre-rendered plan rows for a review-decision overlay.
+    /// The App renders `body_markdown` through the transcript Markdown pipeline
+    /// (inside `with_text_math_rendering`) at `content_width` columns.
+    pub fn set_review_plan(&mut self, lines: Vec<Line<'static>>, content_width: u16) {
+        self.review.plan_lines = lines;
+        self.review.content_width = content_width;
+    }
+
+    /// Number of plan rows (at least one placeholder row so an empty body
+    /// still gives the cursor a document to move through).
+    fn review_plan_rows(&self) -> usize {
+        self.review.plan_lines.len().max(1)
+    }
+
+    /// First row of the decision block inside the flat review document.
+    fn review_decision_start(&self) -> usize {
+        self.review_plan_rows().saturating_add(1)
+    }
+
+    /// Number of decision rows (label + detail per option, plus the feedback
+    /// row and its inline editor while editing).
+    fn review_decision_rows(&self) -> usize {
+        let option_rows = self
+            .questions
+            .first()
+            .map(|question| question.options.len() + usize::from(question.allow_custom))
+            .unwrap_or(0)
+            .saturating_mul(2);
+        option_rows.saturating_add(usize::from(self.review.editing_custom))
+    }
+
+    /// Total rows of the flat review document: plan + separator + decisions.
+    fn review_total_lines(&self) -> usize {
+        self.review_decision_start()
+            .saturating_add(self.review_decision_rows())
     }
 
     pub fn focus_question(&mut self, index: usize) {
@@ -210,8 +278,8 @@ impl UserInputPresentation {
             return self.handle_custom_input_key(key);
         }
         match self.state.screen() {
-            QuestionFlowScreen::Question => self.handle_question_key(key),
-            QuestionFlowScreen::Review => self.handle_review_key(key),
+            QuestionFlowScreen::Question => self.handle_question_key(key, page_size),
+            QuestionFlowScreen::Review => self.handle_review_key(key, page_size),
         }
     }
 
@@ -219,44 +287,134 @@ impl UserInputPresentation {
         if self.review.editing_custom {
             return self.handle_review_custom_key(key);
         }
-        let option_count = self
-            .questions
-            .first()
-            .map(|question| question.options.len() + usize::from(question.allow_custom))
-            .unwrap_or(0);
+        let body_height = page_size.max(1);
+        // `gg`/`gG` and `zz`/`zt`/`zb` complete in two keystrokes; consume the
+        // completing key before normal dispatch.
+        if self.review.pending_goto {
+            self.review.pending_goto = false;
+            match resolve(KeyContext::UserInputReview, key) {
+                Some(KeyAction::GotoPrefix) => self.review_move_cursor_to(0, body_height),
+                Some(KeyAction::End) => {
+                    self.review_move_cursor_to(self.review_total_lines(), body_height)
+                }
+                _ => {}
+            }
+            return UserInputEffect::KeepOpen;
+        }
+        if self.review.pending_viewport {
+            self.review.pending_viewport = false;
+            match resolve(KeyContext::UserInputReview, key) {
+                Some(KeyAction::ViewportPrefix) => {
+                    // zz: center the cursor row in the viewport.
+                    self.review.scroll = self.review.cursor_line.saturating_sub(body_height / 2);
+                }
+                Some(KeyAction::ViewportTop) => {
+                    // zt: scroll the cursor row to the top.
+                    self.review.scroll = self.review.cursor_line;
+                }
+                Some(KeyAction::ViewportBottom) => {
+                    // zb: scroll the cursor row to the bottom.
+                    self.review.scroll = self
+                        .review
+                        .cursor_line
+                        .saturating_sub(body_height.saturating_sub(1));
+                }
+                _ => {}
+            }
+            self.review_clamp_scroll(body_height);
+            return UserInputEffect::KeepOpen;
+        }
         match resolve(KeyContext::UserInputReview, key) {
             Some(KeyAction::Close) => UserInputEffect::Close,
             Some(KeyAction::Accept) => {
-                if self.review_selected_row_is_custom() {
+                if self.review_cursor_is_custom() {
                     if self.review.custom_text().is_empty() {
                         self.begin_review_custom_edit();
                         UserInputEffect::KeepOpen
                     } else {
                         UserInputEffect::Submit
                     }
-                } else {
+                } else if self.review_cursor_in_decision_block() {
                     UserInputEffect::Submit
+                } else {
+                    // Still reading the plan: Enter walks down instead of
+                    // submitting the first decision.
+                    self.review_move_cursor_by(1, body_height);
+                    UserInputEffect::KeepOpen
                 }
             }
             Some(KeyAction::CancelRequest) => UserInputEffect::Cancel,
             Some(KeyAction::MoveUp) => {
-                move_selected_index(&mut self.review.selected_option, option_count, -1);
+                self.review_move_cursor_by(-1, body_height);
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::MoveDown) => {
-                move_selected_index(&mut self.review.selected_option, option_count, 1);
+                self.review_move_cursor_by(1, body_height);
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::PageUp) => {
-                self.review.scroll = self.review.scroll.saturating_sub(page_size.max(1) as u16);
+                self.review_move_cursor_by(-(body_height as isize), body_height);
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::PageDown) => {
-                self.review.scroll = self.review.scroll.saturating_add(page_size.max(1) as u16);
+                self.review_move_cursor_by(body_height as isize, body_height);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::HalfPageUp) => {
+                self.review_move_cursor_by(-(body_height as isize / 2), body_height);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::HalfPageDown) => {
+                self.review_move_cursor_by(body_height as isize / 2, body_height);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::GotoPrefix) => {
+                self.review.pending_goto = true;
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::Home) => {
+                self.review_move_cursor_to(0, body_height);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::End) => {
+                self.review_move_cursor_to(self.review_total_lines(), body_height);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ViewportPrefix) => {
+                self.review.pending_viewport = true;
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ViewTop) => {
+                // H: cursor to the first visible row.
+                self.review.cursor_line = self.review.scroll;
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ViewBottom) => {
+                // L: cursor to the last visible row.
+                self.review.cursor_line = self
+                    .review
+                    .scroll
+                    .saturating_add(body_height.saturating_sub(1))
+                    .min(self.review_total_lines());
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ViewportTop) => {
+                // t: scroll the cursor row to the top.
+                self.review.scroll = self.review.cursor_line;
+                self.review_clamp_scroll(body_height);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::ViewportBottom) => {
+                // b: scroll the cursor row to the bottom.
+                self.review.scroll = self
+                    .review
+                    .cursor_line
+                    .saturating_sub(body_height.saturating_sub(1));
+                self.review_clamp_scroll(body_height);
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::Edit) => {
-                if self.review_selected_row_is_custom() {
+                if self.review_cursor_is_custom() {
                     self.begin_review_custom_edit();
                 }
                 UserInputEffect::KeepOpen
@@ -269,11 +427,88 @@ impl UserInputPresentation {
         }
     }
 
-    fn review_selected_row_is_custom(&self) -> bool {
+    fn review_cursor_in_decision_block(&self) -> bool {
+        self.review.cursor_line >= self.review_decision_start()
+    }
+
+    fn review_cursor_is_custom(&self) -> bool {
         let Some(question) = self.questions.first() else {
             return false;
         };
-        question.allow_custom && self.review.selected_option >= question.options.len()
+        if !question.allow_custom {
+            return false;
+        }
+        let decision_start = self.review_decision_start();
+        self.review.cursor_line >= decision_start
+            && self.review.cursor_line.saturating_sub(decision_start) / 2 == question.options.len()
+    }
+
+    fn review_move_cursor_by(&mut self, delta: isize, body_height: usize) {
+        let body_height = body_height.max(1);
+        let last = self.review_total_lines().saturating_sub(1);
+        let next = (self.review.cursor_line as isize + delta).clamp(0, last as isize);
+        self.review.cursor_line = next as usize;
+        self.review_sync_selection();
+        if delta.unsigned_abs() >= body_height {
+            // Page jumps land on the page edge like the main transcript pager:
+            // forward jumps place the cursor at the top of the new viewport,
+            // backward jumps at the bottom.
+            if delta > 0 {
+                self.review.scroll = self.review.cursor_line;
+            } else {
+                self.review.scroll = self
+                    .review
+                    .cursor_line
+                    .saturating_sub(body_height.saturating_sub(1));
+            }
+        }
+        self.review_follow_cursor(body_height);
+    }
+
+    fn review_move_cursor_to(&mut self, line: usize, body_height: usize) {
+        let last = self.review_total_lines().saturating_sub(1);
+        self.review.cursor_line = line.min(last);
+        self.review_sync_selection();
+        self.review_follow_cursor(body_height);
+    }
+
+    fn review_sync_selection(&mut self) {
+        let Some(question) = self.questions.first() else {
+            return;
+        };
+        let decision_start = self.review_decision_start();
+        if self.review.cursor_line < decision_start {
+            return;
+        }
+        let option_count = question.options.len() + usize::from(question.allow_custom);
+        if option_count == 0 {
+            return;
+        }
+        let index = self.review.cursor_line.saturating_sub(decision_start) / 2;
+        self.review.selected_option = index.min(option_count.saturating_sub(1));
+    }
+
+    fn review_follow_cursor(&mut self, body_height: usize) {
+        let body_height = body_height.max(1);
+        self.review_clamp_scroll(body_height);
+        if self.review.cursor_line < self.review.scroll {
+            self.review.scroll = self.review.cursor_line;
+        }
+        if self.review.cursor_line >= self.review.scroll.saturating_add(body_height) {
+            self.review.scroll = self
+                .review
+                .cursor_line
+                .saturating_add(1)
+                .saturating_sub(body_height);
+        }
+    }
+
+    fn review_clamp_scroll(&mut self, body_height: usize) {
+        let total = self.review_total_lines();
+        self.review.scroll = self
+            .review
+            .scroll
+            .min(total.saturating_sub(body_height.max(1)));
     }
 
     fn begin_review_custom_edit(&mut self) {
@@ -284,13 +519,28 @@ impl UserInputPresentation {
             return;
         }
         self.review.selected_option = question.options.len();
+        let custom_label_row = self
+            .review_decision_start()
+            .saturating_add(question.options.len().saturating_mul(2));
+        self.review.cursor_line = custom_label_row;
         self.review.editing_custom = true;
+    }
+
+    fn review_snap_custom_cursor(&mut self) {
+        let Some(question) = self.questions.first() else {
+            return;
+        };
+        let custom_label_row = self
+            .review_decision_start()
+            .saturating_add(question.options.len().saturating_mul(2));
+        self.review.cursor_line = custom_label_row.min(self.review_total_lines());
     }
 
     fn handle_review_custom_key(&mut self, key: KeyEvent) -> UserInputEffect {
         match resolve(KeyContext::UserInputQuestion, key) {
             Some(KeyAction::Close) => {
                 self.review.editing_custom = false;
+                self.review_snap_custom_cursor();
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::Accept) => {
@@ -299,6 +549,7 @@ impl UserInputPresentation {
                 if has_text {
                     UserInputEffect::Submit
                 } else {
+                    self.review_snap_custom_cursor();
                     UserInputEffect::KeepOpen
                 }
             }
@@ -341,7 +592,7 @@ impl UserInputPresentation {
         }
     }
 
-    fn handle_question_key(&mut self, key: KeyEvent) -> UserInputEffect {
+    fn handle_question_key(&mut self, key: KeyEvent, page_size: usize) -> UserInputEffect {
         match resolve(KeyContext::UserInputQuestion, key) {
             Some(KeyAction::Close) => UserInputEffect::Close,
             Some(KeyAction::Accept) => self.commit_question(),
@@ -352,6 +603,22 @@ impl UserInputPresentation {
             }
             Some(KeyAction::MoveDown) => {
                 self.move_option(1);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::PageUp) => {
+                self.move_flow_scroll(-(page_size.max(1) as i16));
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::PageDown) => {
+                self.move_flow_scroll(page_size.max(1) as i16);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::HalfPageUp) => {
+                self.move_flow_scroll(-(page_size.max(1) as i16 / 2));
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::HalfPageDown) => {
+                self.move_flow_scroll(page_size.max(1) as i16 / 2);
                 UserInputEffect::KeepOpen
             }
             Some(KeyAction::NextTab) => {
@@ -378,11 +645,35 @@ impl UserInputPresentation {
         }
     }
 
-    fn handle_review_key(&mut self, key: KeyEvent) -> UserInputEffect {
+    fn move_flow_scroll(&mut self, delta: i16) {
+        self.flow_scroll = if delta < 0 {
+            self.flow_scroll.saturating_sub(delta.unsigned_abs())
+        } else {
+            self.flow_scroll.saturating_add(delta as u16)
+        };
+    }
+
+    fn handle_review_key(&mut self, key: KeyEvent, page_size: usize) -> UserInputEffect {
         match resolve(KeyContext::UserInputReview, key) {
             Some(KeyAction::Close) => UserInputEffect::Close,
             Some(KeyAction::Accept) => UserInputEffect::Submit,
             Some(KeyAction::CancelRequest) => UserInputEffect::Cancel,
+            Some(KeyAction::PageUp) => {
+                self.move_flow_scroll(-(page_size.max(1) as i16));
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::PageDown) => {
+                self.move_flow_scroll(page_size.max(1) as i16);
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::HalfPageUp) => {
+                self.move_flow_scroll(-(page_size.max(1) as i16 / 2));
+                UserInputEffect::KeepOpen
+            }
+            Some(KeyAction::HalfPageDown) => {
+                self.move_flow_scroll(page_size.max(1) as i16 / 2);
+                UserInputEffect::KeepOpen
+            }
             Some(KeyAction::NextTab) => {
                 self.move_tab(1);
                 UserInputEffect::KeepOpen
@@ -655,15 +946,6 @@ fn preferred_option_row(
     0
 }
 
-fn move_selected_index(selected: &mut usize, count: usize, delta: isize) {
-    if count == 0 {
-        *selected = 0;
-        return;
-    }
-    let next = (*selected as isize + delta).rem_euclid(count as isize);
-    *selected = next as usize;
-}
-
 /// Renders the full User Input overlay from its TUI-owned request projection
 /// and presentation state. Domain reply construction and Runtime effects stay
 /// in the App adapter.
@@ -717,7 +999,7 @@ pub fn render_overlay(
             i18n,
             "overlay-user-input-footer-review",
         ));
-        render_question_flow_dialog(
+        render_question_flow_dialog_scrollable(
             frame,
             area,
             SurfaceMode::Overlay,
@@ -732,6 +1014,7 @@ pub fn render_overlay(
                     &footer,
                 ),
             ),
+            presentation.flow_scroll,
         );
         return;
     }
@@ -747,7 +1030,7 @@ pub fn render_overlay(
         } else {
             Text::from(markdown_lines(overlay.body_markdown.as_str()))
         };
-        render_question_flow_dialog(
+        render_question_flow_dialog_scrollable(
             frame,
             area,
             SurfaceMode::Overlay,
@@ -762,6 +1045,7 @@ pub fn render_overlay(
                     12,
                 ),
             ),
+            presentation.flow_scroll,
         );
         return;
     };
@@ -816,10 +1100,9 @@ pub fn render_overlay(
     ]);
     let prompt_body = Text::from(prompt_lines);
     let choice_width = area.width.saturating_sub(8);
-    let mut choice_items: Vec<ListItem<'_>> = Vec::new();
+    let mut choice_items = Vec::new();
+    let selected_row = presentation.selected_option();
     for (index, option) in question.options.iter().enumerate() {
-        let selected = index == presentation.selected_option() && !presentation.is_editing_custom();
-        let style = selected.then(selection_style).unwrap_or_default();
         let picked = draft.option_indexes.contains(&index);
         let marker = if question.multiple {
             if picked { "[x]" } else { "[ ]" }
@@ -829,10 +1112,10 @@ pub fn render_overlay(
             "( )"
         };
         let mut lines = vec![Line::from(vec![
-            Span::styled(format!("{marker} "), style),
+            Span::styled(format!("{marker} "), Style::default()),
             Span::styled(
                 sanitize_display_text(option.label.as_str()),
-                style.add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(Modifier::BOLD),
             ),
         ])];
         if !option.description.trim().is_empty() {
@@ -841,19 +1124,12 @@ pub fn render_overlay(
                     "    {}",
                     truncate_display_text(option.description.as_str(), choice_width)
                 ),
-                if selected {
-                    style
-                } else {
-                    Style::default().fg(agena_tui_components::theme::muted_color())
-                },
+                Style::default().fg(agena_tui_components::theme::muted_color()),
             )));
         }
         choice_items.push(ListItem::new(lines));
     }
     if question.allow_custom {
-        let selected = question.options.len() == presentation.selected_option()
-            && !presentation.is_editing_custom();
-        let style = selected.then(selection_style).unwrap_or_default();
         let picked = !draft.custom_values.is_empty();
         let marker = if question.multiple {
             if picked { "[x]" } else { "[ ]" }
@@ -863,31 +1139,27 @@ pub fn render_overlay(
             "( )"
         };
         let mut lines = vec![Line::from(vec![
-            Span::styled(format!("{marker} "), style),
+            Span::styled(format!("{marker} "), Style::default()),
             Span::styled(
                 i18n.text("overlay-user-input-other"),
-                style.add_modifier(Modifier::BOLD),
+                Style::default().add_modifier(Modifier::BOLD),
             ),
         ])];
-        let values = if draft.custom_values.is_empty() {
-            i18n.text("overlay-user-input-custom-empty")
-        } else {
-            truncate_display_text(draft.custom_values.join(", ").as_str(), choice_width)
-        };
-        lines.push(Line::from(Span::styled(
-            format!("    {values}"),
-            if draft.custom_values.is_empty() {
-                if selected {
-                    style
-                } else {
-                    Style::default().fg(agena_tui_components::theme::muted_color())
-                }
-            } else if selected {
-                style
+        if !presentation.is_editing_custom() {
+            let values = if draft.custom_values.is_empty() {
+                i18n.text("overlay-user-input-custom-empty")
             } else {
-                Style::default().fg(agena_tui_components::theme::info_color())
-            },
-        )));
+                truncate_display_text(draft.custom_values.join(", ").as_str(), choice_width)
+            };
+            lines.push(Line::from(Span::styled(
+                format!("    {values}"),
+                if draft.custom_values.is_empty() {
+                    Style::default().fg(agena_tui_components::theme::muted_color())
+                } else {
+                    Style::default().fg(agena_tui_components::theme::info_color())
+                },
+            )));
+        }
         choice_items.push(ListItem::new(lines));
     }
     let preview = question
@@ -907,19 +1179,17 @@ pub fn render_overlay(
         i18n,
         "overlay-user-input-footer-question",
     ));
-    let custom_input = question.allow_custom.then(|| {
-        QuestionFlowCustomInputSpec::new(
-            i18n.text(if presentation.is_editing_custom() {
-                "overlay-user-input-custom-input"
-            } else {
-                "overlay-user-input-custom-input-hint"
-            })
-            .into(),
+    // The custom reply is typed inline inside the choices panel, directly under
+    // the custom option row, while the custom editor is active.
+    let custom_input = question
+        .allow_custom
+        .then_some(QuestionFlowCustomInputSpec::new(
+            i18n.text("overlay-user-input-custom-input").into(),
             presentation.custom_input(),
             presentation.is_editing_custom(),
-        )
-    });
-    let result = render_question_flow_dialog(
+        ))
+        .filter(|_| presentation.is_editing_custom());
+    let result = render_question_flow_dialog_scrollable(
         frame,
         area,
         SurfaceMode::Overlay,
@@ -932,18 +1202,26 @@ pub fn render_overlay(
                 i18n.text("overlay-user-input-prompt-panel").into(),
                 &prompt_body,
                 i18n.text("overlay-user-input-choices").into(),
-                &choice_items,
-                Some(presentation.selected_option()),
+                choice_items.as_slice(),
+                Some(selected_row),
                 preview_title.map(Into::into),
                 preview_body.as_ref(),
                 custom_input,
                 &footer,
             ),
         ),
+        presentation.flow_scroll,
     );
     if let Some(cursor) = result.cursor {
         frame.set_cursor_position(cursor);
     }
+}
+
+/// The width at which the review-decision document is laid out. The App
+/// pre-renders the plan body at this width so cursor arithmetic matches the
+/// rendered rows.
+pub fn user_input_review_content_width(area: Rect) -> u16 {
+    SurfaceMode::Overlay.content_width(area, 92).max(1)
 }
 
 /// Layout metrics of the review-decision overlay, shared by the renderer and
@@ -951,8 +1229,8 @@ pub fn render_overlay(
 /// instead of a hard-coded number of lines.
 #[derive(Debug, Clone, Copy)]
 struct ReviewDecisionLayout {
-    natural_height: u16,
-    body_height: u16,
+    natural_height: usize,
+    body_height: usize,
 }
 
 fn review_decision_layout(
@@ -961,72 +1239,157 @@ fn review_decision_layout(
     area: Rect,
 ) -> ReviewDecisionLayout {
     let overlay = presentation.overlay();
-    let content_width = SurfaceMode::Overlay
-        .content_width(area, area.width)
-        .saturating_sub(2)
-        .max(1);
-    let plan_body = Text::from(markdown_lines(overlay.body_markdown.as_str()));
-    let natural_height =
-        wrapped_text_height_for_text(&plan_body, content_width.saturating_sub(2).max(1));
-    let footer = Text::from(vec![
-        Line::from(Span::styled(
-            format!(
-                "Enter {} · Ctrl+X {} · ↑/↓ choose · PgUp/PgDn scroll",
-                submit_label(overlay, i18n),
-                cancel_label(overlay, i18n)
-            ),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )),
-        timeout_text(overlay, i18n)
-            .map(|text| {
-                Line::from(Span::styled(
-                    format!("◷ {text}"),
-                    Style::default().fg(agena_tui_components::theme::warning_color()),
-                ))
-            })
-            .unwrap_or_default(),
-    ]);
-    let decision_height = list_panel_height(
-        presentation
-            .questions()
-            .first()
-            .map(|question| question.options.len() + usize::from(question.allow_custom))
-            .unwrap_or(0),
-        2,
-        4,
-        10,
-    );
-    let editor_height = if presentation.review().is_editing_custom() {
-        3
-    } else {
-        0
-    };
-    let footer_height = wrapped_text_height_for_text(&footer, content_width).clamp(1, 2);
-    let body_height = area
-        .height
-        .saturating_sub(4)
-        .saturating_sub(decision_height)
-        .saturating_sub(editor_height)
-        .saturating_sub(footer_height)
-        .max(1);
+    let content_width = presentation
+        .review()
+        .content_width
+        .max(user_input_review_content_width(area));
+    let footer = Text::from(review_footer_lines(overlay, i18n));
+    let footer_height =
+        usize::from(wrapped_text_height_for_text(&footer, content_width).clamp(1, 2));
+    let natural_height = presentation.review_total_lines().max(1);
+    let target_height = framed_overlay_height(u16::try_from(natural_height).unwrap_or(u16::MAX));
+    let outer_height = SurfaceMode::Overlay
+        .outer_rect(area, content_width.saturating_add(2), target_height)
+        .height;
+    let inner_height = usize::from(outer_height.saturating_sub(2).max(1));
+    let body_height = inner_height.saturating_sub(footer_height).max(1);
     ReviewDecisionLayout {
         natural_height,
         body_height,
     }
 }
 
-/// The number of lines one PageUp/PageDown moves the review-decision Plan
-/// panel, matching the panel's visible height.
+/// The number of lines one PageUp/PageDown moves the review-decision cursor,
+/// matching the document's visible height.
 pub fn review_decision_page_size(
     presentation: &UserInputPresentation,
     i18n: &I18n,
     area: Rect,
 ) -> usize {
-    usize::from(
-        review_decision_layout(presentation, i18n, area)
-            .body_height
-            .max(1),
-    )
+    review_decision_layout(presentation, i18n, area)
+        .body_height
+        .max(1)
+}
+
+fn review_footer_lines(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(footer_text(
+        overlay,
+        i18n,
+        "overlay-user-input-footer-review",
+    ))];
+    if let Some(timeout) = timeout_text(overlay, i18n) {
+        lines.push(Line::from(Span::styled(
+            format!("◷ {timeout}"),
+            Style::default().fg(agena_tui_components::theme::warning_color()),
+        )));
+    }
+    lines
+}
+
+/// Builds the flat review document: chat-style plan rows, a separator, and the
+/// decision rows. The cursor row is highlighted; the selected decision shows a
+/// `(x)` marker on its label row.
+fn build_review_document(
+    presentation: &UserInputPresentation,
+    question: &UserInputQuestionPresentation,
+    i18n: &I18n,
+    content_width: u16,
+) -> Vec<Line<'static>> {
+    let mut document = Vec::new();
+    let plan = presentation.review().plan_lines.clone();
+    if plan.is_empty() {
+        document.push(Line::from(Span::styled(
+            i18n.text("overlay-user-input-no-questions"),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )));
+    } else {
+        document.extend(plan);
+    }
+    document.push(Line::from(Span::styled(
+        "─".repeat(usize::from(content_width.max(1))),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+    )));
+
+    let decision_start = presentation.review_decision_start();
+    let cursor_line = presentation.review().cursor_line;
+    let selected_index = if cursor_line >= decision_start {
+        Some(cursor_line.saturating_sub(decision_start) / 2)
+    } else {
+        None
+    };
+    for (index, option) in question.options.iter().enumerate() {
+        let marker = if selected_index == Some(index) {
+            "(x)"
+        } else {
+            "( )"
+        };
+        document.push(Line::from(vec![
+            Span::styled(format!("{marker} "), Style::default()),
+            Span::styled(
+                truncate_display_text(option.label.as_str(), content_width.saturating_sub(4)),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        document.push(Line::from(Span::styled(
+            if option.description.trim().is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "    {}",
+                    truncate_display_text(
+                        option.description.as_str(),
+                        content_width.saturating_sub(4)
+                    )
+                )
+            },
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+        )));
+    }
+    if question.allow_custom {
+        let custom_index = question.options.len();
+        let marker = if selected_index == Some(custom_index) {
+            "(x)"
+        } else {
+            "( )"
+        };
+        document.push(Line::from(vec![
+            Span::styled(format!("{marker} "), Style::default()),
+            Span::styled(
+                i18n.text("overlay-user-input-review-feedback"),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        if presentation.review().is_editing_custom() {
+            document.push(Line::from(Span::styled(
+                format!(
+                    "    {}",
+                    truncate_display_text(
+                        presentation.review().custom_input().text(),
+                        content_width.saturating_sub(4)
+                    )
+                ),
+                Style::default(),
+            )));
+        } else {
+            let feedback = presentation.review().custom_text();
+            document.push(Line::from(Span::styled(
+                format!(
+                    "    {}",
+                    if feedback.is_empty() {
+                        i18n.text("overlay-user-input-review-feedback-empty")
+                    } else {
+                        truncate_display_text(feedback.as_str(), content_width.saturating_sub(4))
+                    }
+                ),
+                Style::default().fg(agena_tui_components::theme::muted_color()),
+            )));
+        }
+    }
+    let last = document.len().saturating_sub(1);
+    if let Some(row) = document.get_mut(cursor_line.min(last)) {
+        row.style = selection_style();
+    }
+    document
 }
 
 fn render_review_decision(
@@ -1039,113 +1402,87 @@ fn render_review_decision(
     let Some(question) = presentation.questions().first() else {
         return;
     };
-    let plan_body = Text::from(markdown_lines(overlay.body_markdown.as_str()));
-    let mut items = question
-        .options
-        .iter()
-        .map(|option| {
-            build_detail_two_line_list_item(
-                sanitize_display_text(option.label.as_str()).into(),
-                (!option.description.trim().is_empty())
-                    .then(|| sanitize_display_text(option.description.as_str()).into()),
-                Style::default().fg(agena_tui_components::theme::muted_color()),
-            )
-        })
-        .collect::<Vec<ListItem<'static>>>();
-    if question.allow_custom {
-        let feedback = presentation.review().custom_text();
-        items.push(build_detail_two_line_list_item(
-            i18n.text("overlay-user-input-review-feedback").into(),
-            if feedback.is_empty() {
-                Some(i18n.text("overlay-user-input-review-feedback-empty").into())
-            } else {
-                Some(sanitize_display_text(feedback.as_str()).into())
-            },
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        ));
-    }
-    let footer = Text::from(vec![
-        Line::from(Span::styled(
-            format!(
-                "Enter {} · Ctrl+X {} · ↑/↓ choose · PgUp/PgDn scroll",
-                submit_label(overlay, i18n),
-                cancel_label(overlay, i18n)
-            ),
-            Style::default().fg(agena_tui_components::theme::muted_color()),
-        )),
-        timeout_text(overlay, i18n)
-            .map(|text| {
-                Line::from(Span::styled(
-                    format!("◷ {text}"),
-                    Style::default().fg(agena_tui_components::theme::warning_color()),
-                ))
-            })
-            .unwrap_or_default(),
-    ]);
+    let content_width = presentation
+        .review()
+        .content_width
+        .max(user_input_review_content_width(area));
     let layout = review_decision_layout(presentation, i18n, area);
-    let scroll = presentation.review().scroll().min(
-        layout
-            .natural_height
-            .saturating_sub(layout.body_height.saturating_sub(2)),
-    );
-    let mut sections = Vec::with_capacity(3);
-    if presentation.review().is_editing_custom() {
-        sections.push(StackedDialogSection::EditorPanel(EditorSection {
-            height: StackedDialogSectionHeight::AutoEditor { multiline: false },
-            spec: EditorPanelSpec {
-                title: Some(i18n.text("overlay-user-input-review-feedback").into()),
-                borders: Borders::ALL,
-            },
-            input: presentation.review().custom_input(),
-            set_cursor: true,
-        }));
-    } else {
-        sections.push(StackedDialogSection::ListPanel(ListPanelSection {
-            height: StackedDialogSectionHeight::AutoList {
-                lines_per_item: 2,
-                min_body: 4,
-                max_body: 10,
-            },
-            spec: ListPanelSpec::new(
-                Some("Decisions".into()),
-                items.as_slice(),
-                Some(presentation.review().selected_option()),
-                selection_style(),
-                ">> ".into(),
-            ),
-        }));
-    }
-    sections.push(StackedDialogSection::TextPanel(TextPanelSection {
-        height: StackedDialogSectionHeight::Fixed(layout.body_height),
-        spec: TextPanelSpec {
-            title: Some("Plan".into()),
-            body: &plan_body,
-            wrap: true,
-            scroll: Some((scroll, 0)),
-            alignment: None,
-        },
-    }));
-    sections.push(StackedDialogSection::Paragraph(ParagraphSection {
-        height: StackedDialogSectionHeight::AutoText { min: 1, max: 2 },
-        title: None,
-        borders: Borders::NONE,
-        body: footer,
-        wrap: true,
-        scroll: None,
-        alignment: None,
-    }));
-    let result = render_stacked_dialog(
+    let scroll = presentation
+        .review()
+        .scroll()
+        .min(layout.natural_height.saturating_sub(layout.body_height));
+    let footer = Text::from(review_footer_lines(overlay, i18n));
+    let frame_surface = render_framed_surface(
         frame,
         area,
         SurfaceMode::Overlay,
-        &StackedDialogSpec {
+        &FramedSurfaceSpec {
             title: display_title(overlay, i18n).into(),
-            target_width: area.width,
-            sections,
+            target_width: content_width.saturating_add(2),
+            target_height: framed_overlay_height(
+                u16::try_from(layout.natural_height.max(1)).unwrap_or(u16::MAX),
+            ),
         },
     );
-    if let Some(cursor) = result.cursor {
-        frame.set_cursor_position(cursor);
+    let inner = frame_surface.inner;
+    let footer_height =
+        usize::from(wrapped_text_height_for_text(&footer, content_width).clamp(1, 2));
+    let body_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: inner.height.saturating_sub(footer_height as u16).max(1),
+    };
+
+    let document = build_review_document(presentation, question, i18n, content_width);
+    let total = document.len().max(1);
+    let start = scroll.min(total);
+    let end = total.min(start.saturating_add(usize::from(body_area.height)));
+    let visible = &document[start..end];
+    frame.render_widget(
+        Paragraph::new(Text::from(visible.to_vec())).wrap(ratatui::widgets::Wrap { trim: false }),
+        body_area,
+    );
+    frame.render_widget(
+        Paragraph::new(footer).wrap(ratatui::widgets::Wrap { trim: false }),
+        Rect {
+            x: inner.x,
+            y: inner.y.saturating_add(body_area.height),
+            width: inner.width,
+            height: inner.height.saturating_sub(body_area.height).max(1),
+        },
+    );
+
+    if presentation.review().is_editing_custom() {
+        let editor_row = presentation
+            .review_decision_start()
+            .saturating_add(question.options.len().saturating_mul(2))
+            .saturating_add(1);
+        if editor_row >= start && editor_row < end {
+            let text = presentation.review().custom_input().text();
+            let column = unicode_width::UnicodeWidthStr::width(
+                &text[..text.len().min(
+                    presentation
+                        .review()
+                        .custom_input()
+                        .cursor()
+                        .min(text.len()),
+                )],
+            );
+            let cursor_x = body_area
+                .x
+                .saturating_add(4)
+                .saturating_add(column as u16)
+                .min(
+                    body_area
+                        .x
+                        .saturating_add(body_area.width.saturating_sub(1)),
+                );
+            frame.set_cursor_position((
+                cursor_x,
+                body_area.y.saturating_add((editor_row - start) as u16),
+            ));
+        }
     }
 }
 
@@ -1223,14 +1560,6 @@ fn submit_label(overlay: &UserInputOverlayPresentation, i18n: &I18n) -> String {
         sanitize_display_text(overlay.submit_label.as_str())
     } else {
         i18n.text("overlay-user-input-submit")
-    }
-}
-
-fn cancel_label(overlay: &UserInputOverlayPresentation, _i18n: &I18n) -> String {
-    if !overlay.cancel_label.trim().is_empty() {
-        sanitize_display_text(overlay.cancel_label.as_str())
-    } else {
-        "cancel".to_owned()
     }
 }
 
@@ -1377,7 +1706,7 @@ fn sanitize_display_text(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
+        Line, UserInputEffect, UserInputOptionPresentation, UserInputPresentation,
         UserInputQuestionPresentation,
     };
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1446,14 +1775,20 @@ mod tests {
     }
 
     #[test]
-    fn review_decision_wraps_selection_and_emits_submit() {
+    fn review_decision_starts_on_the_plan_and_requires_scrolling_to_decisions() {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, false)]);
 
+        assert_eq!(presentation.review().cursor_line(), 0);
         assert_eq!(
-            presentation.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 10),
-            UserInputEffect::KeepOpen
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::KeepOpen,
+            "Enter on the plan must not submit the first decision"
         );
+        // Walk past the placeholder + separator into the decision block.
+        for _ in 0..3 {
+            presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        }
         assert_eq!(presentation.review().selected_option(), 0);
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
@@ -1462,17 +1797,58 @@ mod tests {
     }
 
     #[test]
-    fn review_decision_page_keys_step_by_page_size() {
+    fn review_decision_vim_keys_navigate_the_document() {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, false)]);
 
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 1);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 0);
+
+        // G jumps to the bottom of the document.
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT), 10);
+        assert_eq!(presentation.review().cursor_line(), 3);
+        assert_eq!(
+            presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
+            UserInputEffect::Submit
+        );
+    }
+
+    #[test]
+    fn review_decision_gg_returns_to_the_top() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, false)]);
+
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 0);
+    }
+
+    #[test]
+    fn review_decision_page_keys_step_by_page_size() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(true), vec![question(false, false)]);
+        presentation.set_review_plan(
+            (0..40)
+                .map(|index| Line::from(format!("line {index}")))
+                .collect(),
+            60,
+        );
+
+        // total = 40 plan rows + separator + 2 decision rows = 43.
         presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 10);
         assert_eq!(presentation.review().scroll(), 10);
-        presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 7);
-        assert_eq!(presentation.review().scroll(), 17);
-        presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 7);
-        assert_eq!(presentation.review().scroll(), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 20);
+        assert_eq!(presentation.review().scroll(), 20);
         presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 10);
+        assert_eq!(presentation.review().scroll(), 1);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.review().cursor_line(), 0);
         assert_eq!(presentation.review().scroll(), 0);
     }
 
@@ -1481,7 +1857,10 @@ mod tests {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, true)]);
 
-        presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        // Walk to the custom feedback row (placeholder + separator + option).
+        for _ in 0..4 {
+            presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        }
         assert_eq!(presentation.review().selected_option(), 1);
 
         assert_eq!(
@@ -1506,7 +1885,9 @@ mod tests {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, true)]);
 
-        presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        for _ in 0..4 {
+            presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        }
         presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10);
         assert!(presentation.review().is_editing_custom());
 
@@ -1516,6 +1897,7 @@ mod tests {
         );
         assert!(!presentation.review().is_editing_custom());
         assert_eq!(presentation.review().selected_option(), 1);
+        assert_eq!(presentation.review().cursor_line(), 4);
     }
 
     #[test]
@@ -1523,16 +1905,27 @@ mod tests {
         let mut presentation =
             UserInputPresentation::new(overlay(true), vec![question(false, true)]);
 
-        presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        for _ in 0..4 {
+            presentation.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 10);
+        }
         presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10);
         presentation.handle_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE), 10);
-        presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10);
-        assert_eq!(presentation.review().custom_text(), "o");
-        assert!(!presentation.review().is_editing_custom());
-
         assert_eq!(
             presentation.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 10),
             UserInputEffect::Submit
         );
+        assert_eq!(presentation.review().custom_text(), "o");
+        assert!(!presentation.review().is_editing_custom());
+    }
+
+    #[test]
+    fn question_flow_page_keys_scroll_the_dialog() {
+        let mut presentation =
+            UserInputPresentation::new(overlay(false), vec![question(false, false)]);
+
+        presentation.handle_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE), 10);
+        assert_eq!(presentation.flow_scroll(), 10);
+        presentation.handle_key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE), 5);
+        assert_eq!(presentation.flow_scroll(), 5);
     }
 }

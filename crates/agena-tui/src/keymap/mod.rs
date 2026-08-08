@@ -1410,7 +1410,10 @@ mod tests {
             }
         }
 
-        for context in [KeyContext::PermissionPrompt, KeyContext::UserInputQuestion] {
+        // PermissionPrompt and UserInputQuestion used to reject PgUp/PgDn;
+        // UserInputQuestion now binds them for whole-dialog scrolling in short
+        // terminals, so only PermissionPrompt stays in the reject list.
+        for context in [KeyContext::PermissionPrompt] {
             for code in [
                 KeyCode::Left,
                 KeyCode::Right,

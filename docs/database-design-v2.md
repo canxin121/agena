@@ -541,25 +541,31 @@ CREATE INDEX idx_sessions_root  ON sessions(root_id, updated_at_ms);
 CREATE INDEX idx_sessions_task  ON sessions(parent_id, task_id);   -- get_subagent_by_task_id
 ```
 
-### 13.2 Parts: message-level metadata and provider state on the run marker (BLOCKING)
+### 13.2 Parts: only provider_state persists on the run marker (BLOCKING, revised)
 
-v1 `MessageMetadata` (source, idempotency_key, model_turn_id, parent_message_id,
-generated_by_call_id, externally_initiated_tool, model_provider_id,
-model_adapter_id, model_id, model_thinking_mode, model_speed_mode) and
-`MessageProviderState` (response_id, gemini_thought_signatures,
-anthropic_thinking_blocks, openai_reasoning_items, openai_chat_reasoning_details,
-copilot_reasoning_opaque, assistant_reasoning_field) are message-level and are
-consumed by prompt assembly, usage reporting, import/export and provider
-replay. In v2 the run marker is the message, so:
+v1 `MessageMetadata` is **dissolved, not stored**: a per-message metadata JSON
+column would multiply tiny records across every message and is unnecessary in
+v2 (a message == one run marker; metadata was a v1 artifact). Field by field:
+
+| v1 MessageMetadata field | v2 disposition | evidence |
+|--------------------------|----------------|----------|
+| `idempotency_key` | `idempotency` table (already exists) | |
+| `model_turn_id` | dropped (marker == turn) | |
+| `parent_message_id` | dropped (never read at runtime; derivable = previous marker in membership) | only set at creation (replies_state.rs:504) |
+| `generated_by_call_id` | dropped (never read) | only set to None (run.rs:143) |
+| `externally_initiated_tool` | boolean on the tool_call part content | read at replies.rs:856 |
+| `model_provider_id` / `model_adapter_id` / `model_id` | run-level: `usage` table (attribution/cost, cost.rs:154) + continuation check reads the last run marker (replies.rs:371) | no per-message need |
+| `model_thinking_mode` / `model_speed_mode` | run-level settings on the run marker content if replay fidelity requires (one per run, not per message) | |
+| `source` | derived from `role` + `kind`; compaction uses role==User && source==User (compact.rs:535) == role='user' && kind='text' | |
+
+Only `MessageProviderState` persists, as a nullable JSON column on the run
+marker of assistant messages that need provider continuation (response_id,
+thought signatures, thinking blocks). It is NOT on every part — only on
+assistant run markers, and empty for the rest.
 
 ```sql
-ALTER TABLE parts ADD COLUMN metadata        JSON;  -- MessageMetadata, marker-only
-ALTER TABLE parts ADD COLUMN provider_state  JSON;  -- MessageProviderState, marker-only
+ALTER TABLE parts ADD COLUMN provider_state JSON;  -- MessageProviderState, assistant run markers only
 ```
-
-`model_turn_id` / `parent_message_id` map to the parent run marker `part_id`;
-`generated_by_call_id` maps to the tool_call `part_id`. Both live inside
-`metadata` JSON.
 
 ### 13.3 Provider anchors must persist (BLOCKING)
 
@@ -625,8 +631,8 @@ ownership (origin session); visibility is available for fork-aware UIs.
 |--------|----------------|
 | `list_session_events` / `stream_session_events` (REST, event envelopes) | ordered parts of the session + in-memory live patch bus; wire format changes |
 | `latest_event_seq` | `sessions.version` or `MAX(session_parts.seq)` |
-| `export_session_jsonl` | serialize session meta + ordered parts (markers carry metadata/provider_state; anchors from 13.3); one part per line |
-| `import_session_jsonl` | re-create session + parts + membership with fresh ids; remap `parent_part_id`/`run_id` chains; restore metadata/provider_state/anchors; drop subtask lineage (matches v1) |
+| `export_session_jsonl` | serialize session meta + ordered parts (markers carry provider_state; anchors from 13.3); one part per line |
+| `import_session_jsonl` | re-create session + parts + membership with fresh ids; remap `parent_part_id`/`run_id` chains; restore provider_state/anchors; drop subtask lineage (matches v1) |
 | `TranscriptSnapshot`/`TranscriptPatch` (turns) | marker-grouped parts (turns = run marker + its parts); UI renders markers as turn boundaries |
 | `ActivityId`/`TextSegmentId`/`MessageId` | dissolve into `part_id` (API uses part ids) |
 
@@ -669,7 +675,7 @@ as-is; they are not part of the chat-data schema.
 
 | # | Decision | Default (recommended) |
 |---|----------|-----------------------|
-| D7 | message-level metadata / provider_state home | nullable `metadata`/`provider_state` JSON columns on parts, populated on run markers |
+| D7 | message-level metadata | dissolved: no `metadata` column; only `provider_state` on assistant run markers; all other fields redistributed (13.2) |
 | D8 | provider anchors | persist `sessions.provider_anchors_json` (not derivable; required for cache continuation + import round-trip) |
 | D9 | message_count semantics | count of run markers (a message == one run) |
 | D10 | streaming write policy | throttle part updates; live deltas stay in-memory |

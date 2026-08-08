@@ -742,6 +742,111 @@ mod tests {
     }
 
     #[test]
+    fn reply_content_notice_folds_with_older_activity_blocks() {
+        let now = Utc::now();
+        let operation = |index: i64| {
+            TranscriptFixture::operation_part(
+                100 + index,
+                7,
+                now,
+                ExecutionStatus::Completed,
+                fixture_operation(index, "agena.fs.read", &format!("Read file {index}")),
+            )
+        };
+        // A reply-content maintenance notice (prompt compaction completed,
+        // recorded by the runtime with `kind == "compaction"`) is durable
+        // reply content, not a mid-reply session notice. Inside a long tool
+        // run it must fold with the older activity blocks instead of staying
+        // pinned above the recent work.
+        let compaction_payload =
+            agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
+                kind: "compaction".to_owned(),
+                summary: "Prompt compaction completed".to_owned(),
+                detail: Some("compaction of execution 42".to_owned()),
+                occurred_at_ms: None,
+                title: None,
+            });
+        let mut parts = vec![operation(0), operation(1)];
+        parts.push(TranscriptFixture::canonical_activity(
+            200,
+            7,
+            now,
+            ExecutionStatus::Completed,
+            &compaction_payload,
+        ));
+        parts.extend((2..11).map(operation));
+        let message = entry(
+            7,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::Completed,
+            now,
+            parts,
+        );
+
+        let rendered = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // Twelve activities (the compaction notice included) fold as one block
+        // to the newest five. The notice sits in the older prefix, so it is
+        // hidden with the other stale blocks and never displayed above the
+        // recent tool calls.
+        assert!(
+            !text.contains("Prompt compaction completed"),
+            "stale reply-content notice must fold away, got: {text}"
+        );
+        assert!(text.contains("7 older activity blocks collapsed"), "{text}");
+        assert!(!text.contains("Read file 5"), "{text}");
+        assert!(text.contains("Read file 6"), "{text}");
+        assert_eq!(
+            rendered
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+                .count(),
+            1,
+            "the tool calls must fold as a single block"
+        );
+
+        // Expanding the fold reveals the notice at its chronological position
+        // inside the older run.
+        let summary_key = TranscriptNodeKey::ActivitySummary {
+            entry_id: TranscriptEntryId::StoredMessage(7),
+            first_content_id: TranscriptContentId::StoredPart(100),
+        };
+        let expanded = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &std::collections::BTreeMap::from([(summary_key, true)]),
+        );
+        let expanded_text = expanded
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            expanded_text.contains("Prompt compaction completed"),
+            "{expanded_text}"
+        );
+    }
+
+    #[test]
     fn expanded_activity_run_stays_expanded_when_the_assistant_appends_an_activity() {
         let now = Utc::now();
         let activity = |part_id: i64| {

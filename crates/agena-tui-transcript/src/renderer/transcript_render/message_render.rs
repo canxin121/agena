@@ -134,16 +134,27 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
 }
 
 /// Whether an Activity part stays visible even when its run is collapsed.
-/// Session activities injected mid-reply (hook runs, background notices)
-/// project as `Canonical` Notice payloads; hiding them inside a tool-run fold
-/// would bury where the hook actually fired. They still belong to the same
-/// foldable run, so the surrounding tool calls collapse as one block instead
-/// of splitting around the notice.
+/// Session activities injected mid-reply (hook runs) project as `Canonical`
+/// Notice payloads; hiding them inside a tool-run fold would bury where the
+/// hook actually fired. They still belong to the same foldable run, so the
+/// surrounding tool calls collapse as one block instead of splitting around
+/// the notice.
+///
+/// Only *session-injected* notices are pinned. The runtime records hook runs
+/// as session-owned Notice nodes with `kind == "hook"` (the sole kind written
+/// by `upsert_session_notice_node`). Reply-content maintenance notices —
+/// prompt compaction completed, model-turn budget exhausted, provider
+/// retries — are durable content of the reply itself and fold like any other
+/// older activity block, so a long run never pins stale notices above the
+/// recent work.
 pub(crate) fn is_always_visible_activity(part: &TranscriptEntryPart) -> bool {
     matches!(
         transcript_part_content(part),
         TranscriptPartContent::Activity(TranscriptActivityContent::Canonical(payload))
-            if matches!(payload, agena_domain::ActivityPayload::Notice(_))
+            if matches!(
+                payload,
+                agena_domain::ActivityPayload::Notice(notice) if notice.kind == "hook"
+            )
     )
 }
 

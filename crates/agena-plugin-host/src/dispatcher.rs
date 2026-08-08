@@ -91,14 +91,10 @@ where
             }
         };
         if matches!(&result, serde_json::Value::Null) {
-            runs.push(HookRunRecord::new(
-                &hook,
-                &plugin_id,
-                session_id,
-                HookRunStatus::Skipped,
-                format!("{hook} hook ran (no change)"),
-                None,
-            ));
+            // No-op runs are not transcript activity. A hook that ran but
+            // changed nothing would otherwise spam the transcript once per
+            // plugin per dispatch (tool.definition, chat.params, ...), which
+            // is invisible to the model but floods the human-facing record.
             continue;
         }
         let patch: Option<P> = serde_json::from_value(result)?;
@@ -114,16 +110,8 @@ where
                     None,
                 ));
             }
-            None => {
-                runs.push(HookRunRecord::new(
-                    &hook,
-                    &plugin_id,
-                    session_id,
-                    HookRunStatus::Skipped,
-                    format!("{hook} hook ran (no change)"),
-                    None,
-                ));
-            }
+            // A deserialized `None` patch is also a no-op; not recorded.
+            None => {}
         }
     }
     Ok(input)

@@ -106,9 +106,11 @@ pub struct AgentStopDispatch {
 /// activity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookRunStatus {
-    /// Hook ran and its patch was applied.
+    /// Hook ran and its patch was applied (or it otherwise had an effect).
     Applied,
-    /// Hook ran and returned nothing (no patch / null).
+    /// Hook ran and returned nothing (no patch / null). No-op runs are not
+    /// recorded as transcript activity — only effective runs and failures
+    /// are queued, so this status is rarely seen in practice.
     Skipped,
     /// Hook transport call failed.
     Failed,
@@ -132,6 +134,11 @@ pub struct HookRunRecord {
     pub summary: String,
     /// Optional extra detail (reason, error, injected continuation).
     pub detail: Option<String>,
+    /// Wall-clock timestamp (ms since the Unix epoch) captured when the hook
+    /// actually ran, not when the record was drained. The session runtime
+    /// uses this to place the activity on the transcript timeline at the real
+    /// hook call position.
+    pub occurred_at_ms: i64,
 }
 
 impl HookRunRecord {
@@ -150,7 +157,15 @@ impl HookRunRecord {
             status,
             summary: summary.into(),
             detail,
+            occurred_at_ms: unix_timestamp_ms(),
         }
+    }
+
+    /// Override the recorded hook-call time (used by tests to simulate
+    /// deterministic timeline positions).
+    pub fn with_occurred_at(mut self, occurred_at_ms: i64) -> Self {
+        self.occurred_at_ms = occurred_at_ms;
+        self
     }
 }
 

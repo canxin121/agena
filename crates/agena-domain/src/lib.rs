@@ -73,6 +73,7 @@ mod usage_period;
 mod usage_query;
 mod usage_stats;
 mod user_input;
+mod user_input_events;
 
 pub mod activity_v2;
 pub use access::{AccessKind, AccessSelector};
@@ -203,6 +204,7 @@ pub use usage_stats::{
     UsageDailyBreakdown, UsageStats, UsageTotals,
 };
 pub use user_input::{PendingInteractiveRequestKind, UserInputReplyKind};
+pub use user_input_events::UserInputRequestedEvent;
 mod availability_outcome;
 pub use availability_outcome::{
     CapabilitySourceKind, CapabilityUnavailableResult, ToolUnavailableResult,

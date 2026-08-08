@@ -194,10 +194,12 @@ impl WorkflowPlugin {
             previous.as_ref(),
         )?;
         self.save_active_plan(&plan).await?;
-        if self.config()?.plan.require_approval_on_create {
-            // Creating a plan must pass through user approval before the plan
-            // may become active. The review keeps the plan in planning when the
-            // user rejects or leaves feedback, so the agent can revise it.
+        if input.request_approval.unwrap_or(true) {
+            // By default a new plan must pass through user approval before it
+            // may become active; the agent can opt out explicitly when the user
+            // has already declared that the plan needs no approval. The review
+            // keeps the plan in planning when the user rejects or leaves
+            // feedback, so the agent can revise it.
             return self
                 .review_plan_status_transition(
                     plan,
@@ -233,12 +235,11 @@ impl WorkflowPlugin {
                     Some(WorkflowPlanPhase::Completed) => input.summary.as_deref(),
                     _ => None,
                 };
-                let allow_direct_approval = self.config()?.plan.allow_direct_approval;
                 if let Some(phase) = input.phase {
                     Self::validate_plan_phase_change(&plan, phase)?;
                     if Self::plan_phase_requires_approval(phase)
                         && !Self::plan_phase_is_approved(plan.phase)
-                        && !allow_direct_approval
+                        && input.request_approval.unwrap_or(true)
                     {
                         return self
                             .review_plan_status_transition(

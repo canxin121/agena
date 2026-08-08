@@ -103,16 +103,12 @@ impl Default for ToolTagsConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanConfig {
     pub(crate) default_autorun: bool,
-    pub(crate) allow_direct_approval: bool,
-    pub(crate) require_approval_on_create: bool,
 }
 
 impl Default for WorkflowPlanConfig {
     fn default() -> Self {
         Self {
             default_autorun: true,
-            allow_direct_approval: true,
-            require_approval_on_create: true,
         }
     }
 }
@@ -212,16 +208,6 @@ pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
             "/properties/default_autorun",
             "Default Autorun",
             "Default autorun value applied when plan.set omits the override.",
-        ),
-        (
-            "/properties/allow_direct_approval",
-            "Allow Direct Approval",
-            "When enabled, plan.update may move a planning or cancelled plan directly into active, blocked, or completed. Disable this to make plan.update automatically request review before those transitions.",
-        ),
-        (
-            "/properties/require_approval_on_create",
-            "Require Approval on Create",
-            "When enabled, plan.set asks the user to approve the new plan before it can become active. Disable to save new plans silently in planning.",
         ),
     ] {
         crate::tool::definition::set_schema_metadata(
@@ -935,10 +921,10 @@ mod tests {
     }
 
     #[test]
-    fn plan_config_requires_approval_on_create_by_default() {
+    fn plan_config_defaults_autorun_on() {
         use super::WorkflowPlanConfig;
 
-        assert!(WorkflowPlanConfig::default().require_approval_on_create);
+        assert!(WorkflowPlanConfig::default().default_autorun);
     }
 
     #[test]

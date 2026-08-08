@@ -5473,18 +5473,53 @@ mod tests {
                 }
             }
         }
-        for expected in [
-            "session.start",
-            "user.prompt.submit",
-            "chat.params",
-            "command.before",
-            "command.after",
-            "config",
-            "agent.stop",
-        ] {
+        // Effective runs (a patch was applied) are recorded as transcript
+        // activity.
+        for expected in ["session.start", "user.prompt.submit", "chat.params"] {
             assert!(
                 hook_names.iter().any(|name| name == expected),
                 "missing hook activity for {expected}; got {hook_names:?}"
+            );
+        }
+        // No-op runs (the hook returned nothing) are not recorded: they would
+        // otherwise flood the transcript once per plugin per dispatch.
+        for skipped in [
+            "agent.stop",
+            "command.before",
+            "command.after",
+            "config",
+        ] {
+            assert!(
+                !hook_names.iter().any(|name| name == skipped),
+                "no-op hook run must not be recorded for {skipped}; got {hook_names:?}"
+            );
+        }
+
+        // Effective hook runs are also mirrored as session-owned Notice
+        // activities so the TUI transcript (which reads session content
+        // nodes) renders them; the hook parts themselves carry no execution
+        // identity and never produce content nodes through the execution
+        // projection.
+        let snapshot = manager
+            .transcript_snapshot(session.id)
+            .await
+            .expect("transcript snapshot");
+        let mut session_notice_kinds = snapshot
+            .session_activities
+            .iter()
+            .filter_map(|activity| match &activity.payload {
+                agena_domain::ActivityPayload::Notice(notice) => Some(notice.summary.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        session_notice_kinds.sort();
+        session_notice_kinds.dedup();
+        for expected in ["session.start", "user.prompt.submit", "chat.params"] {
+            assert!(
+                session_notice_kinds
+                    .iter()
+                    .any(|summary| summary.contains(expected)),
+                "missing session hook activity for {expected}; got {session_notice_kinds:?}"
             );
         }
     }

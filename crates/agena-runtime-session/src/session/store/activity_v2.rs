@@ -77,6 +77,70 @@ pub(crate) async fn upsert_content_node(
     Ok(())
 }
 
+/// One-shot terminal write for a hook run as a session-owned Notice activity
+/// (`owner_kind='session'`).
+///
+/// Hook runs are recorded as System assistant messages (`model_turn_id:
+/// None`, `execution_id: None`), so the execution-scoped
+/// `project_part_content` projection never emits a content node for their
+/// parts. The TUI transcript (`transcript_snapshot`) reads session-owned
+/// content nodes, so hook activity would be persisted but never rendered.
+/// This mirrors each run into a session Notice node using the canonical
+/// `ActivityPayload::Notice` shape (tagged `activity_type`) that
+/// `parse_activity_row` reads, so the terminal renders it with the existing
+/// Notice activity styles. Human-facing only: session Notice nodes never
+/// reach the model prompt.
+pub(crate) async fn upsert_session_notice_node(
+    db: &DatabaseConnection,
+    session_id: i64,
+    node_id: &agena_domain::ActivityId,
+    kind: &str,
+    summary: &str,
+    detail: Option<&str>,
+    occurred_at_ms: i64,
+) -> Result<(), AppError> {
+    let backend = db.get_database_backend();
+    let position = db
+        .query_one(Statement::from_sql_and_values(
+            backend,
+            "SELECT COALESCE(MAX(position), -1) + 1 AS next_position \
+             FROM agena_content_nodes WHERE owner_kind = 'session' AND owner_id = ?",
+            [session_id.to_string().into()],
+        ))
+        .await?
+        .and_then(|row| row.try_get("", "next_position").ok())
+        .unwrap_or(0);
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let payload = serde_json::json!({
+        "activity_type": "notice",
+        "kind": kind,
+        "summary": summary,
+        "detail": detail,
+    });
+    db.execute(Statement::from_sql_and_values(
+        backend,
+        "INSERT INTO agena_content_nodes \
+         (node_id, owner_kind, owner_id, node_type, actor, title, payload_json, text, state, \
+          position, revision_seq, started_at_ms, finished_at_ms, created_at_ms, updated_at_ms) \
+         VALUES (?, 'session', ?, 'activity', 'runtime', '', ?, NULL, 'completed', ?, 1, ?, ?, ?, ?) \
+         ON CONFLICT(node_id) DO NOTHING",
+        [
+            node_id.to_string().into(),
+            session_id.into(),
+            serde_json::to_value(payload)
+                .map_err(|error| AppError::Internal(format!("encode hook activity node: {error}")))?
+                .into(),
+            position.into(),
+            occurred_at_ms.into(),
+            occurred_at_ms.into(),
+            now_ms.into(),
+            now_ms.into(),
+        ],
+    ))
+    .await?;
+    Ok(())
+}
+
 /// O(1) compact label update (07 §8.2 `update_activity_label`): refreshes
 /// the mirrored `title` column without touching the raw output payload. Used
 /// by the 2s streaming title refresh so a long stream costs only tiny

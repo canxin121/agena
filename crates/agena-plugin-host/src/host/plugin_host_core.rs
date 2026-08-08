@@ -923,14 +923,7 @@ impl PluginHost {
                 }
             };
             if matches!(&v, serde_json::Value::Null) {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "command.before",
-                    &plugin_id,
-                    session_id,
-                    HookRunStatus::Skipped,
-                    "command.before hook ran (no change)",
-                    None,
-                )]);
+                // No-op run; not recorded as transcript activity.
                 continue;
             }
             let resp: Option<CommandBeforeResponse> = serde_json::from_value(v)
@@ -972,14 +965,7 @@ impl PluginHost {
                     }
                 }
                 None => {
-                    self.push_hook_runs(vec![HookRunRecord::new(
-                        "command.before",
-                        &plugin_id,
-                        session_id,
-                        HookRunStatus::Skipped,
-                        "command.before hook ran (no change)",
-                        None,
-                    )]);
+                    // No-op run; not recorded as transcript activity.
                 }
             }
         }
@@ -1015,14 +1001,7 @@ impl PluginHost {
                 }
             };
             if matches!(&v, serde_json::Value::Null) {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "auth",
-                    &plugin_id,
-                    None,
-                    HookRunStatus::Skipped,
-                    "auth hook ran (no credentials)",
-                    None,
-                )]);
+                // No-op run (no credentials supplied); not recorded.
                 continue;
             }
             let out: Option<AuthOutput> = serde_json::from_value(v)
@@ -1071,14 +1050,7 @@ impl PluginHost {
                 }
             };
             if matches!(&v, serde_json::Value::Null) {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "provider.list",
-                    &plugin_id,
-                    None,
-                    HookRunStatus::Skipped,
-                    "provider.list hook ran (no change)",
-                    None,
-                )]);
+                // No-op run; not recorded as transcript activity.
                 continue;
             }
             let patch: Option<ProviderListPatch> = serde_json::from_value(v)
@@ -1191,14 +1163,8 @@ impl PluginHost {
                 }
             };
             if matches!(&v, serde_json::Value::Null) {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "session.start",
-                    &plugin_id,
-                    session_id,
-                    HookRunStatus::Skipped,
-                    "session.start hook ran (no change)",
-                    None,
-                )]);
+                // No-op run; only effective runs (and failures) are recorded
+                // as transcript activity.
                 continue;
             }
             let patch: Option<SessionStartPatch> = serde_json::from_value(v)
@@ -1327,14 +1293,8 @@ impl PluginHost {
                 }
             };
             if matches!(&v, serde_json::Value::Null) {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "user.prompt.submit",
-                    &plugin_id,
-                    session_id,
-                    HookRunStatus::Skipped,
-                    "user.prompt.submit hook ran (no change)",
-                    None,
-                )]);
+                // No-op run; only effective runs (block/rewrite) and failures
+                // are recorded as transcript activity.
                 continue;
             }
             let patch: Option<UserPromptSubmitPatch> = serde_json::from_value(v)
@@ -1444,7 +1404,12 @@ impl PluginHost {
             &mut runs,
         )
         .await;
-        self.push_hook_runs(runs);
+        // tool.definition runs once per registered tool per tool-request
+        // computation; recording them as transcript activity would flood the
+        // session with thousands of "no change" parts every turn. The chain
+        // still applies its patches — only the runs are discarded, like
+        // tool.after.
+        let _ = runs;
         result.map_err(transport_to_plugin_error)
     }
 
@@ -1532,46 +1497,41 @@ impl PluginHost {
                 }
             };
             if matches!(&v, serde_json::Value::Null) {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "agent.stop",
-                    &plugin_id,
-                    Some(input.session_id),
-                    HookRunStatus::Skipped,
-                    "agent.stop hook ran (no continuation)",
-                    None,
-                )]);
+                // No continuation: the run is a no-op and is not recorded as
+                // transcript activity. The dispatch still notes it for the
+                // AgentStop aggregation.
                 runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
                 continue;
             }
             let patch: Option<AgentStopPatch> = serde_json::from_value(v)
                 .map_err(|e| PluginError::invalid_params(e.to_string()))?;
             if let Some(p) = patch {
-                let (summary, detail) = match (&p.continue_with_message, &p.reason) {
-                    (Some(_), Some(reason)) => (
-                        format!("agent.stop hook blocked stop: {reason}"),
-                        p.continue_with_message.clone().or_else(|| p.reason.clone()),
-                    ),
-                    (Some(_), None) => (
-                        "agent.stop hook blocked stop".to_string(),
-                        p.continue_with_message.clone(),
-                    ),
-                    (None, Some(reason)) => (
-                        format!("agent.stop hook ran: {reason}"),
-                        Some(reason.clone()),
-                    ),
-                    (None, None) => (
-                        "agent.stop hook ran (no continuation)".to_string(),
-                        None,
-                    ),
-                };
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "agent.stop",
-                    &plugin_id,
-                    Some(input.session_id),
-                    HookRunStatus::Applied,
-                    summary,
-                    detail,
-                )]);
+                let has_effect = p.continue_with_message.is_some() || p.reason.is_some();
+                if has_effect {
+                    let (summary, detail) = match (&p.continue_with_message, &p.reason) {
+                        (Some(_), Some(reason)) => (
+                            format!("agent.stop hook blocked stop: {reason}"),
+                            p.continue_with_message.clone().or_else(|| p.reason.clone()),
+                        ),
+                        (Some(_), None) => (
+                            "agent.stop hook blocked stop".to_string(),
+                            p.continue_with_message.clone(),
+                        ),
+                        (None, Some(reason)) => (
+                            format!("agent.stop hook ran: {reason}"),
+                            Some(reason.clone()),
+                        ),
+                        (None, None) => unreachable!("covered by has_effect"),
+                    };
+                    self.push_hook_runs(vec![HookRunRecord::new(
+                        "agent.stop",
+                        &plugin_id,
+                        Some(input.session_id),
+                        HookRunStatus::Applied,
+                        summary,
+                        detail,
+                    )]);
+                }
                 runs.push(AgentStopHookRun {
                     plugin_id,
                     hook: "agent.stop".to_string(),
@@ -1585,14 +1545,8 @@ impl PluginHost {
                     break;
                 }
             } else {
-                self.push_hook_runs(vec![HookRunRecord::new(
-                    "agent.stop",
-                    &plugin_id,
-                    Some(input.session_id),
-                    HookRunStatus::Skipped,
-                    "agent.stop hook ran (no continuation)",
-                    None,
-                )]);
+                // A deserialized `None` patch is a no-op (no continuation);
+                // not recorded as transcript activity.
                 runs.push(AgentStopHookRun::ran(plugin_id, "agent.stop"));
             }
         }

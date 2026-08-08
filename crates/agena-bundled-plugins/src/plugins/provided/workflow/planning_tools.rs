@@ -119,7 +119,7 @@ pub(crate) struct WorkflowPlanStepInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 #[schemars(
-    description = "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically."
+    description = "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. `request_approval` controls whether the user must approve the plan before it becomes active; it defaults to requesting approval unless the user has already declared the plan needs none."
 )]
 pub(crate) struct PlanSetInput {
     pub(crate) objective: String,
@@ -134,6 +134,11 @@ pub(crate) struct PlanSetInput {
     pub(crate) steps: Vec<WorkflowPlanStepInput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) autorun: Option<bool>,
+    #[schemars(
+        description = "Whether to request user approval before the plan becomes active. Defaults to true when omitted: request approval unless the user has already declared that the plan can be created directly without approval."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_approval: Option<bool>,
 }
 
 #[derive(
@@ -158,7 +163,7 @@ pub(crate) struct PlanGetInput {
 #[input(trim("summary", "note"))]
 #[serde(default, deny_unknown_fields)]
 #[schemars(
-    description = "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
+    description = "Update the current plan. Use `phase` / `autorun` / `request_approval` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`, `request_approval`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`."
 )]
 pub(crate) struct PlanUpdateInput {
     #[schemars(
@@ -166,6 +171,11 @@ pub(crate) struct PlanUpdateInput {
     )]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) phase: Option<WorkflowPlanPhase>,
+    #[schemars(
+        description = "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval."
+    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) request_approval: Option<bool>,
     #[schemars(description = "Whether an approved active plan should keep running automatically.")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) autorun: Option<bool>,

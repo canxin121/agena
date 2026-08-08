@@ -1157,8 +1157,10 @@ impl WorkflowPlugin {
     pub(in crate::plugins::provided::workflow) fn validate_plan_update_input(
         input: &PlanUpdateInput,
     ) -> SdkResult<PlanUpdateTarget> {
-        let phase_update_requested =
-            input.phase.is_some() || input.autorun.is_some() || input.summary.is_some();
+        let phase_update_requested = input.phase.is_some()
+            || input.autorun.is_some()
+            || input.summary.is_some()
+            || input.request_approval.is_some();
         let step = input.step;
         let check = input.check;
 
@@ -1179,9 +1181,13 @@ impl WorkflowPlugin {
                     "plan.update summary is only valid when phase is `completed`".to_string(),
                 ));
             }
-            if input.phase.is_none() && input.autorun.is_none() {
+            if input.phase.is_none()
+                && input.autorun.is_none()
+                && input.request_approval.is_none()
+            {
                 return Err(PluginError::invalid_params(
-                    "plan.update requires `phase` or `autorun` for plan-level updates".to_string(),
+                    "plan.update requires `phase`, `autorun`, or `request_approval` for plan-level updates"
+                        .to_string(),
                 ));
             }
             return Ok(PlanUpdateTarget::Plan);

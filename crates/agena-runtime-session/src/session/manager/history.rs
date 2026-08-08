@@ -302,6 +302,7 @@ fn project_runtime_timeline_event(
         EventKind::CommandEnd(_) => "timeline-type-command-end",
         EventKind::PermissionRequested(_) => "timeline-type-permission-requested",
         EventKind::PermissionReplied(_) => "timeline-type-permission-replied",
+        EventKind::UserInputRequested(_) => "timeline-type-user-input-requested",
         EventKind::PermissionRuleCreated(_) => "timeline-type-permission-rule-created",
         EventKind::PermissionRuleUpdated(_) => "timeline-type-permission-rule-updated",
         EventKind::PermissionRuleRevoked(_) => "timeline-type-permission-rule-revoked",
@@ -415,7 +416,9 @@ fn project_runtime_presentation_event(
                 force_refresh: false,
             })
         }
-        EventKind::PermissionRequested(_) | EventKind::PermissionReplied(_) => {
+        EventKind::PermissionRequested(_)
+        | EventKind::PermissionReplied(_)
+        | EventKind::UserInputRequested(_) => {
             Some(agena_runtime::RuntimePresentationEventKind::Refresh {
                 force_refresh: true,
             })
@@ -1738,6 +1741,48 @@ mod tests {
             projected.kind,
             agena_runtime::RuntimePresentationEventKind::Refresh {
                 force_refresh: false
+            }
+        ));
+    }
+
+    #[test]
+    fn user_input_request_forces_a_presentation_refresh() {
+        // Regression guard: a durable UserInputRequested event must project to
+        // a force refresh so every UI re-reads the execution snapshot and pops
+        // the pending approval/question modal. The part checkpoint alone only
+        // projects to a TranscriptPatch, which terminals apply without
+        // refreshing the execution (and therefore without seeing the request).
+        let session_id = 42;
+        let event = crate::event::DomainEvent {
+            meta: agena_domain::EventMeta {
+                id: uuid::Uuid::new_v4(),
+                seq_global: 1,
+                seq_session: Some(1),
+                session_id: Some(session_id),
+                workspace_id: Some(1),
+                created_at: chrono::Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
+            },
+            kind: crate::event::EventKind::UserInputRequested(
+                agena_domain::UserInputRequestedEvent {
+                    session_id,
+                    operation_id: "op-1".to_string(),
+                    call_id: 7,
+                    request_id: "req-1".to_string(),
+                    ts_ms: 1,
+                },
+            ),
+        };
+
+        let projected = project_runtime_presentation_event(&event)
+            .expect("presentation projection")
+            .expect("user input request must be visible");
+        assert!(matches!(
+            projected.kind,
+            agena_runtime::RuntimePresentationEventKind::Refresh {
+                force_refresh: true
             }
         ));
     }

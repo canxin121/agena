@@ -20,7 +20,7 @@ use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionScope,
-    PolicySourceKind, Role, RunAbortReason,
+    PolicySourceKind, Role, RunAbortReason, UserInputRequestedEvent,
 };
 use tracing::Instrument;
 
@@ -429,6 +429,19 @@ impl SessionManager {
                 ))
                 .await?;
                 session.refresh_derived();
+                // Drain and record hook runs observed while the tool batch
+                // executed (command.before/after, and any hook the tool itself
+                // triggered) before the next model turn, so they land at the
+                // tool-call position instead of piling up at the end.
+                let hook_runs = state
+                    .tool_executor
+                    .plugin_manager()
+                    .drain_hook_runs(session.id);
+                if !hook_runs.is_empty() {
+                    session = self
+                        .record_hook_runs(session, hook_runs, state.clone())
+                        .await?;
+                }
                 model_requested = !session.blocked() && session.pending_tools().is_empty();
                 continue;
             }
@@ -438,7 +451,13 @@ impl SessionManager {
                     .messages
                     .iter()
                     .rev()
-                    .find(|m| m.role == agena_domain::Role::Assistant)
+                    // Only real assistant-authored messages count as the last
+                    // assistant text: hook-only System-originated assistant
+                    // messages carry no body and must not feed the stop input.
+                    .find(|m| {
+                        m.role == agena_domain::Role::Assistant
+                            && m.metadata.source == agena_domain::MessageSource::Assistant
+                    })
                     .map(|m| m.as_text_lossy());
                 let stop_input = agena_plugin_host::AgentStopInput {
                     session_id: session.id,
@@ -491,6 +510,18 @@ impl SessionManager {
                             target: "agena_plugin_host::agent_stop",
                             "agent.stop hook failed (stopping normally): {err}"
                         );
+                        // The dispatch pushed a HookRunRecord for the failed
+                        // transport; drain and record it so the stop failure is
+                        // visible instead of being misattributed to the next run.
+                        let hook_runs = state
+                            .tool_executor
+                            .plugin_manager()
+                            .drain_hook_runs(session.id);
+                        if !hook_runs.is_empty() {
+                            session = self
+                                .record_hook_runs(session, hook_runs, state.clone())
+                                .await?;
+                        }
                         return Ok(session);
                     }
                 }
@@ -744,6 +775,12 @@ impl SessionManager {
     /// restart keeps the record. Every session operation that drains
     /// `PluginHost::drain_hook_runs` (session.start, user.prompt.submit,
     /// chat.params, command.before/after, agent.stop) records through here.
+    ///
+    /// Hook messages carry no execution identity, so the execution-scoped
+    /// content-node projection never emits nodes for their parts; the TUI
+    /// transcript reads session-owned content nodes and would otherwise never
+    /// show hook activity. Each run is therefore also mirrored as a
+    /// session Notice activity (human-facing only) so the terminal renders it.
     pub(in crate::session::manager) async fn record_hook_runs(
         &self,
         mut session: Session,
@@ -752,13 +789,13 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let ids = self.store.reserve_message_ids(runs.len()).await?;
         let parts = runs
-            .into_iter()
+            .iter()
             .map(|run| {
                 PartContent::hook(crate::message::HookPart {
-                    hook: run.hook,
-                    plugin_id: Some(run.plugin_id),
-                    summary: run.summary,
-                    detail: run.detail,
+                    hook: run.hook.clone(),
+                    plugin_id: Some(run.plugin_id.clone()),
+                    summary: run.summary.clone(),
+                    detail: run.detail.clone(),
                 })
             })
             .collect();
@@ -783,8 +820,36 @@ impl SessionManager {
         )?;
         session.messages.push(message.clone());
         let checkpoint = MessageCheckpoint::all(&message);
-        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
-            .await
+        session = self
+            .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
+            .await?;
+        // Mirror each hook part as a session Notice activity (see the doc
+        // comment above). Activity ids are assigned by `build_message`, so
+        // read them back off the persisted message parts.
+        // Each notice mirrors its run's `occurred_at_ms` (the time the hook
+        // actually ran) so the transcript can place the activity at the real
+        // hook call position instead of at record time.
+        for (run, part) in runs.iter().zip(&message.parts) {
+            let Some(activity_id) = part.activity_id else {
+                continue;
+            };
+            let Some(PartContent::Activity(crate::message::RuntimeActivity::Hook(hook))) =
+                part.content.as_ref()
+            else {
+                continue;
+            };
+            crate::session::store::upsert_session_notice_node(
+                &self.store.db,
+                session.id,
+                &activity_id,
+                "hook",
+                &hook.summary,
+                hook.detail.as_deref(),
+                run.occurred_at_ms,
+            )
+            .await?;
+        }
+        Ok(session)
     }
 
     /// Record a System-originated Assistant message with a single `Notice`
@@ -1223,6 +1288,50 @@ impl SessionManager {
                         diagnostic = %err,
                         "session run aborted by an execution failure"
                     );
+                    // Drain hook runs observed while the provider call failed
+                    // (for example chat.params that fired before the transport
+                    // error) and record them before the session is consumed by
+                    // the history append below. Recording failures are
+                    // swallowed so the original run error is preserved.
+                    let session_id = session.id;
+                    let hook_runs = state
+                        .tool_executor
+                        .plugin_manager()
+                        .drain_hook_runs(session_id);
+                    if !hook_runs.is_empty() {
+                        match self
+                            .record_hook_runs(session, hook_runs, state.clone())
+                            .await
+                        {
+                            Ok(recorded) => session = recorded,
+                            Err(record_err) => {
+                                tracing::warn!(
+                                    target: "agena::session::hook_runs",
+                                    session_id,
+                                    "failed to record hook runs after failed model turn: {record_err}"
+                                );
+                                // `record_hook_runs` consumed the session; reload
+                                // a fresh one so the RunAborted history append
+                                // below still works. If even that fails, return
+                                // the original run error.
+                                match self
+                                    .store
+                                    .load_session(session_id, state.cache_policy())
+                                    .await
+                                {
+                                    Ok(reloaded) => session = reloaded,
+                                    Err(load_err) => {
+                                        tracing::warn!(
+                                            target: "agena::session::hook_runs",
+                                            session_id,
+                                            "failed to reload session after failed model turn: {load_err}"
+                                        );
+                                        return Err(err);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     self.store
                         .append_history_items(
                             session,
@@ -2536,7 +2645,19 @@ impl SessionManager {
                 .filter(|part| part.operation_id.as_deref() == Some(resolved.operation_id.as_str()))
                 .map(|part| part.id),
         );
-        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
+        // Surface the request to every UI immediately: the durable part
+        // checkpoint below projects to a TranscriptPatch, which terminals apply
+        // without refreshing the execution snapshot (and therefore without
+        // seeing the pending interactive request). A dedicated event forces the
+        // presentation refresh that pops the approval/question modal.
+        let events = vec![EventKind::UserInputRequested(UserInputRequestedEvent {
+            session_id: session.id,
+            operation_id: resolved.operation_id.clone(),
+            call_id: resolved.call_id,
+            request_id: request.request_id.clone(),
+            ts_ms: Utc::now().timestamp_millis(),
+        })];
+        self.persist_session_changes(session, vec![checkpoint], events, None, state)
             .await
     }
 

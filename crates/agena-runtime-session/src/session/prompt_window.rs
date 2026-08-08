@@ -291,8 +291,25 @@ fn prompt_messages_for_request(messages: &[Message]) -> Vec<Message> {
 
 fn message_has_visible_prompt_payload(message: &Message) -> bool {
     let projected_parts = project_session_parts(message);
-    projected_parts.iter().any(prompt_part_has_visible_payload)
-        || (projected_parts.is_empty() && !message.as_text_lossy().trim().is_empty())
+    if projected_parts.iter().any(prompt_part_has_visible_payload) {
+        return true;
+    }
+    // Fallback for messages whose parts project to nothing (for example a
+    // part with no content but a human-facing summary). Never count
+    // human-only activity (hook / notice / interaction / error) as model
+    // payload: those parts project to nothing and their lossy summaries must
+    // not leak into the provider prompt as empty assistant messages.
+    message.parts.iter().any(|part| {
+        !matches!(
+            part.content,
+            Some(PartContent::Activity(
+                crate::message::RuntimeActivity::Hook(_)
+                    | crate::message::RuntimeActivity::Notice(_)
+                    | crate::message::RuntimeActivity::Interaction(_)
+                    | crate::message::RuntimeActivity::Error(_)
+            ))
+        ) && !part.summary.as_deref().unwrap_or("").trim().is_empty()
+    })
 }
 
 fn prompt_part_has_visible_payload(part: &crate::provider::ProjectedSessionPart) -> bool {
@@ -1264,6 +1281,51 @@ mod compaction_tests {
             active
                 .iter()
                 .all(|message| message.as_text_lossy() != "old user")
+        );
+    }
+
+    #[test]
+    fn hook_only_activity_is_filtered_from_the_model_prompt() {
+        let mut session = session_with_messages();
+
+        // A recorded hook run (human-only activity) must never reach the
+        // model: it projects to no parts and its human-facing summary is not
+        // provider payload.
+        let mut hook_message = Message::prompt_parts(
+            Role::Assistant,
+            vec![PartContent::hook(crate::message::HookPart {
+                hook: "agent.stop".to_owned(),
+                plugin_id: Some("agena.plan".to_owned()),
+                summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
+                detail: Some("continue with the next plan step".to_owned()),
+            })],
+        );
+        hook_message.id = 99;
+        hook_message.metadata.source = MessageSource::System;
+        session.messages.push(hook_message);
+
+        // A real user message following the hook-only activity is unaffected.
+        let mut plain_text = Message::prompt_text(Role::User, "future user");
+        plain_text.id = 100;
+        plain_text.metadata.source = MessageSource::User;
+        session.messages.push(plain_text);
+
+        let prompt_messages = prompt_messages_for_request(&session.messages);
+        assert!(
+            prompt_messages.iter().all(|m| m.id != 99),
+            "hook-only assistant message must not be sent to the model; got {:?}",
+            prompt_messages
+                .iter()
+                .map(|m| (m.id, m.as_text_lossy()))
+                .collect::<Vec<_>>()
+        );
+        // The three base messages plus the trailing user message remain.
+        assert_eq!(prompt_messages.len(), 4);
+        assert!(
+            !prompt_messages
+                .iter()
+                .any(|m| m.as_text_lossy().contains("agent.stop hook")),
+            "hook summaries must not leak into the model prompt"
         );
     }
 

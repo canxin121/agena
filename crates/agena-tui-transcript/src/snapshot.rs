@@ -31,7 +31,25 @@ pub fn transcript_entries<'a>(snapshot: &'a TranscriptSnapshot) -> Vec<Transcrip
             .saturating_mul(2)
             .saturating_add(snapshot.session_activities.len()),
     );
+    // Session activities (hook runs, background notices, …) are interleaved
+    // into the turn timeline by their actual occurrence time instead of being
+    // appended after every turn. The sort is stable, so activities recorded in
+    // the same drain keep their original order.
+    let mut activities = snapshot.session_activities.iter().collect::<Vec<_>>();
+    activities.sort_by_key(|activity| activity.lifecycle.started_at_ms);
+
+    let mut activity_index = 0;
+    let mut pending = Vec::<&'a ActivityNode>::new();
     for turn in &snapshot.turns {
+        // Activities that began before the turn's user input are placed ahead
+        // of the turn (for example a session hook that fired first).
+        while activity_index < activities.len()
+            && activities[activity_index].lifecycle.started_at_ms < turn.created_at_ms
+        {
+            pending.push(activities[activity_index]);
+            activity_index += 1;
+        }
+        entries.extend(pending.drain(..).map(session_activity_entry));
         if !turn.input.is_empty() {
             entries.push(user_document_entry(
                 turn.id,
@@ -39,6 +57,18 @@ pub fn transcript_entries<'a>(snapshot: &'a TranscriptSnapshot) -> Vec<Transcrip
                 &turn.input,
             ));
         }
+        // Activities that began while the assistant was composing (before the
+        // reply finished) render between the user input and the reply; the
+        // finished timestamp falls back to the reply creation time while the
+        // reply is still streaming.
+        let reply_boundary_ms = turn.reply.finished_at_ms.unwrap_or(turn.reply.created_at_ms);
+        while activity_index < activities.len()
+            && activities[activity_index].lifecycle.started_at_ms <= reply_boundary_ms
+        {
+            pending.push(activities[activity_index]);
+            activity_index += 1;
+        }
+        entries.extend(pending.drain(..).map(session_activity_entry));
         entries.push(assistant_reply_document_entry(
             turn.reply.id,
             assistant_reply_status(turn.reply.status),
@@ -47,19 +77,24 @@ pub fn transcript_entries<'a>(snapshot: &'a TranscriptSnapshot) -> Vec<Transcrip
             turn.reply.failure.clone(),
         ));
     }
+    // Anything still pending started after the last turn's reply; keep it at
+    // the end of the timeline in timestamp order.
     entries.extend(
-        snapshot
-            .session_activities
+        activities[activity_index..]
             .iter()
-            .map(|activity| TranscriptEntry {
-                id: TranscriptEntryId::SessionActivity(activity.id),
-                role: None,
-                state: activity_entry_status(activity.state),
-                created_at: timestamp(activity.lifecycle.started_at_ms),
-                parts: vec![activity_entry_part(activity)],
-            }),
+            .map(|activity| session_activity_entry(activity)),
     );
     entries
+}
+
+fn session_activity_entry<'a>(activity: &'a ActivityNode) -> TranscriptEntry<'a> {
+    TranscriptEntry {
+        id: TranscriptEntryId::SessionActivity(activity.id),
+        role: None,
+        state: activity_entry_status(activity.state),
+        created_at: timestamp(activity.lifecycle.started_at_ms),
+        parts: vec![activity_entry_part(activity)],
+    }
 }
 
 fn user_document_entry(
@@ -1169,6 +1204,161 @@ mod tests {
                     content_id: TranscriptContentId::Activity(activity_id),
                 }
         }));
+    }
+
+    fn session_notice_activity(id: agena_domain::ActivityId, started_at_ms: i64) -> ActivityNode {
+        ActivityNode {
+            id,
+            owner: ActivityOwner::Session { session_id: 7 },
+            actor: ActivityActor::Runtime,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: 0 },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle {
+                started_at_ms,
+                finished_at_ms: Some(started_at_ms),
+            },
+            payload: ActivityPayload::Notice(agena_domain::NoticeActivity {
+                kind: "hook".to_owned(),
+                summary: format!("hook@{started_at_ms}"),
+                detail: None,
+            }),
+            provenance: ActivityProvenance::default(),
+        }
+    }
+
+    #[test]
+    fn session_activities_interleave_into_the_turn_timeline_by_timestamp() {
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let before = agena_domain::ActivityId::new();
+        let mid = agena_domain::ActivityId::new();
+        let after = agena_domain::ActivityId::new();
+        let snapshot = TranscriptSnapshot {
+            session_id: 7,
+            seq_session: 1,
+            turns: vec![agena_domain::TurnSnapshot {
+                id: turn_id,
+                session_id: 7,
+                sequence: 1,
+                input: ContentDocument::new(vec![ContentNode::text("user input")]),
+                reply: agena_domain::AssistantReplySnapshot {
+                    id: reply_id,
+                    turn_id,
+                    status: AssistantReplyStatus::Completed,
+                    content: ContentDocument::new(vec![ContentNode::text("reply")]),
+                    revision_seq: 1,
+                    created_at_ms: 100,
+                    finished_at_ms: Some(300),
+                    failure: None,
+                },
+                created_at_ms: 100,
+            }],
+            // Deliberately out of timestamp order: the projection must sort by
+            // started_at_ms before interleaving.
+            session_activities: vec![
+                session_notice_activity(after, 400),
+                session_notice_activity(before, 50),
+                session_notice_activity(mid, 200),
+            ],
+        };
+
+        let entries = transcript_entries(&snapshot);
+        let ids = entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                TranscriptEntryId::SessionActivity(before),
+                TranscriptEntryId::TurnInput(turn_id),
+                TranscriptEntryId::SessionActivity(mid),
+                TranscriptEntryId::AssistantReply(reply_id),
+                TranscriptEntryId::SessionActivity(after),
+            ]
+        );
+    }
+
+    #[test]
+    fn session_activities_land_between_turns_and_streaming_reply_falls_back_to_created() {
+        let first_turn = agena_domain::TurnId::new();
+        let first_reply = agena_domain::AssistantReplyId::new();
+        let second_turn = agena_domain::TurnId::new();
+        let second_reply = agena_domain::AssistantReplyId::new();
+        let between = agena_domain::ActivityId::new();
+        let inside_streaming = agena_domain::ActivityId::new();
+        let tail = agena_domain::ActivityId::new();
+        let snapshot = TranscriptSnapshot {
+            session_id: 7,
+            seq_session: 1,
+            turns: vec![
+                agena_domain::TurnSnapshot {
+                    id: first_turn,
+                    session_id: 7,
+                    sequence: 1,
+                    input: ContentDocument::new(vec![ContentNode::text("first")]),
+                    reply: agena_domain::AssistantReplySnapshot {
+                        id: first_reply,
+                        turn_id: first_turn,
+                        status: AssistantReplyStatus::Completed,
+                        content: ContentDocument::new(vec![ContentNode::text("first reply")]),
+                        revision_seq: 1,
+                        created_at_ms: 100,
+                        finished_at_ms: Some(300),
+                        failure: None,
+                    },
+                    created_at_ms: 100,
+                },
+                agena_domain::TurnSnapshot {
+                    id: second_turn,
+                    session_id: 7,
+                    sequence: 2,
+                    input: ContentDocument::new(vec![ContentNode::text("second")]),
+                    // Still streaming: finished_at_ms is None, so the reply
+                    // creation time is the boundary for inside-turn placement.
+                    reply: agena_domain::AssistantReplySnapshot {
+                        id: second_reply,
+                        turn_id: second_turn,
+                        status: AssistantReplyStatus::InProgress,
+                        content: ContentDocument::new(vec![ContentNode::text("second reply")]),
+                        revision_seq: 1,
+                        created_at_ms: 500,
+                        finished_at_ms: None,
+                        failure: None,
+                    },
+                    created_at_ms: 500,
+                },
+            ],
+            session_activities: vec![
+                // Started after the first reply finished but before the second
+                // turn was created: lands between the two turns.
+                session_notice_activity(between, 400),
+                // Started at the streaming reply's creation time: inside the
+                // second turn (before its reply entry).
+                session_notice_activity(inside_streaming, 500),
+                // Started after the last reply boundary: stays at the tail.
+                session_notice_activity(tail, 900),
+            ],
+        };
+
+        let entries = transcript_entries(&snapshot);
+        let ids = entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                TranscriptEntryId::TurnInput(first_turn),
+                TranscriptEntryId::AssistantReply(first_reply),
+                TranscriptEntryId::SessionActivity(between),
+                TranscriptEntryId::TurnInput(second_turn),
+                TranscriptEntryId::SessionActivity(inside_streaming),
+                TranscriptEntryId::AssistantReply(second_reply),
+                TranscriptEntryId::SessionActivity(tail),
+            ]
+        );
     }
 
     #[test]

@@ -9,6 +9,7 @@ use agena_domain::{
     KindPersistence, PermissionRepliedEvent, PermissionRequestedEvent, PermissionRuleEvent,
     PromptCompactionCompletedEvent, ProviderRetryEvent, ProviderRetryResolvedEvent,
     StreamErrorEvent, SubtaskStatusChangedEvent, ToolPolicyDeniedEvent, ToolUserDeclinedEvent,
+    UserInputRequestedEvent,
 };
 use agena_plugin_sdk::PluginKey;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,7 @@ pub enum EventKind {
     CommandEnd(CommandEndEvent),
     PermissionRequested(PermissionRequestedEvent),
     PermissionReplied(PermissionRepliedEvent),
+    UserInputRequested(UserInputRequestedEvent),
     PermissionRuleCreated(PermissionRuleEvent),
     PermissionRuleUpdated(PermissionRuleEvent),
     PermissionRuleRevoked(PermissionRuleEvent),
@@ -92,6 +94,7 @@ impl EventKind {
             Self::CommandEnd(_) => "command_end",
             Self::PermissionRequested(_) => "permission_requested",
             Self::PermissionReplied(_) => "permission_replied",
+            Self::UserInputRequested(_) => "user_input_requested",
             Self::PermissionRuleCreated(_) => "permission_rule_created",
             Self::PermissionRuleUpdated(_) => "permission_rule_updated",
             Self::PermissionRuleRevoked(_) => "permission_rule_revoked",
@@ -140,6 +143,7 @@ impl EventKind {
             self,
             Self::PermissionRequested(_)
                 | Self::PermissionReplied(_)
+                | Self::UserInputRequested(_)
                 | Self::SubtaskStatusChanged(_)
                 | Self::ExecutionFinished(_)
                 | Self::BackgroundActivityChanged(_)
@@ -178,6 +182,7 @@ pub const HISTORY_KINDS: &[&str] = &[
     "message_part_checkpointed",
     "permission_requested",
     "permission_replied",
+    "user_input_requested",
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",
@@ -211,6 +216,7 @@ pub const ALL_KINDS: &[&str] = &[
     "command_end",
     "permission_requested",
     "permission_replied",
+    "user_input_requested",
     "permission_rule_created",
     "permission_rule_updated",
     "permission_rule_revoked",

@@ -324,19 +324,78 @@ impl SessionManager {
             session = self.record_hook_runs(session, hook_runs, state.clone()).await?;
         }
 
-        self.run_until_stable(
-            session,
-            &options,
-            StableRunContext {
-                base_run_source: ExecutionSource::User,
-                active_model_turn_id: Some(user_message.id),
-                state,
-                control,
-                steer_rx,
-                usage_budget,
-            },
-        )
-        .await
+        let session_id = session.id;
+        let outcome = self
+            .run_until_stable(
+                session,
+                &options,
+                StableRunContext {
+                    base_run_source: ExecutionSource::User,
+                    active_model_turn_id: Some(user_message.id),
+                    state,
+                    control,
+                    steer_rx,
+                    usage_budget,
+                },
+            )
+            .await;
+        match outcome {
+            Ok(mut session) => {
+                // Drain any hook runs the stable run left behind (for example
+                // a stop hook that fired after the final reply) and record them
+                // into the returned session so they are not left in the shared
+                // queue to be misattributed to the next submission.
+                let state = self.execution_state();
+                let hook_runs = state
+                    .tool_executor
+                    .plugin_manager()
+                    .drain_hook_runs(session.id);
+                if !hook_runs.is_empty() {
+                    session = self.record_hook_runs(session, hook_runs, state).await?;
+                }
+                Ok(session)
+            }
+            Err(err) => {
+                // The run failed; drain anything still queued and record it so
+                // the failure records stay attributed to this run instead of
+                // leaking into the next one. `record_hook_runs` consumes the
+                // session, so reload it from the store first; recording
+                // failures are swallowed to keep the original error.
+                let state = self.execution_state();
+                let hook_runs = state
+                    .tool_executor
+                    .plugin_manager()
+                    .drain_hook_runs(session_id);
+                if !hook_runs.is_empty() {
+                    match self
+                        .store
+                        .load_session(session_id, state.cache_policy())
+                        .await
+                    {
+                        Ok(reloaded) => {
+                            if let Err(record_err) = self
+                                .record_hook_runs(reloaded, hook_runs, state.clone())
+                                .await
+                            {
+                                tracing::warn!(
+                                    target: "agena::session::hook_runs",
+                                    session_id,
+                                    "failed to record hook runs after failed run: {record_err}"
+                                );
+                            }
+                        }
+                        Err(load_err) => {
+                            tracing::warn!(
+                                target: "agena::session::hook_runs",
+                                session_id,
+                                "failed to reload session to record hook runs: {load_err}"
+                            );
+                        }
+                    }
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Same execution lifecycle as an ordinary user message, with an

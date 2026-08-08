@@ -107,6 +107,7 @@ pub(crate) fn rewrite_copied_domain_ids(items: &mut [EventKind]) {
             | EventKind::CommandOutputDelta(_)
             | EventKind::CommandEnd(_)
             | EventKind::PermissionRequested(_)
+            | EventKind::UserInputRequested(_)
             | EventKind::PermissionReplied(_)
             | EventKind::PermissionRuleCreated(_)
             | EventKind::PermissionRuleUpdated(_)
@@ -219,6 +220,7 @@ pub(crate) fn visit_event_message_ids(kind: &EventKind, mut visit: impl FnMut(i6
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
         | EventKind::PermissionRequested(_)
+        | EventKind::UserInputRequested(_)
         | EventKind::PermissionReplied(_)
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
@@ -274,6 +276,7 @@ pub(crate) fn visit_event_part_ids(kind: &EventKind, mut visit: impl FnMut(i64))
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
         | EventKind::PermissionRequested(_)
+        | EventKind::UserInputRequested(_)
         | EventKind::PermissionReplied(_)
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
@@ -336,6 +339,7 @@ pub(crate) fn rewrite_event_message_ids(kind: &mut EventKind, mut f: impl FnMut(
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
         | EventKind::PermissionRequested(_)
+        | EventKind::UserInputRequested(_)
         | EventKind::PermissionReplied(_)
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
@@ -393,6 +397,7 @@ pub(crate) fn rewrite_event_part_ids(kind: &mut EventKind, mut f: impl FnMut(i64
         | EventKind::CommandOutputDelta(_)
         | EventKind::CommandEnd(_)
         | EventKind::PermissionRequested(_)
+        | EventKind::UserInputRequested(_)
         | EventKind::PermissionReplied(_)
         | EventKind::PermissionRuleCreated(_)
         | EventKind::PermissionRuleUpdated(_)
@@ -426,6 +431,7 @@ pub(crate) fn rewrite_event_session_ids(kind: &mut EventKind, session_id: i64) {
         EventKind::CommandOutputDelta(p) => p.context.session_id = session_id,
         EventKind::CommandEnd(p) => p.context.session_id = session_id,
         EventKind::PermissionRequested(p) => p.session_id = session_id,
+        EventKind::UserInputRequested(p) => p.session_id = session_id,
         EventKind::PermissionReplied(p) => p.session_id = session_id,
         EventKind::PermissionRuleCreated(p)
         | EventKind::PermissionRuleUpdated(p)

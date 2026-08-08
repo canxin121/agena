@@ -93,12 +93,12 @@ pub use panels::{
     MeasuredListPanelHeight, TextPanelSpec, TwoLineListItemSpec, build_accented_two_line_list_item,
     build_detail_two_line_list_item, build_horizontal_divider, build_two_line_list_item,
     build_vertical_divider, panel_highlight_style, render_list_panel, render_list_panel_state,
-    render_text_panel,
+    render_list_panel_with_offset, render_text_panel,
 };
 pub use question_flow::{QuestionFlowScreen, QuestionFlowState};
 pub use question_flow_dialog::{
     QuestionFlowCustomInputSpec, QuestionFlowDialogMode, QuestionFlowDialogSpec,
-    render_question_flow_dialog,
+    render_question_flow_dialog, render_question_flow_dialog_scrollable,
 };
 pub use scroll_state::ScrollState;
 pub use search_picker::{
@@ -117,9 +117,10 @@ pub use selection::{
 };
 pub use shortcut_bar::{ShortcutHint, build_shortcut_bar, build_shortcut_line};
 pub use stacked_dialog::{
-    EditorSection, ListPanelSection, ParagraphSection, StackedDialogRenderResult,
-    StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, TextPanelSection,
-    render_stacked_dialog,
+    ChoicePanelSection, EditorSection, ListPanelSection, ParagraphSection,
+    StackedDialogRenderResult, StackedDialogScrollMetrics, StackedDialogSection,
+    StackedDialogSectionHeight, StackedDialogSpec, TextPanelSection, render_stacked_dialog,
+    render_stacked_dialog_scrollable, stacked_dialog_scroll_metrics,
 };
 pub use surface::{
     ComposerEditorSurfaceSpec, ComposerStatusPlacement, ComposerSurfaceLayout,

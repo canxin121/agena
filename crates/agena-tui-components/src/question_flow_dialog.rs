@@ -2,12 +2,17 @@
 
 use std::borrow::Cow;
 
-use ratatui::{Frame, layout::Rect, text::Text, widgets::Borders};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    text::Text,
+    widgets::{Borders, ListItem},
+};
 
 use crate::{
-    Editor, EditorPanelSpec, EditorSection, ParagraphSection, StackedDialogRenderResult,
-    StackedDialogSection, StackedDialogSectionHeight, StackedDialogSpec, SurfaceMode,
-    TextPanelSection, TextPanelSpec, render_stacked_dialog,
+    ChoicePanelSection, Editor, ParagraphSection, StackedDialogRenderResult, StackedDialogSection,
+    StackedDialogSectionHeight, StackedDialogSpec, SurfaceMode, TextPanelSection, TextPanelSpec,
+    render_stacked_dialog_scrollable,
 };
 
 /// Custom input spec of the question flow dialog.
@@ -39,11 +44,12 @@ pub enum QuestionFlowDialogMode<'a> {
         summary_body: &'a Text<'a>,
         footer: &'a Text<'a>,
     },
-    Question {
+        Question {
         prompt_title: Cow<'a, str>,
         prompt_body: &'a Text<'a>,
         choices_title: Cow<'a, str>,
-        choices_body: &'a Text<'a>,
+        choices_items: &'a [ListItem<'a>],
+        choices_selected: Option<usize>,
         preview_title: Option<Cow<'a, str>>,
         preview_body: Option<&'a Text<'a>>,
         custom_input: Option<QuestionFlowCustomInputSpec<'a>>,
@@ -76,11 +82,13 @@ impl<'a> QuestionFlowDialogMode<'a> {
         }
     }
 
-    pub fn question(
+        #[allow(clippy::too_many_arguments)]
+        pub fn question(
         prompt_title: Cow<'a, str>,
         prompt_body: &'a Text<'a>,
         choices_title: Cow<'a, str>,
-        choices_body: &'a Text<'a>,
+        choices_items: &'a [ListItem<'a>],
+        choices_selected: Option<usize>,
         preview_title: Option<Cow<'a, str>>,
         preview_body: Option<&'a Text<'a>>,
         custom_input: Option<QuestionFlowCustomInputSpec<'a>>,
@@ -90,7 +98,8 @@ impl<'a> QuestionFlowDialogMode<'a> {
             prompt_title,
             prompt_body,
             choices_title,
-            choices_body,
+            choices_items,
+            choices_selected,
             preview_title,
             preview_body,
             custom_input,
@@ -126,11 +135,26 @@ impl<'a> QuestionFlowDialogSpec<'a> {
     }
 }
 
+/// Renders a question flow dialog without whole-dialog scrolling.
 pub fn render_question_flow_dialog(
     frame: &mut Frame,
     area: Rect,
     surface: SurfaceMode,
     spec: &QuestionFlowDialogSpec<'_>,
+) -> StackedDialogRenderResult {
+    render_question_flow_dialog_scrollable(frame, area, surface, spec, 0)
+}
+
+/// Renders a question flow dialog with whole-dialog vertical scrolling.
+///
+/// Short terminals can scroll (PgUp/PgDn and friends) so the choices, preview,
+/// inline custom editor, and footer are never permanently clipped.
+pub fn render_question_flow_dialog_scrollable(
+    frame: &mut Frame,
+    area: Rect,
+    surface: SurfaceMode,
+    spec: &QuestionFlowDialogSpec<'_>,
+    scroll: u16,
 ) -> StackedDialogRenderResult {
     let mut sections = Vec::new();
     if let Some(nav_body) = spec.nav_body {
@@ -186,11 +210,12 @@ pub fn render_question_flow_dialog(
                 alignment: None,
             }));
         }
-        QuestionFlowDialogMode::Question {
+                QuestionFlowDialogMode::Question {
             prompt_title,
             prompt_body,
             choices_title,
-            choices_body,
+            choices_items,
+            choices_selected,
             preview_title,
             preview_body,
             custom_input,
@@ -206,15 +231,20 @@ pub fn render_question_flow_dialog(
                     alignment: None,
                 },
             }));
-            sections.push(StackedDialogSection::TextPanel(TextPanelSection {
-                height: StackedDialogSectionHeight::AutoText { min: 4, max: 12 },
-                spec: TextPanelSpec {
-                    title: Some(choices_title.clone()),
-                    body: choices_body,
-                    wrap: true,
-                    scroll: None,
-                    alignment: None,
+            sections.push(StackedDialogSection::ChoicePanel(ChoicePanelSection {
+                height: StackedDialogSectionHeight::AutoList {
+                    lines_per_item: 2,
+                    min_body: 4,
+                    max_body: 12,
                 },
+                title: Some(choices_title.clone()),
+                items: choices_items,
+                selected: *choices_selected,
+                highlight_style: crate::theme::selection_style(),
+                highlight_symbol: Cow::Borrowed("> "),
+                inline_editor: custom_input.as_ref().map(|custom| custom.input),
+                editing: custom_input.as_ref().is_some_and(|custom| custom.editing),
+                set_cursor: custom_input.as_ref().is_some_and(|custom| custom.editing),
             }));
             if let (Some(preview_title), Some(preview_body)) =
                 (preview_title.as_ref(), preview_body.as_ref())
@@ -230,17 +260,6 @@ pub fn render_question_flow_dialog(
                     },
                 }));
             }
-            if let Some(custom_input) = custom_input.as_ref() {
-                sections.push(StackedDialogSection::EditorPanel(EditorSection {
-                    height: StackedDialogSectionHeight::AutoEditor { multiline: true },
-                    spec: EditorPanelSpec {
-                        title: Some(custom_input.title.clone()),
-                        borders: Borders::ALL,
-                    },
-                    input: custom_input.input,
-                    set_cursor: custom_input.editing,
-                }));
-            }
             sections.push(StackedDialogSection::Paragraph(ParagraphSection {
                 height: StackedDialogSectionHeight::AutoText { min: 1, max: 2 },
                 title: None,
@@ -253,7 +272,7 @@ pub fn render_question_flow_dialog(
         }
     }
 
-    render_stacked_dialog(
+        render_stacked_dialog_scrollable(
         frame,
         area,
         surface,
@@ -262,5 +281,6 @@ pub fn render_question_flow_dialog(
             target_width: spec.target_width,
             sections,
         },
+        scroll,
     )
 }

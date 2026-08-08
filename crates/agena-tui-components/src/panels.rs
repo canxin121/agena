@@ -172,6 +172,18 @@ impl<'a, H> ListPanelState<'a, H> {
 }
 
 pub fn render_list_panel(frame: &mut Frame, area: Rect, spec: &ListPanelSpec<'_>) {
+    render_list_panel_with_offset(frame, area, spec, 0)
+}
+
+/// Renders a list panel whose first visible row is `offset`. Scrollable stacked
+/// dialogs use this to keep a partially revealed panel aligned with the dialog
+/// window while its selected row stays highlighted.
+pub fn render_list_panel_with_offset(
+    frame: &mut Frame,
+    area: Rect,
+    spec: &ListPanelSpec<'_>,
+    offset: u16,
+) {
     let block = match spec.title.as_ref() {
         Some(title) => Block::default()
             .borders(Borders::ALL)
@@ -182,8 +194,9 @@ pub fn render_list_panel(frame: &mut Frame, area: Rect, spec: &ListPanelSpec<'_>
         .block(block)
         .highlight_style(spec.highlight_style)
         .highlight_symbol(spec.highlight_symbol.as_ref());
-    let mut state = empty_list_state();
-    state.select(spec.selected);
+    let mut state = empty_list_state()
+        .with_offset(usize::from(offset))
+        .with_selected(spec.selected);
     frame.render_stateful_widget(list, area, &mut state);
 }
 

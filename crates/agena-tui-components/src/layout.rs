@@ -14,7 +14,7 @@ pub enum VerticalSectionSize {
     Flexible(u16),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// Mode of a surface.
 pub enum SurfaceMode {
     Overlay,

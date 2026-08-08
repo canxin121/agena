@@ -816,7 +816,7 @@ pub fn render_overlay(
     ]);
     let prompt_body = Text::from(prompt_lines);
     let choice_width = area.width.saturating_sub(8);
-    let mut choice_lines = Vec::new();
+    let mut choice_items: Vec<ListItem<'_>> = Vec::new();
     for (index, option) in question.options.iter().enumerate() {
         let selected = index == presentation.selected_option() && !presentation.is_editing_custom();
         let style = selected.then(selection_style).unwrap_or_default();
@@ -828,15 +828,15 @@ pub fn render_overlay(
         } else {
             "( )"
         };
-        choice_lines.push(Line::from(vec![
+        let mut lines = vec![Line::from(vec![
             Span::styled(format!("{marker} "), style),
             Span::styled(
                 sanitize_display_text(option.label.as_str()),
                 style.add_modifier(Modifier::BOLD),
             ),
-        ]));
+        ])];
         if !option.description.trim().is_empty() {
-            choice_lines.push(Line::from(Span::styled(
+            lines.push(Line::from(Span::styled(
                 format!(
                     "    {}",
                     truncate_display_text(option.description.as_str(), choice_width)
@@ -848,6 +848,7 @@ pub fn render_overlay(
                 },
             )));
         }
+        choice_items.push(ListItem::new(lines));
     }
     if question.allow_custom {
         let selected = question.options.len() == presentation.selected_option()
@@ -861,19 +862,19 @@ pub fn render_overlay(
         } else {
             "( )"
         };
-        choice_lines.push(Line::from(vec![
+        let mut lines = vec![Line::from(vec![
             Span::styled(format!("{marker} "), style),
             Span::styled(
                 i18n.text("overlay-user-input-other"),
                 style.add_modifier(Modifier::BOLD),
             ),
-        ]));
+        ])];
         let values = if draft.custom_values.is_empty() {
             i18n.text("overlay-user-input-custom-empty")
         } else {
             truncate_display_text(draft.custom_values.join(", ").as_str(), choice_width)
         };
-        choice_lines.push(Line::from(Span::styled(
+        lines.push(Line::from(Span::styled(
             format!("    {values}"),
             if draft.custom_values.is_empty() {
                 if selected {
@@ -887,8 +888,8 @@ pub fn render_overlay(
                 Style::default().fg(agena_tui_components::theme::info_color())
             },
         )));
+        choice_items.push(ListItem::new(lines));
     }
-    let choices_body = Text::from(choice_lines);
     let preview = question
         .options
         .get(presentation.selected_option())
@@ -931,7 +932,8 @@ pub fn render_overlay(
                 i18n.text("overlay-user-input-prompt-panel").into(),
                 &prompt_body,
                 i18n.text("overlay-user-input-choices").into(),
-                &choices_body,
+                &choice_items,
+                Some(presentation.selected_option()),
                 preview_title.map(Into::into),
                 preview_body.as_ref(),
                 custom_input,

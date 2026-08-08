@@ -3082,18 +3082,21 @@ mod tests {
             .iter()
             .flat_map(|message| message.parts.iter().map(|part| part.id))
             .collect::<HashSet<_>>();
+        // Copy-free sharing: the rewind branch references the parent's
+        // terminal message rows instead of remapping them into physical
+        // copies, so message and part identities are preserved exactly.
         assert!(
             child
                 .messages
                 .iter()
-                .all(|message| !source_message_ids.contains(&message.id))
+                .all(|message| source_message_ids.contains(&message.id))
         );
         assert!(
             child
                 .messages
                 .iter()
                 .flat_map(|message| &message.parts)
-                .all(|part| !source_part_ids.contains(&part.id))
+                .all(|part| source_part_ids.contains(&part.id))
         );
         assert_eq!(
             child.messages[1].metadata.model_turn_id,
@@ -3104,14 +3107,28 @@ mod tests {
             Some(child.messages[0].id)
         );
 
+        // The child's own event log is only the delta. The rewind branch has
+        // no tail of its own, so the shared prefix stays in the parent's log
+        // and no message events are replayed into the branch. Read paths use
+        // the merged view, which still presents the whole conversation.
         let child_events = manager
             .store
             .list_session_events(child.id)
             .await
-            .expect("load copied child events");
-        assert!(child_events.iter().any(|event| {
+            .expect("load child delta events");
+        assert!(child_events.iter().all(|event| {
+            !matches!(event.kind, crate::event::EventKind::UserMessageAppended(_))
+        }));
+        let view_events = manager
+            .store
+            .history
+            .list_session_view_events(child.id)
+            .await
+            .expect("load merged child view events");
+        assert!(view_events.iter().any(|event| {
             matches!(event.kind, crate::event::EventKind::UserMessageAppended(_))
         }));
+        assert!(view_events.len() > child_events.len());
         assert!(child_events.iter().all(|event| match &event.kind {
             crate::event::EventKind::MessagePartCheckpointed(payload) => {
                 payload.session_id == child.id
@@ -5724,7 +5741,8 @@ mod tests {
         async fn user_prompt_submit(
             &self,
             _input: agena_plugin_host::UserPromptSubmitInput,
-        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::UserPromptSubmitPatch>> {
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::UserPromptSubmitPatch>>
+        {
             Ok(Some(agena_plugin_host::UserPromptSubmitPatch::default()))
         }
 
@@ -5748,7 +5766,8 @@ mod tests {
         async fn command_execute_before(
             &self,
             _input: agena_plugin_host::CommandBeforeInput,
-        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::CommandBeforeResponse>> {
+        ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::CommandBeforeResponse>>
+        {
             Ok(None)
         }
 

@@ -15,7 +15,10 @@
 /// `agena_user_message_idempotency` table, and the scheduler `delivery_key` /
 /// `claimed_at_ms` columns. The schema evolves in place (create-if-not-exists);
 /// older databases are rejected rather than migrated.
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+/// Version 3 adds the `agena_session_messages` membership table: a fork (or
+/// rewind branch) references the parent's terminal message rows instead of
+/// physically copying them, so `/fork` and `/side` stay cheap and compact.
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 #[cfg(test)]
 mod tests {

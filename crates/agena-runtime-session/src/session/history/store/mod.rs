@@ -11,15 +11,18 @@ use sea_orm::{
     PaginatorTrait, QueryFilter, Statement, TransactionTrait,
 };
 
+use crate::session::store::{insert_session_message_memberships, visit_event_message_ids};
 use crate::{
-    db::entities::{model_message, model_message_part, model_projection_state},
+    db::entities::{
+        model_message, model_message_part, model_projection_state, session, session_lineage,
+    },
     event::{DomainEvent, EventKind, EventPublisher, MessagePartCheckpointedEvent, PublishContext},
     message::{Message, MessagePart, PartContent},
     session::SessionRuntimeState,
 };
 use agena_storage::{
     ModelMessageHeaderRecord, ModelMessagePartRecord, ModelMessagePartWrite,
-    ModelMessageRepository, ModelMessageTransactionWriter, StoreRange,
+    ModelMessageRepository, ModelMessageTransactionWriter, ReverseStoreRange, StoreRange,
 };
 #[cfg(test)]
 use agena_storage_sqlite::StoredRole;
@@ -254,6 +257,107 @@ impl SessionHistoryStore {
         self.list_session_events_after(session_id, 0).await
     }
 
+    /// Full history for a session's view, oldest first.
+    ///
+    /// Forked (and rewind) sessions share their parent's terminal history by
+    /// reference through `agena_session_messages`, so the child's own event
+    /// log is only the delta. This method merges the parent's events up to
+    /// the fork cutoff with the child's own events so read paths (export,
+    /// timeline) keep seeing the whole conversation without a physical copy.
+    pub(crate) async fn list_session_view_events(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<DomainEvent>, DbErr> {
+        let own = self.list_session_events(session_id).await?;
+        let Some((parent_session_id, cutoff_seq)) = self.fork_source_cutoff(session_id).await?
+        else {
+            return Ok(own);
+        };
+        let mut view = self
+            .list_session_events_before(parent_session_id, cutoff_seq, None)
+            .await?;
+        view.extend(own);
+        view.sort_by_key(|event| event.meta.seq_global);
+        Ok(view)
+    }
+
+    /// If `session_id` is a fork/rewind branch of another session, the parent
+    /// session id and the last parent event sequence included in the branch's
+    /// shared history. Other relations (root, child, subagent) have no shared
+    /// prefix.
+    pub(crate) async fn fork_source_cutoff(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<(i64, i64)>, DbErr> {
+        let Some(lineage) = session_lineage::Entity::find_by_id(session_id)
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !matches!(lineage.relation_kind.as_str(), "fork" | "rewind") {
+            return Ok(None);
+        }
+        let Some(cutoff_seq) = lineage.source_cutoff_seq_global else {
+            return Ok(None);
+        };
+        let Some(model) = session::Entity::find_by_id(session_id)
+            .one(&self.db)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let Some(parent_id) = model.parent_id else {
+            return Ok(None);
+        };
+        Ok(Some((parent_id, cutoff_seq)))
+    }
+
+    /// Events for `session_id` with `seq_global <= cutoff_seq`, oldest first.
+    /// With `limit`, only the newest `limit` qualifying events are returned
+    /// (still oldest-first).
+    pub(crate) async fn list_session_events_before(
+        &self,
+        session_id: i64,
+        cutoff_seq: i64,
+        limit: Option<usize>,
+    ) -> Result<Vec<DomainEvent>, DbErr> {
+        let filter = EventFilter::new(EventScope::Session { session_id });
+        let mut events = Vec::new();
+        let mut cursor = cutoff_seq + 1;
+        loop {
+            let remaining = limit.map(|limit| limit.saturating_sub(events.len()));
+            if remaining == Some(0) {
+                break;
+            }
+            let chunk = self
+                .publisher
+                .store()
+                .range_before(
+                    &filter,
+                    ReverseStoreRange {
+                        before_seq_global: Some(cursor),
+                        limit: remaining.unwrap_or(1024),
+                    },
+                )
+                .await
+                .map_err(|err| DbErr::Custom(format!("event store range_before failed: {err}")))?;
+            if chunk.is_empty() {
+                break;
+            }
+            cursor = chunk
+                .last()
+                .map(|event| event.meta.seq_global)
+                .unwrap_or(cursor);
+            events.extend(chunk);
+            if limit.is_some_and(|limit| events.len() >= limit) {
+                break;
+            }
+        }
+        events.reverse();
+        Ok(events)
+    }
+
     async fn list_session_events_after(
         &self,
         session_id: i64,
@@ -474,6 +578,32 @@ impl SessionHistoryStore {
             .await?;
         apply_projection_events_on_connection(&txn, &part_writer, session_id, events.as_slice())
             .await?;
+        // Forked/rewind branches reference the parent's terminal messages
+        // instead of owning copies. The clear above dropped those membership
+        // edges, so restore them from the fork's shared prefix so the rebuilt
+        // projection keeps showing the whole conversation.
+        if let Some((parent_session_id, cutoff_seq)) = self.fork_source_cutoff(session_id).await? {
+            let parent_events = self
+                .list_session_events_before(parent_session_id, cutoff_seq, None)
+                .await?;
+            let mut shared_ids = Vec::new();
+            for event in &parent_events {
+                visit_event_message_ids(&event.kind, |id| {
+                    if id > 0 && !shared_ids.contains(&id) {
+                        shared_ids.push(id);
+                    }
+                });
+            }
+            if !shared_ids.is_empty() {
+                insert_session_message_memberships(&txn, session_id, &shared_ids)
+                    .await
+                    .map_err(|error| {
+                        DbErr::Custom(format!(
+                            "insert session message memberships failed: {error}"
+                        ))
+                    })?;
+            }
+        }
         txn.commit().await?;
         Ok(())
     }

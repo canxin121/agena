@@ -779,13 +779,76 @@ impl SessionStore {
         &self,
         source_session_id: i64,
         title: String,
-        mut items: Vec<EventKind>,
+        items: Vec<EventKind>,
         mut source_prompt_window: crate::session::PromptWindowRuntime,
         lineage: session::SessionLineageInput,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        let message_id_map = self.remap_copied_history_ids(&mut items).await?;
-        if !remap_prompt_window_for_fork(&mut source_prompt_window, &message_id_map) {
+        // Copy-free fork: every event of a completed run (a run with its own
+        // RunCompleted/RunAborted) is shared by reference through
+        // `agena_session_messages`; terminal message rows are immutable once
+        // their run finishes. Only an in-flight run's events are physically
+        // copied; the parent keeps mutating them after the fork. Trailing
+        // lifecycle bookkeeping of the last completed run (for example
+        // ExecutionFinished) stays in the parent too: replaying it in the
+        // child would reference an execution whose start lives in the shared
+        // prefix.
+        let mut completed_executions = std::collections::HashSet::new();
+        {
+            let mut run_start_by_run = std::collections::HashMap::new();
+            for item in &items {
+                match item {
+                    EventKind::RunStarted(payload) => {
+                        run_start_by_run.insert(payload.run_id, payload.execution_id);
+                    }
+                    EventKind::RunCompleted(payload) => {
+                        if let Some(execution_id) = run_start_by_run.get(&payload.run_id) {
+                            completed_executions.insert(*execution_id);
+                        }
+                    }
+                    EventKind::RunAborted(payload) => {
+                        if let Some(execution_id) = run_start_by_run.get(&payload.run_id) {
+                            completed_executions.insert(*execution_id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let tail_start = items
+            .iter()
+            .position(|item| {
+                let execution_id = match item {
+                    EventKind::ExecutionStarted(payload) => Some(payload.execution_id),
+                    EventKind::RunStarted(payload) => Some(payload.execution_id),
+                    EventKind::ExecutionFinished(payload) => Some(payload.execution_id),
+                    EventKind::UserMessageAppended(payload) => Some(payload.execution_id),
+                    EventKind::AssistantMessageFinished(payload) => Some(payload.execution_id),
+                    EventKind::CompactionCompleted(payload) => Some(payload.execution_id),
+                    EventKind::MessagePartCheckpointed(payload) => payload.execution_id,
+                    _ => None,
+                };
+                execution_id.is_some_and(|id| !completed_executions.contains(&id))
+            })
+            .unwrap_or(items.len());
+        let share_items = &items[..tail_start];
+        let mut tail_items = items[tail_start..].to_vec();
+
+        // The shared prefix keeps its message ids; the copied tail gets fresh
+        // storage ids and fresh domain identities.
+        let mut id_map = if tail_items.is_empty() {
+            BTreeMap::new()
+        } else {
+            self.remap_copied_history_ids(&mut tail_items).await?
+        };
+        for item in share_items {
+            visit_event_message_ids(item, |id| {
+                if id > 0 {
+                    id_map.insert(id, id);
+                }
+            });
+        }
+        if !remap_prompt_window_for_fork(&mut source_prompt_window, &id_map) {
             source_prompt_window.compaction = None;
         }
 
@@ -800,18 +863,46 @@ impl SessionStore {
             )
             .await?;
         let child_id = child.id;
-        for item in &mut items {
+
+        // Share the terminal prefix by referencing the parent's message rows.
+        let mut share_message_ids = Vec::new();
+        for item in share_items {
+            visit_event_message_ids(item, |id| {
+                if id > 0 && !share_message_ids.contains(&id) {
+                    share_message_ids.push(id);
+                }
+            });
+        }
+        if !share_message_ids.is_empty() {
+            insert_session_message_memberships(&self.db, child_id, &share_message_ids).await?;
+        }
+
+        for item in &mut tail_items {
             rewrite_event_session_ids(item, child.id);
         }
         // Silent: subscribers should not observe copied history as fresh
         // activity. Storage ids must already be remapped at this boundary so
         // projection upserts cannot steal the source session's rows.
         let build_result = async {
-            let child = self
-                .append_history_items_silent(child, items, cache_policy)
+            let mut child = self
+                .append_history_items_silent(child, tail_items, cache_policy)
                 .await?;
-            self.inherit_prompt_window_on_fork(child, source_prompt_window, cache_policy)
-                .await
+            // An empty tail skips the append path's projection load, so
+            // materialize the shared memberships into the session's
+            // transcript explicitly.
+            let projection = self
+                .history
+                .load_projection(child.id, child.runtime.clone())
+                .await?;
+            child.install_projected_messages(projection.messages);
+            child.runtime = projection.runtime;
+            self.inherit_prompt_window_on_fork(
+                child,
+                source_prompt_window,
+                &share_message_ids,
+                cache_policy,
+            )
+            .await
         }
         .await;
 
@@ -914,7 +1005,7 @@ impl SessionStore {
         let model = session::get_session_by_id(&self.db, session_id)
             .await?
             .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
-        let events = self.history.list_session_events(session_id).await?;
+        let events = self.history.list_session_view_events(session_id).await?;
         let meta = SessionExportMeta {
             source_session_id: model.id,
             title: model.title.clone(),
@@ -1069,17 +1160,22 @@ impl SessionStore {
         &self,
         mut child: Session,
         source_prompt_window: crate::session::PromptWindowRuntime,
+        shared_message_ids: &[i64],
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
+        // The compaction checkpoint may live in the shared prefix (which is
+        // not loaded into the child's in-memory messages), so check both the
+        // shared ids and the copied tail.
         let checkpoint_retained =
             source_prompt_window
                 .compaction
                 .as_ref()
                 .is_some_and(|checkpoint| {
-                    child
-                        .messages
-                        .iter()
-                        .any(|message| message.id == checkpoint.compacted_through_message_id)
+                    shared_message_ids.contains(&checkpoint.compacted_through_message_id)
+                        || child
+                            .messages
+                            .iter()
+                            .any(|message| message.id == checkpoint.compacted_through_message_id)
                 });
         if !checkpoint_retained {
             return Ok(child);
@@ -1100,6 +1196,42 @@ impl SessionStore {
         )
         .await
     }
+}
+
+/// Reference the given message rows as visible in `session_id`'s view.
+/// Forked sessions use this instead of physically copying terminal history,
+/// so `/fork` and `/side` stay cheap and compact.
+pub(crate) async fn insert_session_message_memberships<C>(
+    db: &C,
+    session_id: i64,
+    message_ids: &[i64],
+) -> Result<(), AppError>
+where
+    C: sea_orm::ConnectionTrait,
+{
+    for chunk in message_ids.chunks(400) {
+        let placeholders = std::iter::repeat_n("(?, ?)", chunk.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "INSERT OR IGNORE INTO agena_session_messages (session_id, message_id) VALUES {placeholders}"
+        );
+        let mut values: Vec<sea_orm::Value> = Vec::with_capacity(chunk.len() * 2);
+        for message_id in chunk {
+            values.push(session_id.into());
+            values.push((*message_id).into());
+        }
+        db.execute(sea_orm::Statement::from_sql_and_values(
+            db.get_database_backend(),
+            sql,
+            values,
+        ))
+        .await
+        .map_err(|error| {
+            AppError::Internal(format!("insert session message memberships: {error}"))
+        })?;
+    }
+    Ok(())
 }
 
 fn remap_prompt_window_for_fork(

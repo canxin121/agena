@@ -125,6 +125,7 @@ mod workspace;
 
 pub(crate) use self::activity_v2::*;
 pub(crate) use self::core::LEASE_STALENESS_MS;
+pub(crate) use self::core::insert_session_message_memberships;
 pub(crate) use self::event_rewrite::*;
 pub(crate) use self::helpers::*;
 pub(crate) use self::types::*;

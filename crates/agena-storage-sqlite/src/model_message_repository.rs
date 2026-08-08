@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use crate::{StoredExecutionStatus, StoredPartKind, StoredRole};
 
 const TABLE: &str = "agena_model_messages";
-const COLUMNS: &str = "message_id, model_turn_id, role, state, created_at_ms, metadata, provider_state, usage, part_count";
+/// Qualified column list for reads that join `agena_session_messages`, where
+/// bare column names would be ambiguous.
+const COLUMNS_M: &str = "m.message_id, m.model_turn_id, m.role, m.state, m.created_at_ms, m.metadata, m.provider_state, m.usage, m.part_count";
 const PART_TABLE: &str = "agena_model_message_parts";
 const PART_COLUMNS: &str = "part_id, message_id, part_index, status, kind, name, summary, has_detail, awaits_user_reply, activity_id, segment_id, operation_id, created_at_ms, content";
 /// Header-only column list: collapsed queries must never read the large
@@ -136,9 +138,23 @@ impl SeaModelMessageTransactionWriter {
             ))
             .await
             .map_err(map_error)?;
+        // Drop the session's own view first, then delete only message rows no
+        // longer referenced by any other session. Forked views keep sharing
+        // the parent's terminal messages, so a projection rebuild must not
+        // destroy rows other sessions still reference.
         transaction
             .execute(statement(
-                format!("DELETE FROM {TABLE} WHERE session_id = ?"),
+                "DELETE FROM agena_session_messages WHERE session_id = ?".to_owned(),
+                [session_id.into()],
+            ))
+            .await
+            .map_err(map_error)?;
+        transaction
+            .execute(statement(
+                format!(
+                    "DELETE FROM {TABLE} WHERE session_id = ? AND message_id NOT IN \
+                     (SELECT message_id FROM agena_session_messages)"
+                ),
                 [session_id.into()],
             ))
             .await
@@ -261,6 +277,18 @@ impl SeaModelMessageTransactionWriter {
                 message.message_id
             )));
         }
+        // The message is now visible in its owning session's view. Forked
+        // sessions reference the same row through `agena_session_messages`
+        // (copy-free history sharing), so every projection write records the
+        // ownership edge exactly once.
+        transaction
+            .execute(statement(
+                "INSERT OR IGNORE INTO agena_session_messages (session_id, message_id) VALUES (?, ?)"
+                    .to_owned(),
+                [message.session_id.into(), message.message_id.into()],
+            ))
+            .await
+            .map_err(map_error)?;
         Ok(())
     }
 
@@ -469,7 +497,9 @@ impl ModelMessageRepository for SeaModelMessageRepository {
         self.db
             .query_all(statement(
                 format!(
-                    "SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ? ORDER BY created_at_ms ASC, message_id ASC"
+                    "SELECT {COLUMNS_M} FROM {TABLE} m \
+                     JOIN agena_session_messages sm ON sm.message_id = m.message_id \
+                     WHERE sm.session_id = ? ORDER BY m.created_at_ms ASC, m.message_id ASC"
                 ),
                 [session_id.into()],
             ))
@@ -495,17 +525,23 @@ impl ModelMessageRepository for SeaModelMessageRepository {
         let fetch_limit = limit.checked_add(1).ok_or_else(|| {
             ModelMessageRepositoryError::Backend("message page limit overflow".to_owned())
         })?;
-        let mut sql = format!("SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ?");
+        let mut sql = format!(
+            "SELECT {COLUMNS_M} FROM {TABLE} m \
+             JOIN agena_session_messages sm ON sm.message_id = m.message_id \
+             WHERE sm.session_id = ?"
+        );
         let mut values = vec![session_id.into()];
         if let Some((created_at_ms, message_id)) = cursor {
-            sql.push_str(" AND (created_at_ms < ? OR (created_at_ms = ? AND message_id < ?))");
+            sql.push_str(
+                " AND (m.created_at_ms < ? OR (m.created_at_ms = ? AND m.message_id < ?))",
+            );
             values.extend([
                 created_at_ms.into(),
                 created_at_ms.into(),
                 message_id.into(),
             ]);
         }
-        sql.push_str(" ORDER BY created_at_ms DESC, message_id DESC LIMIT ?");
+        sql.push_str(" ORDER BY m.created_at_ms DESC, m.message_id DESC LIMIT ?");
         values.push(fetch_limit.into());
         let mut records = self
             .db
@@ -534,7 +570,9 @@ impl ModelMessageRepository for SeaModelMessageRepository {
         self.db
             .query_one(statement(
                 format!(
-                    "SELECT {COLUMNS} FROM {TABLE} WHERE session_id = ? AND message_id = ? LIMIT 1"
+                    "SELECT {COLUMNS_M} FROM {TABLE} m \
+                     JOIN agena_session_messages sm ON sm.message_id = m.message_id \
+                     WHERE sm.session_id = ? AND m.message_id = ? LIMIT 1"
                 ),
                 [session_id.into(), message_id.into()],
             ))
@@ -664,12 +702,25 @@ mod tests {
             .expect("in-memory database");
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
+            "CREATE TABLE agena_session_messages (session_id INTEGER NOT NULL, message_id INTEGER NOT NULL, PRIMARY KEY (session_id, message_id))".to_owned(),
+        ))
+        .await
+        .expect("create membership fixture");
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
             format!(
                 "CREATE TABLE {TABLE} (message_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, model_turn_id INTEGER NULL, role INTEGER NOT NULL, state INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, metadata JSON NOT NULL, provider_state JSON NULL, usage JSON NULL, part_count INTEGER NOT NULL)"
             ),
         ))
         .await
         .expect("create projection fixture");
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO agena_session_messages (session_id, message_id) VALUES (7, 11), (7, 12)"
+                .to_owned(),
+        ))
+        .await
+        .expect("seed membership fixture");
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(
@@ -813,6 +864,12 @@ mod tests {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("in-memory database");
+        db.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "CREATE TABLE agena_session_messages (session_id INTEGER NOT NULL, message_id INTEGER NOT NULL, PRIMARY KEY (session_id, message_id))".to_owned(),
+        ))
+        .await
+        .expect("create membership fixture");
         db.execute(Statement::from_string(
             DatabaseBackend::Sqlite,
             format!(

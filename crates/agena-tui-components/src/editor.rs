@@ -1265,7 +1265,13 @@ fn slice_display_window_styled(
 /// editor applies the same policy at every mutation entry point (typing,
 /// paste, history recall, attachment insertion) so the stored buffer is
 /// always exactly what is rendered and measured.
-fn sanitize_editor_text(text: &str) -> String {
+///
+/// Public so composer code can sanitize generated placeholders with the same
+/// policy before storing them as composer-item placeholders; otherwise an
+/// i18n placeholder that carries characters the editor strips (for example
+/// Unicode bidi isolation marks around interpolated variables) would never
+/// match the editor element text and the attachment would be dropped.
+pub fn sanitize_editor_text(text: &str) -> String {
     let stripped = strip_ansi_sequences(text);
     let mut out = String::with_capacity(stripped.len());
     for ch in stripped.chars() {

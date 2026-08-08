@@ -223,23 +223,9 @@ impl App {
     }
 
     pub(crate) fn sync_composer_items_with_editor(&mut self) {
-        let mut by_placeholder = std::mem::take(&mut self.composer_items)
-            .into_iter()
-            .map(|item| (item.placeholder().to_string(), item))
-            .collect::<BTreeMap<_, _>>();
-
-        let mut synced = Vec::new();
-        for placeholder in self.composer.element_texts() {
-            if let Some(item) = by_placeholder.remove(placeholder.as_str()) {
-                synced.push(item);
-            }
-        }
-
-        for (_, item) in by_placeholder {
-            cleanup_temporary_composer_item(&item);
-        }
-
-        self.composer_items = synced;
+        let items = std::mem::take(&mut self.composer_items);
+        self.composer_items =
+            sync_composer_items_with_editor_texts(&self.composer.element_texts(), items);
     }
 
     pub(crate) fn current_draft_slot(&self) -> DraftSlot {
@@ -567,6 +553,34 @@ impl App {
     }
 }
 
+/// Keep only the composer items whose placeholder still exists as an editor
+/// element. Items whose placeholder was deleted or edited away are removed so
+/// their activity cannot leak a stale reference into the submitted document;
+/// the placeholder then degrades to ordinary body text, which is the
+/// user-visible signal that the attachment was removed.
+pub(crate) fn sync_composer_items_with_editor_texts(
+    element_texts: &[String],
+    items: Vec<ComposerItem>,
+) -> Vec<ComposerItem> {
+    let mut by_placeholder = items
+        .into_iter()
+        .map(|item| (item.placeholder().to_string(), item))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut synced = Vec::new();
+    for placeholder in element_texts {
+        if let Some(item) = by_placeholder.remove(placeholder.as_str()) {
+            synced.push(item);
+        }
+    }
+
+    for (_, item) in by_placeholder {
+        cleanup_temporary_composer_item(&item);
+    }
+
+    synced
+}
+
 fn text_artifact_composer_activity(text: String) -> agena_domain::ComposerActivity {
     let count = text.chars().count();
     let label = format!("paste {count} chars");
@@ -647,14 +661,23 @@ fn rebuild_placeholders(
 
 /// Pick `base` unless it is already taken, then `stem #2]`, `stem #3]`, …
 /// matching `make_unique_composer_placeholder`'s suffix scheme.
+///
+/// The base is sanitized exactly like the editor sanitizes inserted text
+/// (`sanitize_editor_text` strips ANSI escapes, control characters, tabs and
+/// Unicode bidi isolation marks). i18n placeholders such as the zh-CN
+/// `attachment-placeholder` wrap their interpolated variables in U+2068/U+2069
+/// isolation marks, so without this step the stored item placeholder would
+/// never equal the editor element text and `sync_composer_items_with_editor`
+/// would drop the attachment, leaking the literal placeholder into the body.
 fn unique_composer_placeholder_text(
     base: &str,
     used: &mut std::collections::HashSet<String>,
 ) -> String {
-    if used.insert(base.to_owned()) {
-        return base.to_owned();
+    let base = sanitize_editor_text(base);
+    if used.insert(base.clone()) {
+        return base;
     }
-    let stem = base.strip_suffix(']').unwrap_or(base);
+    let stem = base.strip_suffix(']').unwrap_or(&base);
     for index in 2.. {
         let candidate = if base.ends_with(']') {
             format!("{stem} #{index}]")
@@ -674,10 +697,13 @@ mod tests {
         ActivityId, ActivityPayload, ComposerActivity, ComposerDocument, ComposerNode,
         ResourceActivity, ResourceKind, ResourceReference, SkillReferenceActivity,
     };
+    use agena_tui::i18n::I18n;
+    use agena_tui_components::Editor;
 
     use super::{
-        ComposerItem, composer_document_from_editor, rebuild_placeholders,
-        text_artifact_composer_activity,
+        AttachmentKind, ComposerItem, attachment_placeholder_base, composer_document_from_editor,
+        rebuild_placeholders, sync_composer_items_with_editor_texts,
+        text_artifact_composer_activity, unique_composer_placeholder_text,
     };
 
     #[test]
@@ -826,6 +852,85 @@ mod tests {
         );
         assert_eq!(json.matches("x".repeat(1_000).as_str()).count(), 2);
     }
+
+    #[test]
+    fn zh_cn_file_attachment_survives_editor_sync_and_builds_activity_document() {
+        let i18n = I18n::resolve(Some("zh-CN"), None);
+        // The zh-CN attachment-placeholder wraps its interpolated variables in
+        // Unicode bidi isolation marks (U+2068/U+2069); the editor strips those
+        // marks on insert, so the unique placeholder must be computed from the
+        // sanitized base or the composer item would never match the editor
+        // element and the attachment would degrade to literal body text.
+        let base = attachment_placeholder_base(
+            &i18n,
+            std::path::Path::new("LICENSE"),
+            AttachmentKind::File,
+            false,
+        );
+        assert!(
+            base.contains('\u{2068}'),
+            "i18n placeholders carry bidi marks"
+        );
+        let placeholder =
+            unique_composer_placeholder_text(&base, &mut std::collections::HashSet::new());
+        assert_eq!(placeholder, "[文件 LICENSE]");
+
+        // The editor flow that stage_resource performs when the user attaches
+        // a file, followed by typing a body after the placeholder.
+        let mut editor = Editor::default();
+        editor.insert_element(placeholder.as_str());
+        editor.insert_str(" aaa");
+        assert_eq!(editor.text(), "[文件 LICENSE] aaa");
+        assert_eq!(editor.element_texts(), vec![placeholder.clone()]);
+
+        let item = ComposerItem {
+            placeholder: placeholder.clone(),
+            label: "文件: LICENSE".to_owned(),
+            activity: ComposerActivity {
+                id: ActivityId::new(),
+                payload: ActivityPayload::Resource(ResourceActivity {
+                    kind: ResourceKind::File,
+                    reference: ResourceReference::WorkspacePath {
+                        path: "LICENSE".to_owned(),
+                    },
+                    name: "LICENSE".to_owned(),
+                    media_type: None,
+                    size_bytes: None,
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                }),
+                provenance: Default::default(),
+            },
+        };
+
+        // submit_composer → current_composer_draft syncs items against the
+        // editor elements; the zh-CN placeholder must match exactly so the
+        // Resource activity survives into the submitted document.
+        let synced = sync_composer_items_with_editor_texts(&editor.element_texts(), vec![item]);
+        assert_eq!(synced.len(), 1);
+
+        let document = composer_document_from_editor(
+            editor.text(),
+            editor.draft_elements().as_slice(),
+            synced.as_slice(),
+        );
+        assert!(matches!(
+            &document.0[0],
+            ComposerNode::Activity { activity }
+                if matches!(
+                    &activity.payload,
+                    ActivityPayload::Resource(ResourceActivity { name, .. }) if name == "LICENSE"
+                )
+        ));
+        assert!(matches!(&document.0[1], ComposerNode::Text { text } if text == " aaa"));
+        assert_eq!(document.text(), " aaa");
+        assert!(
+            !document.text().contains("[文件 LICENSE]"),
+            "the placeholder must never leak into the submitted body text"
+        );
+    }
 }
 
 use crate::Result;
@@ -839,3 +944,4 @@ use crate::{
 };
 use agena_tui::main_focus::Focus;
 use agena_tui::terminal_lifecycle::SuspendReason;
+use agena_tui_components::sanitize_editor_text;

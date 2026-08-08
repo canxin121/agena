@@ -59,7 +59,7 @@ pub use detail_text::{
     DetailDocument, DetailTextLine, DetailTextSpec, build_detail_document, build_detail_text,
     build_detail_text_plain, detail_row_display_text,
 };
-pub use editor::{Editor, EditorView};
+pub use editor::{Editor, EditorView, sanitize_editor_text};
 pub use editor_dialog::{
     EditorDialogSpec, render_editor_dialog, render_overlay_line_input_dialog,
     render_workbench_editor_dialog,

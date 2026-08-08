@@ -116,14 +116,15 @@ pub fn render_entry_detailed(
                     .iter()
                     .filter(|part| is_activity_node(part))
                     .collect::<Vec<_>>();
-                // Session notices stay visible inside a collapsed run: only
-                // the surrounding activity blocks count toward the fold, so a
-                // mid-reply hook notice never splits one run into several
-                // fold blocks and never gets hidden itself.
-                let foldable_count = activities
-                    .iter()
-                    .filter(|part| !is_always_visible_activity(part))
-                    .count();
+                // Every activity folds uniformly, exactly like a consecutive
+                // tool-call block: when the run exceeds the visible budget the
+                // oldest activities collapse into one marker row and the newest
+                // `COLLAPSED_ACTIVITY_VISIBLE_COUNT` stay visible. Session
+                // notices injected mid-reply (hook runs, background notices)
+                // are no exception — a long run of hook rows would otherwise
+                // pile up without ever folding. The run still groups them with
+                // the surrounding tool calls, so the whole block folds as one.
+                let foldable_count = activities.len();
                 let collapsed_prefix_len =
                     foldable_count.saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT);
                 let key = TranscriptNodeKey::ActivitySummary {
@@ -134,14 +135,10 @@ pub fn render_entry_detailed(
                 // An Activity the user can currently see as expanded is
                 // pinned within the run. Appending newer Activities may fold
                 // untouched older siblings, but it must never hide that node.
-                let mut foldable_index = 0_usize;
                 let hidden_when_collapsed = activities
                     .iter()
                     .enumerate()
-                    .map(|(_, part)| {
-                        if is_always_visible_activity(part) {
-                            return false;
-                        }
+                    .map(|(foldable_index, part)| {
                         let activity_key = TranscriptNodeKey::Activity {
                             entry_id: message.id,
                             content_id: part.id,
@@ -150,9 +147,7 @@ pub fn render_entry_detailed(
                             .get(&activity_key)
                             .copied()
                             .unwrap_or(defaults.activity_expanded);
-                        let hidden = foldable_index < collapsed_prefix_len && !activity_expanded;
-                        foldable_index += 1;
-                        hidden
+                        foldable_index < collapsed_prefix_len && !activity_expanded
                     })
                     .collect::<Vec<_>>();
                 let hidden_count = hidden_when_collapsed
@@ -647,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn session_notice_stays_visible_within_single_folded_tool_run() {
+    fn session_notice_folds_as_one_block_with_the_tool_run() {
         let now = Utc::now();
         let mut parts = (0..7)
             .map(|index| {
@@ -661,8 +656,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         // A session Notice injected mid-reply (hook run, background notice)
-        // must stay visible without splitting the surrounding tool calls
-        // into several fold blocks.
+        // belongs to the same foldable run as the surrounding tool calls and
+        // folds like any other older activity block.
         let notice_payload = agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
             kind: "hook".to_owned(),
             summary: "mid-reply hook fired".to_owned(),
@@ -709,10 +704,12 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        // The nine tool calls fold as one block to five visible ones (the
-        // oldest four are hidden); the notice stays visible in place.
+        // Ten activities fold as one block to the newest five: the oldest
+        // five are hidden, the hook (index 7) falls inside the newest five so
+        // it renders at its chronological position, and the newest tool
+        // calls remain on screen. No activity kind is exempt from the fold.
         assert!(text.contains("Hook · mid-reply hook fired"), "{text}");
-        assert!(text.contains("4 older activity blocks collapsed"), "{text}");
+        assert!(text.contains("5 older activity blocks collapsed"), "{text}");
         let notice_line = rendered
             .lines
             .iter()
@@ -721,7 +718,8 @@ mod tests {
             .expect("notice line");
         assert!(notice_line.contains(':'), "{notice_line}");
         assert!(!text.contains("Read file 1"), "{text}");
-        assert!(text.contains("Read file 4"), "{text}");
+        assert!(!text.contains("Read file 4"), "{text}");
+        assert!(text.contains("Read file 5"), "{text}");
         assert_eq!(
             rendered
                 .nodes
@@ -738,6 +736,77 @@ mod tests {
                     content_id: TranscriptContentId::StoredPart(200),
                 }),
             "injected session notice must render as its own Activity node"
+        );
+    }
+
+    #[test]
+    fn many_hook_notices_fold_keeping_the_newest_five_visible() {
+        let now = Utc::now();
+        let payloads = (0..9)
+            .map(|index| {
+                agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
+                    kind: "hook".to_owned(),
+                    summary: format!("hook run {index}"),
+                    detail: Some(format!("detail {index}")),
+                    occurred_at_ms: Some(1_700_000_000_000 + index),
+                    title: None,
+                })
+            })
+            .collect::<Vec<_>>();
+        let parts = payloads
+            .iter()
+            .enumerate()
+            .map(|(index, payload)| {
+                TranscriptFixture::canonical_activity(
+                    300 + index as i64,
+                    7,
+                    now,
+                    ExecutionStatus::Completed,
+                    payload,
+                )
+            })
+            .collect::<Vec<_>>();
+        let message = entry(
+            7,
+            agena_api::resource::MessageRole::Assistant,
+            MessageStatus::Completed,
+            now,
+            parts,
+        );
+
+        let rendered = render_entry_detailed(
+            &message,
+            80,
+            &I18n::english(),
+            TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // A long run of session hook rows must fold exactly like tool calls:
+        // the oldest four collapse into one marker row and the newest five
+        // stay visible instead of piling up.
+        assert!(text.contains("4 older activity blocks collapsed"), "{text}");
+        assert!(!text.contains("hook run 0"), "{text}");
+        assert!(!text.contains("hook run 1"), "{text}");
+        assert!(!text.contains("hook run 2"), "{text}");
+        assert!(!text.contains("hook run 3"), "{text}");
+        assert!(text.contains("hook run 4"), "{text}");
+        assert!(text.contains("hook run 8"), "{text}");
+        assert_eq!(
+            rendered
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+                .count(),
+            1,
+            "the hook rows must fold as a single block"
         );
     }
 

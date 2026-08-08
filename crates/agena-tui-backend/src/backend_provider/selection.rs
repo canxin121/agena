@@ -897,11 +897,15 @@ mod tests {
 
     #[test]
     fn default_thinking_selector_prefers_the_marked_default_mode() {
-        let mut second = agena_domain::ModelThinkingMode::default();
-        second.preset = Some("balanced".to_owned());
-        let mut default = agena_domain::ModelThinkingMode::default();
-        default.is_default = true;
-        default.preset = Some("high".to_owned());
+        let second = agena_domain::ModelThinkingMode {
+            preset: Some("balanced".to_owned()),
+            ..Default::default()
+        };
+        let default = agena_domain::ModelThinkingMode {
+            is_default: true,
+            preset: Some("high".to_owned()),
+            ..Default::default()
+        };
 
         assert_eq!(
             default_thinking_mode_selector(&[second, default]).as_deref(),
@@ -911,10 +915,14 @@ mod tests {
 
     #[test]
     fn default_thinking_selector_falls_back_to_the_first_mode_when_none_is_default() {
-        let mut first = agena_domain::ModelThinkingMode::default();
-        first.preset = Some("high".to_owned());
-        let mut second = agena_domain::ModelThinkingMode::default();
-        second.preset = Some("max".to_owned());
+        let first = agena_domain::ModelThinkingMode {
+            preset: Some("high".to_owned()),
+            ..Default::default()
+        };
+        let second = agena_domain::ModelThinkingMode {
+            preset: Some("max".to_owned()),
+            ..Default::default()
+        };
 
         assert_eq!(
             default_thinking_mode_selector(&[first, second]).as_deref(),
@@ -929,8 +937,10 @@ mod tests {
 
     #[test]
     fn default_speed_name_prefers_the_marked_default_then_falls_back_to_the_first() {
-        let mut default = agena_domain::ModelSpeedMode::default();
-        default.is_default = true;
+        let default = agena_domain::ModelSpeedMode {
+            is_default: true,
+            ..Default::default()
+        };
         let mut modes = BTreeMap::new();
         modes.insert("fast".to_owned(), agena_domain::ModelSpeedMode::default());
         modes.insert("balanced".to_owned(), default);

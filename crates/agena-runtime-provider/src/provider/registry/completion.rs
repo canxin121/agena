@@ -1147,8 +1147,8 @@ impl ProviderRegistry {
                                     _ => {
                                         if replay_structural_cursor
                                             < replay_structural_indices.len()
-                                            && &event
-                                                == &emitted_history[replay_structural_indices
+                                            && event
+                                                == emitted_history[replay_structural_indices
                                                     [replay_structural_cursor]]
                                         {
                                             replay_structural_cursor += 1;

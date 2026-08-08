@@ -398,11 +398,11 @@ use super::{
     Application, ApplicationError, CancelRunParams, Command, CommandResult, CompactSessionParams,
     ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
     DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams,
-    ForkSessionParams, ImportSessionParams, ListSessionTreeParams, PermissionRuleWriteRequest,
-    MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams, ReplyPermissionParams,
-    ReplyUserInputParams,
-    ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, StopActivityParams,
-    SubmitMessageParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
+    ForkSessionParams, ImportSessionParams, ListSessionTreeParams,
+    MarkInteractiveRequestPresentedParams, PermissionRuleWriteRequest, ReplacePermissionRuleParams,
+    ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
+    RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitMessageParams,
+    UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
     UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
 };
 

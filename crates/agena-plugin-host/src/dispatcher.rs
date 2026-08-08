@@ -98,20 +98,17 @@ where
             continue;
         }
         let patch: Option<P> = serde_json::from_value(result)?;
-        match patch {
-            Some(p) => {
-                apply(&mut input, p);
-                runs.push(HookRunRecord::new(
-                    &hook,
-                    &plugin_id,
-                    session_id,
-                    HookRunStatus::Applied,
-                    format!("{hook} hook ran"),
-                    None,
-                ));
-            }
-            // A deserialized `None` patch is also a no-op; not recorded.
-            None => {}
+        // A deserialized `None` patch is also a no-op; not recorded.
+        if let Some(p) = patch {
+            apply(&mut input, p);
+            runs.push(HookRunRecord::new(
+                &hook,
+                &plugin_id,
+                session_id,
+                HookRunStatus::Applied,
+                format!("{hook} hook ran"),
+                None,
+            ));
         }
     }
     Ok(input)

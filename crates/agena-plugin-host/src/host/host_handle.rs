@@ -954,7 +954,7 @@ impl HostHandle {
     pub(super) fn plugin_list_response(&self) -> crate::sdk::HostPluginListResponse {
         let mut plugins = BTreeMap::<String, crate::sdk::HostPluginDescriptor>::new();
         if let Ok(names) = self.plugin_names.read() {
-            for (key, _name) in names.iter() {
+            for key in names.keys() {
                 plugins.entry(key.to_string()).or_insert_with(|| {
                     crate::sdk::HostPluginDescriptor {
                         plugin_id: key.clone(),

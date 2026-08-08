@@ -260,11 +260,11 @@ fn parse_plugin_inline_tool_config(
                                 Expr::Path(path) => path.path.get_ident().map(Ident::to_string),
                                 _ => None,
                             };
-                            if let Some(ident) = ident {
-                                if let Some(tag) = inline_tool_tag_expr(ident.as_str()) {
-                                    spec.tags.push(tag);
-                                    continue;
-                                }
+                            if let Some(ident) = ident
+                                && let Some(tag) = inline_tool_tag_expr(ident.as_str())
+                            {
+                                spec.tags.push(tag);
+                                continue;
                             }
                             spec.tags.push(expr.clone());
                         }

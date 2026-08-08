@@ -249,9 +249,7 @@ impl ApplicationService {
                 ApplicationError::bad_request("The uploaded file data is not valid base64.")
             })?;
         if decoded.is_empty() {
-            return Err(ApplicationError::bad_request(
-                "The uploaded file is empty.",
-            ));
+            return Err(ApplicationError::bad_request("The uploaded file is empty."));
         }
         if decoded.len() as u64 > MAX_UPLOAD_BYTES {
             return Err(ApplicationError::bad_request_with_diagnostic(
@@ -527,10 +525,7 @@ fn sanitize_upload_filename(filename: &str) -> String {
     }
     // Keep only the final path component so a client-provided path can never
     // smuggle directory traversal into the managed uploads directory.
-    let base = trimmed
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(trimmed);
+    let base = trimmed.rsplit(['/', '\\']).next().unwrap_or(trimmed);
     base.chars()
         .map(|character| {
             if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_' | ' ') {
@@ -606,7 +601,10 @@ mod tests {
     fn upload_filenames_strip_directories_and_keep_safe_characters() {
         assert_eq!(sanitize_upload_filename("report.pdf"), "report.pdf");
         assert_eq!(sanitize_upload_filename("docs/../secret.txt"), "secret.txt");
-        assert_eq!(sanitize_upload_filename("C:\\Users\\alice\\notes.md"), "notes.md");
+        assert_eq!(
+            sanitize_upload_filename("C:\\Users\\alice\\notes.md"),
+            "notes.md"
+        );
         assert_eq!(sanitize_upload_filename("a b+c!.png"), "a b_c_.png");
         assert_eq!(sanitize_upload_filename("  "), "");
         assert_eq!(sanitize_upload_filename("."), "");
@@ -616,8 +614,8 @@ mod tests {
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, HashMap, PageOrder, PaginatedResponse,
     Path, PathBuf, WorkspaceCursor, WorkspaceFileDownloadQuery, WorkspaceFileKind,
-    WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceFileUploadRequest,
-    WorkspaceFileUploadResource, WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
-    WorkspaceResource, build_page, decode_cursor, fs, io, non_empty, normalize_limit,
-    timestamp_millis_to_utc, trim_page,
+    WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
+    WorkspaceFileUploadRequest, WorkspaceFileUploadResource, WorkspaceListQuery,
+    WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource, build_page, decode_cursor,
+    fs, io, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
 };

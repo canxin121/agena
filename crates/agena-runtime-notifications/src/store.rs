@@ -26,37 +26,37 @@ pub fn now_ms() -> i64 {
 /// 订阅事件：通知、滞后信号、流关闭。
 #[derive(Debug, Clone)]
 pub enum SubscriptionEvent {
-    Notification(Notification),
+    Notification(Box<Notification>),
     Lagged(u64),
     Closed,
 }
 
 /// 判断通知是否匹配过滤器。
 pub fn filter_matches(filter: &NotificationFilter, n: &Notification) -> bool {
-    if let Some(scope) = &filter.scope {
-        if &n.scope != scope {
-            return false;
-        }
+    if let Some(scope) = &filter.scope
+        && &n.scope != scope
+    {
+        return false;
     }
-    if let Some(severity) = filter.severity {
-        if n.severity != severity {
-            return false;
-        }
+    if let Some(severity) = filter.severity
+        && n.severity != severity
+    {
+        return false;
     }
-    if let Some(kind) = &filter.kind {
-        if &n.kind != kind {
-            return false;
-        }
+    if let Some(kind) = &filter.kind
+        && &n.kind != kind
+    {
+        return false;
     }
-    if let Some(surface) = filter.surface {
-        if n.surface != surface {
-            return false;
-        }
+    if let Some(surface) = filter.surface
+        && n.surface != surface
+    {
+        return false;
     }
-    if let Some(source) = filter.source {
-        if n.source != source {
-            return false;
-        }
+    if let Some(source) = filter.source
+        && n.source != source
+    {
+        return false;
     }
     if filter.active_only && n.dismissed {
         return false;
@@ -104,7 +104,7 @@ impl InMemoryNotificationStore {
         let stored = inner.notifications[pos].clone();
         let _ = self
             .tx
-            .send(SubscriptionEvent::Notification(stored.clone()));
+            .send(SubscriptionEvent::Notification(Box::new(stored.clone())));
         stored
     }
 
@@ -129,32 +129,30 @@ impl InMemoryNotificationStore {
             return pos;
         }
         // dedup_key 冲突则替换旧条目（保持新条目的 id）
-        if let Some(dk) = &notification.dedup_key {
-            if let Some(pos) = inner
+        if let Some(dk) = &notification.dedup_key
+            && let Some(pos) = inner
                 .notifications
                 .iter()
                 .position(|n| n.dedup_key.as_deref() == Some(dk))
-            {
-                let old_id = inner.notifications[pos].id.clone();
-                let new_id = notification.id.clone();
-                inner.by_id.remove(&old_id);
-                inner.notifications[pos] = notification;
-                inner.by_id.insert(new_id, pos);
-                return pos;
-            }
+        {
+            let old_id = inner.notifications[pos].id.clone();
+            let new_id = notification.id.clone();
+            inner.by_id.remove(&old_id);
+            inner.notifications[pos] = notification;
+            inner.by_id.insert(new_id, pos);
+            return pos;
         }
         // 容量淘汰最旧
-        if inner.notifications.len() >= capacity {
-            if let Some(oldest_pos) = inner
+        if inner.notifications.len() >= capacity
+            && let Some(oldest_pos) = inner
                 .notifications
                 .iter()
                 .enumerate()
                 .min_by_key(|(_, n)| n.created_at_ms)
                 .map(|(i, _)| i)
-            {
-                let removed_id = inner.notifications.remove(oldest_pos).id;
-                inner.by_id.remove(&removed_id);
-            }
+        {
+            let removed_id = inner.notifications.remove(oldest_pos).id;
+            inner.by_id.remove(&removed_id);
         }
         inner
             .by_id
@@ -204,9 +202,9 @@ impl NotificationService for InMemoryNotificationStore {
             .notifications
             .iter()
             .filter(|n| filter_matches(&filter, n))
-            .filter(|n| filter.cursor.map_or(true, |c| n.created_at_ms < c))
+            .filter(|n| filter.cursor.is_none_or(|c| n.created_at_ms < c))
             .collect();
-        matched.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+        matched.sort_by_key(|b| std::cmp::Reverse(b.created_at_ms));
         let limit = filter.limit.unwrap_or(usize::MAX).min(matched.len());
         Ok(matched.into_iter().take(limit).cloned().collect())
     }
@@ -225,7 +223,9 @@ impl NotificationService for InMemoryNotificationStore {
         inner.notifications[pos].dismissed = true;
         let updated = inner.notifications[pos].clone();
         drop(inner);
-        let _ = self.tx.send(SubscriptionEvent::Notification(updated));
+        let _ = self
+            .tx
+            .send(SubscriptionEvent::Notification(Box::new(updated)));
         Ok(())
     }
 
@@ -270,7 +270,7 @@ impl NotificationSubscription for BroadcastSubscription {
         loop {
             match self.rx.recv().await {
                 Ok(SubscriptionEvent::Notification(n)) if filter_matches(&self.filter, &n) => {
-                    return Some(n);
+                    return Some(*n);
                 }
                 Ok(SubscriptionEvent::Notification(_)) => continue,
                 Ok(SubscriptionEvent::Lagged(_)) | Ok(SubscriptionEvent::Closed) => return None,

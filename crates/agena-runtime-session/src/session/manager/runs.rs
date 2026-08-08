@@ -321,7 +321,9 @@ impl SessionManager {
             .plugin_manager()
             .drain_hook_runs(session.id);
         if !hook_runs.is_empty() {
-            session = self.record_hook_runs(session, hook_runs, state.clone()).await?;
+            session = self
+                .record_hook_runs(session, hook_runs, state.clone())
+                .await?;
         }
 
         let session_id = session.id;

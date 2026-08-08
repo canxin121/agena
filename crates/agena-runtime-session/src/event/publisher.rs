@@ -70,10 +70,9 @@ where
         ctx: PublishContext,
         kind: K,
     ) -> Result<DomainEvent<K>, EventStoreError> {
-        let seq_session = if ctx.session_id.is_some() {
-            Some(self.seq.next_seq_session(ctx.session_id.unwrap()).await?)
-        } else {
-            None
+        let seq_session = match ctx.session_id {
+            Some(session_id) => Some(self.seq.next_seq_session(session_id).await?),
+            None => None,
         };
         Ok(DomainEvent {
             meta: EventMeta {

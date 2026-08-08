@@ -57,20 +57,19 @@ const VERSION_CONFLICT_PREFIX: &str = "__agena_version_conflict:";
 /// Translate a persistence `DbErr` into `AppError`, mapping the version
 /// conflict sentinel to `AppError::Conflict` so reply paths can reload+retry.
 fn parse_version_conflict_error(error: DbErr) -> AppError {
-    if let DbErr::Custom(message) = &error {
-        if let Some(rest) = message.strip_prefix(VERSION_CONFLICT_PREFIX) {
-            let mut parts = rest.splitn(2, ':');
-            if let (Some(session_id), Some(expected)) = (parts.next(), parts.next()) {
-                if let (Ok(session_id), Ok(expected)) =
-                    (session_id.parse::<i64>(), expected.parse::<i64>())
-                {
-                    return AppError::Conflict {
-                        session_id,
-                        expected,
-                        current: expected,
-                    };
-                }
-            }
+    if let DbErr::Custom(message) = &error
+        && let Some(rest) = message.strip_prefix(VERSION_CONFLICT_PREFIX)
+    {
+        let mut parts = rest.splitn(2, ':');
+        if let (Some(session_id), Some(expected)) = (parts.next(), parts.next())
+            && let (Ok(session_id), Ok(expected)) =
+                (session_id.parse::<i64>(), expected.parse::<i64>())
+        {
+            return AppError::Conflict {
+                session_id,
+                expected,
+                current: expected,
+            };
         }
     }
     AppError::from(error)

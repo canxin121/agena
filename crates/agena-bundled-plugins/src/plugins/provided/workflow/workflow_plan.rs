@@ -990,7 +990,7 @@ impl WorkflowPlugin {
     }
 
     pub(in crate::plugins::provided::workflow) fn plan_current_text(plan: &WorkflowPlan) -> String {
-        match Self::next_actionable_step(&plan) {
+        match Self::next_actionable_step(plan) {
             Some((index, step)) => format!(
                 "Current step {}: '{}' (step {}).\nGoal: {}\nStatus: {}.",
                 index + 1,
@@ -1181,9 +1181,7 @@ impl WorkflowPlugin {
                     "plan.update summary is only valid when phase is `completed`".to_string(),
                 ));
             }
-            if input.phase.is_none()
-                && input.autorun.is_none()
-                && input.request_approval.is_none()
+            if input.phase.is_none() && input.autorun.is_none() && input.request_approval.is_none()
             {
                 return Err(PluginError::invalid_params(
                     "plan.update requires `phase`, `autorun`, or `request_approval` for plan-level updates"

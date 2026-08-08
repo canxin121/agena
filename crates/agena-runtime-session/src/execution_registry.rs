@@ -159,6 +159,12 @@ pub struct ExecutionRegistry<T> {
     lease_handles: Mutex<HashMap<i64, LeaseHandle>>,
 }
 
+impl<T: Send + 'static> Default for ExecutionRegistry<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Send + 'static> ExecutionRegistry<T> {
     /// A registry without a database binding: single-process semantics only
     /// (no cross-process lease). Used by tests.

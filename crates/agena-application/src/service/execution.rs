@@ -832,9 +832,7 @@ mod pending_interactive_projection_tests {
     use agena_domain::{PendingInteractiveRequest, UserInputRequest};
     use chrono::Utc;
 
-    fn domain_user_input(
-        presented_at: Option<chrono::DateTime<Utc>>,
-    ) -> PendingInteractiveRequest {
+    fn domain_user_input(presented_at: Option<chrono::DateTime<Utc>>) -> PendingInteractiveRequest {
         PendingInteractiveRequest::UserInput {
             request: UserInputRequest {
                 request_id: "host-input:1:98:0".to_owned(),

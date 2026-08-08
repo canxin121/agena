@@ -253,13 +253,13 @@ fn repair_json_control_characters(json: &str) -> Option<String> {
                     out.push(character);
                 }
                 '"' => {
-                    if backslash_run % 2 == 0 {
+                    if backslash_run.is_multiple_of(2) {
                         in_string = false;
                     }
                     backslash_run = 0;
                     out.push(character);
                 }
-                _ if character.is_control() && backslash_run % 2 == 0 => {
+                _ if character.is_control() && backslash_run.is_multiple_of(2) => {
                     match character {
                         '\n' => out.push_str("\\n"),
                         '\r' => out.push_str("\\r"),

@@ -834,7 +834,7 @@ fn json_block_to_view_block(value: &StructuredValue) -> Result<agena_domain::Vie
                                 .get("snippet")
                                 .and_then(|value| value.as_str())
                                 .map(str::to_owned);
-                            (!title.is_empty() || !url.is_empty()).then(|| {
+                            (!title.is_empty() || !url.is_empty()).then_some({
                                 agena_domain::WebSearchResult {
                                     title,
                                     url,

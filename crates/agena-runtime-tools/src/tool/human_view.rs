@@ -82,27 +82,26 @@ impl BuiltinHumanRenderer {
         let mut blocks = Vec::new();
         // Shell/process executions render as a command card: the command line
         // and its output, exit code, and stderr as a distinct human block.
-        if let Some(parsed) = ToolPayloadOutput::from_tool_output(tool_name, output) {
-            if let ToolPayloadOutput::Shell {
+        if let Some(parsed) = ToolPayloadOutput::from_tool_output(tool_name, output)
+            && let ToolPayloadOutput::Shell {
                 exit_code,
                 output: shell_output,
                 ..
             } = &parsed
-                && let Some(command) = command.filter(|c| !c.trim().is_empty())
-            {
-                blocks.push(ViewBlock::Command {
-                    id: Some("command".into()),
-                    command: command.to_owned(),
-                    cwd: cwd.map(ToOwned::to_owned),
-                    exit_code: *exit_code,
-                    stdout: shell_output
-                        .as_deref()
-                        .unwrap_or(raw.text.as_str())
-                        .to_owned(),
-                    stderr: String::new(),
-                });
-                return blocks;
-            }
+            && let Some(command) = command.filter(|c| !c.trim().is_empty())
+        {
+            blocks.push(ViewBlock::Command {
+                id: Some("command".into()),
+                command: command.to_owned(),
+                cwd: cwd.map(ToOwned::to_owned),
+                exit_code: *exit_code,
+                stdout: shell_output
+                    .as_deref()
+                    .unwrap_or(raw.text.as_str())
+                    .to_owned(),
+                stderr: String::new(),
+            });
+            return blocks;
         }
 
         match ToolPayloadOutput::from_tool_output(tool_name, output) {
@@ -243,8 +242,8 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
         _ctx: &RenderContext,
         raw: &RawOutput,
     ) -> Result<Vec<ViewBlock>, RenderError> {
-        let output = ToolOutput::from_json_payload(raw.payload.as_ref())
-            .map_err(|error| RenderError::Failed(error))?;
+        let output =
+            ToolOutput::from_json_payload(raw.payload.as_ref()).map_err(RenderError::Failed)?;
         let blocks = Self::structured_blocks(
             &self.tool_name,
             raw,

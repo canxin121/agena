@@ -126,8 +126,7 @@ impl SessionManager {
                 .await?;
             self.store
                 .reconcile_unmatched_runs(session_id, agena_domain::RunAbortReason::ProcessRestart)
-                .await
-                .map_err(AppError::from)?;
+                .await?;
             let _ = state;
         }
         Ok(())
@@ -230,9 +229,14 @@ impl SessionManager {
         // Record the session.start hook runs observed during creation (plus
         // any unattributed runs, such as config/provider.list, that happened
         // before this session existed) as transcript activity.
-        let hook_runs = state.tool_executor.plugin_manager().drain_hook_runs(session.id);
+        let hook_runs = state
+            .tool_executor
+            .plugin_manager()
+            .drain_hook_runs(session.id);
         if !hook_runs.is_empty() {
-            session = self.record_hook_runs(session, hook_runs, state.clone()).await?;
+            session = self
+                .record_hook_runs(session, hook_runs, state.clone())
+                .await?;
         }
 
         if injected_messages.is_empty() {

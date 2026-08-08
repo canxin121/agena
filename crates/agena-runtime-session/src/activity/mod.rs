@@ -271,28 +271,26 @@ impl ActivityHandler {
                 self.live_blocks.push(delta.view.clone());
             }
             agena_domain::DeltaMode::Append => {
-                if let Some(id) = block_id {
-                    if let Some(block) = self
+                if let Some(id) = block_id
+                    && let Some(block) = self
                         .live_blocks
                         .iter_mut()
                         .find(|b| b.block_id() == Some(id))
-                    {
-                        append_to_block(block, &delta.view);
-                        return;
-                    }
+                {
+                    append_to_block(block, &delta.view);
+                    return;
                 }
                 self.live_blocks.push(delta.view.clone());
             }
             agena_domain::DeltaMode::Replace => {
-                if let Some(id) = block_id {
-                    if let Some(block) = self
+                if let Some(id) = block_id
+                    && let Some(block) = self
                         .live_blocks
                         .iter_mut()
                         .find(|b| b.block_id() == Some(id))
-                    {
-                        *block = delta.view.clone();
-                        return;
-                    }
+                {
+                    *block = delta.view.clone();
+                    return;
                 }
                 self.live_blocks.push(delta.view.clone());
             }

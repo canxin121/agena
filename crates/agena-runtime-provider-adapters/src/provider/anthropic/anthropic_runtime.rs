@@ -307,11 +307,10 @@ impl ModelRuntime for AnthropicAdapter {
         let text = if structured_output.is_some() {
             tool_calls
                 .iter()
-                .find_map(|tool_call| match tool_call {
-                    CompletionToolCall::Function { arguments_json, .. } => {
-                        Some(arguments_json.clone())
-                    }
+                .map(|tool_call| match tool_call {
+                    CompletionToolCall::Function { arguments_json, .. } => arguments_json.clone(),
                 })
+                .next()
                 .unwrap_or(text)
         } else {
             text

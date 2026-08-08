@@ -394,6 +394,6 @@ fn truncate_classifier_text(text: &str) -> String {
         return text.to_owned();
     }
     let mut out = text.chars().take(MAX).collect::<String>();
-    out.push_str("…");
+    out.push('…');
     out
 }

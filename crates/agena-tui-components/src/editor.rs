@@ -1518,6 +1518,8 @@ mod tests {
         let mut editor = Editor::from_text("ab中文".to_string());
         // "ab中文" = a(0) b(1) 中(2..5) 文(5..8); byte 3 is inside 中 and
         // byte 6 inside 文, both must snap back to 2 and 5.
+        #[allow(clippy::single_range_in_vec_init)]
+        // set_elements takes ranges, not collected indices
         editor.set_elements(vec![3..6]);
 
         assert_eq!(editor.draft_elements(), vec![2..5]);

@@ -827,8 +827,10 @@ mod tests {
 
     #[test]
     fn protocol_path_without_leading_slash_is_normalized() {
-        let mut paths = ProviderProtocolPathsConfig::default();
-        paths.openai = "v1".to_owned();
+        let paths = ProviderProtocolPathsConfig {
+            openai: "v1".to_owned(),
+            ..Default::default()
+        };
         let auth = api_auth("https://api.example.com", paths);
         assert_eq!(
             resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::OpenAi).unwrap(),
@@ -838,8 +840,10 @@ mod tests {
 
     #[test]
     fn empty_protocol_path_leaves_base_url_untouched() {
-        let mut paths = ProviderProtocolPathsConfig::default();
-        paths.openai = String::new();
+        let paths = ProviderProtocolPathsConfig {
+            openai: String::new(),
+            ..Default::default()
+        };
         let auth = api_auth("https://api.example.com", paths);
         assert_eq!(
             resolve_http_adapter_base_url("test", &auth, HttpAdapterKind::OpenAi).unwrap(),

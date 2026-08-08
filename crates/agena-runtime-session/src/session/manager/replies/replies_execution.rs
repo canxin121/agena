@@ -2885,24 +2885,21 @@ impl SessionManager {
                 session = self
                     .refresh_streaming_title(session.id, pending_tool, state.clone())
                     .await?;
-                if let Some(handler) = &mut activity_handler {
-                    if let Some(event) =
+                if let Some(handler) = &mut activity_handler
+                    && let Some(event) =
                         handler.refresh_elapsed_title(stream_started.elapsed().as_secs())
+                {
+                    if let crate::activity::ActivityLiveEvent::TitleChanged { activity_id, title } =
+                        &event
                     {
-                        if let crate::activity::ActivityLiveEvent::TitleChanged {
-                            activity_id,
+                        crate::session::store::update_activity_label(
+                            &self.store.db,
+                            *activity_id,
                             title,
-                        } = &event
-                        {
-                            crate::session::store::update_activity_label(
-                                &self.store.db,
-                                *activity_id,
-                                title,
-                            )
-                            .await?;
-                        }
-                        self.broadcast_activity_v2(session.id, event)?;
+                        )
+                        .await?;
                     }
+                    self.broadcast_activity_v2(session.id, event)?;
                 }
             }
         }

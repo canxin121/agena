@@ -24,7 +24,11 @@ pub(super) const MAX_USER_INPUT_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
 /// invariant "no interactive request blocks indefinitely" holds at the
 /// session-manager layer regardless of the calling plugin or tool.
 pub(super) fn effective_user_input_timeout_ms(requested: Option<u64>) -> Option<u64> {
-    Some(requested.unwrap_or(DEFAULT_USER_INPUT_TIMEOUT_MS).min(MAX_USER_INPUT_TIMEOUT_MS))
+    Some(
+        requested
+            .unwrap_or(DEFAULT_USER_INPUT_TIMEOUT_MS)
+            .min(MAX_USER_INPUT_TIMEOUT_MS),
+    )
 }
 
 /// Derive the human-facing detail Markdown from a compact tool result payload.
@@ -712,7 +716,10 @@ mod tests {
         );
         // Caller-specified deadlines are honored below the ceiling.
         assert_eq!(effective_user_input_timeout_ms(Some(1_000)), Some(1_000));
-        assert_eq!(effective_user_input_timeout_ms(Some(DEFAULT_USER_INPUT_TIMEOUT_MS)), Some(DEFAULT_USER_INPUT_TIMEOUT_MS));
+        assert_eq!(
+            effective_user_input_timeout_ms(Some(DEFAULT_USER_INPUT_TIMEOUT_MS)),
+            Some(DEFAULT_USER_INPUT_TIMEOUT_MS)
+        );
         // Anything above the ceiling is clamped so a plugin cannot create an
         // effectively unbounded request.
         assert_eq!(

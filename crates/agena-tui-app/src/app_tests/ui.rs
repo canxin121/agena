@@ -476,9 +476,11 @@ mod session_list_load_state_tests {
 
     #[test]
     fn stalled_session_list_request_is_recovered() {
-        let mut state = SessionListLoadState::default();
-        state.loading = true;
-        state.requested_at = Some(Instant::now());
+        let mut state = SessionListLoadState {
+            loading: true,
+            requested_at: Some(Instant::now()),
+            ..Default::default()
+        };
 
         assert!(state.recover_stalled_request(Duration::ZERO));
         assert!(!state.loading);
@@ -488,9 +490,11 @@ mod session_list_load_state_tests {
 
     #[test]
     fn fresh_session_list_request_survives_the_recovery_pass() {
-        let mut state = SessionListLoadState::default();
-        state.loading = true;
-        state.requested_at = Some(Instant::now());
+        let mut state = SessionListLoadState {
+            loading: true,
+            requested_at: Some(Instant::now()),
+            ..Default::default()
+        };
 
         assert!(!state.recover_stalled_request(Duration::from_secs(3600)));
         assert!(state.loading);

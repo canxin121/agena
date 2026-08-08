@@ -117,18 +117,18 @@ pub fn visible_rows<'a>(
 ) -> Vec<&'a ActivitiesRow> {
     rows.iter()
         .filter(|row| {
-            if !filter.show_finished && row.is_active() == false {
+            if !filter.show_finished && !row.is_active() {
                 return false;
             }
-            if let Some(kind) = filter.kind_filter.as_deref() {
-                if row.kind != kind {
-                    return false;
-                }
+            if let Some(kind) = filter.kind_filter.as_deref()
+                && row.kind != kind
+            {
+                return false;
             }
-            if let Some(status) = filter.status_filter.as_deref() {
-                if row.status != status {
-                    return false;
-                }
+            if let Some(status) = filter.status_filter.as_deref()
+                && row.status != status
+            {
+                return false;
             }
             true
         })
@@ -380,9 +380,8 @@ fn render_list_pane(
             muted_style(),
         )));
     } else {
-        let mut index = 0_usize;
         let mut last_section: Option<&'static str> = None;
-        for row in &visible {
+        for (index, row) in visible.iter().enumerate() {
             let section = if row.is_active() {
                 "Active"
             } else {
@@ -399,7 +398,6 @@ fn render_list_pane(
                 last_section = Some(section);
             }
             lines.push(render_row_line(row, index == presentation.selected, now_ms));
-            index += 1;
         }
     }
 

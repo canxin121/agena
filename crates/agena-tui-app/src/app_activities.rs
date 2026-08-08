@@ -16,10 +16,10 @@ impl App {
     /// refreshed timestamp, so a failed backend does not hammer every tick.
     pub(crate) fn refresh_background_activity_summary_if_due(&mut self, now: super::Instant) {
         const INTERVAL_MS: u64 = 10_000;
-        if let Some((_, refreshed)) = self.background_activity_summary {
-            if now.duration_since(refreshed) < super::Duration::from_millis(INTERVAL_MS) {
-                return;
-            }
+        if let Some((_, refreshed)) = self.background_activity_summary
+            && now.duration_since(refreshed) < super::Duration::from_millis(INTERVAL_MS)
+        {
+            return;
         }
         let filter = agena_domain::BackgroundActivityFilter {
             active_only: true,
@@ -144,10 +144,8 @@ impl App {
             }
             Err(error) => state.error = Some(error.to_string()),
         }
-        if wants_detail {
-            if let Some(selected_id) = selected_id {
-                self.spawn_activity_log_tail(selected_id);
-            }
+        if wants_detail && let Some(selected_id) = selected_id {
+            self.spawn_activity_log_tail(selected_id);
         }
     }
 

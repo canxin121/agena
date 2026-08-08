@@ -219,7 +219,7 @@ pub async fn notifications_stream(
             let message = match item {
                 SubscriptionEvent::Notification(notification) => {
                     NotificationStreamEvent::Notification(Box::new(NotificationResource::from(
-                        &notification,
+                        &*notification,
                     )))
                 }
                 SubscriptionEvent::Lagged(skipped) => NotificationStreamEvent::Lagged { skipped },

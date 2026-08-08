@@ -270,8 +270,8 @@ impl agena_runtime::RuntimeEventQueryService for SessionManager {
         // events so the timeline still shows the whole conversation. Paging
         // into the shared prefix (before_seq_global <= cutoff) is served by
         // the plain query below, which already only reads the child's scope.
-        if let agena_domain::EventScope::Session { session_id } = &filter.scope {
-            if let Some((parent_session_id, cutoff_seq)) = self
+        if let agena_domain::EventScope::Session { session_id } = &filter.scope
+            && let Some((parent_session_id, cutoff_seq)) = self
                 .store
                 .history
                 .fork_source_cutoff(*session_id)
@@ -279,52 +279,47 @@ impl agena_runtime::RuntimeEventQueryService for SessionManager {
                 .map_err(|error| {
                     agena_runtime::RuntimeEventQueryError::internal(error.to_string())
                 })?
-            {
-                let parent_in_range = range
-                    .before_seq_global
-                    .is_none_or(|before| before > cutoff_seq);
-                if parent_in_range {
-                    let mut merged = self
-                        .store
-                        .history
-                        .list_session_events_before(
-                            parent_session_id,
-                            cutoff_seq,
-                            Some(range.limit),
-                        )
-                        .await
-                        .map_err(|error| {
-                            agena_runtime::RuntimeEventQueryError::internal(error.to_string())
-                        })?;
-                    merged.retain(|event| {
-                        filter
-                            .kinds
-                            .as_ref()
-                            .is_none_or(|kinds| kinds.contains(&event.kind.tag()))
-                            && filter
-                                .since_seq_global
-                                .is_none_or(|since| event.meta.seq_global > since)
-                    });
-                    merged.reverse(); // oldest-first -> newest-first
-                    let mut own_events = self
-                        .publisher
-                        .store()
-                        .range_before(
-                            filter,
-                            agena_storage::ReverseStoreRange {
-                                before_seq_global: range.before_seq_global,
-                                limit: range.limit,
-                            },
-                        )
-                        .await
-                        .map_err(|error| {
-                            agena_runtime::RuntimeEventQueryError::internal(error.to_string())
-                        })?;
-                    merged.append(&mut own_events);
-                    merged.sort_by(|a, b| b.meta.seq_global.cmp(&a.meta.seq_global));
-                    merged.truncate(range.limit);
-                    return merged.iter().map(project_runtime_timeline_event).collect();
-                }
+        {
+            let parent_in_range = range
+                .before_seq_global
+                .is_none_or(|before| before > cutoff_seq);
+            if parent_in_range {
+                let mut merged = self
+                    .store
+                    .history
+                    .list_session_events_before(parent_session_id, cutoff_seq, Some(range.limit))
+                    .await
+                    .map_err(|error| {
+                        agena_runtime::RuntimeEventQueryError::internal(error.to_string())
+                    })?;
+                merged.retain(|event| {
+                    filter
+                        .kinds
+                        .as_ref()
+                        .is_none_or(|kinds| kinds.contains(&event.kind.tag()))
+                        && filter
+                            .since_seq_global
+                            .is_none_or(|since| event.meta.seq_global > since)
+                });
+                merged.reverse(); // oldest-first -> newest-first
+                let mut own_events = self
+                    .publisher
+                    .store()
+                    .range_before(
+                        filter,
+                        agena_storage::ReverseStoreRange {
+                            before_seq_global: range.before_seq_global,
+                            limit: range.limit,
+                        },
+                    )
+                    .await
+                    .map_err(|error| {
+                        agena_runtime::RuntimeEventQueryError::internal(error.to_string())
+                    })?;
+                merged.append(&mut own_events);
+                merged.sort_by_key(|b| std::cmp::Reverse(b.meta.seq_global));
+                merged.truncate(range.limit);
+                return merged.iter().map(project_runtime_timeline_event).collect();
             }
         }
         self.publisher

@@ -909,7 +909,7 @@ impl WorkflowPlugin {
             lines.push(format!(
                 "- {}: {}",
                 tag.tag,
-                tag.plugin_count.unwrap_or_else(|| tag.tool_count)
+                tag.plugin_count.unwrap_or(tag.tool_count)
             ));
         }
         append_discovery_page_hint(

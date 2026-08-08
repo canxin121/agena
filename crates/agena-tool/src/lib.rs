@@ -115,12 +115,12 @@ pub fn invocation_call_summary(input: &serde_json::Value) -> String {
         }
     }
     // Provider-native envelopes nest the real target under `input`.
-    if let Some(inner) = input.get("input").and_then(serde_json::Value::as_object) {
-        if let Some(value) = inner.get("tool").and_then(serde_json::Value::as_str) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return trimmed.to_owned();
-            }
+    if let Some(inner) = input.get("input").and_then(serde_json::Value::as_object)
+        && let Some(value) = inner.get("tool").and_then(serde_json::Value::as_str)
+    {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_owned();
         }
     }
     String::new()

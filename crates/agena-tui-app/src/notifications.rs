@@ -121,7 +121,7 @@ impl NotificationStore {
             .active(now)
             .filter(|n| n.surface == NotificationSurface::Toast)
             .collect();
-        items.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+        items.sort_by_key(|b| std::cmp::Reverse(b.created_at_ms));
         items
     }
 
@@ -157,7 +157,7 @@ impl NotificationStore {
                 )
             })
             .collect();
-        items.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+        items.sort_by_key(|b| std::cmp::Reverse(b.created_at_ms));
         items
     }
 }

@@ -4902,11 +4902,10 @@ mod tests {
                 usage: None,
                 provider_metadata: None,
             })
-            .map(|response| {
+            .inspect(|_response| {
                 // The non-streaming port has no end_turn field; this provider
                 // is exercised through complete_stream below.
                 let _ = end_turn;
-                response
             })
         }
 
@@ -5327,7 +5326,11 @@ mod tests {
             &self,
             _request: CompletionRequest,
         ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
-            if self.failures_remaining.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            if self
+                .failures_remaining
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0
+            {
                 self.failures_remaining
                     .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 return Err(agena_runtime_provider::ProviderError::Provider(
@@ -5362,7 +5365,11 @@ mod tests {
             >,
             agena_runtime_provider::ProviderError,
         > {
-            if self.failures_remaining.load(std::sync::atomic::Ordering::SeqCst) > 0 {
+            if self
+                .failures_remaining
+                .load(std::sync::atomic::Ordering::SeqCst)
+                > 0
+            {
                 self.failures_remaining
                     .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 return Err(agena_runtime_provider::ProviderError::Provider(
@@ -5406,10 +5413,7 @@ mod tests {
             input: agena_plugin_host::AgentStopInput,
         ) -> agena_plugin_host::sdk::Result<Option<agena_plugin_host::AgentStopPatch>> {
             if input.run_error.is_some() {
-                RETRY_ON_ERROR_HOOK_SAW_RUN_ERROR.store(
-                    true,
-                    std::sync::atomic::Ordering::SeqCst,
-                );
+                RETRY_ON_ERROR_HOOK_SAW_RUN_ERROR.store(true, std::sync::atomic::Ordering::SeqCst);
                 return Ok(Some(agena_plugin_host::AgentStopPatch {
                     continue_with_message: Some("retry the failed run".to_owned()),
                     reason: Some("test retry on run error".to_owned()),
@@ -5421,10 +5425,7 @@ mod tests {
 
     async fn test_manager_with_retry_on_error_probe(
         failures: usize,
-    ) -> (
-        SessionManager,
-        Arc<std::sync::atomic::AtomicUsize>,
-    ) {
+    ) -> (SessionManager, Arc<std::sync::atomic::AtomicUsize>) {
         let workspace_root = std::env::current_dir().expect("resolve test workspace");
         let mut plugins_config = PluginsConfig::default();
         plugins_config.list.insert(
@@ -5811,27 +5812,23 @@ mod tests {
             _request: CompletionRequest,
         ) -> Result<CompletionResponse, agena_runtime_provider::ProviderError> {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (text, finish_reason) = if self.always_truncate {
-                (
-                    "partial output".to_owned(),
-                    agena_provider::CompletionFinishReason::Length,
-                )
-            } else if self.truncate_first && call == 0 {
-                (
-                    "partial output".to_owned(),
-                    agena_provider::CompletionFinishReason::Length,
-                )
-            } else if call < self.dangling_turns {
-                (
-                    "先查看 provider_for_adapter_with_mode 和 1390-1420 区域：".to_owned(),
-                    agena_provider::CompletionFinishReason::Stop,
-                )
-            } else {
-                (
-                    "完成。".to_owned(),
-                    agena_provider::CompletionFinishReason::Stop,
-                )
-            };
+            let (text, finish_reason) =
+                if self.always_truncate || (self.truncate_first && call == 0) {
+                    (
+                        "partial output".to_owned(),
+                        agena_provider::CompletionFinishReason::Length,
+                    )
+                } else if call < self.dangling_turns {
+                    (
+                        "先查看 provider_for_adapter_with_mode 和 1390-1420 区域：".to_owned(),
+                        agena_provider::CompletionFinishReason::Stop,
+                    )
+                } else {
+                    (
+                        "完成。".to_owned(),
+                        agena_provider::CompletionFinishReason::Stop,
+                    )
+                };
             Ok(CompletionResponse {
                 provider_id: agena_domain::ProviderId::new(self.id()),
                 model: self.default_model.clone(),
@@ -5861,27 +5858,23 @@ mod tests {
             agena_runtime_provider::ProviderError,
         > {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (text, finish_reason) = if self.always_truncate {
-                (
-                    "partial output".to_owned(),
-                    agena_provider::CompletionFinishReason::Length,
-                )
-            } else if self.truncate_first && call == 0 {
-                (
-                    "partial output".to_owned(),
-                    agena_provider::CompletionFinishReason::Length,
-                )
-            } else if call < self.dangling_turns {
-                (
-                    "先查看 provider_for_adapter_with_mode 和 1390-1420 区域：".to_owned(),
-                    agena_provider::CompletionFinishReason::Stop,
-                )
-            } else {
-                (
-                    "完成。".to_owned(),
-                    agena_provider::CompletionFinishReason::Stop,
-                )
-            };
+            let (text, finish_reason) =
+                if self.always_truncate || (self.truncate_first && call == 0) {
+                    (
+                        "partial output".to_owned(),
+                        agena_provider::CompletionFinishReason::Length,
+                    )
+                } else if call < self.dangling_turns {
+                    (
+                        "先查看 provider_for_adapter_with_mode 和 1390-1420 区域：".to_owned(),
+                        agena_provider::CompletionFinishReason::Stop,
+                    )
+                } else {
+                    (
+                        "完成。".to_owned(),
+                        agena_provider::CompletionFinishReason::Stop,
+                    )
+                };
             Ok(Box::pin(futures_util::stream::iter(vec![
                 Ok(agena_provider::CompletionStreamEvent::TextDelta {
                     provider_id: agena_domain::ProviderId::new(self.id()),
@@ -6757,12 +6750,7 @@ mod tests {
         }
         // No-op runs (the hook returned nothing) are not recorded: they would
         // otherwise flood the transcript once per plugin per dispatch.
-        for skipped in [
-            "agent.stop",
-            "command.before",
-            "command.after",
-            "config",
-        ] {
+        for skipped in ["agent.stop", "command.before", "command.after", "config"] {
             assert!(
                 !hook_names.iter().any(|name| name == skipped),
                 "no-op hook run must not be recorded for {skipped}; got {hook_names:?}"

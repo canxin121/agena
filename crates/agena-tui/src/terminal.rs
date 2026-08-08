@@ -130,7 +130,7 @@ pub mod profile {
     use super::TerminalFamily;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Terminal profile support level.
+    /// Terminal profile support level.
     pub enum ProfileSupport {
         Available,
         Unsupported,
@@ -288,7 +288,7 @@ pub mod transport {
     use super::TerminalEnvironment;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-/// A hop in the terminal transport chain.
+    /// A hop in the terminal transport chain.
     pub enum TransportHop {
         Ssh,
         Mosh,
@@ -318,7 +318,7 @@ pub mod transport {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-/// Evidence about the terminal transport.
+    /// Evidence about the terminal transport.
     pub struct TransportEvidence {
         pub layer: TransportHop,
         pub source_key: &'static str,
@@ -362,7 +362,7 @@ pub mod identity {
     use super::{TerminalEnvironment, TerminalFamily, TerminalVersion};
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Source of a terminal identity claim.
+    /// Source of a terminal identity claim.
     pub enum IdentitySource {
         UserOverride,
         Environment,
@@ -380,7 +380,7 @@ pub mod identity {
         }
     }
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// Confidence of a terminal identity claim.
+    /// Confidence of a terminal identity claim.
     pub enum IdentityConfidence {
         Explicit,
         Strong,
@@ -406,7 +406,7 @@ pub mod identity {
         }
     }
     #[derive(Debug, Clone, PartialEq, Eq)]
-/// Evidence of terminal identity.
+    /// Evidence of terminal identity.
     pub struct IdentityEvidence {
         pub key: &'static str,
         pub value: String,
@@ -415,7 +415,7 @@ pub mod identity {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
-/// Detected identity of the terminal.
+    /// Detected identity of the terminal.
     pub struct TerminalIdentity {
         pub family: TerminalFamily,
         pub version: Option<String>,

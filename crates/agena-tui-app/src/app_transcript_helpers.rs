@@ -30,6 +30,7 @@ pub(crate) fn pending_interactive_request_is_seen(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn first_unseen_pending_interactive_request<'a>(
     requests: &'a [PendingInteractiveRequestResource],
     seen_permission_request_ids: &BTreeSet<String>,

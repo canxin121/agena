@@ -3604,6 +3604,6 @@ mod activity_v2_tests {
             80,
             20,
         );
-        assert!(transcript.v2_activities.get(&activity_id).is_none());
+        assert!(!transcript.v2_activities.contains_key(&activity_id));
     }
 }

@@ -716,9 +716,10 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let session = SessionManager::mark_interactive_request_presented(self, session_id, request_id)
-            .await
-            .map_err(session_execution_command_error)?;
+        let session =
+            SessionManager::mark_interactive_request_presented(self, session_id, request_id)
+                .await
+                .map_err(session_execution_command_error)?;
         Ok(agena_runtime::SessionExecutionCommandOutcome::completed(
             session.id,
         ))

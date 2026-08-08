@@ -23,10 +23,9 @@ use agena_api::{
         DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams,
         ForkSessionParams, ImportSessionParams, ListSessionTreeParams,
         MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams, ReplyPermissionParams,
-        ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitMessageParams,
-        UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
-        UpsertPermissionRuleParams,
+        ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
+        RewindSessionParams, StopActivityParams, SubmitMessageParams, UpdateSessionParams,
+        UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     pagination::{PageInfo, PaginatedResponse, normalize_limit},
     queries::{
@@ -309,7 +308,7 @@ async fn runtime_status_response(state: &Application) -> RuntimeStatusResponse {
     };
     let default_selection = {
         let selection = state.provider_catalog().default_selection();
-        (!selection.is_empty()).then(|| DefaultSelectionResource {
+        (!selection.is_empty()).then_some(DefaultSelectionResource {
             provider: selection.provider,
             adapter: selection.adapter,
             model: selection.model,

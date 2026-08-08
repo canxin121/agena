@@ -70,14 +70,13 @@ pub(crate) fn refresh_permission_studio_dialog(
 }
 
 pub(crate) fn permission_studio_title(i18n: &I18n, dialog: &PermissionStudioOverlay) -> String {
-    match &dialog.page {
-        page => format!(
-            "{} · {} · {}",
-            ui_text::t(i18n, "overlay-permission-studio-title"),
-            dialog.title_context,
-            permission_studio_page_label(i18n, page)
-        ),
-    }
+    let page = &dialog.page;
+    format!(
+        "{} · {} · {}",
+        ui_text::t(i18n, "overlay-permission-studio-title"),
+        dialog.title_context,
+        permission_studio_page_label(i18n, page)
+    )
 }
 
 pub(crate) fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage) -> String {
@@ -94,11 +93,9 @@ pub(crate) fn permission_studio_footer(i18n: &I18n, page: &PermissionStudioPage)
 }
 
 pub(crate) fn permission_studio_default_focus(
-    page: &PermissionStudioPage,
+    _page: &PermissionStudioPage,
 ) -> PermissionStudioFocus {
-    match page {
-        _ => PermissionStudioFocus::Items,
-    }
+    PermissionStudioFocus::Items
 }
 
 pub(crate) fn permission_studio_page_label(i18n: &I18n, page: &PermissionStudioPage) -> String {

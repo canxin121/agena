@@ -838,7 +838,12 @@ impl PluginHost {
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
         let session_id = Some(input.session_id);
         let mut runs = Vec::new();
-        let result = dispatcher::chain_patch_in_context::<ChatSystemTransformInput, ChatSystemTransformPatch, _, _>(
+        let result = dispatcher::chain_patch_in_context::<
+            ChatSystemTransformInput,
+            ChatSystemTransformPatch,
+            _,
+            _,
+        >(
             &self.plugins,
             method::HOOK_CHAT_SYSTEM_TRANSFORM,
             HookSubscription::CHAT_SYSTEM_TRANSFORM,
@@ -992,10 +997,7 @@ impl PluginHost {
                 Ok(v) => v,
                 Err(err) => {
                     self.push_hook_runs(vec![dispatcher::transport_failure_record(
-                        "auth",
-                        &plugin_id,
-                        None,
-                        &err,
+                        "auth", &plugin_id, None, &err,
                     )]);
                     return Err(transport_to_plugin_error(err));
                 }
@@ -1371,39 +1373,40 @@ impl PluginHost {
     ) -> Result<ToolDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let mut runs = Vec::new();
-        let result = dispatcher::chain_patch_in_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
-            &self.plugins,
-            method::HOOK_TOOL_DEFINITION,
-            HookSubscription::TOOL_DEFINITION,
-            timeout,
-            input,
-            |inp, patch| {
-                if let Some(summary) = patch.summary {
-                    inp.summary = summary;
-                }
-                if patch.help.is_some() {
-                    inp.help = patch.help;
-                }
-                if patch.description_mode.is_some() {
-                    inp.description_mode = patch.description_mode;
-                }
-                if let Some(s) = patch.input_schema {
-                    inp.input_schema = s;
-                }
-            },
-            |plugin, input| {
-                Some(tool_hook_context(
-                    plugin,
-                    input.tool_name(),
-                    None,
-                    None,
-                    None,
-                ))
-            },
-            None,
-            &mut runs,
-        )
-        .await;
+        let result =
+            dispatcher::chain_patch_in_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
+                &self.plugins,
+                method::HOOK_TOOL_DEFINITION,
+                HookSubscription::TOOL_DEFINITION,
+                timeout,
+                input,
+                |inp, patch| {
+                    if let Some(summary) = patch.summary {
+                        inp.summary = summary;
+                    }
+                    if patch.help.is_some() {
+                        inp.help = patch.help;
+                    }
+                    if patch.description_mode.is_some() {
+                        inp.description_mode = patch.description_mode;
+                    }
+                    if let Some(s) = patch.input_schema {
+                        inp.input_schema = s;
+                    }
+                },
+                |plugin, input| {
+                    Some(tool_hook_context(
+                        plugin,
+                        input.tool_name(),
+                        None,
+                        None,
+                        None,
+                    ))
+                },
+                None,
+                &mut runs,
+            )
+            .await;
         // tool.definition runs once per registered tool per tool-request
         // computation; recording them as transcript activity would flood the
         // session with thousands of "no change" parts every turn. The chain
@@ -1609,21 +1612,22 @@ impl PluginHost {
         let timeout = self.timeouts.chat_or(Duration::from_secs(10));
         let session_id = Some(input.session_id);
         let mut runs = Vec::new();
-        let result = dispatcher::chain_patch::<ChatMessagesTransformInput, ChatMessagesTransformPatch, _>(
-            &self.plugins,
-            method::HOOK_CHAT_MESSAGES_TRANSFORM,
-            HookSubscription::CHAT_MESSAGES_TRANSFORM,
-            timeout,
-            input,
-            |inp, patch| {
-                if let Some(msgs) = patch.messages {
-                    inp.messages = msgs;
-                }
-            },
-            session_id,
-            &mut runs,
-        )
-        .await;
+        let result =
+            dispatcher::chain_patch::<ChatMessagesTransformInput, ChatMessagesTransformPatch, _>(
+                &self.plugins,
+                method::HOOK_CHAT_MESSAGES_TRANSFORM,
+                HookSubscription::CHAT_MESSAGES_TRANSFORM,
+                timeout,
+                input,
+                |inp, patch| {
+                    if let Some(msgs) = patch.messages {
+                        inp.messages = msgs;
+                    }
+                },
+                session_id,
+                &mut runs,
+            )
+            .await;
         // chat.messages.transform activity is intentionally not recorded (not
         // part of the transcript hook-run scope); the runs are discarded.
         let _ = runs;
@@ -1909,23 +1913,22 @@ use super::{
     ChatSystemTransformInput, ChatSystemTransformPatch, CommandAfterInput, CommandAfterPatch,
     CommandBeforeInput, CommandBeforeOutcome, CommandBeforeResponse, ConfigInput, ConfigPatch,
     Duration, EventEnvelope, HashMap, HookRunRecord, HookRunStatus, HookSubscription,
-    HostCallbackContext,
-    HostDisplayContribution, HostHandle, HostNotification, HostThemePalette, LoadedPlugin,
-    NoopHostClient, NotificationInput, PluginCommandCatalogItem, PluginCommandInvokeInput,
-    PluginCommandOutput, PluginError, PluginHost, PluginInspect, PluginKey, PluginLogRecord,
-    PluginLogStore, PluginStudioControlCatalogItem, PluginStudioUiCatalog,
-    PluginStudioViewCatalogItem, PluginToolRegistry, PluginTuiUiCatalog, PluginUiAction,
-    PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput, ProviderListPatch,
-    RegisteredTool, RwLock, SessionEndInput, SessionStartInput, SessionStartPatch, ShellEnvInput,
-    ShellEnvPatch, TimeoutsConfig, ToolAfterInput, ToolAfterPatch, ToolBeforeInput,
-    ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch, ToolFailureInput, ToolInvokeInput,
-    ToolInvokeOutput, ToolInvokeStream, ToolKey, ToolPermissionNetworksInput,
-    ToolPermissionPathsInput, ToolRegistryChangedEvent, ToolStreamChunk, ToolStreamEnd,
-    TransportError, UserPromptSubmitInput, UserPromptSubmitPatch, block_on_handle_or_thread,
-    block_on_handle_scoped_thread, block_on_new_thread, block_on_runtime_scoped_thread,
-    block_on_scoped_thread, call_with_timeout, dispatcher, hook_registration_for_plugin, host_api,
-    merge_json, method, push_hook_runs_into, shutdown_transport, tool_hook_context,
-    transport_to_plugin_error,
+    HostCallbackContext, HostDisplayContribution, HostHandle, HostNotification, HostThemePalette,
+    LoadedPlugin, NoopHostClient, NotificationInput, PluginCommandCatalogItem,
+    PluginCommandInvokeInput, PluginCommandOutput, PluginError, PluginHost, PluginInspect,
+    PluginKey, PluginLogRecord, PluginLogStore, PluginStudioControlCatalogItem,
+    PluginStudioUiCatalog, PluginStudioViewCatalogItem, PluginToolRegistry, PluginTuiUiCatalog,
+    PluginUiAction, PluginUiCatalog, PostRunInput, PreRunInput, ProviderListInput,
+    ProviderListPatch, RegisteredTool, RwLock, SessionEndInput, SessionStartInput,
+    SessionStartPatch, ShellEnvInput, ShellEnvPatch, TimeoutsConfig, ToolAfterInput,
+    ToolAfterPatch, ToolBeforeInput, ToolBeforePatch, ToolDefinitionInput, ToolDefinitionPatch,
+    ToolFailureInput, ToolInvokeInput, ToolInvokeOutput, ToolInvokeStream, ToolKey,
+    ToolPermissionNetworksInput, ToolPermissionPathsInput, ToolRegistryChangedEvent,
+    ToolStreamChunk, ToolStreamEnd, TransportError, UserPromptSubmitInput, UserPromptSubmitPatch,
+    block_on_handle_or_thread, block_on_handle_scoped_thread, block_on_new_thread,
+    block_on_runtime_scoped_thread, block_on_scoped_thread, call_with_timeout, dispatcher,
+    hook_registration_for_plugin, host_api, merge_json, method, push_hook_runs_into,
+    shutdown_transport, tool_hook_context, transport_to_plugin_error,
 };
 
 #[cfg(test)]
@@ -1968,9 +1971,10 @@ mod tests {
             2,
             "session 1 claims its own run plus the unattributed one"
         );
-        assert!(s1
-            .iter()
-            .all(|r| r.session_id.is_none() || r.session_id == Some(1)));
+        assert!(
+            s1.iter()
+                .all(|r| r.session_id.is_none() || r.session_id == Some(1))
+        );
 
         let s2 = host.drain_hook_runs(2);
         assert_eq!(s2.len(), 1);

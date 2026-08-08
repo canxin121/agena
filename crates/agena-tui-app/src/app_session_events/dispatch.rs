@@ -19,7 +19,7 @@ impl App {
                 if let Err(error) = &result {
                     self.flash_error(error.clone());
                 }
-                self.handle_activities_stopped(activity_id, result.map_or(false, |ok| ok));
+                self.handle_activities_stopped(activity_id, result.is_ok_and(|ok| ok));
             }
             AppMessage::ActivitiesDismissed {
                 activity_id,
@@ -28,13 +28,13 @@ impl App {
                 if let Err(error) = &result {
                     self.flash_error(error.clone());
                 }
-                self.handle_activities_dismissed(activity_id, result.map_or(false, |ok| ok));
+                self.handle_activities_dismissed(activity_id, result.is_ok_and(|ok| ok));
             }
             AppMessage::ActivitiesCleared { result } => {
                 if let Err(error) = &result {
                     self.flash_error(error.clone());
                 }
-                self.handle_activities_cleared(result.map_or(false, |ok| ok));
+                self.handle_activities_cleared(result.is_ok_and(|ok| ok));
             }
             AppMessage::PlanViewerLoaded { request_id, result } => {
                 self.handle_plan_viewer_loaded(request_id, result)

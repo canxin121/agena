@@ -177,14 +177,13 @@ pub fn local_browser_running() -> bool {
 /// Mark the managed browser as recently used so the idle auto-close timer
 /// restarts. No-op when no browser is running.
 pub fn local_browser_touch() {
-    if let Ok(mut state) = LOCAL_BROWSER.lock() {
-        if state
+    if let Ok(mut state) = LOCAL_BROWSER.lock()
+        && state
             .browser
             .as_mut()
             .is_some_and(ManagedBrowser::is_running)
-        {
-            state.last_used = Some(Instant::now());
-        }
+    {
+        state.last_used = Some(Instant::now());
     }
 }
 

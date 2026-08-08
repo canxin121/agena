@@ -78,10 +78,7 @@ impl ProviderError {
                 // chunk encoding) are transient transport conditions exactly like
                 // timeouts and connect failures: they must enter the retry loop
                 // instead of failing the run immediately.
-                error.is_timeout()
-                    || error.is_connect()
-                    || error.is_body()
-                    || error.is_decode()
+                error.is_timeout() || error.is_connect() || error.is_body() || error.is_decode()
             }
             _ => false,
         }
@@ -117,14 +114,12 @@ impl From<ProviderJsonStreamError> for ProviderError {
             // classify through `utils::json_stream_error` with the real
             // provider id; this fallback keeps the conversion retryable for
             // any remaining `?` call sites.
-            ProviderJsonStreamError::InvalidJson { format, source } => {
-                Self::ProviderClassified {
-                    provider: "stream".to_owned(),
-                    message: format!("invalid {format} payload: {source}"),
-                    kind: ProviderErrorKind::MalformedResponse,
-                    retryable: true,
-                }
-            }
+            ProviderJsonStreamError::InvalidJson { format, source } => Self::ProviderClassified {
+                provider: "stream".to_owned(),
+                message: format!("invalid {format} payload: {source}"),
+                kind: ProviderErrorKind::MalformedResponse,
+                retryable: true,
+            },
         }
     }
 }

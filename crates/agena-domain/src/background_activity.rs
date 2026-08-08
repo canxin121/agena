@@ -31,7 +31,7 @@ pub enum BackgroundActivityKind {
 }
 
 impl BackgroundActivityKind {
-/// All background activity kinds.
+    /// All background activity kinds.
     pub const ALL: [Self; 4] = [Self::Shell, Self::Task, Self::Runtime, Self::Browser];
 
     pub fn as_str(self) -> &'static str {

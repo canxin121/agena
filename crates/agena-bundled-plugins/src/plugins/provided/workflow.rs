@@ -975,29 +975,24 @@ mod tests {
 
     #[test]
     fn autorun_cap_default_is_unlimited_and_configurable() {
-        assert_eq!(
-            WorkflowPlugin::autorun_cap_exhausted(0, None),
-            false,
+        assert!(
+            !WorkflowPlugin::autorun_cap_exhausted(0, None),
             "the default (None) must never cap autorun"
         );
-        assert_eq!(
-            WorkflowPlugin::autorun_cap_exhausted(100, None),
-            false,
+        assert!(
+            !WorkflowPlugin::autorun_cap_exhausted(100, None),
             "the default (None) must never cap autorun even after many continuations"
         );
-        assert_eq!(
-            WorkflowPlugin::autorun_cap_exhausted(4, Some(5)),
-            false,
+        assert!(
+            !WorkflowPlugin::autorun_cap_exhausted(4, Some(5)),
             "under the configured cap autorun continues"
         );
-        assert_eq!(
+        assert!(
             WorkflowPlugin::autorun_cap_exhausted(5, Some(5)),
-            true,
             "at the configured cap autorun stops"
         );
-        assert_eq!(
+        assert!(
             WorkflowPlugin::autorun_cap_exhausted(6, Some(5)),
-            true,
             "past the configured cap autorun stops"
         );
     }

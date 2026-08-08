@@ -120,11 +120,7 @@ mod permission_overlay_presentation_tests {
     fn rendered(lines: &[PermissionPromptLine]) -> String {
         lines
             .iter()
-            .map(|line| {
-                line.markdown
-                    .as_deref()
-                    .unwrap_or_else(|| line.text.as_str())
-            })
+            .map(|line| line.markdown.as_deref().unwrap_or(line.text.as_str()))
             .collect::<Vec<_>>()
             .join("\n")
     }

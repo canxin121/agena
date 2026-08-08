@@ -517,3 +517,163 @@ session mutation.
 ---
 
 _Companion docs: `docs/database-design-audit.md` (v1 audit), this file (v2 design)._
+
+---
+
+## 13. Gap closure — v1 → v2 completeness (added after detailed v1 review)
+
+A line-by-line review of the v1 schema and storage/query APIs against v2 found
+the following gaps. This section closes them; it extends sections 4, 5, 6, 7, 8
+and the open-decision table (section 11).
+
+### 13.1 Sessions: restore tree columns and index (BLOCKING)
+
+v1 `SessionSummary` carries `depth`, `root_id`, `message_count`, `child_session_count`,
+`last_message_at`; session-tree listing and descendant cancellation walk
+`root_id`/`parent_id`. v2 initially dropped `root_id`/`depth`. Restore them:
+
+```sql
+ALTER TABLE sessions ADD COLUMN root_id INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN depth   INTEGER NOT NULL DEFAULT 0;
+-- sessions.parent_id gets ON DELETE CASCADE (deleting a root deletes the subtree,
+-- matching v1; shared parts survive via the GC guard because edges cascade but parts do not).
+CREATE INDEX idx_sessions_root  ON sessions(root_id, updated_at_ms);
+CREATE INDEX idx_sessions_task  ON sessions(parent_id, task_id);   -- get_subagent_by_task_id
+```
+
+### 13.2 Parts: message-level metadata and provider state on the run marker (BLOCKING)
+
+v1 `MessageMetadata` (source, idempotency_key, model_turn_id, parent_message_id,
+generated_by_call_id, externally_initiated_tool, model_provider_id,
+model_adapter_id, model_id, model_thinking_mode, model_speed_mode) and
+`MessageProviderState` (response_id, gemini_thought_signatures,
+anthropic_thinking_blocks, openai_reasoning_items, openai_chat_reasoning_details,
+copilot_reasoning_opaque, assistant_reasoning_field) are message-level and are
+consumed by prompt assembly, usage reporting, import/export and provider
+replay. In v2 the run marker is the message, so:
+
+```sql
+ALTER TABLE parts ADD COLUMN metadata        JSON;  -- MessageMetadata, marker-only
+ALTER TABLE parts ADD COLUMN provider_state  JSON;  -- MessageProviderState, marker-only
+```
+
+`model_turn_id` / `parent_message_id` map to the parent run marker `part_id`;
+`generated_by_call_id` maps to the tool_call `part_id`. Both live inside
+`metadata` JSON.
+
+### 13.3 Provider anchors must persist (BLOCKING)
+
+`ProviderPromptAnchor` (provider_id, model_id, previous_response_id,
+assistant_message_id, prompt_window_generation, system_fingerprint,
+request_options_fingerprint, provider_request_shape, transcript_digest) is
+provider-side continuation/cache state that is NOT derivable from parts (the
+provider returns it at runtime). v1 stores it in `runtime_state_json`, and the
+import path explicitly restores it so the next run does not re-prime caches.
+Dropping it in v2 would silently lose prompt-continuation caching across
+restarts and across import/export.
+
+```sql
+ALTER TABLE sessions ADD COLUMN provider_anchors_json JSON;  -- map<provider_id, ProviderPromptAnchor>
+-- maintained per run completion; cleared on compaction (mirrors v1 clear_provider_anchors)
+```
+
+### 13.4 Prompt window / token accounting (SHOULD, derive + slim persist)
+
+v1 `PromptWindowRuntime` / `PromptTokenRuntime` (prompt_window, prompt_tokens)
+are reconstructible in v2: the window is the membership parts after the last
+compaction part; the compaction part itself marks the boundary; token counts
+can be recomputed or taken from `usage`. Keep only what is not derivable:
+`provider_anchors_json` (13.3) and `config_json` (5.1). No prompt-window
+columns are added; this is a decision to validate during implementation.
+
+### 13.5 Session stats are derived — define the queries (SHOULD)
+
+v1 `SessionStatsRepository` (workspace_counts, event_stats, child_counts)
+becomes derived SQL over v2 tables:
+
+```sql
+-- message_count per session: count run markers (a message == one run)
+SELECT m.session_id, COUNT(*) FROM session_parts m
+JOIN parts p ON p.part_id = m.part_id WHERE p.kind = 'run' GROUP BY m.session_id;
+-- last_message_at per session
+SELECT sp.session_id, MAX(p.created_at_ms) FROM session_parts sp
+JOIN parts p ON p.part_id = sp.part_id GROUP BY sp.session_id;
+-- child_counts per parent
+SELECT parent_id, COUNT(*) FROM sessions GROUP BY parent_id;
+-- workspace_counts
+SELECT workspace_id, COUNT(*) FROM sessions GROUP BY workspace_id;
+```
+
+Decision D9 (message_count semantics): count `kind='run'` markers = messages;
+UI part counts are a separate query if needed.
+
+### 13.6 Part-lookup semantics change in a multi-session world (SHOULD)
+
+v1 `ProjectionLookupRepository.session_id_for_message/part` answered 「which
+session owns this」. v2 has two answers:
+
+- ownership: `parts.origin_session_id` (fast, indexed `idx_parts_origin`);
+- visibility: `SELECT session_id FROM session_parts WHERE part_id = ?`
+  (`idx_session_parts_part`).
+
+API consumers (TUI navigation via `find_session_id_for_message/part`) default to
+ownership (origin session); visibility is available for fork-aware UIs.
+
+### 13.7 Timeline / event API surface redefinition (SHOULD, API breaking)
+
+| v1 API | v2 replacement |
+|--------|----------------|
+| `list_session_events` / `stream_session_events` (REST, event envelopes) | ordered parts of the session + in-memory live patch bus; wire format changes |
+| `latest_event_seq` | `sessions.version` or `MAX(session_parts.seq)` |
+| `export_session_jsonl` | serialize session meta + ordered parts (markers carry metadata/provider_state; anchors from 13.3); one part per line |
+| `import_session_jsonl` | re-create session + parts + membership with fresh ids; remap `parent_part_id`/`run_id` chains; restore metadata/provider_state/anchors; drop subtask lineage (matches v1) |
+| `TranscriptSnapshot`/`TranscriptPatch` (turns) | marker-grouped parts (turns = run marker + its parts); UI renders markers as turn boundaries |
+| `ActivityId`/`TextSegmentId`/`MessageId` | dissolve into `part_id` (API uses part ids) |
+
+### 13.8 Usage queries need session context (SHOULD)
+
+v1 usage records carry session title + is_subagent and filter by workspace /
+session list / time range / `include_subagents`. v2 `usage` already stores
+session_id/run_id/provider/model/usage_json/created_at_ms; add the JOIN:
+
+```sql
+SELECT u.*, s.title, (s.relation_kind = 'subagent') AS is_subagent
+FROM usage u JOIN sessions s ON s.session_id = u.session_id
+WHERE s.workspace_id = ? AND s.lifecycle_state = 'ready'
+  AND (s.relation_kind != 'subagent' OR :include_subagents)
+  AND u.created_at_ms BETWEEN :from AND :to;
+```
+
+### 13.9 Streaming write policy (SHOULD, explicit)
+
+v1 deliberately had 「0 writes while streaming」 for activities (memory-only
+deltas) and checkpoint events for parts. v2 writes part rows directly and
+updates `content` + `revision` per delta; that is more write amplification per
+stream than v1's activity path. Policy: throttle in-place part updates (flush
+at most every N deltas or on run completion), keep live deltas on the in-memory
+bus as v1. This is an implementation knob, not a schema change.
+
+### 13.10 Attachment/server-cache boundary (INFO)
+
+`file_ref` / `paste_ref` / `attachment` parts reference blobs managed by the app
+server's attachment cache (a separate sqlx DB, out of scope). Part content
+carries the reference (path/name/mime/sha); the cache DB stays as-is.
+
+### 13.11 Non-DB surfaces unchanged (INFO)
+
+`MemoryRepository` / `MemoryDir` (filesystem memory docs), `model_catalog_*`,
+`scheduler_*`, permission policy resolution, leases heartbeat timing all stay
+as-is; they are not part of the chat-data schema.
+
+### 13.12 Open-decision additions
+
+| # | Decision | Default (recommended) |
+|---|----------|-----------------------|
+| D7 | message-level metadata / provider_state home | nullable `metadata`/`provider_state` JSON columns on parts, populated on run markers |
+| D8 | provider anchors | persist `sessions.provider_anchors_json` (not derivable; required for cache continuation + import round-trip) |
+| D9 | message_count semantics | count of run markers (a message == one run) |
+| D10 | streaming write policy | throttle part updates; live deltas stay in-memory |
+
+---
+
+_End of v2 design (gap closure included)._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._

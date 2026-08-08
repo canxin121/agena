@@ -693,3 +693,75 @@ as-is; they are not part of the chat-data schema.
 ---
 
 _End of v2 design (gap closure included)._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._
+
+---
+
+## 14. Unified session facade — no event concept anywhere
+
+External callers (TUI, Web, CLI, tests) interact with ONE facade that hides the
+memory/DB boundary completely. Persistence is purely internal.
+
+### 14.1 Public shape
+
+```rust
+// Pure data model — no DB types leak out
+pub struct Part { part_id, kind, role, state, content, summary, parent_part_id, run_id, ... }
+pub struct SessionView { meta: SessionMeta, parts: Vec<Part> }  // ordered by seq
+
+// The ONLY live-update concept: change notifications, not an event log.
+// Derived from operations, emitted after commit, never persisted, never replayed.
+pub enum SessionChange {
+    PartAdded   { seq, part },
+    PartUpdated { part_id, revision, state, content },   // streaming deltas
+    PartRemoved { part_id },
+    SessionMetaUpdated { meta },
+}
+
+#[async_trait]
+pub trait SessionStore {
+    async fn load(&self, session_id: i64) -> Result<SessionView>;
+    async fn submit_user_message(&self, session_id, parts: Vec<NewPart>) -> Result<RunId>;
+    async fn append_parts(&self, session_id, run_id, parts: Vec<NewPart>) -> Result<()>;  // streaming
+    async fn update_part(&self, session_id, part_id, delta) -> Result<()>;                // streaming delta
+    async fn complete_run(&self, session_id, run_id, outcome) -> Result<()>;
+    async fn answer_interaction(&self, session_id, interaction_part_id, reply) -> Result<()>;
+    async fn fork(&self, session_id, at_seq, title) -> Result<i64>;
+    async fn rewind(&self, session_id, at_seq, title) -> Result<i64>;
+    async fn delete(&self, session_id) -> Result<()>;
+    fn subscribe(&self, session_id, observer: impl Fn(SessionChange)) -> Subscription;
+}
+```
+
+### 14.2 Internals (invisible to callers)
+
+- `load`: memory cache first, then a single membership JOIN against the DB.
+- Writes: validate lease -> one transaction (parts + membership + `sessions.version`
+  bump) -> after commit, notify subscribers -> return. Callers never see a
+  memory/DB split.
+- Recovery (lease steal -> abort stale run markers) and GC are maintenance
+  internals.
+- In-memory backend for tests (v1 MemoryStore precedent): tests run without SQLite.
+
+### 14.3 The event concept is gone
+
+| v1 event role | v2 replacement |
+|---------------|----------------|
+| source of truth / audit / replay | parts are the truth (no replay) |
+| internal projection driver | no projections; domain operations persist directly |
+| notify subscribers (live updates) | `SessionChange` notifications derived from the same operation, emitted after commit |
+| catch-up (reconnect / cross-process) | `sessions.version` / `MAX(session_parts.seq)` |
+
+`SessionChange` is a notification (observer pattern), not an event: never
+persisted, never replayed, no causality chain. History = ordered parts.
+
+### 14.4 Cross-process live updates (honest boundary)
+
+- Same-process subscribers: backed by the in-memory bus (TUI is in-process, zero cost).
+- Cross-process (server executes, another instance's UI watches): `subscribe` is
+  backed by the existing notification stream (`agena-runtime-notifications` / SSE)
+  plus `version`/`seq` catch-up for late joiners. The facade hides the transport;
+  it is a notification channel, not an event log.
+
+---
+
+_End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._

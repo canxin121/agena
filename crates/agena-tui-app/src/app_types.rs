@@ -454,10 +454,12 @@ pub struct App {
     pub(super) pending_ui_action: Option<UiAction>,
     pub(super) current_lineage: Option<CurrentLineageState>,
     /// Open side conversations: side session id -> the parent session it was
-    /// forked from. A side conversation is an ephemeral fork started by
-    /// `/side <question>`; the user is switched into it to chat while the
-    /// parent run keeps going. The entry is dropped when navigation leaves
-    /// the side conversation (unless toggling straight back to its parent).
+    /// forked from. A side conversation is `/fork` plus a transient side
+    /// identity: the fork itself is a permanent child session with full
+    /// history, tracked here only while the TUI treats it as an open side
+    /// conversation (`/side <question>`; the user is switched into it to
+    /// chat while the parent run keeps going). The entry is dropped when
+    /// navigation leaves the side conversation or its parent.
     pub(super) side_sessions: HashMap<i64, i64>,
     /// Monotonic id for usage dashboard loads. Keeping it on the app prevents
     /// a late response from an older, closed dashboard matching a newly

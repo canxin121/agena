@@ -314,7 +314,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Fork,
         name: "fork",
         aliases: &["branch"],
-        arguments: "",
+        arguments: "<question>",
         summary_key: "command-fork-summary",
     },
     CommandSpec {
@@ -589,5 +589,22 @@ mod tests {
         let alias = parse_command("/btw explain the recent diff").expect("btw alias");
         assert_eq!(alias.spec.id, CommandId::Side);
         assert_eq!(alias.args, "explain the recent diff");
+    }
+
+    #[test]
+    fn fork_is_a_real_fork_command_requiring_a_question() {
+        let spec = find_command("fork").expect("fork command");
+        assert_eq!(spec.name, "fork");
+        assert!(spec.requires_arguments());
+        assert_eq!(spec.invocation(), "/fork <question>");
+
+        let command = parse_command("/fork explain the architecture").expect("fork command");
+        assert_eq!(command.spec.id, CommandId::Fork);
+        assert_eq!(command.args, "explain the architecture");
+
+        assert_eq!(
+            find_command("branch").map(|spec| spec.id),
+            Some(CommandId::Fork)
+        );
     }
 }

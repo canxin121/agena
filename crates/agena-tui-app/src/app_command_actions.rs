@@ -48,13 +48,7 @@ impl App {
             CommandId::Copy => self.copy_loaded_transcript(),
             CommandId::CopyMessage => self.copy_last_assistant_message(),
             CommandId::CopyVisible => self.copy_visible_transcript(),
-            CommandId::Fork => {
-                let Some(session_id) = self.transcript.session_id else {
-                    self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
-                    return;
-                };
-                self.create_session_with_parent(None, Some(session_id));
-            }
+            CommandId::Fork => self.handle_fork_command(args),
             CommandId::Children => self.open_child_sessions_picker(),
             CommandId::Parent => self.open_parent_session(),
             CommandId::Diagnostics => {
@@ -120,16 +114,33 @@ impl App {
         }
     }
 
-    /// `/side <question>` forks the current session (full history clone) and
-    /// submits the question in the fork. The user is switched into the fork
-    /// to chat while the parent run keeps going untouched — a codex-style
-    /// ephemeral side conversation. `/btw` and `/aside` are aliases.
+    /// `/fork <question>` forks the current session (full history clone) and
+    /// submits the question into the fork. The user is switched into the
+    /// fork; the parent session is untouched and keeps running. `/branch` is
+    /// an alias.
+    pub(crate) fn handle_fork_command(&mut self, args: &str) {
+        self.fork_session_and_submit(args, ForkKind::Fork);
+    }
+
+    /// `/side <question>` is `/fork` plus the side-conversation identity: the
+    /// fork is registered in `side_sessions` (footer indicator, already-open
+    /// gate, marker dropped on navigation) while the main session keeps
+    /// running in the background — the only difference from plain `/fork`.
+    /// `/btw` and `/aside` are aliases.
     pub(crate) fn handle_side_command(&mut self, args: &str) {
+        self.fork_session_and_submit(args, ForkKind::Side);
+    }
+
+    /// Shared `/fork` / `/side` implementation: fork the current session with
+    /// full history (`ForkSession`, `at_message_id: None`), submit the
+    /// question into the fork, and route the UI into it. The fork itself is a
+    /// permanent child session; side tracking only affects the TUI identity.
+    fn fork_session_and_submit(&mut self, args: &str, kind: ForkKind) {
         let question = args.trim();
         if question.is_empty() {
             self.flash_warning(self.i18n.text_args(
                 "flash-command-usage",
-                &agena_tui::fl_args!("usage" => "/side <question>"),
+                &agena_tui::fl_args!("usage" => kind.usage()),
             ));
             return;
         }
@@ -138,15 +149,23 @@ impl App {
             .session_id
             .or_else(|| self.sessions.current_selected_id())
         else {
-            self.flash_warning(ui_text::t(&self.i18n, "flash-side-requires-session"));
+            let key = match kind {
+                ForkKind::Fork => "flash-command-requires-session",
+                ForkKind::Side => "flash-side-requires-session",
+            };
+            self.flash_warning(ui_text::t(&self.i18n, key));
             return;
         };
-        if !self.side_sessions.is_empty() {
+        if kind == ForkKind::Side && !self.side_sessions.is_empty() {
             self.flash_warning(ui_text::t(&self.i18n, "flash-side-already-open"));
             return;
         }
-        let title = format!("side: {}", derive_session_title(&self.i18n, question));
+        let title = match kind {
+            ForkKind::Fork => derive_session_title(&self.i18n, question),
+            ForkKind::Side => format!("side: {}", derive_session_title(&self.i18n, question)),
+        };
         let prompt = question.to_string();
+        let track_as_side = kind == ForkKind::Side;
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
@@ -158,10 +177,12 @@ impl App {
                     // Register the side conversation before the submit result
                     // routes the UI into the fork, so the open_session switch
                     // keeps the side marker (same-channel ordering).
-                    let _ = tx.send(AppMessage::SideSessionOpened {
-                        session_id,
-                        parent_id,
-                    });
+                    if track_as_side {
+                        let _ = tx.send(AppMessage::SideSessionOpened {
+                            session_id,
+                            parent_id,
+                        });
+                    }
                     let document =
                         agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                             text: prompt,
@@ -188,7 +209,11 @@ impl App {
                 }
             }
         });
-        self.flash_info(ui_text::t(&self.i18n, "flash-side-spawned"));
+        let spawned_key = match kind {
+            ForkKind::Fork => "flash-fork-spawned",
+            ForkKind::Side => "flash-side-spawned",
+        };
+        self.flash_info(ui_text::t(&self.i18n, spawned_key));
     }
 
     pub(crate) fn handle_review_command(&mut self, args: &str) {
@@ -335,6 +360,26 @@ impl App {
         };
         self.request_session_rename(session_id, trimmed.to_string());
         true
+    }
+}
+
+/// Which fork flavor a `/fork` or `/side` invocation runs. Both commands
+/// create the same real fork (full history clone) and submit the question
+/// into it; `/side` additionally tracks the fork as an open side
+/// conversation so the main session keeps running untouched in the
+/// background.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ForkKind {
+    Fork,
+    Side,
+}
+
+impl ForkKind {
+    fn usage(self) -> &'static str {
+        match self {
+            ForkKind::Fork => "/fork <question>",
+            ForkKind::Side => "/side <question>",
+        }
     }
 }
 

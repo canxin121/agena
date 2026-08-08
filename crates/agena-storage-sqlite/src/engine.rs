@@ -650,6 +650,120 @@ impl PersistenceEngine for SqliteEngine {
         .await
     }
 
+    async fn find_subagent_by_task_id(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<Option<SessionMeta>, StoreError> {
+        self.db()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT {SESSION_COLS} FROM agena_sessions s \
+                     WHERE s.parent_id = ? AND s.task_id = ?"
+                ),
+                [parent_session_id.into(), task_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .map(meta_from_row)
+            .transpose()
+            .map_err(map_db_err)
+    }
+
+    async fn create_subagent_session(
+        &self,
+        parent_session_id: i64,
+        task_id: String,
+        title: String,
+        now_ms: i64,
+    ) -> Result<SessionMeta, StoreError> {
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let (depth, root_id, workspace_id) = {
+                    let parent = session_meta_tx(txn, parent_session_id).await?;
+                    if parent.lifecycle_state != SessionLifecycleState::Ready {
+                        return Err(StoreError::InvalidState(format!(
+                            "parent session {parent_session_id} is not ready"
+                        )));
+                    }
+                    (parent.depth + 1, parent.root_id, parent.workspace_id)
+                };
+                let now = now_ms;
+                let result = txn
+                    .execute(Statement::from_sql_and_values(
+                        DatabaseBackend::Sqlite,
+                        "INSERT INTO agena_sessions \
+                         (parent_id, depth, root_id, workspace_id, relation_kind, cutoff_part_id, title, \
+                          version, lifecycle_state, task_id, subtask_status, config_json, provider_anchors_json, \
+                          created_at_ms, updated_at_ms) \
+                         VALUES (?, ?, ?, ?, 'subagent', NULL, ?, 1, 'creating', ?, 'created', NULL, NULL, ?, ?)",
+                        [
+                            parent_session_id.into(),
+                            depth.into(),
+                            root_id.into(),
+                            workspace_id.into(),
+                            title.into(),
+                            task_id.into(),
+                            now.into(),
+                            now.into(),
+                        ],
+                    ))
+                    .await
+                    .map_err(map_db_err)?;
+                let id = i64::try_from(result.last_insert_id()).map_err(|_| {
+                    StoreError::Database("session identifier exceeds i64 range".to_owned())
+                })?;
+                session_meta_tx(txn, id).await
+            })
+        })
+        .await
+    }
+
+    async fn update_subtask_state(
+        &self,
+        session_id: i64,
+        status: Option<String>,
+        started_at_ms: Option<i64>,
+        finished_at_ms: Option<i64>,
+        failure: Option<serde_json::Value>,
+    ) -> Result<SessionMeta, StoreError> {
+        let db = self.db();
+        run_write(db, move |txn| {
+            Box::pin(async move {
+                let now = wall_clock_ms();
+                let failure_json = failure
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()
+                    .map_err(|error| {
+                        StoreError::Serialization(format!("encode failure: {error}"))
+                    })?;
+                txn.execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    "UPDATE agena_sessions \
+                     SET subtask_status = ?, subtask_started_at_ms = ?, \
+                         subtask_finished_at_ms = ?, subtask_failure_json = ?, \
+                         version = version + 1, updated_at_ms = ? \
+                     WHERE id = ?",
+                    [
+                        text_value(status),
+                        Value::BigInt(started_at_ms),
+                        Value::BigInt(finished_at_ms),
+                        text_value(failure_json),
+                        now.into(),
+                        session_id.into(),
+                    ],
+                ))
+                .await
+                .map_err(map_db_err)?;
+                session_meta_tx(txn, session_id).await
+            })
+        })
+        .await
+    }
+
     async fn list_session_summaries(
         &self,
         query: SessionListQuery,

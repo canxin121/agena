@@ -237,6 +237,10 @@ impl InMemoryEngine {
         }
     }
 
+    /// The child's `(depth, root_id)` given its parent: `depth = parent.depth +
+    /// 1`, `root_id = parent.root_id` — matching the SQLite engine and the
+    /// schema invariant (`NEW.depth = parent.depth + 1 AND NEW.root_id =
+    /// parent.root_id`).
     fn parent_lineage(&self, parent_id: Option<i64>) -> Result<(i64, i64), StoreError> {
         let Some(parent_id) = parent_id else {
             return Ok((0, 0));
@@ -250,7 +254,7 @@ impl InMemoryEngine {
                 "parent session {parent_id} is not ready"
             )));
         }
-        Ok((parent.depth, parent.root_id))
+        Ok((parent.depth + 1, parent.root_id))
     }
 
     /// Parts of `session_id` ordered by `(created_at_ms, part_id)`.
@@ -461,6 +465,103 @@ impl PersistenceEngine for InMemoryEngine {
             .get_mut(&session_id)
             .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
         meta.config_json = config;
+        meta.version += 1;
+        meta.updated_at_ms = now_ms;
+        Ok(meta.clone())
+    }
+
+    async fn find_subagent_by_task_id(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<Option<SessionMeta>, StoreError> {
+        let sessions = self.sessions.read().expect("sessions lock");
+        Ok(sessions
+            .values()
+            .find(|meta| {
+                meta.parent_id == Some(parent_session_id)
+                    && meta.task_id.as_deref() == Some(task_id)
+            })
+            .cloned())
+    }
+
+    async fn create_subagent_session(
+        &self,
+        parent_session_id: i64,
+        task_id: String,
+        title: String,
+        now_ms: i64,
+    ) -> Result<SessionMeta, StoreError> {
+        if self
+            .find_subagent_by_task_id(parent_session_id, &task_id)
+            .await?
+            .is_some()
+        {
+            return Err(StoreError::InvalidState(format!(
+                "subtask '{task_id}' already exists under session {parent_session_id}"
+            )));
+        }
+        // A subagent is a child branch of the parent's root, inheriting its
+        // workspace (matches v1 `create_subagent_session` semantics).
+        let parent = self
+            .sessions
+            .read()
+            .expect("sessions lock")
+            .get(&parent_session_id)
+            .cloned()
+            .ok_or_else(|| StoreError::not_found(format!("session {parent_session_id}")))?;
+        // Depth = parent.depth + 1, matching the SQLite engine and the schema
+        // invariant (`NEW.depth = parent.depth + 1`).
+        let depth = parent.depth + 1;
+        let id = self.next_session_id();
+        let meta = SessionMeta {
+            id,
+            parent_id: Some(parent_session_id),
+            depth,
+            root_id: parent.root_id,
+            workspace_id: parent.workspace_id,
+            relation_kind: SessionRelationKind::Subagent,
+            cutoff_part_id: None,
+            title,
+            version: 1,
+            lifecycle_state: SessionLifecycleState::Creating,
+            creation_failure: None,
+            task_id: Some(task_id),
+            // `created` is the initial delegated-task lifecycle (matches the
+            // SQLite schema trigger `agena_sessions_subagent_shape`).
+            subtask_status: Some("created".to_owned()),
+            subtask_started_at_ms: None,
+            subtask_finished_at_ms: None,
+            subtask_failure: None,
+            config_json: None,
+            provider_anchors_json: None,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+        };
+        self.sessions
+            .write()
+            .expect("sessions lock")
+            .insert(id, meta.clone());
+        Ok(meta)
+    }
+
+    async fn update_subtask_state(
+        &self,
+        session_id: i64,
+        status: Option<String>,
+        started_at_ms: Option<i64>,
+        finished_at_ms: Option<i64>,
+        failure: Option<Value>,
+    ) -> Result<SessionMeta, StoreError> {
+        let now_ms = self.now_ms();
+        let mut sessions = self.sessions.write().expect("sessions lock");
+        let meta = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        meta.subtask_status = status;
+        meta.subtask_started_at_ms = started_at_ms;
+        meta.subtask_finished_at_ms = finished_at_ms;
+        meta.subtask_failure = failure;
         meta.version += 1;
         meta.updated_at_ms = now_ms;
         Ok(meta.clone())

@@ -691,3 +691,84 @@ async fn second_process_reads_committed_parts() {
     assert!(view.parts[0].is_run_marker());
     assert_eq!(view.parts[1].content["text"], "hello");
 }
+
+#[tokio::test]
+async fn subagent_helpers_find_create_and_update_subtask_state() {
+    let db = in_memory_db().await;
+    let (engine, parent_id) = setup(db).await;
+    let child = engine
+        .create_subagent_session(parent_id, "task-9".to_owned(), "sub".to_owned(), 1_000_000)
+        .await
+        .expect("create subagent");
+    assert_eq!(child.parent_id, Some(parent_id));
+    assert_eq!(child.task_id.as_deref(), Some("task-9"));
+    assert_eq!(child.relation_kind, SessionRelationKind::Subagent);
+    // Depth and root follow the hierarchy invariant: depth = parent.depth + 1,
+    // root inherited from the parent.
+    let parent_meta = engine.session_meta(parent_id).await.expect("parent meta");
+    assert_eq!(child.depth, parent_meta.depth + 1);
+    assert_eq!(child.root_id, parent_meta.root_id);
+
+    let found = engine
+        .find_subagent_by_task_id(parent_id, "task-9")
+        .await
+        .expect("find")
+        .expect("subagent exists");
+    assert_eq!(found.id, child.id);
+
+    let missing = engine
+        .find_subagent_by_task_id(parent_id, "nope")
+        .await
+        .expect("find missing");
+    assert!(missing.is_none(), "unknown task id yields None");
+
+    // `running`: started, no finish, no failure (schema lifecycle trigger).
+    let updated = engine
+        .update_subtask_state(
+            child.id,
+            Some("running".to_owned()),
+            Some(1_000_001),
+            None,
+            None,
+        )
+        .await
+        .expect("update subtask");
+    assert_eq!(updated.subtask_status.as_deref(), Some("running"));
+    assert_eq!(updated.subtask_started_at_ms, Some(1_000_001));
+    assert_eq!(updated.subtask_finished_at_ms, None);
+    assert_eq!(updated.subtask_failure, None);
+
+    // `failed`: started + finished + full failure shape.
+    let failure = json!({
+        "id": "task-9",
+        "code": "execution_failed",
+        "user": {"fallback": "The subtask failed."}
+    });
+    let failed = engine
+        .update_subtask_state(
+            child.id,
+            Some("failed".to_owned()),
+            Some(1_000_001),
+            Some(1_000_002),
+            Some(failure.clone()),
+        )
+        .await
+        .expect("update subtask");
+    assert_eq!(failed.subtask_status.as_deref(), Some("failed"));
+    assert_eq!(failed.subtask_finished_at_ms, Some(1_000_002));
+    assert_eq!(failed.subtask_failure, Some(failure));
+
+    // The unique (parent_id, task_id) index refuses a duplicate create.
+    let err = engine
+        .create_subagent_session(parent_id, "task-9".to_owned(), "dup".to_owned(), 1_000_000)
+        .await
+        .expect_err("duplicate subagent refused");
+    assert!(
+        matches!(
+            err,
+            agena_storage::store::StoreError::Database(_)
+                | agena_storage::store::StoreError::InvalidState(_)
+        ),
+        "duplicate (parent, task) is rejected: {err:?}"
+    );
+}

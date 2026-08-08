@@ -29,12 +29,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
-    LEASE_STALENESS_MS, LeaseAcquire, NewPart, PartDelta, PersistenceEngine, RunOutcome,
-    SessionChange, SessionListQuery, SessionMeta, SessionPresentation, SessionSummary, SessionView,
-    StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageStats, presentation,
+    LEASE_STALENESS_MS, LeaseAcquire, NewPart, NewSession, PartDelta, PersistenceEngine,
+    RunOutcome, SessionChange, SessionListQuery, SessionMeta, SessionPresentation, SessionSummary,
+    SessionView, StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
+    presentation,
 };
 
 /// A session subscription handle. Dropping it unsubscribes (15.5).
@@ -64,6 +65,41 @@ pub trait SessionStore: Send + Sync {
     /// Load a session's metadata plus parts ordered by
     /// `(created_at_ms, part_id)` — cache first, then one membership JOIN.
     async fn load(&self, session_id: i64) -> Result<SessionView, StoreError>;
+
+    /// Create a new session row (root, child, fork/rewind, or subagent) and
+    /// return its metadata. The engine validates the lineage rules
+    /// (root/child/subagent must have a `cutoff_part_id`, branches must have
+    /// one).
+    async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError>;
+
+    /// Find a subagent session by its unique `(parent_id, task_id)` pair.
+    async fn find_subagent_by_task_id(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<Option<SessionMeta>, StoreError>;
+
+    /// Create a subagent session (delegated subtask) under `parent_session_id`
+    /// with `task_id` recorded. The schema's unique `(parent_id, task_id)`
+    /// index makes concurrent creates fail loudly; callers check
+    /// `find_subagent_by_task_id` first. Returns the new session id.
+    async fn create_subagent_session(
+        &self,
+        parent_session_id: i64,
+        task_id: String,
+        title: String,
+    ) -> Result<i64, StoreError>;
+
+    /// Update a session's subtask columns (status / started / finished /
+    /// failure), bumping `version`.
+    async fn update_subtask_state(
+        &self,
+        session_id: i64,
+        status: Option<String>,
+        started_at_ms: Option<i64>,
+        finished_at_ms: Option<i64>,
+        failure: Option<Value>,
+    ) -> Result<SessionMeta, StoreError>;
 
     /// List session summaries, newest first (13.1 / 14.1).
     async fn list_session_summaries(
@@ -114,6 +150,37 @@ pub trait SessionStore: Send + Sync {
         run_id: i64,
         outcome: RunOutcome,
     ) -> Result<(), StoreError>;
+
+    /// Start a fresh run without user input (`continue`, `compaction`,
+    /// `background`, `steer`). Creates a run marker with the given `run_kind`
+    /// and returns its part id.
+    async fn start_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_kind: &str,
+        content: Value,
+        idempotency_key: Option<String>,
+    ) -> Result<i64, StoreError>;
+
+    /// Persist `provider_anchors_json` (resume is blocking on it, D8).
+    async fn set_provider_anchors(
+        &self,
+        session_id: i64,
+        anchors: Option<Value>,
+    ) -> Result<SessionMeta, StoreError>;
+
+    /// Persist `config_json` (execution config only, D5).
+    async fn set_config_json(
+        &self,
+        session_id: i64,
+        config: Option<Value>,
+    ) -> Result<SessionMeta, StoreError>;
+
+    /// Append one provider-call usage record (append-only, section 16). No
+    /// lease: usage is written once per model call by the engine and never
+    /// updated.
+    async fn record_usage(&self, record: UsageRecord) -> Result<(), StoreError>;
 
     /// Answer a pending interaction: complete it and append the user reply.
     async fn answer_interaction(
@@ -492,6 +559,63 @@ where
         self.load_cached(session_id).await
     }
 
+    async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError> {
+        let meta = self.engine.create_session(new_session).await?;
+        // A fresh session has no subscribers yet, but emit for consistency
+        // with the write path (a child create may be observed by a parent
+        // subscriber).
+        self.bus.emit(SessionChange::SessionMetaUpdated {
+            session_id: meta.id,
+            meta: meta.clone(),
+        });
+        Ok(meta)
+    }
+
+    async fn find_subagent_by_task_id(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<Option<SessionMeta>, StoreError> {
+        self.engine.find_subagent_by_task_id(parent_session_id, task_id).await
+    }
+
+    async fn create_subagent_session(
+        &self,
+        parent_session_id: i64,
+        task_id: String,
+        title: String,
+    ) -> Result<i64, StoreError> {
+        let meta = self
+            .engine
+            .create_subagent_session(parent_session_id, task_id, title, self.now())
+            .await?;
+        self.bus.emit(SessionChange::SessionMetaUpdated {
+            session_id: meta.id,
+            meta: meta.clone(),
+        });
+        Ok(meta.id)
+    }
+
+    async fn update_subtask_state(
+        &self,
+        session_id: i64,
+        status: Option<String>,
+        started_at_ms: Option<i64>,
+        finished_at_ms: Option<i64>,
+        failure: Option<Value>,
+    ) -> Result<SessionMeta, StoreError> {
+        let meta = self
+            .engine
+            .update_subtask_state(session_id, status, started_at_ms, finished_at_ms, failure)
+            .await?;
+        self.memory.invalidate(session_id);
+        self.bus.emit(SessionChange::SessionMetaUpdated {
+            session_id,
+            meta: meta.clone(),
+        });
+        Ok(meta)
+    }
+
     async fn list_session_summaries(
         &self,
         query: SessionListQuery,
@@ -601,6 +725,66 @@ where
         let meta = self.engine.session_meta(session_id).await?;
         self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(())
+    }
+
+    async fn start_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_kind: &str,
+        content: Value,
+        idempotency_key: Option<String>,
+    ) -> Result<i64, StoreError> {
+        let owner = self.owner(owner_id);
+        self.ensure_lease(session_id, &owner, true).await?;
+        let outcome = self
+            .engine
+            .start_run(session_id, &owner, run_kind, content, idempotency_key, self.now())
+            .await?;
+        if outcome.created {
+            self.memory.invalidate(session_id);
+            let meta = self.engine.session_meta(session_id).await?;
+            for part in &outcome.parts {
+                self.bus.emit(SessionChange::PartAdded {
+                    session_id,
+                    part: part.clone(),
+                });
+            }
+            self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        }
+        Ok(outcome.run_id)
+    }
+
+    async fn set_provider_anchors(
+        &self,
+        session_id: i64,
+        anchors: Option<Value>,
+    ) -> Result<SessionMeta, StoreError> {
+        let meta = self.engine.set_provider_anchors(session_id, anchors).await?;
+        self.memory.invalidate(session_id);
+        self.bus.emit(SessionChange::SessionMetaUpdated {
+            session_id,
+            meta: meta.clone(),
+        });
+        Ok(meta)
+    }
+
+    async fn set_config_json(
+        &self,
+        session_id: i64,
+        config: Option<Value>,
+    ) -> Result<SessionMeta, StoreError> {
+        let meta = self.engine.set_config_json(session_id, config).await?;
+        self.memory.invalidate(session_id);
+        self.bus.emit(SessionChange::SessionMetaUpdated {
+            session_id,
+            meta: meta.clone(),
+        });
+        Ok(meta)
+    }
+
+    async fn record_usage(&self, record: UsageRecord) -> Result<(), StoreError> {
+        self.engine.record_usage(record).await
     }
 
     async fn answer_interaction(
@@ -1177,5 +1361,170 @@ mod tests {
         let imported_view = facade.load(imported).await.expect("imported view");
         assert_eq!(imported_view.parts.len(), 2, "marker + text survive the round trip");
         assert_eq!(imported_view.parts[1].content["text"], "export me");
+    }
+
+    #[tokio::test]
+    async fn create_session_through_the_facade_returns_meta_and_notifies() {
+        let (facade, _clock) = harness();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer: SessionObserver = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().unwrap().push(change))
+        };
+        // No subscriber before creation; subscribe to the new id after it
+        // exists by scanning the emitted change.
+        let meta = facade
+            .create_session(NewSession {
+                workspace_id: 1,
+                parent_id: None,
+                relation_kind: SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "root".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .expect("create root");
+        assert_eq!(meta.relation_kind, SessionRelationKind::Root);
+        assert!(meta.id > 0);
+
+        let _subscription = facade.subscribe(meta.id, observer);
+        let child = facade
+            .create_session(NewSession {
+                workspace_id: 1,
+                parent_id: Some(meta.id),
+                relation_kind: SessionRelationKind::Child,
+                cutoff_part_id: None,
+                title: "child".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .expect("create child");
+        assert_eq!(child.depth, meta.depth + 1, "depth matches the schema invariant");
+        assert_eq!(child.root_id, meta.id, "child inherits the root");
+    }
+
+    #[tokio::test]
+    async fn start_run_starts_a_non_user_run_and_returns_its_marker_id() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "t").await;
+        let run_id = facade
+            .start_run(
+                session_id,
+                "owner-a",
+                "background",
+                json!({"kind": "background", "prompt": "do a thing"}),
+                None,
+            )
+            .await
+            .expect("start background run");
+        assert!(run_id > 0);
+        let view = facade.load(session_id).await.expect("load");
+        let marker = view
+            .parts
+            .iter()
+            .find(|p| p.part_id == run_id)
+            .expect("marker exists");
+        assert_eq!(marker.kind, "run");
+        assert_eq!(marker.content["run_kind"], "background");
+        assert!(marker.state.is_in_flight());
+    }
+
+    #[tokio::test]
+    async fn anchors_and_config_json_are_set_through_the_facade() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "t").await;
+        let anchors = json!({"claude": {"anchor": "abc"}});
+        let config = json!({"execution": {"access": "read_only"}});
+        facade
+            .set_provider_anchors(session_id, Some(anchors.clone()))
+            .await
+            .expect("set anchors");
+        facade
+            .set_config_json(session_id, Some(config.clone()))
+            .await
+            .expect("set config");
+        let meta = facade.engine().session_meta(session_id).await.expect("meta");
+        assert_eq!(meta.provider_anchors_json, Some(anchors));
+        assert_eq!(meta.config_json, Some(config));
+    }
+
+    #[tokio::test]
+    async fn record_usage_through_the_facade_is_reported_in_stats() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "t").await;
+        facade
+            .record_usage(crate::store::UsageRecord {
+                workspace_id: 1,
+                session_id,
+                run_id: None,
+                provider_id: "anthropic".to_owned(),
+                model_id: "claude-5".to_owned(),
+                created_at_ms: facade.now(),
+                input_tokens: 5,
+                output_tokens: 9,
+                reasoning_tokens: 1,
+                cache_write_tokens: 0,
+                cache_read_tokens: 0,
+                tool_use_tokens: 0,
+                other_tokens: 0,
+                total_cost_micros: 42,
+                recorded_cost_micros: None,
+                cost_estimate_incomplete: false,
+                detail_json: None,
+            })
+            .await
+            .expect("record usage");
+        let stats = facade
+            .usage_stats(crate::store::UsageQuery {
+                session_id: Some(session_id),
+                ..Default::default()
+            })
+            .await
+            .expect("stats");
+        assert_eq!(stats.total_calls, 1);
+        assert_eq!(stats.groups[0].input_tokens, 5);
+        assert_eq!(stats.groups[0].output_tokens, 9);
+    }
+
+    #[tokio::test]
+    async fn subtask_helpers_find_create_and_update_subagent_sessions() {
+        let (facade, _clock) = harness();
+        let parent = ready_session(&facade, 1, "parent").await;
+        let child_id = facade
+            .create_subagent_session(parent, "task-1".to_owned(), "sub".to_owned())
+            .await
+            .expect("create subagent");
+        let meta = facade
+            .find_subagent_by_task_id(parent, "task-1")
+            .await
+            .expect("find")
+            .expect("subagent exists");
+        assert_eq!(meta.id, child_id);
+        assert_eq!(meta.parent_id, Some(parent));
+        assert_eq!(meta.task_id.as_deref(), Some("task-1"));
+
+        let updated = facade
+            .update_subtask_state(
+                child_id,
+                Some("running".to_owned()),
+                Some(facade.now()),
+                None,
+                None,
+            )
+            .await
+            .expect("update subtask");
+        assert_eq!(updated.subtask_status.as_deref(), Some("running"));
+        assert!(updated.subtask_started_at_ms.is_some());
+
+        // Creating the same (parent, task) again must be refused.
+        let err = facade
+            .create_subagent_session(parent, "task-1".to_owned(), "dup".to_owned())
+            .await
+            .expect_err("duplicate subagent refused");
+        assert!(matches!(err, StoreError::InvalidState(_)));
     }
 }

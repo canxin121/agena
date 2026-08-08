@@ -94,6 +94,39 @@ pub trait PersistenceEngine: Send + Sync {
         config: Option<serde_json::Value>,
     ) -> Result<SessionMeta, StoreError>;
 
+    /// Find a subagent session by its unique `(parent_id, task_id)` pair
+    /// (schema `uq_agena_session_parent_task`). Used to resume a delegated
+    /// subtask instead of creating a duplicate child.
+    async fn find_subagent_by_task_id(
+        &self,
+        parent_session_id: i64,
+        task_id: &str,
+    ) -> Result<Option<SessionMeta>, StoreError>;
+
+    /// Create a subagent session: `relation_kind = subagent`, parented under
+    /// `parent_session_id`, `task_id` recorded on the row. The unique
+    /// `(parent_id, task_id)` pair makes create idempotent at the schema level;
+    /// callers check `find_subagent_by_task_id` first so a conflicting create
+    /// is an unexpected error.
+    async fn create_subagent_session(
+        &self,
+        parent_session_id: i64,
+        task_id: String,
+        title: String,
+        now_ms: i64,
+    ) -> Result<SessionMeta, StoreError>;
+
+    /// Update a session's subtask columns (status / started / finished /
+    /// failure), bumping `version`. Returns the fresh metadata.
+    async fn update_subtask_state(
+        &self,
+        session_id: i64,
+        status: Option<String>,
+        started_at_ms: Option<i64>,
+        finished_at_ms: Option<i64>,
+        failure: Option<serde_json::Value>,
+    ) -> Result<SessionMeta, StoreError>;
+
     /// List session summaries, newest first (section 14.1).
     async fn list_session_summaries(
         &self,

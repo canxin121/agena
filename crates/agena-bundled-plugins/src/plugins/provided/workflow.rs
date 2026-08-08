@@ -103,17 +103,12 @@ impl Default for ToolTagsConfig {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WorkflowPlanConfig {
     pub(crate) default_autorun: bool,
-    /// Maximum consecutive autorun continuations without plan progress.
-    /// `None` (the default) means unlimited: autorun keeps retrying until the
-    /// plan completes, is blocked, or the user stops it.
-    pub(crate) max_autorun_continuations: Option<u32>,
 }
 
 impl Default for WorkflowPlanConfig {
     fn default() -> Self {
         Self {
             default_autorun: true,
-            max_autorun_continuations: None,
         }
     }
 }
@@ -214,11 +209,6 @@ pub(crate) fn planning_plugin_config_schema() -> serde_json::Value {
             "Default Autorun",
             "Default autorun value applied when plan.set omits the override.",
         ),
-        (
-            "/properties/max_autorun_continuations",
-            "Max Autorun Continuations",
-            "Maximum consecutive plan autorun continuations without plan progress; null (the default) means unlimited.",
-        ),
     ] {
         crate::tool::definition::set_schema_metadata(
             &mut schema,
@@ -250,9 +240,6 @@ pub(crate) use tool_api_inputs::{
 
 const PLAN_NAMESPACE: &str = "workflow_plan";
 const PLAN_KEY_ACTIVE: &str = "active";
-const PLAN_RUNTIME_NAMESPACE: &str = "workflow_plan_runtime";
-const PLAN_RUNTIME_AUTO_SIGNATURE_KEY: &str = "last_autorun_signature";
-const PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY: &str = "autorun_continuations";
 const PLAN_DISPLAY_CONTRIBUTION_ID: &str = "plan";
 const PLAN_REVIEW_DECISION_APPROVE: &str = "Approve";
 const PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON: &str = "Approve with autorun on";
@@ -409,28 +396,6 @@ impl WorkflowPlugin {
         if step.executor != WorkflowPlanExecutor::Ai {
             return Ok(None);
         }
-        let signature = Self::plan_auto_signature(&plan, step_index)?;
-        let mut continuations = self.load_autorun_continuations().await?;
-        let same_signature = self
-            .load_autorun_signature()
-            .await?
-            .is_some_and(|current| current == signature);
-        let max_continuations = self.config()?.plan.max_autorun_continuations;
-        if same_signature {
-            if Self::autorun_cap_exhausted(continuations, max_continuations) {
-                tracing::warn!(
-                    target: "agena::workflow",
-                    plan = %plan.title,
-                    step = step_index + 1,
-                    "plan autorun stopped after {continuations} consecutive continuations without plan progress; update the plan state to resume"
-                );
-                return Ok(None);
-            }
-        } else {
-            continuations = 0;
-            self.save_autorun_signature(signature.as_str()).await?;
-        }
-        self.save_autorun_continuations(continuations + 1).await?;
         Ok(Some(agena_plugin_host::AgentStopPatch {
             continue_with_message: Some(Self::autorun_prompt(
                 &plan,
@@ -440,16 +405,6 @@ impl WorkflowPlugin {
             )),
             reason: Some("workflow plan autorun".to_string()),
         }))
-    }
-
-    /// True when the configured `max_autorun_continuations` cap is exhausted.
-    /// `None` (the default) means unlimited: autorun keeps retrying until the
-    /// plan completes, is blocked, or the user stops it.
-    pub(in crate::plugins::provided::workflow) fn autorun_cap_exhausted(
-        continuations: u32,
-        max_continuations: Option<u32>,
-    ) -> bool {
-        max_continuations.is_some_and(|max| continuations >= max)
     }
 }
 
@@ -942,11 +897,6 @@ mod tests {
         use super::WorkflowPlanConfig;
 
         assert!(WorkflowPlanConfig::default().default_autorun);
-        assert_eq!(
-            WorkflowPlanConfig::default().max_autorun_continuations,
-            None,
-            "the default max_autorun_continuations must mean unlimited"
-        );
     }
 
     #[test]
@@ -962,30 +912,6 @@ mod tests {
         assert!(
             with_error.contains("Previous run error: boom"),
             "the run_error must be surfaced to the model: {with_error}"
-        );
-    }
-
-    #[test]
-    fn autorun_cap_default_is_unlimited_and_configurable() {
-        assert!(
-            !WorkflowPlugin::autorun_cap_exhausted(0, None),
-            "the default (None) must never cap autorun"
-        );
-        assert!(
-            !WorkflowPlugin::autorun_cap_exhausted(100, None),
-            "the default (None) must never cap autorun even after many continuations"
-        );
-        assert!(
-            !WorkflowPlugin::autorun_cap_exhausted(4, Some(5)),
-            "under the configured cap autorun continues"
-        );
-        assert!(
-            WorkflowPlugin::autorun_cap_exhausted(5, Some(5)),
-            "at the configured cap autorun stops"
-        );
-        assert!(
-            WorkflowPlugin::autorun_cap_exhausted(6, Some(5)),
-            "past the configured cap autorun stops"
         );
     }
 

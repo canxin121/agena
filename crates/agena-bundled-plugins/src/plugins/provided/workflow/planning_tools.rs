@@ -54,8 +54,6 @@ pub(crate) struct WorkflowPlanStep {
     pub(crate) description: String,
     pub(crate) executor: WorkflowPlanExecutor,
     pub(crate) status: WorkflowPlanStepStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) wait_until_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) note: String,
     #[serde(default, rename = "checks", skip_serializing_if = "Vec::is_empty")]
@@ -105,8 +103,6 @@ pub(crate) struct WorkflowPlanStepInput {
     pub(crate) executor: WorkflowPlanExecutor,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) status: Option<WorkflowPlanStepStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) wait_until_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
     #[schemars(
@@ -194,8 +190,6 @@ pub(crate) struct PlanUpdateInput {
     pub(crate) check: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) status: Option<WorkflowPlanStepStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) wait_until_ms: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
 }

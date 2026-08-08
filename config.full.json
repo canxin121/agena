@@ -121,10 +121,9 @@
       "agena.plan": {
         "package": {
           "kind": "static"
-        },
+                },
         "config": {
-          "default_autorun": true,
-          "max_autorun_continuations": null
+          "default_autorun": true
         }
       },
       "agena.memory": {

@@ -73,6 +73,8 @@ pub enum AppError {
     ExecutionAlreadyActive(i64),
     #[error("model returned an empty response")]
     EmptyResponse,
+    #[error("model-turn budget exhausted (max_turns={max_turns}); the run stopped")]
+    ModelTurnBudgetExhausted { max_turns: usize },
     #[error("session {0} has no active execution")]
     NoActiveExecution(i64),
     #[error("internal error: {0}")]
@@ -151,6 +153,9 @@ impl AppError {
             Self::ExecutionAlreadyActive(_) => "This session is already running a response.",
             Self::EmptyResponse => {
                 "The model returned an empty response. It may be temporarily unavailable or misconfigured; try again or choose another model."
+            }
+            Self::ModelTurnBudgetExhausted { .. } => {
+                "The run reached the configured model-turn cap and stopped. Send a new message to continue, or raise the cap via `session.max_turns` in the config (`0` means unlimited)."
             }
             Self::NoActiveExecution(_) => "This session has no active response.",
             Self::Database(error) if is_database_busy(error) => {
@@ -305,6 +310,13 @@ impl AppError {
                 Responsibility::Dependency,
                 Retry::AfterUserAction,
                 Recovery::ChooseAlternative,
+            ),
+            Self::ModelTurnBudgetExhausted { .. } => (
+                "session.model_turn_budget_exhausted",
+                Category::QuotaExceeded,
+                Responsibility::Caller,
+                Retry::AfterUserAction,
+                Recovery::None,
             ),
             Self::Cancelled => (
                 // Cancellation is a terminal outcome. If it reaches a

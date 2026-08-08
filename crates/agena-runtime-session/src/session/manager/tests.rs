@@ -4559,21 +4559,19 @@ mod tests {
             },
             agena_domain::ComposerNode::activity(agena_domain::ComposerActivity {
                 id: resource_id,
-                payload: agena_domain::ActivityPayload::Resource(
-                    agena_domain::ResourceActivity {
-                        kind: agena_domain::ResourceKind::File,
-                        reference: agena_domain::ResourceReference::WorkspacePath {
-                            path: "notes.txt".to_owned(),
-                        },
-                        name: "notes.txt".to_owned(),
-                        media_type: Some("text/plain".to_owned()),
-                        size_bytes: Some(12),
-                        width: None,
-                        height: None,
-                        duration_ms: None,
-                        page_count: None,
+                payload: agena_domain::ActivityPayload::Resource(agena_domain::ResourceActivity {
+                    kind: agena_domain::ResourceKind::File,
+                    reference: agena_domain::ResourceReference::WorkspacePath {
+                        path: "notes.txt".to_owned(),
                     },
-                ),
+                    name: "notes.txt".to_owned(),
+                    media_type: Some("text/plain".to_owned()),
+                    size_bytes: Some(12),
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                }),
                 provenance: Default::default(),
             }),
             agena_domain::ComposerNode::activity(agena_domain::ComposerActivity {
@@ -4590,9 +4588,7 @@ mod tests {
         ]);
         manager
             .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
-                session.id,
-                options,
-                document,
+                session.id, options, document,
             ))
             .await
             .expect("submit user message with attachment");
@@ -4638,15 +4634,16 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn max_turns_exhaustion_stops_the_run_and_records_a_notice() {
+    async fn max_turns_exhaustion_fails_the_run_with_budget_error() {
         // The end-turn-false provider signals `end_turn=false` on every turn
         // and would keep looping past the follow-up budget; a model-turn cap
-        // of 2 must stop the run at the budget boundary and surface a visible
-        // Notice instead of stopping silently.
+        // of 2 must stop the run at the budget boundary. Budget exhaustion is
+        // now an error (like a provider failure), not a silent soft stop with
+        // a Notice: without a stop hook that asks to continue, the run fails.
         let (manager, calls) = test_manager_with_end_turn_false_and_max_turns(true, Some(2)).await;
         let session = manager
             .create_session(SessionCreateRequest {
-                title: "max turns notice".to_owned(),
+                title: "max turns error".to_owned(),
                 parent_session_id: None,
             })
             .await
@@ -4709,42 +4706,25 @@ mod tests {
             .expect("load finished session");
         assert!(finished.next_pending_tool().is_none());
 
-        let notice = finished
-            .messages
-            .iter()
-            .find_map(|message| {
-                if message.role != Role::Assistant
-                    || message.metadata.source != agena_domain::MessageSource::System
-                {
-                    return None;
-                }
-                message
-                    .parts
-                    .iter()
-                    .find_map(|part| match part.content.as_ref() {
-                        Some(PartContent::Activity(crate::message::RuntimeActivity::Notice(
-                            notice,
-                        ))) => Some((message, notice)),
-                        _ => None,
-                    })
-            })
-            .expect("exhaustion must produce an Assistant/System Notice message");
-        assert_eq!(notice.1.kind, "max_turns_exhausted");
-        assert!(!notice.1.summary.is_empty());
-        assert!(notice.1.detail.is_some());
-
-        // The run must not be recorded as failed or cancelled; it simply
-        // stopped at the configured budget.
+        // The run must be recorded as failed: budget exhaustion is a run
+        // error, not a normal completion.
         let events = manager
             .list_session_events(session.id)
             .await
             .expect("load lifecycle events");
-        assert!(events.iter().all(|event| match &event.kind {
+        let failed = events.iter().any(|event| match &event.kind {
             EventKind::ExecutionFinished(finished) => {
-                finished.outcome == agena_domain::ExecutionOutcome::Completed
+                matches!(
+                    finished.outcome,
+                    agena_domain::ExecutionOutcome::Failed { .. }
+                )
             }
-            _ => true,
-        }));
+            _ => false,
+        });
+        assert!(
+            failed,
+            "budget exhaustion must fail the run; events: {events:#?}"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

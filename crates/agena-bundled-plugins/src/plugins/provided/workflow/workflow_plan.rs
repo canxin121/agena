@@ -444,8 +444,6 @@ impl WorkflowPlugin {
             value,
         })
         .await?;
-        self.clear_autorun_signature().await?;
-        self.clear_autorun_continuations().await?;
         self.sync_plan_display(Some(plan)).await?;
         Ok(())
     }
@@ -459,105 +457,8 @@ impl WorkflowPlugin {
             key: PLAN_KEY_ACTIVE.to_string(),
         })
         .await?;
-        self.clear_autorun_signature().await?;
-        self.clear_autorun_continuations().await?;
         self.sync_plan_display(None).await?;
         Ok(())
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn load_autorun_signature(
-        &self,
-    ) -> SdkResult<Option<String>> {
-        Ok(self
-            .host()?
-            .storage_get(HostStorageGetRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
-                key: PLAN_RUNTIME_AUTO_SIGNATURE_KEY.to_string(),
-            })
-            .await?
-            .value)
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn save_autorun_signature(
-        &self,
-        signature: &str,
-    ) -> SdkResult<()> {
-        self.host()?
-            .storage_set(HostStorageSetRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
-                key: PLAN_RUNTIME_AUTO_SIGNATURE_KEY.to_string(),
-                value: signature.to_string(),
-            })
-            .await
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn clear_autorun_signature(
-        &self,
-    ) -> SdkResult<()> {
-        self.host()?
-            .storage_delete(HostStorageDeleteRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
-                key: PLAN_RUNTIME_AUTO_SIGNATURE_KEY.to_string(),
-            })
-            .await
-    }
-
-    /// Number of consecutive autorun stop-hook continuations recorded for the
-    /// *current* plan state (same `plan_auto_signature`). Resets whenever the
-    /// plan changes; bounds the anti-loop guard in `agent_stop_hook`.
-    pub(in crate::plugins::provided::workflow) async fn load_autorun_continuations(
-        &self,
-    ) -> SdkResult<u32> {
-        let value = self
-            .host()?
-            .storage_get(HostStorageGetRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
-                key: PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY.to_string(),
-            })
-            .await?
-            .value;
-        match value {
-            None => Ok(0),
-            Some(value) => value.parse::<u32>().map_err(|err| {
-                PluginError::internal(format!("invalid stored autorun continuations: {err}"))
-            }),
-        }
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn save_autorun_continuations(
-        &self,
-        count: u32,
-    ) -> SdkResult<()> {
-        self.host()?
-            .storage_set(HostStorageSetRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
-                key: PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY.to_string(),
-                value: count.to_string(),
-            })
-            .await
-    }
-
-    pub(in crate::plugins::provided::workflow) async fn clear_autorun_continuations(
-        &self,
-    ) -> SdkResult<()> {
-        self.host()?
-            .storage_delete(HostStorageDeleteRequest {
-                scope: HostStorageScope::Session,
-                visibility: HostStorageVisibility::Private,
-                namespace: PLAN_RUNTIME_NAMESPACE.to_string(),
-                key: PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY.to_string(),
-            })
-            .await
     }
 
     pub(in crate::plugins::provided::workflow) async fn sync_plan_display(
@@ -1280,15 +1181,6 @@ impl WorkflowPlugin {
         Ok(())
     }
 
-    pub(in crate::plugins::provided::workflow) fn plan_auto_signature(
-        plan: &WorkflowPlan,
-        step_index: usize,
-    ) -> SdkResult<String> {
-        let serialized =
-            serde_json::to_string(plan).map_err(|err| PluginError::internal(err.to_string()))?;
-        Ok(format!("{serialized}:{step_index}"))
-    }
-
     pub(in crate::plugins::provided::workflow) fn review_decision(
         response: &agena_plugin_host::sdk::host_api::AskUserResponse,
     ) -> Option<String> {
@@ -1530,12 +1422,11 @@ use super::{
     PLAN_REVIEW_DECISION_APPROVE, PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_OFF,
     PLAN_REVIEW_DECISION_APPROVE_ACTIVE_AUTORUN_ON, PLAN_REVIEW_DECISION_APPROVE_REQUESTED,
     PLAN_REVIEW_DECISION_APPROVE_REQUESTED_PAUSE, PLAN_REVIEW_DECISION_CANCELLED,
-    PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT,
-    PLAN_RUNTIME_AUTO_CONTINUATIONS_KEY, PLAN_RUNTIME_AUTO_SIGNATURE_KEY, PLAN_RUNTIME_NAMESPACE,
-    Path, PathBuf, PlanGetView, PlanReviewKind, PlanUpdateInput, PlanUpdateTarget,
-    PluginDisplayContent, PluginDisplayContribution, PluginError, RwLock, SdkResult,
-    SessionRenameToolInput, SessionToolResponse, ToolDescriptor, ToolInvokeOutput,
-    ToolSearchDocument, ToolTagRecord, WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor,
-    WorkflowPlanPhase, WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus,
-    WorkflowPlugin, WorkflowPluginConfig,
+    PLAN_REVIEW_DECISION_KEEP_PLANNING, PLAN_REVIEW_DECISION_REJECT, Path, PathBuf, PlanGetView,
+    PlanReviewKind, PlanUpdateInput, PlanUpdateTarget, PluginDisplayContent,
+    PluginDisplayContribution, PluginError, RwLock, SdkResult, SessionRenameToolInput,
+    SessionToolResponse, ToolDescriptor, ToolInvokeOutput, ToolSearchDocument, ToolTagRecord,
+    WorkflowPlan, WorkflowPlanCheckpoint, WorkflowPlanExecutor, WorkflowPlanPhase,
+    WorkflowPlanStep, WorkflowPlanStepInput, WorkflowPlanStepStatus, WorkflowPlugin,
+    WorkflowPluginConfig,
 };

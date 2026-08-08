@@ -548,19 +548,30 @@ impl SessionManager {
                 None => DEFAULT_MAX_MODEL_TURNS,
             };
             if model_turns_taken >= max_turns {
-                tracing::warn!(
-                    target: "agena::session::run_until_stable",
-                    session_id = session.id,
-                    max_turns,
-                    "stopping run softly after the model-turn budget was exhausted"
-                );
-                // Surface a user-facing notice in the transcript before the
-                // silent soft stop, so the run does not look like it finished
-                // normally when it was actually cut off by the budget cap.
-                session = self
-                    .record_model_turn_budget_notice(session, max_turns, state.clone())
-                    .await?;
-                return Ok(session);
+                let budget_error = AppError::ModelTurnBudgetExhausted { max_turns };
+                // Budget exhaustion is a run failure, not a silent soft stop.
+                // Surface it to agent.stop hooks via `run_error` so the plan
+                // autorun (or another hook) can decide to continue. When a
+                // hook continues, the run is granted a fresh turn budget
+                // (`model_turns_taken` resets) so it keeps working instead of
+                // immediately re-triggering the budget check.
+                if let Some(continued) = self
+                    .dispatch_run_failure_continuation(
+                        session,
+                        &current_options,
+                        state.clone(),
+                        control.clone(),
+                        &budget_error,
+                        &mut failure_retry_backoff_ms,
+                    )
+                    .await?
+                {
+                    session = continued;
+                    model_turns_taken = 0;
+                    model_requested = true;
+                    continue;
+                }
+                return Err(budget_error);
             }
             model_turns_taken += 1;
 
@@ -738,75 +749,106 @@ impl SessionManager {
                     if control.cancel.is_cancelled() {
                         return Err(AppError::Cancelled);
                     }
-                    let run_error = err.public_message();
-                    let stop_input = agena_plugin_host::AgentStopInput {
-                        session_id,
-                        stop_hook_active: false,
-                        last_assistant_message: None,
-                        run_error: Some(run_error.to_string()),
-                    };
                     session = self
                         .store
                         .load_session(session_id, state.cache_policy())
                         .await?;
-                    match state
-                        .tool_executor
-                        .plugin_manager()
-                        .dispatch_agent_stop_cancellable(stop_input, Some(control.cancel.clone()))
-                        .await
+                    if let Some(continued) = self
+                        .dispatch_run_failure_continuation(
+                            session,
+                            &current_options,
+                            state.clone(),
+                            control.clone(),
+                            &err,
+                            &mut failure_retry_backoff_ms,
+                        )
+                        .await?
                     {
-                        Ok(dispatch) => {
-                            let hook_runs = state
-                                .tool_executor
-                                .plugin_manager()
-                                .drain_hook_runs(session.id);
-                            if !hook_runs.is_empty() {
-                                session = self
-                                    .record_hook_runs(session, hook_runs, state.clone())
-                                    .await?;
-                            }
-                            if let Some(follow_up) = dispatch.patch.continue_with_message {
-                                session = self
-                                    .inject_continuation_message(
-                                        session,
-                                        &current_options,
-                                        follow_up,
-                                        state.clone(),
-                                    )
-                                    .await?;
-                                let delay = failure_retry_backoff_ms;
-                                failure_retry_backoff_ms =
-                                    (failure_retry_backoff_ms * 2).min(5_000);
-                                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                                model_requested = true;
-                                continue;
-                            }
-                            return Err(err);
-                        }
-                        Err(dispatch_err) => {
-                            if control.cancel.is_cancelled() {
-                                return Err(AppError::Cancelled);
-                            }
-                            tracing::warn!(
-                                target: "agena_plugin_host::agent_stop",
-                                "agent.stop hook failed after run error: {dispatch_err}"
-                            );
-                            let hook_runs = state
-                                .tool_executor
-                                .plugin_manager()
-                                .drain_hook_runs(session.id);
-                            if !hook_runs.is_empty() {
-                                // The hook activity is already persisted; the
-                                // reloaded session is not needed on this path,
-                                // which returns the original run error.
-                                let _ = self
-                                    .record_hook_runs(session, hook_runs, state.clone())
-                                    .await?;
-                            }
-                            return Err(err);
-                        }
+                        session = continued;
+                        model_requested = true;
+                        continue;
                     }
+                    return Err(err);
                 }
+            }
+        }
+    }
+
+    /// Surface a run failure to agent.stop hooks and, if a hook asks to
+    /// continue (for example the workflow plan autorun), inject the
+    /// continuation message. Returns `Some(session)` when the run should
+    /// continue after backoff; `None` when the run should fail with `error`.
+    ///
+    /// Shared by the model-turn error path and the model-turn budget
+    /// exhaustion path so both treat run errors uniformly: the error is
+    /// surfaced to hooks via `run_error`, and only an explicit hook
+    /// continuation keeps the run alive.
+    async fn dispatch_run_failure_continuation(
+        &self,
+        mut session: Session,
+        options: &SessionRunOptions,
+        state: Arc<SessionManagerState>,
+        control: Arc<ExecutionControl>,
+        error: &AppError,
+        retry_backoff_ms: &mut u64,
+    ) -> Result<Option<Session>, AppError> {
+        let run_error = error.public_message();
+        let stop_input = agena_plugin_host::AgentStopInput {
+            session_id: session.id,
+            stop_hook_active: false,
+            last_assistant_message: None,
+            run_error: Some(run_error.to_string()),
+        };
+        session = self
+            .store
+            .load_session(session.id, state.cache_policy())
+            .await?;
+        match state
+            .tool_executor
+            .plugin_manager()
+            .dispatch_agent_stop_cancellable(stop_input, Some(control.cancel.clone()))
+            .await
+        {
+            Ok(dispatch) => {
+                let hook_runs = state
+                    .tool_executor
+                    .plugin_manager()
+                    .drain_hook_runs(session.id);
+                if !hook_runs.is_empty() {
+                    session = self
+                        .record_hook_runs(session, hook_runs, state.clone())
+                        .await?;
+                }
+                if let Some(follow_up) = dispatch.patch.continue_with_message {
+                    session = self
+                        .inject_continuation_message(session, options, follow_up, state.clone())
+                        .await?;
+                    let delay = *retry_backoff_ms;
+                    *retry_backoff_ms = (*retry_backoff_ms * 2).min(5_000);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    Ok(Some(session))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(dispatch_err) => {
+                if control.cancel.is_cancelled() {
+                    return Err(AppError::Cancelled);
+                }
+                tracing::warn!(
+                    target: "agena_plugin_host::agent_stop",
+                    "agent.stop hook failed after run error: {dispatch_err}"
+                );
+                let hook_runs = state
+                    .tool_executor
+                    .plugin_manager()
+                    .drain_hook_runs(session.id);
+                if !hook_runs.is_empty() {
+                    let _ = self
+                        .record_hook_runs(session, hook_runs, state.clone())
+                        .await?;
+                }
+                Ok(None)
             }
         }
     }
@@ -930,57 +972,6 @@ impl SessionManager {
             .await?;
         }
         Ok(session)
-    }
-
-    /// Record a System-originated Assistant message with a single `Notice`
-    /// part explaining that the run stopped because the model-turn budget was
-    /// exhausted. Follows the `record_agent_stop_hook_runs` recipe: persisted
-    /// so a restart keeps the record, surfaced as first-class transcript
-    /// activity, and (Assistant + System + `model_turn_id: None`) never
-    /// triggers another model turn. The Notice is user-facing only — the
-    /// provider projection (`wire_message.rs`) skips it, and on a later run
-    /// `normalize_prompt_messages` drops it for having no visible payload.
-    async fn record_model_turn_budget_notice(
-        &self,
-        mut session: Session,
-        max_turns: usize,
-        state: Arc<SessionManagerState>,
-    ) -> Result<Session, AppError> {
-        let ids = self.store.reserve_message_ids(1).await?;
-        const SUMMARY: &str = "Model-turn budget exhausted; the run stopped.";
-        let detail = Some(format!(
-            "The run reached the configured model-turn cap (max_turns={max_turns}) and stopped. \
-             Send a new message to continue, or raise the cap via `session.max_turns` in the \
-             config (`0` means unlimited)."
-        ));
-        let message = build_message(
-            ids,
-            Role::Assistant,
-            ExecutionStatus::Completed,
-            vec![PartContent::notice(crate::message::NoticePart {
-                kind: "max_turns_exhausted".to_string(),
-                summary: SUMMARY.to_string(),
-                detail,
-                title: None,
-            })],
-            MessageMetadata {
-                source: MessageSource::System,
-                idempotency_key: None,
-                model_turn_id: None,
-                parent_message_id: session.last_conversation_message().map(|m| m.id),
-                generated_by_call_id: None,
-                externally_initiated_tool: false,
-                model_provider_id: String::new(),
-                model_adapter_id: None,
-                model_id: String::new(),
-                model_thinking_mode: None,
-                model_speed_mode: None,
-            },
-        )?;
-        session.messages.push(message.clone());
-        let checkpoint = MessageCheckpoint::all(&message);
-        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
-            .await
     }
 
     pub(in crate::session::manager) async fn run_model_turn(

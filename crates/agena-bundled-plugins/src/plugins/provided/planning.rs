@@ -79,7 +79,7 @@ impl PlanPlugin {
     #[tool(
         tags(mutate, planning),
         summary = "Update the current plan.",
-        help = "Keep plan-level updates separate from step/check updates: do not send `phase` / `request_approval` together with `step`, `check`, `status`, `wait_until_ms`, or `note`. Address steps and checks by 1-based index (`step`, `check`). For plan-level phase changes, pass `request_approval: true` (or omit it) to ask the user to approve the transition, unless the user has already declared it needs no approval, in which case pass `request_approval: false`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
+                        help = "Keep plan-level updates separate from step/check updates: do not send `phase` / `request_approval` together with `step`, `check`, `status`, or `note`. Address steps and checks by 1-based index (`step`, `check`). For plan-level phase changes, pass `request_approval: true` (or omit it) to ask the user to approve the transition, unless the user has already declared it needs no approval, in which case pass `request_approval: false`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.",
         planning,
         mutating,
         display = brief,

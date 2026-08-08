@@ -539,18 +539,15 @@ session mutation.
 | usage (derived from message metadata) | → `usage` table |
 | `agena_scheduler_jobs/history`, `model_catalog_*` | kept unchanged (infra) |
 
-## 10. Migration strategy
+## 10. Fresh start — no migration (decided)
 
-- Bump `CURRENT_SCHEMA_VERSION` to the new version; per the project policy, older
-  databases are rejected rather than migrated (fresh DB).
-- Optional one-shot migration tool if preserving data is required:
-  - `parts` from `model_message_parts` + `content_nodes`, aligned by
-    `activity_id` / `segment_id`; message role/state/metadata folded onto the part.
-  - membership from `agena_session_messages` (shared) + origin sessions;
-  - turn/reply boundaries become `run` markers + interaction parts;
-  - `usage` rows derived from message metadata;
-  - events are dropped (optionally backfilled to a thin `part_oplog` if audit is
-    ever needed — not in this design).
+- Bump `CURRENT_SCHEMA_VERSION`; per project policy older databases are
+  rejected. **Fresh DB only — no migration tool, no import path, no data
+  conversion.** v1 data is discarded, not carried forward (user decision:
+  from zero, drop historical debt).
+- Nothing is backfilled. The v1→v2 mapping in section 9 is documentation only
+  (records which v1 concept became which v2 concept), not an implementation
+  plan.
 
 ## 11. Open decisions
 
@@ -558,7 +555,7 @@ session mutation.
 |---|----------|-----------------------|
 | D1 | fork child transcript renders shared prefix turns/content | render (by design of run-marker sharing) |
 | D2 | in-flight streaming parts at fork time | share by reference (child sees them complete) |
-| D3 | migration policy | fresh DB + optional one-shot migration tool |
+| D3 | migration policy | fresh DB only; v1 data dropped, no migration code (decided) |
 | D4 | per-session ordering | part timestamps: `ORDER BY created_at_ms, part_id` (no seq; id breaks same-ms ties) |
 | D5 | `config_json` scope | execution config only (permission ceiling, capability denials, workspace root override, selection/access defaults); workflow state derived from parts; compaction policy from global settings, not stored per session |
 | D6 | run demotion | `runs` table dropped; run = `kind='run'` marker part (decided) |

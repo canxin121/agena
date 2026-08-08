@@ -36,10 +36,6 @@ mod context_budget;
 mod context_governor;
 pub(crate) use agena_runtime_session_core::db;
 mod error;
-pub mod event;
-mod event_bridge;
-mod event_publish_service;
-mod event_query_service;
 mod execution_registry;
 mod guards;
 mod installation_id;
@@ -73,11 +69,6 @@ pub use completion_request::{CompletionRequestInputs, build_completion_request};
 pub use context_budget::*;
 pub use context_governor::ContextGovernor;
 pub use error::AppError;
-pub use event_bridge::{
-    RuntimeEventSubscription, RuntimeEventSubscriptionItem, spawn_event_forwarder,
-};
-pub use event_publish_service::*;
-pub use event_query_service::*;
 pub use execution_registry::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 pub use guards::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub use installation_id::resolve_installation_id;
@@ -94,8 +85,6 @@ pub use session::{Session, SessionProcessor};
 pub use session::{
     SessionSubtaskOutput, SessionSubtaskOutputChunk, SessionSubtaskRequest, SessionSubtaskResponse,
 };
-pub(crate) use session_cache::{CacheEntry, SessionCache};
-pub use session_cache_policy::SessionCachePolicy;
 pub use session_configuration::RuntimeSessionManagerConfig;
 pub use session_execution_control::*;
 pub use session_execution_service::*;

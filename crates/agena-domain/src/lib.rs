@@ -29,7 +29,6 @@ mod background_activity;
 mod command_events;
 mod context_policy;
 mod doom_loop;
-mod event;
 mod execution;
 mod execution_access;
 mod execution_events;
@@ -119,10 +118,6 @@ pub use command_events::{
 };
 pub use context_policy::ContextPolicy;
 pub use doom_loop::{DoomLoopHit, DoomLoopPolicy};
-pub use event::{
-    EVENT_ENVELOPE_SCHEMA_VERSION, EventEnvelope, EventFilter, EventKindTag, EventMeta, EventScope,
-    KindMatcher, KindPersistence, MESSAGE_CREATED_EVENT_KIND_TAGS,
-};
 pub use execution::{ExecutionFailureKind, ExecutionOutcome, ExecutionPhase, ExecutionSource};
 pub use execution_access::ExecutionAccess;
 pub use execution_events::{

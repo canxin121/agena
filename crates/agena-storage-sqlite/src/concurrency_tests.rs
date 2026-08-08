@@ -4,8 +4,8 @@
 //! Two independent `DatabaseConnection` pools pointing at the same file model
 //! the multi-process case: SQLite serializes writers with its file lock, and
 //! every fix in this crate must hold under that pressure — schema
-//! initialization must not race, sequence allocators must never hand out
-//! duplicates, and check-then-insert paths must degrade to atomic upserts.
+//! initialization must not race and check-then-insert paths must degrade to
+//! atomic upserts.
 
 use std::process::Command;
 use std::sync::Arc;
@@ -14,11 +14,9 @@ use sea_orm::{
     ConnectionTrait, Database, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait,
 };
 
-use crate::{SeaPermissionRuleRepository, SeaWorkspaceRepository, SqliteSequenceAllocator};
+use crate::{SeaPermissionRuleRepository, SeaWorkspaceRepository};
 use agena_domain::{PermissionMode, PermissionScope};
-use agena_storage::{
-    PermissionRuleRepository, PersistedPermissionRule, SequenceAllocator, WorkspaceRepository,
-};
+use agena_storage::{PermissionRuleRepository, PersistedPermissionRule, WorkspaceRepository};
 
 async fn connect_file(tempdir: &tempfile::TempDir, name: &str) -> DatabaseConnection {
     let path = tempdir.path().join(name);
@@ -55,45 +53,6 @@ async fn concurrent_schema_initialization_is_idempotent() {
             .try_get("", "user_version")
             .expect("user_version value");
         assert_eq!(version, crate::CURRENT_SCHEMA_VERSION);
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn independent_allocators_never_hand_out_duplicate_sequences() {
-    let directory = tempfile::tempdir().expect("temporary database directory");
-    let db_a = Arc::new(connect_file(&directory, "seq.db").await);
-    let db_b = Arc::new(connect_file(&directory, "seq.db").await);
-    crate::initialize_schema(&db_a).await.expect("schema");
-
-    let alloc_a = SqliteSequenceAllocator::new(Arc::clone(&db_a));
-    let alloc_b = SqliteSequenceAllocator::new(Arc::clone(&db_b));
-
-    // Race 200 allocations across two independent allocators (each backed by
-    // its own connection pool). Every seq_global, message id and part id must
-    // be unique.
-    let mut globals = Vec::new();
-    let mut messages = Vec::new();
-    let mut parts = Vec::new();
-    for i in 0..100i64 {
-        let alloc = if i % 2 == 0 { &alloc_a } else { &alloc_b };
-        globals.push(alloc.next_seq_global().await.expect("alloc seq_global"));
-        messages.push(alloc.next_message_id().await.expect("alloc message id"));
-        parts.push(alloc.next_part_id().await.expect("alloc part id"));
-    }
-
-    for label in ["seq_global", "message_id", "part_id"] {
-        let values = match label {
-            "seq_global" => &globals,
-            "message_id" => &messages,
-            _ => &parts,
-        };
-        let mut sorted = values.clone();
-        sorted.sort_unstable();
-        let unique = sorted.windows(2).all(|w| w[0] != w[1]);
-        assert!(unique, "all 100 {label} must be distinct");
-        assert_eq!(sorted.len(), 100);
-        assert_eq!(sorted.first().copied(), Some(1), "first {label} is 1");
-        assert_eq!(sorted.last().copied(), Some(100), "last {label} is 100");
     }
 }
 
@@ -361,9 +320,4 @@ async fn two_process_work(path: &std::path::Path) {
     repo.ensure_id("/shared/process-workspace")
         .await
         .expect("ensure workspace");
-    // Both processes allocate sequences; the database serializes them.
-    let alloc = SqliteSequenceAllocator::new(Arc::clone(&db));
-    for _ in 0..50 {
-        alloc.next_seq_global().await.expect("allocate seq");
-    }
 }

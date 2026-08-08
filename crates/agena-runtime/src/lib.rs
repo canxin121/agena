@@ -36,7 +36,6 @@ pub use agena_runtime_contracts::{authorization, identity};
 mod config;
 pub use agena_runtime_contracts::message;
 pub use agena_runtime_session::AppError;
-pub use agena_runtime_session::event;
 mod model_catalog;
 pub use agena_runtime_contracts::permission;
 pub mod plugins {
@@ -202,17 +201,6 @@ pub use agena_runtime_session::{
 pub use agena_runtime_session::{
     RuntimeActiveSnapshot, RuntimeManagedSnapshot, RuntimeSnapshotStatus, SessionExecutionControl,
     SessionExecutionControlError,
-};
-pub use agena_runtime_session::{
-    RuntimeEvent, RuntimeEventQueryError, RuntimeEventQueryService, RuntimeEventRange,
-    RuntimeEventStreamService, RuntimeLiveEventSubscription, RuntimeLiveEventSubscriptionItem,
-    RuntimeReverseEventRange, RuntimeTimelineDetailLine, RuntimeTimelineEvent,
-};
-pub use agena_runtime_session::{
-    RuntimeEventPublishError, RuntimeEventPublishRequest, RuntimeEventPublishService,
-};
-pub(crate) use agena_runtime_session::{
-    RuntimeEventSubscription, RuntimeEventSubscriptionItem, spawn_event_forwarder,
 };
 pub use agena_runtime_session::{
     RuntimeLivePresentationSubscription, RuntimeLivePresentationSubscriptionItem,

@@ -218,8 +218,10 @@ CREATE TABLE sessions (
     subtask_started_at_ms INTEGER,
     subtask_finished_at_ms INTEGER,
     subtask_failure_json  JSON,
-    config_json           JSON,                   -- execution config only: permission ceiling,
-                                                  -- capability denials, workspace root override
+        config_json           JSON,                   -- session CONFIG, not state: permission ceiling,
+                                                  -- capability denials, workspace root override,
+                                                  -- execution selection/access defaults, compaction
+                                                  -- policy; state is derived from parts (17.3)
     created_at_ms         INTEGER NOT NULL,
     updated_at_ms         INTEGER NOT NULL
 );
@@ -1324,19 +1326,20 @@ transitions (cancelled/removed); background tasks = `run_kind='background'`
 markers; `operation_detail` = `rendered_markdown` (18.4). A separate activity
 registry table is not needed.
 
-### 19.7 Global runtime history — decision needed
+### 19.7 Global runtime history — decided: dropped
 
 v1 `list_events` / `ListEvents` / `event_query_service` (cursor-paged global
-event history across sessions) has no v2 counterpart. Options: (a) drop it
-(was a diagnostic view over the event log); (b) replace with a global parts
-query (all parts across sessions, cursor-paged, filtered by kind/time) for
-diagnostics. Default: (b) as a facade `list_parts_global` query, low priority.
+event history across sessions) is **dropped** with no replacement. The event
+log it exposed is gone (2.2); chat history is per-session ordered parts
+(4.4), browsed through `SessionStore.list_session_summaries` (14.1). A
+cross-session diagnostic stream, if ever needed, can be derived later from
+`parts` directly.
 
 ### 19.8 Open-decision additions
 
 | # | Decision | Default |
 |---|----------|---------|
-| D11 | global runtime history | replace `list_events` with cursor-paged global parts query (low priority) |
+| D11 | global runtime history | **dropped** (no global event history; chat history is per-session ordered parts) |
 | D12 | `skill_ref` depth | reference-only `{skill, args}`; resolve on demand |
 | D13 | attachment source breadth | extended `file_ref` shape (url/data_url/file_id/media dims) |
 

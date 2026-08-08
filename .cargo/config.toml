@@ -5,3 +5,14 @@
 # is functionally identical for Rust panics and only marginally slower.
 [target.'cfg(target_os = "macos")']
 rustflags = ["-C", "link-arg=-Wl,-no_compact_unwind"]
+
+# Debug builds of the session reply chain (resolve_pending_tool ->
+# apply_tool_success -> persist) measure over 2 MiB of async worker stack, so
+# production debug binaries run tokio workers on 8 MiB stacks (see
+# APP_RUNTIME_THREAD_STACK_SIZE in crates/agena-runtime/src/lib.rs).
+# `cargo test` binaries skip main() and inherit tokio's default 2 MiB worker
+# stack, which the hook-activity drain pushes just over. Raise the default for
+# every cargo-invoked process so tests run at the production debug stack
+# budget instead of crashing with `has overflowed its stack`.
+[env]
+RUST_MIN_STACK = "8388608"

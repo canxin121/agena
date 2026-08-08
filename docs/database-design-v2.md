@@ -130,10 +130,9 @@ closed enums enforced by CHECK.
 | `think` | assistant | `{"summary":[...],"raw":[...]}` | reasoning |
 | `tool_call` | assistant | `{"name":"...","plugin":"...","input":{...}}` | tool invocation |
 | `tool_result` | tool | `{"output":"...","ok":true}` | child of tool_call via parent_part_id |
-| `file_ref` | user | `{"path":"...","name":"...","mime":"...","sha":"..."}` | file attachment reference |
-| `paste_ref` | user | `{"path":"...","name":"...","mime":"...","sha":"..."}` | clipboard reference |
-| `skill_ref` | user | `{"skill":"...","args":{...}}` | skill invocation reference |
-| `attachment` | user / assistant | `{"items":[...]}` | attachment set |
+| `file_ref` | user | `{"path":"...","name":"...","mime":"...","sha":"..."}` | file reference only; no blob stored, AI reads on demand |
+| `paste_ref` | user | `{"text":"..."}` | pasted text stored INLINE (full content; no blob cache) |
+| `skill_ref` | user | `{"skill":"...","args":{...}}` | skill name/args reference only |
 | `notice` | runtime | `{"kind":"...","summary":"...","detail":"..."}` | system notice (hook runs etc.) |
 | `hook` | runtime | `{"hook":"...","summary":"...","detail":"..."}` | hook activity |
 | `compaction` | runtime | `{"summary":"...","window":[...]}` | compaction summary |
@@ -275,24 +274,44 @@ CREATE TABLE permission_rules (
 -- plus the same partial unique index per subject scope as v1
 ```
 
-### 5.6 `usage` — per-run metrics
+### 5.6 `usage` — append-only, normalized metrics (low footprint, high performance)
+
+One row per provider response (model call). Scalar integer columns are directly
+SUM-able in SQL; optional `detail_json` keeps rare provider-specific fields out
+of the hot path. Cost is stored as integer micro-USD (no float drift, compact
+varint encoding). Immutable: rows are inserted once at model-call completion and
+never updated, so aggregation queries never contend with writers.
 
 ```sql
 CREATE TABLE usage (
-    usage_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id    INTEGER NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
-    run_id        INTEGER,                        -- run marker part_id
-    provider_id   TEXT NOT NULL,
-    model_id      TEXT NOT NULL,
-    usage_json    JSON NOT NULL,                  -- tokens / cost / cache / reasoning
-    created_at_ms INTEGER NOT NULL
+    usage_id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id           INTEGER NOT NULL,          -- denormalized: workspace aggregates need no join
+    session_id             INTEGER NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    run_id                 INTEGER,                   -- run marker part_id (a turn may contain many model calls)
+    provider_id            TEXT NOT NULL,
+    model_id               TEXT NOT NULL,
+    created_at_ms          INTEGER NOT NULL,          -- model-call completion time
+    input_tokens           INTEGER NOT NULL,
+    output_tokens          INTEGER NOT NULL,
+    reasoning_tokens       INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens     INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens      INTEGER NOT NULL DEFAULT 0,
+    tool_use_tokens        INTEGER NOT NULL DEFAULT 0,
+    other_tokens           INTEGER NOT NULL DEFAULT 0,
+    total_cost_micros      INTEGER NOT NULL DEFAULT 0,    -- computed/estimated cost, micro-USD
+    recorded_cost_micros   INTEGER,                       -- provider-reported cost when available
+    cost_estimate_incomplete INTEGER NOT NULL DEFAULT 0,  -- surfaced as "cost may be incomplete"
+    detail_json            JSON                           -- optional full provider breakdown (5m/1h cache, per-category, provenance)
 );
 
+CREATE INDEX idx_usage_ws_time ON usage(workspace_id, created_at_ms);
 CREATE INDEX idx_usage_session ON usage(session_id, created_at_ms);
+CREATE INDEX idx_usage_provider_model ON usage(provider_id, model_id, created_at_ms);
 ```
 
-Written at run completion from the provider usage event. Replaces v1 derivation
-from message metadata.
+Written once per model call through the facade (internal to the persistence
+engine). Replaces v1 derivation from message metadata. See section 16 for the
+full low-storage/high-performance design.
 
 ### 5.7 `idempotency` — user-send dedup
 
@@ -646,16 +665,17 @@ that are never persisted — the in-memory bus stays, its payload language chang
 (TranscriptPatch → part patches), web UI session timeline command (reads ordered
 parts grouped by run markers).
 
-### 13.8 Usage queries need session context (SHOULD)
+### 13.8 Usage queries need session context (SHOULD, updated for normalized usage)
 
 v1 usage records carry session title + is_subagent and filter by workspace /
-session list / time range / `include_subagents`. v2 `usage` already stores
-session_id/run_id/provider/model/usage_json/created_at_ms; add the JOIN:
+session list / time range / `include_subagents`. v2 `usage` denormalizes
+`workspace_id` and stores scalar token/cost columns (section 16); title and
+is_subagent come from a JOIN when the caller needs them:
 
 ```sql
 SELECT u.*, s.title, (s.relation_kind = 'subagent') AS is_subagent
 FROM usage u JOIN sessions s ON s.session_id = u.session_id
-WHERE s.workspace_id = ? AND s.lifecycle_state = 'ready'
+WHERE u.workspace_id = ? AND s.lifecycle_state = 'ready'
   AND (s.relation_kind != 'subagent' OR :include_subagents)
   AND u.created_at_ms BETWEEN :from AND :to;
 ```
@@ -669,11 +689,19 @@ stream than v1's activity path. Policy: throttle in-place part updates (flush
 at most every N deltas or on run completion), keep live deltas on the in-memory
 bus as v1. This is an implementation knob, not a schema change.
 
-### 13.10 Attachment/server-cache boundary (INFO)
+### 13.10 Attachment semantics: inline text vs references (REVISED)
 
-`file_ref` / `paste_ref` / `attachment` parts reference blobs managed by the app
-server's attachment cache (a separate sqlx DB, out of scope). Part content
-carries the reference (path/name/mime/sha); the cache DB stays as-is.
+Chat data never stores blobs:
+
+- `paste_ref` carries the full pasted text INLINE in the part content (the paste
+  IS the content and must be stored);
+- `file_ref` carries only a reference (path/name/mime/sha) — the AI reads the
+  file from the filesystem when needed; no blob is stored;
+- `skill_ref` carries only a reference (skill name/args) — the skill is resolved
+  at execution time.
+
+The app server's attachment cache (a separate sqlx DB) serves non-chat server
+features (terminal/preview/…) and is unrelated to chat parts.
 
 ### 13.11 Non-DB surfaces unchanged (INFO)
 
@@ -875,6 +903,85 @@ outside the engine touches the DB.
 - Writes: memory-first latency, throttled persistence, revision guards.
 - Fork/rewind: membership operations through the facade (section 7.3).
 - Multi-instance: version/seq catch-up; single-writer lease per session.
+
+---
+
+_End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._
+
+---
+
+## 16. Usage storage — low footprint, high performance
+
+### 16.1 Why v1 was suboptimal
+
+- v1 stored the full `CompletionUsage` JSON (10+ token counters, f64 cost,
+  cost provenance) inside every assistant message row of the big messages
+  table: roughly 200-400 bytes per model call as opaque JSON.
+- Aggregation (workspace totals, per-provider/model, time ranges) required
+  pulling rows and summing in code, or awkward JSON extraction — no pure-SQL
+  SUM.
+- Cost was `f64` USD (8 bytes each, float drift, hard to sum exactly).
+
+### 16.2 v2 design (table in 5.6)
+
+1. **Normalized scalar columns**: `input/output/reasoning/cache_write/cache_read/
+   tool_use/other_tokens` as INTEGER, `total_cost_micros`/`recorded_cost_micros`
+   as integer micro-USD. SQLite varint encoding makes typical token values 1-2
+   bytes; a row is roughly 60-120 bytes versus 200-400 for JSON — 2-3x smaller
+   AND directly SUM-able.
+2. **Rare detail in `detail_json`**: provider-specific extras (5m/1h cache
+   buckets, per-category breakdowns, provenance) stay NULL for almost all rows.
+3. **Append-only + immutable**: one row per provider response, inserted once at
+   model-call completion, never updated — aggregation never contends with
+   writers; no hot rows.
+4. **Denormalized `workspace_id`**: the most common query (workspace-wide
+   totals) filters on `usage` directly with no join. `is_subagent`/title stay in
+   a cheap PK join when needed (13.8).
+5. **Three indexes** cover the query shapes: workspace×time, session×time,
+   provider×model×time.
+
+### 16.3 Query shapes (all pure SQL over index ranges)
+
+```sql
+-- per-session totals
+SELECT provider_id, model_id, COUNT(*), SUM(input_tokens), SUM(output_tokens),
+       SUM(reasoning_tokens), SUM(cache_write_tokens), SUM(cache_read_tokens),
+       SUM(total_cost_micros)
+FROM usage WHERE session_id = ? GROUP BY provider_id, model_id;
+
+-- workspace-wide totals over a time range
+SELECT provider_id, model_id, COUNT(*), SUM(total_cost_micros)
+FROM usage WHERE workspace_id = ? AND created_at_ms BETWEEN ? AND ?
+GROUP BY provider_id, model_id;
+
+-- per-day chart
+SELECT created_at_ms / 86400000 AS day, SUM(input_tokens), SUM(total_cost_micros)
+FROM usage WHERE workspace_id = ? GROUP BY day ORDER BY day;
+```
+
+### 16.4 Granularity and provenance
+
+- One row per provider response (model call). A turn (run marker) may contain
+  many calls (tool loop); `run_id` groups them, so per-turn cost = `SUM` over
+  the run, per-call detail remains available.
+- `cost_estimate_incomplete` mirrors v1's "cost may be incomplete" signal;
+  `recorded_cost_micros` (provider-reported) takes precedence over
+  `total_cost_micros` (computed/estimated) in reporting, matching v1 cost
+  logic (`usage_cost.rs`).
+
+### 16.5 Long-term storage (future, not v1)
+
+For very large installations, add daily/hourly rollup rows (workspace ×
+provider × model × day) and prune raw rows older than a retention window. The
+rollup table is the same scalar shape, so queries are unchanged; this is an
+optional maintenance job, not a schema redesign.
+
+### 16.6 Through the facade
+
+Usage is written once per model call by the execution engine via the facade
+(internal to the persistence engine); all reads go through a facade
+`usage_stats` query (per-session / workspace / provider-model / time-range).
+External callers never touch the table and cannot distinguish memory/DB.
 
 ---
 

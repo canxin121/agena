@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -118,6 +117,7 @@ impl SessionStore {
             session_mutation_repository,
             projection_lookup_repository,
             session_summary_repository,
+            materialize_locks: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }
 
@@ -550,6 +550,7 @@ impl SessionStore {
                 .await?
                 .ok_or_else(|| AppError::Internal(format!("session not found: {session_id}")))?;
             let mut refreshed = session_from_model(session_model)?;
+            self.materialize_fork_view(session_id).await?;
             let projection = self
                 .history
                 .load_projection(session_id, refreshed.runtime.clone())
@@ -574,6 +575,7 @@ impl SessionStore {
             )));
         }
         let mut session = session_from_model(session_model)?;
+        self.materialize_fork_view(session_id).await?;
         let projection = self
             .history
             .load_projection(session_id, session.runtime.clone())
@@ -625,61 +627,36 @@ impl SessionStore {
         title: String,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        let source_prompt_window = source.runtime.prompt_window.clone();
         let events = self.history.list_session_events(source.id).await?;
-        if events.is_empty() {
-            return self
-                .create_fork_from_history_items(
-                    source.id,
-                    title,
-                    Vec::new(),
-                    source_prompt_window,
-                    session::SessionLineageInput::fork(0, at_message_id),
-                    cache_policy,
-                )
-                .await;
-        }
-
-        let cutoff_seq = match at_message_id {
-            None => events
-                .iter()
-                .rfind(|e| e.kind.is_persistent())
-                .map(|e| e.meta.seq_global)
-                .unwrap_or(0),
-            Some(message_id) => {
-                let target_event = events
+        let cutoff_seq = if events.is_empty() {
+            0
+        } else {
+            match at_message_id {
+                None => events
                     .iter()
-                    .filter(|e| event_targets_message(&e.kind, message_id))
-                    .max_by_key(|e| e.meta.seq_global)
-                    .ok_or_else(|| {
-                        AppError::Internal(format!(
-                            "message not found in session {}: {}",
-                            source.id, message_id
-                        ))
-                    })?;
-                let target_seq = target_event.meta.seq_global;
-                let run_finished_seq = event_run_id_for_message(&target_event.kind, message_id)
-                    .and_then(|run_id| {
-                        events
-                            .iter()
-                            .filter(|e| e.meta.seq_global >= target_seq)
-                            .find_map(|event| match &event.kind {
-                                EventKind::RunCompleted(payload) if payload.run_id == run_id => {
-                                    Some(event.meta.seq_global)
-                                }
-                                _ => None,
-                            })
-                    })
-                    .unwrap_or(target_seq);
-                let execution_finished_seq =
-                    event_execution_id_for_message(&target_event.kind, message_id)
-                        .and_then(|execution_id| {
+                    .rfind(|e| e.kind.is_persistent())
+                    .map(|e| e.meta.seq_global)
+                    .unwrap_or(0),
+                Some(message_id) => {
+                    let target_event = events
+                        .iter()
+                        .filter(|e| event_targets_message(&e.kind, message_id))
+                        .max_by_key(|e| e.meta.seq_global)
+                        .ok_or_else(|| {
+                            AppError::Internal(format!(
+                                "message not found in session {}: {}",
+                                source.id, message_id
+                            ))
+                        })?;
+                    let target_seq = target_event.meta.seq_global;
+                    let run_finished_seq = event_run_id_for_message(&target_event.kind, message_id)
+                        .and_then(|run_id| {
                             events
                                 .iter()
-                                .filter(|event| event.meta.seq_global >= target_seq)
+                                .filter(|e| e.meta.seq_global >= target_seq)
                                 .find_map(|event| match &event.kind {
-                                    EventKind::ExecutionFinished(payload)
-                                        if payload.execution_id == execution_id =>
+                                    EventKind::RunCompleted(payload)
+                                        if payload.run_id == run_id =>
                                     {
                                         Some(event.meta.seq_global)
                                     }
@@ -687,21 +664,30 @@ impl SessionStore {
                                 })
                         })
                         .unwrap_or(target_seq);
-                run_finished_seq.max(execution_finished_seq)
+                    let execution_finished_seq =
+                        event_execution_id_for_message(&target_event.kind, message_id)
+                            .and_then(|execution_id| {
+                                events
+                                    .iter()
+                                    .filter(|event| event.meta.seq_global >= target_seq)
+                                    .find_map(|event| match &event.kind {
+                                        EventKind::ExecutionFinished(payload)
+                                            if payload.execution_id == execution_id =>
+                                        {
+                                            Some(event.meta.seq_global)
+                                        }
+                                        _ => None,
+                                    })
+                            })
+                            .unwrap_or(target_seq);
+                    run_finished_seq.max(execution_finished_seq)
+                }
             }
         };
-
-        let items = events
-            .into_iter()
-            .filter(|event| event.meta.seq_global <= cutoff_seq && event.kind.is_persistent())
-            .map(|event| event.kind)
-            .collect::<Vec<_>>();
 
         self.create_fork_from_history_items(
             source.id,
             title,
-            items,
-            source_prompt_window,
             session::SessionLineageInput::fork(cutoff_seq, at_message_id),
             cache_policy,
         )
@@ -720,7 +706,6 @@ impl SessionStore {
         title: String,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        let source_prompt_window = source.runtime.prompt_window.clone();
         let events = self.history.list_session_events(source.id).await?;
         if events.is_empty() {
             return Err(AppError::Internal(format!(
@@ -758,17 +743,10 @@ impl SessionStore {
             .map(|event| event.meta.seq_global)
             .max()
             .unwrap_or(0);
-        let items = events
-            .into_iter()
-            .filter(|event| event.meta.seq_global <= cutoff_seq && event.kind.is_persistent())
-            .map(|event| event.kind)
-            .collect::<Vec<_>>();
 
         self.create_fork_from_history_items(
             source.id,
             title,
-            items,
-            source_prompt_window,
             session::SessionLineageInput::rewind(cutoff_seq, message_id),
             cache_policy,
         )
@@ -779,79 +757,14 @@ impl SessionStore {
         &self,
         source_session_id: i64,
         title: String,
-        items: Vec<EventKind>,
-        mut source_prompt_window: crate::session::PromptWindowRuntime,
         lineage: session::SessionLineageInput,
         cache_policy: SessionCachePolicy,
     ) -> Result<Session, AppError> {
-        // Copy-free fork: every event of a completed run (a run with its own
-        // RunCompleted/RunAborted) is shared by reference through
-        // `agena_session_messages`; terminal message rows are immutable once
-        // their run finishes. Only an in-flight run's events are physically
-        // copied; the parent keeps mutating them after the fork. Trailing
-        // lifecycle bookkeeping of the last completed run (for example
-        // ExecutionFinished) stays in the parent too: replaying it in the
-        // child would reference an execution whose start lives in the shared
-        // prefix.
-        let mut completed_executions = std::collections::HashSet::new();
-        {
-            let mut run_start_by_run = std::collections::HashMap::new();
-            for item in &items {
-                match item {
-                    EventKind::RunStarted(payload) => {
-                        run_start_by_run.insert(payload.run_id, payload.execution_id);
-                    }
-                    EventKind::RunCompleted(payload) => {
-                        if let Some(execution_id) = run_start_by_run.get(&payload.run_id) {
-                            completed_executions.insert(*execution_id);
-                        }
-                    }
-                    EventKind::RunAborted(payload) => {
-                        if let Some(execution_id) = run_start_by_run.get(&payload.run_id) {
-                            completed_executions.insert(*execution_id);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        let tail_start = items
-            .iter()
-            .position(|item| {
-                let execution_id = match item {
-                    EventKind::ExecutionStarted(payload) => Some(payload.execution_id),
-                    EventKind::RunStarted(payload) => Some(payload.execution_id),
-                    EventKind::ExecutionFinished(payload) => Some(payload.execution_id),
-                    EventKind::UserMessageAppended(payload) => Some(payload.execution_id),
-                    EventKind::AssistantMessageFinished(payload) => Some(payload.execution_id),
-                    EventKind::CompactionCompleted(payload) => Some(payload.execution_id),
-                    EventKind::MessagePartCheckpointed(payload) => payload.execution_id,
-                    _ => None,
-                };
-                execution_id.is_some_and(|id| !completed_executions.contains(&id))
-            })
-            .unwrap_or(items.len());
-        let share_items = &items[..tail_start];
-        let mut tail_items = items[tail_start..].to_vec();
-
-        // The shared prefix keeps its message ids; the copied tail gets fresh
-        // storage ids and fresh domain identities.
-        let mut id_map = if tail_items.is_empty() {
-            BTreeMap::new()
-        } else {
-            self.remap_copied_history_ids(&mut tail_items).await?
-        };
-        for item in share_items {
-            visit_event_message_ids(item, |id| {
-                if id > 0 {
-                    id_map.insert(id, id);
-                }
-            });
-        }
-        if !remap_prompt_window_for_fork(&mut source_prompt_window, &id_map) {
-            source_prompt_window.compaction = None;
-        }
-
+        // View-definition fork: the branch row plus its lineage record are
+        // the entire database write. Shared memberships and the (rare)
+        // in-flight tail are materialized on first open
+        // (`materialize_fork_view`), so the command stays O(1) regardless of
+        // history size.
         let child = self
             .create_session_inner(
                 title,
@@ -863,96 +776,17 @@ impl SessionStore {
             )
             .await?;
         let child_id = child.id;
-
-        // Share the terminal prefix by referencing the parent's message rows.
-        let mut share_message_ids = Vec::new();
-        for item in share_items {
-            visit_event_message_ids(item, |id| {
-                if id > 0 && !share_message_ids.contains(&id) {
-                    share_message_ids.push(id);
-                }
-            });
-        }
-        if !share_message_ids.is_empty() {
-            insert_session_message_memberships(&self.db, child_id, &share_message_ids).await?;
-        }
-
-        for item in &mut tail_items {
-            rewrite_event_session_ids(item, child.id);
-        }
-        // Silent: subscribers should not observe copied history as fresh
-        // activity. Storage ids must already be remapped at this boundary so
-        // projection upserts cannot steal the source session's rows.
-        let build_result = async {
-            let mut child = self
-                .append_history_items_silent(child, tail_items, cache_policy)
-                .await?;
-            // An empty tail skips the append path's projection load, so
-            // materialize the shared memberships into the session's
-            // transcript explicitly.
-            let projection = self
-                .history
-                .load_projection(child.id, child.runtime.clone())
-                .await?;
-            child.install_projected_messages(projection.messages);
-            child.runtime = projection.runtime;
-            self.inherit_prompt_window_on_fork(
-                child,
-                source_prompt_window,
-                &share_message_ids,
-                cache_policy,
-            )
-            .await
-        }
-        .await;
-
-        match build_result {
-            Ok(mut child) => {
-                let ready = session::set_session_lifecycle(
-                    &self.db,
-                    child_id,
-                    SessionLifecycleState::Ready,
-                    None,
-                )
+        let ready =
+            session::set_session_lifecycle(&self.db, child_id, SessionLifecycleState::Ready, None)
                 .await?
                 .ok_or_else(|| {
                     AppError::Internal(format!(
                         "created branch vanished before activation: {child_id}"
                     ))
                 })?;
-                let persisted = session_from_model(ready)?;
-                child.apply_persisted_metadata(&persisted);
-                child.refresh_derived();
-                access_cache(self.cache.as_ref(), |guard| {
-                    guard.insert(child.clone(), cache_policy);
-                });
-                Ok(child)
-            }
-            Err(error) => {
-                let failure = error.failure();
-                tracing::error!(
-                    failure_id = %failure.id,
-                    session_id = child_id,
-                    diagnostic = %error,
-                    "failed to build session branch"
-                );
-                if let Err(mark_error) = session::set_session_lifecycle(
-                    &self.db,
-                    child_id,
-                    SessionLifecycleState::Failed,
-                    Some(failure),
-                )
-                .await
-                {
-                    tracing::error!(
-                        session_id = child_id,
-                        "failed to mark incomplete branch as failed: {mark_error}"
-                    );
-                }
-                access_cache(self.cache.as_ref(), |guard| guard.discard(child_id));
-                Err(error)
-            }
-        }
+        let mut session = session_from_model(ready)?;
+        session.refresh_derived();
+        Ok(session)
     }
 
     pub(crate) async fn usage_stats(&self, query: UsageStatsQuery) -> Result<UsageStats, AppError> {
@@ -1155,47 +989,6 @@ impl SessionStore {
         }
         Ok(session)
     }
-
-    async fn inherit_prompt_window_on_fork(
-        &self,
-        mut child: Session,
-        source_prompt_window: crate::session::PromptWindowRuntime,
-        shared_message_ids: &[i64],
-        cache_policy: SessionCachePolicy,
-    ) -> Result<Session, AppError> {
-        // The compaction checkpoint may live in the shared prefix (which is
-        // not loaded into the child's in-memory messages), so check both the
-        // shared ids and the copied tail.
-        let checkpoint_retained =
-            source_prompt_window
-                .compaction
-                .as_ref()
-                .is_some_and(|checkpoint| {
-                    shared_message_ids.contains(&checkpoint.compacted_through_message_id)
-                        || child
-                            .messages
-                            .iter()
-                            .any(|message| message.id == checkpoint.compacted_through_message_id)
-                });
-        if !checkpoint_retained {
-            return Ok(child);
-        }
-        child.runtime.prompt_window = source_prompt_window;
-        child.runtime.clear_prompt_tokens();
-        child.runtime.clear_provider_anchors();
-        let expected_version = Some(child.version);
-        self.persist(
-            super::SessionCommit {
-                session: child,
-                checkpoints: Vec::new(),
-                client_events: Vec::new(),
-                persisted_rules: Vec::new(),
-                expected_version,
-            },
-            cache_policy,
-        )
-        .await
-    }
 }
 
 /// Reference the given message rows as visible in `session_id`'s view.
@@ -1232,34 +1025,4 @@ where
         })?;
     }
     Ok(())
-}
-
-fn remap_prompt_window_for_fork(
-    prompt_window: &mut crate::session::PromptWindowRuntime,
-    message_id_map: &BTreeMap<i64, i64>,
-) -> bool {
-    let Some(compaction) = prompt_window.compaction.as_mut() else {
-        return true;
-    };
-    let remap = |id: &mut i64| {
-        if *id <= 0 {
-            return true;
-        }
-        let Some(mapped) = message_id_map.get(id).copied() else {
-            return false;
-        };
-        *id = mapped;
-        true
-    };
-
-    let mut fully_mapped = remap(&mut compaction.compacted_through_message_id);
-    if let crate::session::PromptCompactionContent::TextSummary {
-        recent_messages, ..
-    } = &mut compaction.content
-    {
-        for message in recent_messages {
-            fully_mapped &= remap(&mut message.id);
-        }
-    }
-    fully_mapped
 }

@@ -29,6 +29,10 @@ pub enum RunAbortReason {
     /// The run was superseded by a newer user message or steer input before
     /// it completed; the old turn is replaced, not failed.
     Replaced,
+    /// The run was truncated because the session was forked or rewound while
+    /// the run was still in flight: the branch view stops at the fork cutoff
+    /// and never carries the parent's live turn.
+    ForkCutoff,
     /// A configured usage or step budget (max turns, token/cost limit) was
     /// exhausted and the run stopped early on purpose.
     BudgetLimited,

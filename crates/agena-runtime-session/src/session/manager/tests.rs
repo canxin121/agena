@@ -3040,6 +3040,11 @@ mod tests {
             })
             .await
             .expect("rewind current-format session");
+        let child = manager
+            .store
+            .load_session(child.id, manager.execution_state().cache_policy())
+            .await
+            .expect("materialize rewind branch on first open");
 
         let source_after = manager
             .store
@@ -3135,6 +3140,668 @@ mod tests {
             }
             _ => true,
         }));
+    }
+
+    #[tokio::test]
+    async fn fork_of_idle_session_stays_a_view_definition_until_first_open() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "fork view source".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create fork source");
+        let source_id = session.id;
+        let (session, first_user_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "first prompt",
+            None,
+            None,
+        )
+        .await;
+        let (session, assistant_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::Assistant,
+            "first response",
+            Some(first_user_id),
+            Some(first_user_id),
+        )
+        .await;
+        let (source, _second_user_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "second prompt",
+            None,
+            Some(assistant_id),
+        )
+        .await;
+        let source_message_ids = source
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<HashSet<_>>();
+
+        // The fork command writes only the view definition (session row +
+        // lineage row); nothing is materialized yet.
+        let fork = manager
+            .store
+            .fork_session(
+                source,
+                None,
+                "forked view".to_owned(),
+                manager.execution_state().cache_policy(),
+            )
+            .await
+            .expect("fork idle session");
+        assert_eq!(fork.parent_id, Some(source_id));
+        assert!(
+            fork.messages.is_empty(),
+            "fork command must not materialize the view"
+        );
+
+        // First open derives the shared prefix from the parent's event log.
+        let opened = manager
+            .store
+            .load_session(fork.id, manager.execution_state().cache_policy())
+            .await
+            .expect("first open materializes the fork view");
+        assert_eq!(
+            opened
+                .messages
+                .iter()
+                .map(|message| message.as_text_lossy())
+                .collect::<Vec<_>>(),
+            vec!["first prompt", "first response", "second prompt"]
+        );
+        assert!(
+            opened
+                .messages
+                .iter()
+                .all(|message| source_message_ids.contains(&message.id)),
+            "shared prefix must reference the parent rows instead of copies"
+        );
+
+        // A second open is idempotent and shows the same view.
+        let opened_again = manager
+            .store
+            .load_session(fork.id, manager.execution_state().cache_policy())
+            .await
+            .expect("second open is idempotent");
+        assert_eq!(opened_again.messages.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn fork_of_streaming_session_copies_only_the_in_flight_tail_on_first_open() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "streaming fork source".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create streaming source");
+        let (session, first_user_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "first prompt",
+            None,
+            None,
+        )
+        .await;
+        let (session, assistant_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::Assistant,
+            "first response",
+            Some(first_user_id),
+            Some(first_user_id),
+        )
+        .await;
+        let source_id = session.id;
+
+        // An in-flight user turn: execution started, run started, message
+        // appended, but no RunCompleted/ExecutionFinished yet.
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve streaming fork message ids");
+        let message_id = ids.message_id;
+        let streaming_message = build_message(
+            ids,
+            Role::User,
+            ExecutionStatus::InProgress,
+            vec![PartContent::text("streaming prompt")],
+            MessageMetadata {
+                model_turn_id: Some(message_id),
+                ..Default::default()
+            },
+        )
+        .expect("build streaming fork message");
+        let mut session = session;
+        session.messages.push(streaming_message.clone());
+        let session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&streaming_message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist streaming fork message");
+        let execution_id = ExecutionId::new();
+        let run_id = RunId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        manager
+            .store
+            .append_lifecycle_events(
+                source_id,
+                vec![
+                    EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
+                        session_id: source_id,
+                        execution_id,
+                        turn_id,
+                        reply_id,
+                        source: ExecutionSource::User,
+                        ts_ms: streaming_message.created_at.timestamp_millis(),
+                    }),
+                    EventKind::RunStarted(RunStarted {
+                        execution_id,
+                        run_id,
+                        source: ExecutionSource::User,
+                        model_id: "test-model".into(),
+                        provider_id: "test-provider".into(),
+                        request_digest: None,
+                    }),
+                    EventKind::UserMessageAppended(UserMessageAppended {
+                        execution_id,
+                        message_id: agena_domain::MessageId(streaming_message.id),
+                        run_id,
+                        created_at: streaming_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&streaming_message),
+                        parts: streaming_message.parts.clone(),
+                        metadata: streaming_message.metadata.clone(),
+                        provider_state: streaming_message.provider_state.clone(),
+                    }),
+                ],
+            )
+            .await
+            .expect("append in-flight streaming history");
+
+        let fork = manager
+            .store
+            .fork_session(
+                session,
+                None,
+                "streaming fork".to_owned(),
+                manager.execution_state().cache_policy(),
+            )
+            .await
+            .expect("fork streaming session");
+        assert!(fork.messages.is_empty());
+
+        // The parent keeps streaming after the fork. The branch snapshot must
+        // stay frozen at the fork-time cutoff: this later message must not
+        // leak into the child.
+        let parent_session = manager
+            .get_session(source_id)
+            .await
+            .expect("reload parent after fork");
+        let (parent_after, _later_user_id, _) = append_completed_text_message(
+            &manager,
+            parent_session,
+            Role::User,
+            "later prompt",
+            None,
+            Some(assistant_id),
+        )
+        .await;
+        assert_eq!(parent_after.messages.len(), 4);
+
+        let opened = manager
+            .store
+            .load_session(fork.id, manager.execution_state().cache_policy())
+            .await
+            .expect("first open materializes streaming fork");
+        assert_eq!(
+            opened
+                .messages
+                .iter()
+                .map(|message| message.as_text_lossy())
+                .collect::<Vec<_>>(),
+            vec!["first prompt", "first response", "streaming prompt"],
+            "branch snapshot is frozen at fork time"
+        );
+        // Shared prefix references the parent's rows; the in-flight tail is a
+        // physical copy with fresh identities.
+        assert_eq!(opened.messages[0].id, first_user_id);
+        assert_eq!(opened.messages[1].id, assistant_id);
+        assert_ne!(opened.messages[2].id, streaming_message.id);
+
+        // The copied open run is closed in the branch as ForkCutoff.
+        let child_events = manager
+            .store
+            .list_session_events(fork.id)
+            .await
+            .expect("list branch events");
+        assert!(
+            child_events.iter().any(|event| matches!(
+                event.kind,
+                EventKind::RunAborted(crate::session::history::RunAborted {
+                    reason: agena_domain::RunAbortReason::ForkCutoff,
+                    ..
+                })
+            )),
+            "copied in-flight run must be aborted with ForkCutoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn rewind_of_streaming_session_excludes_the_open_run_and_is_idempotent() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "streaming rewind source".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create streaming rewind source");
+        let (session, first_user_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "first prompt",
+            None,
+            None,
+        )
+        .await;
+        let (session, _second_user_id, second_turn_id) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "second prompt",
+            None,
+            Some(first_user_id),
+        )
+        .await;
+        let source_id = session.id;
+
+        // An in-flight run on top of the completed prefix.
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve streaming rewind message ids");
+        let message_id = ids.message_id;
+        let streaming_message = build_message(
+            ids,
+            Role::User,
+            ExecutionStatus::InProgress,
+            vec![PartContent::text("streaming prompt")],
+            MessageMetadata {
+                model_turn_id: Some(message_id),
+                ..Default::default()
+            },
+        )
+        .expect("build streaming rewind message");
+        let mut session = session;
+        session.messages.push(streaming_message.clone());
+        let _session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&streaming_message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist streaming rewind message");
+        let execution_id = ExecutionId::new();
+        let run_id = RunId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        manager
+            .store
+            .append_lifecycle_events(
+                source_id,
+                vec![
+                    EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
+                        session_id: source_id,
+                        execution_id,
+                        turn_id,
+                        reply_id,
+                        source: ExecutionSource::User,
+                        ts_ms: streaming_message.created_at.timestamp_millis(),
+                    }),
+                    EventKind::RunStarted(RunStarted {
+                        execution_id,
+                        run_id,
+                        source: ExecutionSource::User,
+                        model_id: "test-model".into(),
+                        provider_id: "test-provider".into(),
+                        request_digest: None,
+                    }),
+                    EventKind::UserMessageAppended(UserMessageAppended {
+                        execution_id,
+                        message_id: agena_domain::MessageId(streaming_message.id),
+                        run_id,
+                        created_at: streaming_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&streaming_message),
+                        parts: streaming_message.parts.clone(),
+                        metadata: streaming_message.metadata.clone(),
+                        provider_state: streaming_message.provider_state.clone(),
+                    }),
+                ],
+            )
+            .await
+            .expect("append in-flight rewind history");
+
+        // Rewind to the second completed user turn: the open run after it is
+        // fully retracted, so the branch needs no tail copy at all.
+        let child = manager
+            .rewind_session(SessionRewindRequest {
+                session_id: source_id,
+                turn_id: second_turn_id,
+                expected_version: None,
+            })
+            .await
+            .expect("rewind streaming session");
+        assert!(child.messages.is_empty());
+
+        let opened = manager
+            .store
+            .load_session(child.id, manager.execution_state().cache_policy())
+            .await
+            .expect("materialize rewind branch on first open");
+        assert_eq!(
+            opened
+                .messages
+                .iter()
+                .map(|message| message.as_text_lossy())
+                .collect::<Vec<_>>(),
+            vec!["first prompt"],
+            "rewind to an earlier turn excludes the open run"
+        );
+        assert_eq!(opened.messages[0].id, first_user_id);
+
+        // No tail and no aborted run: the cut lands before the open execution.
+        let child_events = manager
+            .store
+            .list_session_events(child.id)
+            .await
+            .expect("list rewind branch events");
+        assert_eq!(
+            child_events
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::UserMessageAppended(_)))
+                .count(),
+            0
+        );
+        assert!(
+            child_events.iter().all(|event| !matches!(
+                event.kind,
+                EventKind::RunAborted(crate::session::history::RunAborted {
+                    reason: agena_domain::RunAbortReason::ForkCutoff,
+                    ..
+                })
+            )),
+            "no copied run means no ForkCutoff abort"
+        );
+
+        // Idempotent second open: same view, no additional branch events.
+        let events_before = child_events.len();
+        let opened_again = manager
+            .store
+            .load_session(child.id, manager.execution_state().cache_policy())
+            .await
+            .expect("second rewind open");
+        assert_eq!(opened_again.messages.len(), 1);
+        let events_after = manager
+            .store
+            .list_session_events(child.id)
+            .await
+            .expect("list rewind branch events after second open");
+        assert_eq!(events_after.len(), events_before);
+    }
+
+    #[tokio::test]
+    async fn materialize_self_heals_when_tail_was_appended_but_marker_never_set() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "crash window fork source".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create crash window source");
+        let (session, _first_user_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "first prompt",
+            None,
+            None,
+        )
+        .await;
+        let source_id = session.id;
+
+        // An in-flight run so the fork has a tail to copy.
+        let ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve crash window message ids");
+        let message_id = ids.message_id;
+        let streaming_message = build_message(
+            ids,
+            Role::User,
+            ExecutionStatus::InProgress,
+            vec![PartContent::text("streaming prompt")],
+            MessageMetadata {
+                model_turn_id: Some(message_id),
+                ..Default::default()
+            },
+        )
+        .expect("build crash window streaming message");
+        let mut session = session;
+        session.messages.push(streaming_message.clone());
+        let session = manager
+            .persist_session_changes(
+                session,
+                vec![MessageCheckpoint::all(&streaming_message)],
+                Vec::new(),
+                None,
+                manager.execution_state(),
+            )
+            .await
+            .expect("persist crash window streaming message");
+        let execution_id = ExecutionId::new();
+        let run_id = RunId::new();
+        let turn_id = agena_domain::TurnId::new();
+        let reply_id = agena_domain::AssistantReplyId::new();
+        manager
+            .store
+            .append_lifecycle_events(
+                source_id,
+                vec![
+                    EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
+                        session_id: source_id,
+                        execution_id,
+                        turn_id,
+                        reply_id,
+                        source: ExecutionSource::User,
+                        ts_ms: streaming_message.created_at.timestamp_millis(),
+                    }),
+                    EventKind::RunStarted(RunStarted {
+                        execution_id,
+                        run_id,
+                        source: ExecutionSource::User,
+                        model_id: "test-model".into(),
+                        provider_id: "test-provider".into(),
+                        request_digest: None,
+                    }),
+                    EventKind::UserMessageAppended(UserMessageAppended {
+                        execution_id,
+                        message_id: agena_domain::MessageId(streaming_message.id),
+                        run_id,
+                        created_at: streaming_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&streaming_message),
+                        parts: streaming_message.parts.clone(),
+                        metadata: streaming_message.metadata.clone(),
+                        provider_state: streaming_message.provider_state.clone(),
+                    }),
+                ],
+            )
+            .await
+            .expect("append in-flight crash window history");
+
+        let fork = manager
+            .store
+            .fork_session(
+                session,
+                None,
+                "crash window fork".to_owned(),
+                manager.execution_state().cache_policy(),
+            )
+            .await
+            .expect("fork crash window session");
+
+        // Simulate a crash between the tail append and the marker write: the
+        // branch already owns the remapped tail, but the lineage marker is
+        // still NULL. The next open must detect the existing tail and skip the
+        // append instead of duplicating it.
+        let tail_ids = manager
+            .store
+            .reserve_message_ids(1)
+            .await
+            .expect("reserve crash window tail ids");
+        let copied_message_id = tail_ids.message_id;
+        let copied_message = build_message(
+            tail_ids,
+            Role::User,
+            ExecutionStatus::InProgress,
+            vec![PartContent::text("streaming prompt")],
+            MessageMetadata {
+                model_turn_id: Some(copied_message_id),
+                ..Default::default()
+            },
+        )
+        .expect("build crash window copied tail message");
+        let copied_execution_id = ExecutionId::new();
+        let copied_run_id = RunId::new();
+        let copied_turn_id = agena_domain::TurnId::new();
+        let copied_reply_id = agena_domain::AssistantReplyId::new();
+        manager
+            .store
+            .history
+            .append_items_silent(
+                fork.id,
+                vec![
+                    EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
+                        session_id: fork.id,
+                        execution_id: copied_execution_id,
+                        turn_id: copied_turn_id,
+                        reply_id: copied_reply_id,
+                        source: ExecutionSource::User,
+                        ts_ms: copied_message.created_at.timestamp_millis(),
+                    }),
+                    EventKind::RunStarted(RunStarted {
+                        execution_id: copied_execution_id,
+                        run_id: copied_run_id,
+                        source: ExecutionSource::User,
+                        model_id: "test-model".into(),
+                        provider_id: "test-provider".into(),
+                        request_digest: None,
+                    }),
+                    EventKind::UserMessageAppended(UserMessageAppended {
+                        execution_id: copied_execution_id,
+                        message_id: agena_domain::MessageId(copied_message.id),
+                        run_id: copied_run_id,
+                        created_at: copied_message.created_at,
+                        content: TranscriptContent::from_message_lossy(&copied_message),
+                        parts: copied_message.parts.clone(),
+                        metadata: copied_message.metadata.clone(),
+                        provider_state: copied_message.provider_state.clone(),
+                    }),
+                ],
+            )
+            .await
+            .expect("simulate partial materialize (tail appended, marker missing)");
+
+        let opened = manager
+            .store
+            .load_session(fork.id, manager.execution_state().cache_policy())
+            .await
+            .expect("first open self-heals the crash window");
+        assert_eq!(
+            opened
+                .messages
+                .iter()
+                .map(|message| message.as_text_lossy())
+                .collect::<Vec<_>>(),
+            vec!["first prompt", "streaming prompt"]
+        );
+
+        let child_events = manager
+            .store
+            .list_session_events(fork.id)
+            .await
+            .expect("list self-healed branch events");
+        assert_eq!(
+            child_events
+                .iter()
+                .filter(|event| matches!(event.kind, EventKind::UserMessageAppended(_)))
+                .count(),
+            1,
+            "the tail must not be re-appended after a crash window"
+        );
+        assert_eq!(
+            child_events
+                .iter()
+                .filter(|event| matches!(
+                    event.kind,
+                    EventKind::RunAborted(crate::session::history::RunAborted {
+                        reason: agena_domain::RunAbortReason::ForkCutoff,
+                        ..
+                    })
+                ))
+                .count(),
+            1,
+            "reconcile must close the copied open run exactly once"
+        );
+
+        // The marker is now set, so a second open is a no-op.
+        let row = manager
+            .store
+            .db
+            .query_one(Statement::from_sql_and_values(
+                manager.store.db.get_database_backend(),
+                "SELECT view_materialized_seq_global FROM agena_session_lineage WHERE session_id = ?",
+                [fork.id.into()],
+            ))
+            .await
+            .expect("query materialize marker")
+            .expect("lineage row exists");
+        assert!(
+            row.try_get::<Option<i64>>("", "view_materialized_seq_global")
+                .expect("marker column")
+                .is_some()
+        );
+
+        let opened_again = manager
+            .store
+            .load_session(fork.id, manager.execution_state().cache_policy())
+            .await
+            .expect("second open after self-heal");
+        assert_eq!(opened_again.messages.len(), 2);
     }
 
     #[tokio::test]

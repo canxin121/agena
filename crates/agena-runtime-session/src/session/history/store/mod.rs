@@ -11,7 +11,9 @@ use sea_orm::{
     PaginatorTrait, QueryFilter, Statement, TransactionTrait,
 };
 
-use crate::session::store::{insert_session_message_memberships, visit_event_message_ids};
+use crate::session::store::{
+    insert_session_message_memberships, split_fork_history, visit_event_message_ids,
+};
 use crate::{
     db::entities::{
         model_message, model_message_part, model_projection_state, session, session_lineage,
@@ -64,6 +66,14 @@ fn run_abort_problem(reason: RunAbortReason) -> Option<agena_failure::UserProble
             RetryDirective::ImmediateOnce,
             RecoveryDirective::Retry,
             "The reply was interrupted because the runtime restarted. Try again.",
+        ),
+        RunAbortReason::ForkCutoff => (
+            "execution.fork_cutoff",
+            FailureCategory::Internal,
+            FailureResponsibility::System,
+            RetryDirective::ImmediateOnce,
+            RecoveryDirective::Retry,
+            "The reply was truncated because the session was forked while it was still running.",
         ),
         RunAbortReason::Internal => (
             "execution.internal",
@@ -586,10 +596,28 @@ impl SessionHistoryStore {
             let parent_events = self
                 .list_session_events_before(parent_session_id, cutoff_seq, None)
                 .await?;
+            let parent_kinds: Vec<EventKind> = parent_events
+                .iter()
+                .map(|event| event.kind.clone())
+                .collect();
+            // In-flight tail messages are owned by the branch's own log (see
+            // materialize_fork_view); the completed prefix is shared by
+            // reference. Mirror the materialize derivation so a rebuilt
+            // projection cannot double a tail message that part-checkpoint
+            // events placed in the share part.
+            let (share_items, tail_items) = split_fork_history(parent_kinds.as_slice());
+            let mut tail_message_ids = std::collections::HashSet::new();
+            for item in &tail_items {
+                visit_event_message_ids(item, |id| {
+                    if id > 0 {
+                        tail_message_ids.insert(id);
+                    }
+                });
+            }
             let mut shared_ids = Vec::new();
-            for event in &parent_events {
-                visit_event_message_ids(&event.kind, |id| {
-                    if id > 0 && !shared_ids.contains(&id) {
+            for item in share_items {
+                visit_event_message_ids(item, |id| {
+                    if id > 0 && !tail_message_ids.contains(&id) && !shared_ids.contains(&id) {
                         shared_ids.push(id);
                     }
                 });
@@ -2609,7 +2637,8 @@ where
                     }
                     RunAbortReason::ProcessRestart
                     | RunAbortReason::ProviderError
-                    | RunAbortReason::Internal => ExecutionStatus::Failed,
+                    | RunAbortReason::Internal
+                    | RunAbortReason::ForkCutoff => ExecutionStatus::Failed,
                 };
                 part_writer
                     .terminalize_open_messages(

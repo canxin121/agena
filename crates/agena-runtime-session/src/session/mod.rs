@@ -13,8 +13,7 @@ mod store;
 pub(crate) use agena_runtime::ContextGovernor;
 pub use agena_runtime_session_core::model::Session;
 pub(crate) use agena_runtime_session_core::model::{
-    PromptCompactionContent, PromptCompactionMessage, PromptWindowRuntime, SessionRuntimeState,
-    SubtaskRuntimeState,
+    PromptCompactionMessage, SessionRuntimeState, SubtaskRuntimeState,
 };
 pub use manager::{
     SessionManager, SessionSubtaskOutput, SessionSubtaskOutputChunk, SessionSubtaskRequest,

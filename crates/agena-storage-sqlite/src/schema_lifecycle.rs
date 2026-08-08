@@ -18,7 +18,11 @@
 /// Version 3 adds the `agena_session_messages` membership table: a fork (or
 /// rewind branch) references the parent's terminal message rows instead of
 /// physically copying them, so `/fork` and `/side` stay cheap and compact.
-pub const CURRENT_SCHEMA_VERSION: i64 = 3;
+/// Version 4 adds `agena_session_lineage.view_materialized_seq_global`: a
+/// fork/rewind branch is a view definition (`parent_id` + cutoff) whose shared
+/// membership and (rare) in-flight tail are materialized lazily on first open,
+/// so the fork command itself stays O(1) and never copies content rows.
+pub const CURRENT_SCHEMA_VERSION: i64 = 4;
 
 #[cfg(test)]
 mod tests {

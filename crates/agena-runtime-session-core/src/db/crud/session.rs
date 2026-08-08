@@ -431,6 +431,7 @@ pub async fn create_session_in_transaction(
             relation_kind: Set(lineage_input.relation_kind.as_str().to_owned()),
             source_cutoff_seq_global: Set(lineage_input.source_cutoff_seq_global),
             source_message_id: Set(lineage_input.source_message_id),
+            view_materialized_seq_global: Set(None),
             task_id: Set(task_id),
             subtask_status: Set(is_subagent.then(|| SubtaskStatus::Created.as_ref().to_owned())),
             subtask_started_at_ms: Set(None),

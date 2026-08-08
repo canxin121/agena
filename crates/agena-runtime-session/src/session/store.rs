@@ -112,11 +112,18 @@ pub(crate) struct SessionStore {
     pub(crate) session_mutation_repository: Arc<dyn agena_storage::SessionMutationRepository>,
     pub(crate) projection_lookup_repository: Arc<dyn agena_storage::ProjectionLookupRepository>,
     pub(crate) session_summary_repository: Arc<dyn SessionSummaryRepository>,
+    /// First-open materialization of fork/rewind views is a per-session
+    /// single-writer operation inside one process. The projection locks live
+    /// in `SessionHistoryStore` and are not held while materializing (the
+    /// materializer itself drives projection catch-up), so it needs its own
+    /// fence to keep concurrent first opens from appending the tail twice.
+    materialize_locks: Arc<Mutex<std::collections::HashMap<i64, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 mod activity_v2;
 mod core;
 mod event_rewrite;
+mod fork;
 mod helpers;
 mod history;
 mod ids;
@@ -127,5 +134,6 @@ pub(crate) use self::activity_v2::*;
 pub(crate) use self::core::LEASE_STALENESS_MS;
 pub(crate) use self::core::insert_session_message_memberships;
 pub(crate) use self::event_rewrite::*;
+pub(crate) use self::fork::split_fork_history;
 pub(crate) use self::helpers::*;
 pub(crate) use self::types::*;

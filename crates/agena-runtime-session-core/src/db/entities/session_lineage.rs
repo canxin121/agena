@@ -16,6 +16,11 @@ pub struct Model {
     pub relation_kind: String,
     pub source_cutoff_seq_global: Option<i64>,
     pub source_message_id: Option<i64>,
+    /// Fork/rewind branches are view definitions: shared membership and the
+    /// (rare) in-flight tail are materialized lazily on first open. This holds
+    /// the parent cutoff the view was materialized through; `NULL` means the
+    /// branch has not been opened yet.
+    pub view_materialized_seq_global: Option<i64>,
     pub task_id: Option<String>,
     pub subtask_status: Option<String>,
     pub subtask_started_at_ms: Option<i64>,

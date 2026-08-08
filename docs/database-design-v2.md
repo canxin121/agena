@@ -785,14 +785,23 @@ pub enum SessionChange {
 #[async_trait]
 pub trait SessionStore {
     async fn load(&self, session_id: i64) -> Result<SessionView>;
+    async fn list_session_summaries(&self, query: SessionListQuery) -> Result<Vec<SessionSummary>>;
+    async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>>;
+    async fn session_state(&self, session_id: i64) -> Result<SessionPresentation>;
     async fn submit_user_message(&self, session_id, parts: Vec<NewPart>) -> Result<RunId>;
     async fn append_parts(&self, session_id, run_id, parts: Vec<NewPart>) -> Result<()>;  // streaming
     async fn update_part(&self, session_id, part_id, delta) -> Result<()>;                // streaming delta
     async fn complete_run(&self, session_id, run_id, outcome) -> Result<()>;
     async fn answer_interaction(&self, session_id, interaction_part_id, reply) -> Result<()>;
-        async fn fork(&self, session_id, at_part_id, title) -> Result<i64>;
+    async fn fork(&self, session_id, at_part_id, title) -> Result<i64>;
     async fn rewind(&self, session_id, at_part_id, title) -> Result<i64>;
+    async fn rename(&self, session_id, title) -> Result<SessionMeta>;
+    async fn cancel_run(&self, session_id, run_id) -> Result<()>;
+    async fn compact_session(&self, session_id) -> Result<RunId>;
     async fn delete(&self, session_id) -> Result<()>;
+    async fn export_session_jsonl(&self, session_id) -> Result<String>;
+    async fn import_session_jsonl(&self, bundle: &str) -> Result<i64>;
+    async fn usage_stats(&self, query: UsageQuery) -> Result<UsageStats>;
     fn subscribe(&self, session_id, observer: impl Fn(SessionChange)) -> Subscription;
 }
 ```
@@ -1242,6 +1251,94 @@ they are — visibility is per part, not per session.
 - Visibility and rendering do not affect the state machine at all — they only
   change prompt/UI filtering and display. `SessionPresentation` (17.6) stays the
   single source of session state; per-part visibility/rendering is detail.
+
+---
+
+_End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._
+
+---
+
+## 19. v1 coverage matrix and gap closure
+
+Four read-only sub-audits walked every v1 surface (storage ops, execution flows,
+query/REST/UI, domain types) against this design. Verdict: storage operations
+and execution flows are 100% covered (the event-log/projection machinery is
+intentionally dropped); query/UI and domain payloads need the closures below.
+
+### 19.1 Storage operations — covered
+
+All `agena-storage` traits, session-store operations, leases, sequence
+allocation, transactions, reconcile, workspace/catalog/permission/usage/stats,
+memory docs map to v2 engine/facade or kept-infra; `EventStore` and
+`ModelMessage*`/projection writers are dropped by design. v2 even ADDS orphan
+part GC that v1 lacked. Open items are implementation knobs (D4 ordering,
+D10 streaming throttle).
+
+### 19.2 Execution flows — covered
+
+Run lifecycle, streaming/checkpoints, tool calls/results, ask-user, permission,
+plan review, compaction, hooks, subagents, cancel, steer, continue, crash
+reconcile all map to part kinds + states + the state machine (17). Three v1
+runtime fields need homes (19.5).
+
+### 19.3 Facade completeness (14.1) — closed
+
+Added to `SessionStore`: `list_session_summaries`, `list_session_tree`,
+`session_state`, `rename`, `cancel_run`, `compact_session`,
+`export_session_jsonl`, `import_session_jsonl`, `usage_stats`. (Session listing,
+export/import, cancel, compact, meta-update were missing from the first draft.)
+
+### 19.4 Content shape breadth (4.1.1) — extended shapes
+
+Payload breadth, not missing kinds:
+
+- `file_ref`: extend to `{path|url|data_url|file_id|base64, name, mime, sha,
+  width, height, duration_ms, page_count}` (covers v1 Resource/Attachment
+  sources and media dims).
+- `tool_result`: extend to `{output, ok, structured, model_preview,
+  managed_outputs, display, attachments, metadata, raw}` (covers v1
+  `ToolResultEnvelope`); the human view is `rendered_markdown` (18.4).
+- `error`: extend to full `UserProblem` shape `{code, category, message,
+  detail, responsibility, retry, recovery, impact}`.
+- `notice`: add `title`; `hook`: add `plugin_id`.
+- `think`: allow `encrypted_content` (v1 encrypted reasoning); `text`: allow
+  `synthetic` flag.
+- `skill_ref`: KEEP reference-only `{skill, args}` (user decision: the AI
+  resolves the skill on demand; v1's snapshot of instructions is dropped).
+- provider-replay state stays in the `provider_state` column (13.2).
+
+### 19.5 Runtime-state field homes
+
+| v1 field | home |
+|----------|------|
+| `consecutive_compaction_failures` / `auto_compaction_disabled` / `remote_compaction_disabled_models` | `sessions.config_json` (compaction policy, mutable) |
+| `model_context_window_tokens` | derived from model catalog at prompt build (not persisted) |
+| execution `selection` / `access` (model choice, execution access) | run marker content (per run) + `config_json` (session defaults) |
+| exclusive-reply matching (turn_id/reply_id) | marker-based matching (run marker part_id is the turn identity) |
+
+### 19.6 Activities/operations registry mapping
+
+v1 activity registry (logs, stop/dismiss, background tasks, `operation_detail`)
+maps to parts: activity log = parts history; stop/dismiss = part state
+transitions (cancelled/removed); background tasks = `run_kind='background'`
+markers; `operation_detail` = `rendered_markdown` (18.4). A separate activity
+registry table is not needed.
+
+### 19.7 Global runtime history — decision needed
+
+v1 `list_events` / `ListEvents` / `event_query_service` (cursor-paged global
+event history across sessions) has no v2 counterpart. Options: (a) drop it
+(was a diagnostic view over the event log); (b) replace with a global parts
+query (all parts across sessions, cursor-paged, filtered by kind/time) for
+diagnostics. Default: (b) as a facade `list_parts_global` query, low priority.
+
+### 19.8 Open-decision additions
+
+| # | Decision | Default |
+|---|----------|---------|
+| D11 | global runtime history | replace `list_events` with cursor-paged global parts query (low priority) |
+| D12 | `skill_ref` depth | reference-only `{skill, args}`; resolve on demand |
+| D13 | attachment source breadth | extended `file_ref` shape (url/data_url/file_id/media dims) |
 
 ---
 

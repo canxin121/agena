@@ -314,7 +314,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Fork,
         name: "fork",
         aliases: &["branch"],
-        arguments: "<question>",
+        arguments: "",
         summary_key: "command-fork-summary",
     },
     CommandSpec {
@@ -370,7 +370,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         id: CommandId::Side,
         name: "side",
         aliases: &["btw", "aside"],
-        arguments: "<question>",
+        arguments: "",
         summary_key: "command-side-summary",
     },
 ];
@@ -543,6 +543,8 @@ mod tests {
             "image",
             "usage",
             "activities",
+            "fork",
+            "side",
         ] {
             let spec = find_command(name).expect("registered interactive command");
             assert!(
@@ -577,30 +579,31 @@ mod tests {
         let spec = find_command("side").expect("side command");
         assert_eq!(spec.name, "side");
         assert_eq!(spec.summary_key, "command-side-summary");
-        assert!(spec.requires_arguments());
+        assert!(!spec.requires_arguments());
+        assert_eq!(spec.invocation(), "/side");
     }
 
     #[test]
-    fn side_command_parses_its_question_argument() {
-        let command = parse_command("/side what is the current status?").expect("side command");
+    fn side_command_takes_no_question_argument() {
+        let command = parse_command("/side").expect("side command");
         assert_eq!(command.spec.id, CommandId::Side);
-        assert_eq!(command.args, "what is the current status?");
+        assert_eq!(command.args, "");
 
-        let alias = parse_command("/btw explain the recent diff").expect("btw alias");
+        let alias = parse_command("/btw").expect("btw alias");
         assert_eq!(alias.spec.id, CommandId::Side);
-        assert_eq!(alias.args, "explain the recent diff");
+        assert_eq!(alias.args, "");
     }
 
     #[test]
-    fn fork_is_a_real_fork_command_requiring_a_question() {
+    fn fork_is_a_real_fork_command_without_arguments() {
         let spec = find_command("fork").expect("fork command");
         assert_eq!(spec.name, "fork");
-        assert!(spec.requires_arguments());
-        assert_eq!(spec.invocation(), "/fork <question>");
+        assert!(!spec.requires_arguments());
+        assert_eq!(spec.invocation(), "/fork");
 
-        let command = parse_command("/fork explain the architecture").expect("fork command");
+        let command = parse_command("/fork").expect("fork command");
         assert_eq!(command.spec.id, CommandId::Fork);
-        assert_eq!(command.args, "explain the architecture");
+        assert_eq!(command.args, "");
 
         assert_eq!(
             find_command("branch").map(|spec| spec.id),

@@ -457,7 +457,7 @@ pub struct App {
     /// forked from. A side conversation is `/fork` plus a transient side
     /// identity: the fork itself is a permanent child session with full
     /// history, tracked here only while the TUI treats it as an open side
-    /// conversation (`/side <question>`; the user is switched into it to
+    /// conversation (`/side`; the user is switched into it to
     /// chat while the parent run keeps going). The entry is dropped when
     /// navigation leaves the side conversation or its parent.
     pub(super) side_sessions: HashMap<i64, i64>,

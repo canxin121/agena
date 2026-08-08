@@ -3804,6 +3804,164 @@ mod tests {
         assert_eq!(opened_again.messages.len(), 2);
     }
 
+    /// Orphan cleanup (`DELETE ... NOT IN membership`) runs inside projection
+    /// rebuilds. Once a branch has materialized its memberships, the shared
+    /// prefix rows must survive a parent rebuild; an unopened branch must
+    /// still materialize correctly after the parent's rows were dropped and
+    /// re-created inside the rebuild transaction with identical ids.
+    #[tokio::test]
+    async fn fork_shared_memberships_survive_parent_projection_rebuild() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "orphan cleanup source".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create orphan cleanup source");
+        let source_id = session.id;
+        let (session, first_user_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::User,
+            "first prompt",
+            None,
+            None,
+        )
+        .await;
+        let (source, _assistant_id, _) = append_completed_text_message(
+            &manager,
+            session,
+            Role::Assistant,
+            "first response",
+            Some(first_user_id),
+            Some(first_user_id),
+        )
+        .await;
+        let source_message_ids = source
+            .messages
+            .iter()
+            .map(|message| message.id)
+            .collect::<HashSet<_>>();
+        let first_part_id = source.messages[0].parts[0].id;
+
+        // Two unopened branches: no membership edges exist yet.
+        let fork_a = manager
+            .store
+            .fork_session(
+                source.clone(),
+                None,
+                "orphan cleanup fork a".to_owned(),
+                manager.execution_state().cache_policy(),
+            )
+            .await
+            .expect("fork a");
+        let fork_b = manager
+            .store
+            .fork_session(
+                source,
+                None,
+                "orphan cleanup fork b".to_owned(),
+                manager.execution_state().cache_policy(),
+            )
+            .await
+            .expect("fork b");
+
+        // Force a parent projection rebuild while both branches are still
+        // unopened: the orphan cleanup drops the parent's rows (nothing
+        // references them yet) and the rebuild re-creates them from the
+        // parent's event log inside the same transaction, preserving ids.
+        manager
+            .store
+            .db
+            .execute(sea_orm::Statement::from_sql_and_values(
+                manager.store.db.get_database_backend(),
+                "DELETE FROM agena_model_message_parts WHERE part_id = ?",
+                [first_part_id.into()],
+            ))
+            .await
+            .expect("drop a parent part to force repair");
+        let parent_after = manager
+            .store
+            .list_projected_messages(source_id, true)
+            .await
+            .expect("parent rebuild after unopened branches");
+        assert_eq!(parent_after.len(), 2);
+        assert!(
+            parent_after
+                .iter()
+                .all(|message| source_message_ids.contains(&message.id)),
+            "parent rebuild must keep message identities"
+        );
+
+        // The unopened branches materialize against the re-created rows.
+        for fork in [&fork_a, &fork_b] {
+            let opened = manager
+                .store
+                .load_session(fork.id, manager.execution_state().cache_policy())
+                .await
+                .expect("open branch after parent rebuild");
+            assert_eq!(
+                opened
+                    .messages
+                    .iter()
+                    .map(|message| message.as_text_lossy())
+                    .collect::<Vec<_>>(),
+                vec!["first prompt", "first response"]
+            );
+            assert!(
+                opened
+                    .messages
+                    .iter()
+                    .all(|message| source_message_ids.contains(&message.id)),
+                "branch must share the re-created parent rows"
+            );
+        }
+
+        // A second parent rebuild now that both branches are materialized:
+        // the shared rows must survive orphan cleanup because the branch
+        // membership edges still reference them.
+        manager
+            .store
+            .db
+            .execute(sea_orm::Statement::from_sql_and_values(
+                manager.store.db.get_database_backend(),
+                "DELETE FROM agena_model_message_parts WHERE part_id = ?",
+                [first_part_id.into()],
+            ))
+            .await
+            .expect("drop a parent part to force a second repair");
+        let parent_again = manager
+            .store
+            .list_projected_messages(source_id, true)
+            .await
+            .expect("second parent rebuild");
+        assert_eq!(parent_again.len(), 2);
+
+        for fork in [&fork_a, &fork_b] {
+            let opened = manager
+                .store
+                .load_session(fork.id, manager.execution_state().cache_policy())
+                .await
+                .expect("branch view after second parent rebuild");
+            assert_eq!(
+                opened
+                    .messages
+                    .iter()
+                    .map(|message| message.as_text_lossy())
+                    .collect::<Vec<_>>(),
+                vec!["first prompt", "first response"]
+            );
+            assert!(
+                opened
+                    .messages
+                    .iter()
+                    .all(|message| source_message_ids.contains(&message.id)),
+                "shared rows must not be orphaned while branch memberships exist"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn session_export_uses_one_current_unversioned_format() {
         let manager = test_manager().await;

@@ -577,21 +577,15 @@ impl SessionHistoryStore {
 
     async fn rebuild_projection_from_history(&self, session_id: i64) -> Result<(), DbErr> {
         let events = self.list_session_events(session_id).await?;
-
-        let txn = self.db.begin().await?;
-        acquire_projection_fence(&txn, session_id).await?;
-        let part_writer = TransactionProjectionPartWriter::new(Arc::clone(
-            &self.message_projection_transaction_writer,
-        ));
-        part_writer
-            .clear_session_projection(&txn, session_id)
-            .await?;
-        apply_projection_events_on_connection(&txn, &part_writer, session_id, events.as_slice())
-            .await?;
         // Forked/rewind branches reference the parent's terminal messages
         // instead of owning copies. The clear above dropped those membership
         // edges, so restore them from the fork's shared prefix so the rebuilt
-        // projection keeps showing the whole conversation.
+        // projection keeps showing the whole conversation. The derivation is
+        // computed before the transaction starts: these reads go through the
+        // shared connection pool, which is fully occupied by the transaction
+        // itself on a single-connection SQLite pool (for example
+        // `sqlite::memory:`), so doing them inside would deadlock.
+        let mut fork_shared_ids = None;
         if let Some((parent_session_id, cutoff_seq)) = self.fork_source_cutoff(session_id).await? {
             let parent_events = self
                 .list_session_events_before(parent_session_id, cutoff_seq, None)
@@ -622,15 +616,29 @@ impl SessionHistoryStore {
                     }
                 });
             }
-            if !shared_ids.is_empty() {
-                insert_session_message_memberships(&txn, session_id, &shared_ids)
-                    .await
-                    .map_err(|error| {
-                        DbErr::Custom(format!(
-                            "insert session message memberships failed: {error}"
-                        ))
-                    })?;
-            }
+            fork_shared_ids = Some(shared_ids);
+        }
+
+        let txn = self.db.begin().await?;
+        acquire_projection_fence(&txn, session_id).await?;
+        let part_writer = TransactionProjectionPartWriter::new(Arc::clone(
+            &self.message_projection_transaction_writer,
+        ));
+        part_writer
+            .clear_session_projection(&txn, session_id)
+            .await?;
+        apply_projection_events_on_connection(&txn, &part_writer, session_id, events.as_slice())
+            .await?;
+        if let Some(shared_ids) = fork_shared_ids
+            && !shared_ids.is_empty()
+        {
+            insert_session_message_memberships(&txn, session_id, &shared_ids)
+                .await
+                .map_err(|error| {
+                    DbErr::Custom(format!(
+                        "insert session message memberships failed: {error}"
+                    ))
+                })?;
         }
         txn.commit().await?;
         Ok(())
@@ -2785,6 +2793,27 @@ where
     }) {
         Some(result) => Some(result?),
         None => None,
+    };
+    // A checkpoint that carries no execution id inherits one from the
+    // message row. During a projection rebuild the reply/execution rows are
+    // cleared and re-created in event order, so a pre-execution checkpoint
+    // applied to a surviving (shared) message row can derive an execution
+    // whose reply owner does not exist yet; its ExecutionStarted event and
+    // the terminal message event carrying the real execution replay later.
+    // Only project the part when the execution is actually resolvable.
+    let effective_execution_id = match effective_execution_id {
+        Some(execution_id) if update.execution_id.is_none() => {
+            let has_reply_owner = db
+                .query_one(Statement::from_sql_and_values(
+                    db.get_database_backend(),
+                    "SELECT 1 FROM agena_reply_executions WHERE execution_id = ? LIMIT 1",
+                    [execution_id.to_string().into()],
+                ))
+                .await?
+                .is_some();
+            has_reply_owner.then_some(execution_id)
+        }
+        other => other,
     };
 
     // A forked session rewrites message identities but keeps the original

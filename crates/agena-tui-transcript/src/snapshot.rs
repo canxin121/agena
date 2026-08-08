@@ -637,14 +637,23 @@ pub(crate) fn activity_presentation(
         ),
         ActivityPayload::Notice(notice) => (
             "notice".to_owned(),
-            if notice.kind == "hook" {
-                "Hook".to_owned()
-            } else {
-                "Notice".to_owned()
-            },
+            notice_kind_title(notice.kind.as_str()).to_owned(),
             notice.summary.clone(),
             None,
         ),
+    }
+}
+
+/// Human-facing headline for a runtime notice kind. Each known category gets
+/// its own leading label so the transcript is scannable at a glance; unknown
+/// (plugin-supplied) kinds fall back to the generic "Notice".
+fn notice_kind_title(kind: &str) -> &'static str {
+    match kind {
+        "hook" => "Hook",
+        "compaction" => "Compaction",
+        "provider_retry" => "Provider retry",
+        "max_turns_exhausted" => "Turn limit",
+        _ => "Notice",
     }
 }
 
@@ -719,6 +728,17 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn notice_kind_title_distinguishes_known_runtime_kinds() {
+        assert_eq!(notice_kind_title("hook"), "Hook");
+        assert_eq!(notice_kind_title("compaction"), "Compaction");
+        assert_eq!(notice_kind_title("provider_retry"), "Provider retry");
+        assert_eq!(notice_kind_title("max_turns_exhausted"), "Turn limit");
+        // Unknown or plugin-supplied kinds stay generic.
+        assert_eq!(notice_kind_title("session_notice"), "Notice");
+        assert_eq!(notice_kind_title(""), "Notice");
+    }
 
     #[test]
     fn text_artifact_expansion_does_not_mutate_user_document_body() {

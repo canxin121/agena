@@ -809,7 +809,7 @@ pub trait SessionStore {
 | source of truth / audit / replay | parts are the truth (no replay) |
 | internal projection driver | no projections; domain operations persist directly |
 | notify subscribers (live updates) | `SessionChange` notifications derived from the same operation, emitted after commit |
-| catch-up (reconnect / cross-process) | `sessions.version` / `MAX(session_parts.seq)` |
+| catch-up (reconnect / cross-process) | `sessions.version` / newest member part (`created_at_ms`, `part_id`) |
 
 `SessionChange` is a notification (observer pattern), not an event: never
 persisted, never replayed, no causality chain. History = ordered parts.
@@ -819,7 +819,7 @@ persisted, never replayed, no causality chain. History = ordered parts.
 - Same-process subscribers: backed by the in-memory bus (TUI is in-process, zero cost).
 - Cross-process (server executes, another instance's UI watches): `subscribe` is
   backed by the existing notification stream (`agena-runtime-notifications` / SSE)
-  plus `version`/`seq` catch-up for late joiners. The facade hides the transport;
+    plus `version`/`(created_at, part_id)` catch-up for late joiners. The facade hides the transport;
   it is a notification channel, not an event log.
 
 ---
@@ -851,7 +851,7 @@ External callers (TUI / Web / CLI / API server / tests)
 | internal: PersistenceEngine(SQLite repos, transactions,    |
 |                             leases, recovery, GC)          |
 | internal: NotificationBus  (in-process bus + cross-process |
-|                             stream + version/seq catch-up) |
+|                                                          stream + version/(created_at, part_id) catch-up) |
 +------------------------------------------------------------+
        ^
        | the only place that imports sea_orm / holds DatabaseConnection
@@ -901,7 +901,7 @@ v1 `SessionCache` (LRU + TTL + byte budget + max sessions + stats,
 
 - `SessionChange` is emitted after commit: same-process subscribers via the
   in-memory bus; cross-process via the notification stream plus
-  `version`/`seq` catch-up for late joiners (14.4).
+    `version`/(`created_at`, `part_id`) catch-up for late joiners (14.4).
 - `SessionFacade::subscribe` hides the transport; callers see one API.
 
 ### 15.6 Write path (commit-then-notify)
@@ -934,7 +934,7 @@ outside the engine touches the DB.
 - Reads: cache-first; live updates push, no polling.
 - Writes: memory-first latency, throttled persistence, revision guards.
 - Fork/rewind: membership operations through the facade (section 7.3).
-- Multi-instance: version/seq catch-up; single-writer lease per session.
+- Multi-instance: version/(created_at, part_id) catch-up; single-writer lease per session.
 
 ---
 

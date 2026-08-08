@@ -295,8 +295,20 @@ pub(crate) fn push_markdown_document(
                     .with_copy_projection(String::new(), UnicodeWidthStr::width(prefix)),
             );
         }
-        render_markdown_block(out, prefix, block, width);
+                render_markdown_block(out, prefix, block, width);
     }
+}
+
+/// Render a complete Markdown document into chat-style terminal lines.
+///
+/// This is the public entry point for surfaces that reuse the transcript's
+/// Markdown pipeline (comrak parsing, block rendering, and syntax
+/// highlighting) without owning a transcript node. The plan-approval overlay
+/// renders its plan body with the exact same styling as assistant prose.
+pub fn render_markdown_document(text: &str, width: u16) -> Vec<RenderedLine> {
+    let mut out = Vec::new();
+    push_markdown_document(&mut out, "", text, width);
+    out
 }
 
 pub(crate) fn markdown_heading(line: &str) -> Option<(usize, &str)> {
@@ -740,9 +752,44 @@ mod syntax_highlight_tests {
         let palette = agena_tui_components::ThemePalette::for_unknown_background();
         let highlighted = syntax_highlight_lines("rust", &["let answer = 42;"], palette);
 
-        for span in highlighted.iter().flatten() {
+                for span in highlighted.iter().flatten() {
             assert_eq!(span.style.fg, Some(ratatui::style::Color::Reset));
             assert_eq!(span.style.bg, Some(ratatui::style::Color::Reset));
+        }
+    }
+}
+
+#[cfg(test)]
+mod markdown_document_tests {
+    use super::*;
+
+    #[test]
+    fn render_markdown_document_produces_rich_terminal_lines() {
+        let markdown = concat!(
+            "# Plan\n",
+            "\n",
+            "- step one\n",
+            "- step two\n",
+            "\n",
+            "```rust\n",
+            "fn main() {}\n",
+            "```\n",
+        );
+        let lines = render_markdown_document(markdown, 60);
+
+        assert!(!lines.is_empty(), "plan markdown must render to lines");
+        let plain = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<String>();
+        assert!(plain.contains("Plan"), "heading text must appear: {plain}");
+        assert!(plain.contains("step one"), "list item must appear: {plain}");
+        assert!(plain.contains("fn main()"), "code line must appear: {plain}");
+        for line in &lines {
+            assert!(
+                line.rich_line.is_some(),
+                "every rendered line must carry a rich Line for overlay reuse"
+            );
         }
     }
 }

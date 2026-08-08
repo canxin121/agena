@@ -26,3 +26,12 @@ export function composerTextArtifactPreview(draft: ComposerTextArtifactDraft, ma
 export function textArtifactPlaceholder(index: number): string {
   return `[已粘贴文本 #${index}]`
 }
+
+/**
+ * Remove inline `[已粘贴文本 #n]` markers from the composer body. The marker
+ * is only a draft-time stand-in for the artifact stored in the text-artifact
+ * list; it must never be sent as part of the message text.
+ */
+export function stripTextArtifactPlaceholders(text: string): string {
+  return text.replace(/\[已粘贴文本 #\d+\]\s?/g, '').trim()
+}

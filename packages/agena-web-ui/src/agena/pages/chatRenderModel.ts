@@ -30,6 +30,11 @@ function readFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function textArtifactPreview(text: string, maxLength = 240): string {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, Math.max(1, maxLength - 1))}…`
+}
+
 function activityTitle(activity: TranscriptActivity): string {
   const payload = activity.payload
   // Tool operations headline with the composed tool title the runtime produced
@@ -335,6 +340,18 @@ export function partBlocks(part: MessagePart): RenderBlock[] {
         },
       ]
     })
+  }
+  if (part.kind === 'text_artifact' || content?.type === 'text_artifact') {
+    const label = readString(content?.label) || 'Pasted text'
+    const text = readString(content?.text)
+    return [
+      {
+        title: label,
+        body: text ? textArtifactPreview(text) : 'Pasted text was attached to this message.',
+        kind: 'input_activity' as const,
+        activityLabel: 'Pasted text',
+      },
+    ]
   }
   const applyPatch = applyPatchPayload(content)
   if (applyPatch) {

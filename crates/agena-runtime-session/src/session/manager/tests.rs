@@ -4526,6 +4526,118 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn submitted_attachments_and_text_artifacts_round_trip_into_turn_input() {
+        let manager = test_manager().await;
+        let session = manager
+            .create_session(SessionCreateRequest {
+                title: "attachment round trip".to_owned(),
+                parent_session_id: None,
+            })
+            .await
+            .expect("create attachment round-trip session");
+        let options = SessionRunOptions {
+            model: ModelRef::new("reply-test-provider", "reply-test-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        };
+        manager
+            .update_session_selection(session.id, options.clone())
+            .await
+            .expect("select reply-test model");
+
+        let resource_id = agena_domain::ActivityId::new();
+        let artifact_id = agena_domain::ActivityId::new();
+        let document = agena_domain::ComposerDocument(vec![
+            agena_domain::ComposerNode::Text {
+                text: "hello".to_owned(),
+            },
+            agena_domain::ComposerNode::activity(agena_domain::ComposerActivity {
+                id: resource_id,
+                payload: agena_domain::ActivityPayload::Resource(
+                    agena_domain::ResourceActivity {
+                        kind: agena_domain::ResourceKind::File,
+                        reference: agena_domain::ResourceReference::WorkspacePath {
+                            path: "notes.txt".to_owned(),
+                        },
+                        name: "notes.txt".to_owned(),
+                        media_type: Some("text/plain".to_owned()),
+                        size_bytes: Some(12),
+                        width: None,
+                        height: None,
+                        duration_ms: None,
+                        page_count: None,
+                    },
+                ),
+                provenance: Default::default(),
+            }),
+            agena_domain::ComposerNode::activity(agena_domain::ComposerActivity {
+                id: artifact_id,
+                payload: agena_domain::ActivityPayload::TextArtifact(
+                    agena_domain::TextArtifactActivity {
+                        text: "x".repeat(1_000),
+                        language: None,
+                        label: Some("paste 1000 chars".to_owned()),
+                    },
+                ),
+                provenance: Default::default(),
+            }),
+        ]);
+        manager
+            .submit_user_message(agena_runtime::SessionUserMessageRequest::new(
+                session.id,
+                options,
+                document,
+            ))
+            .await
+            .expect("submit user message with attachment");
+
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while manager.is_run_active(session.id).await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("session run did not finish");
+
+        let snapshot = manager
+            .transcript_snapshot(session.id)
+            .await
+            .expect("load transcript snapshot");
+        assert_eq!(snapshot.turns.len(), 1);
+        let input = &snapshot.turns[0].input;
+        assert_eq!(
+            input.nodes().len(),
+            3,
+            "turn input must keep text + resource + text_artifact nodes: {:#?}",
+            input.nodes()
+        );
+        assert!(
+            input.nodes().iter().any(|node| matches!(
+                node,
+                agena_domain::ContentNode::Activity { activity }
+                    if activity.id == resource_id
+            )),
+            "resource attachment activity missing from turn input: {:#?}",
+            input.nodes()
+        );
+        assert!(
+            input.nodes().iter().any(|node| matches!(
+                node,
+                agena_domain::ContentNode::Activity { activity }
+                    if activity.id == artifact_id
+            )),
+            "text artifact activity missing from turn input: {:#?}",
+            input.nodes()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn max_turns_exhaustion_stops_the_run_and_records_a_notice() {
         // The end-turn-false provider signals `end_turn=false` on every turn
         // and would keep looping past the follow-up budget; a model-turn cap

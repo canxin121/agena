@@ -388,3 +388,51 @@ describe('non-execution outcome rendering', () => {
     ])
   })
 })
+
+describe('pasted text artifact rendering', () => {
+  test('renders pasted text as an input activity block with a truncated preview', () => {
+    const blocks = partBlocks({
+      id: 11,
+      message_id: 42,
+      part_index: 0,
+      status: 'completed',
+      kind: 'text_artifact',
+      name: 'text_artifact',
+      created_at: '2026-07-13T00:00:00Z',
+      content: {
+        type: 'text_artifact',
+        text: 'x'.repeat(500),
+        label: 'my paste',
+      },
+    })
+
+    expect(blocks.length).toBe(1)
+    expect(blocks[0]?.kind).toBe('input_activity')
+    expect(blocks[0]?.activityLabel).toBe('Pasted text')
+    expect(blocks[0]?.title).toBe('my paste')
+    expect(blocks[0]?.body?.length).toBe(240)
+    expect(blocks[0]?.body?.endsWith('…')).toBe(true)
+  })
+
+  test('falls back to a generic label and keeps short text as-is', () => {
+    const blocks = partBlocks({
+      id: 12,
+      message_id: 42,
+      part_index: 0,
+      status: 'completed',
+      kind: 'text_artifact',
+      name: 'text_artifact',
+      created_at: '2026-07-13T00:00:00Z',
+      content: { type: 'text_artifact', text: 'short paste' },
+    })
+
+    expect(blocks).toEqual([
+      {
+        title: 'Pasted text',
+        body: 'short paste',
+        kind: 'input_activity',
+        activityLabel: 'Pasted text',
+      },
+    ])
+  })
+})

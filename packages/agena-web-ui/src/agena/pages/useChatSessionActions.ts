@@ -34,7 +34,7 @@ import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import { composerQueuePreview, createComposerQueueItem, type ComposerQueueItem } from './chatQueueModel'
 import { rewindMessageComposerText } from './chatRenderModel'
 import type { ComposerSkillDraft } from './chatSkillModel'
-import type { ComposerTextArtifactDraft } from './chatTextArtifactModel'
+import { stripTextArtifactPlaceholders, type ComposerTextArtifactDraft } from './chatTextArtifactModel'
 import type { NotificationsHandle } from '../lib/notifications/types'
 
 export type ChatSessionActionsInput = {
@@ -520,7 +520,7 @@ export function useChatSessionActions(input: ChatSessionActionsInput, deps: Chat
       if (!sessionId) return false
       const state = await deps.submitTurn({
         sessionId,
-        text,
+        text: stripTextArtifactPlaceholders(text),
         attachments: attachments.map((attachment) => ({
           kind: attachment.kind,
           path: attachment.path,

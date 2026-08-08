@@ -2674,9 +2674,6 @@ function buildComposerDocument(input: {
       },
     })
   }
-  if (input.text.trim()) {
-    document.push({ type: 'text', text: input.text })
-  }
   for (const attachment of input.attachments ?? []) {
     document.push({
       type: 'activity',
@@ -2707,6 +2704,9 @@ function buildComposerDocument(input: {
         provenance: { source: 'paste' },
       },
     })
+  }
+  if (input.text.trim()) {
+    document.push({ type: 'text', text: input.text })
   }
   return document
 }

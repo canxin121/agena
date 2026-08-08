@@ -3408,8 +3408,10 @@ mod transcript_expansion_tests {
 #[cfg(test)]
 mod live_transcript_tests {
     use agena_domain::{
-        ActivityOwner, AssistantReplyId, AssistantReplySnapshot, AssistantReplyStatus,
-        ComposerDocument, ComposerNode, ContentDocument, ContentNode, EventMeta, TextSegmentId,
+        ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
+        ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
+        AssistantReplyStatus, ComposerDocument, ComposerNode, ContentDocument, ContentNode,
+        ContentPosition, EventMeta, ReasoningActivity, ReasoningPart, TextSegmentId,
         TranscriptPatch, TranscriptSnapshot, TurnId, TurnSnapshot,
     };
     use agena_runtime::{RuntimePresentationEvent, RuntimePresentationEventKind};
@@ -3827,6 +3829,95 @@ mod live_transcript_tests {
         assert!(
             rendered.contains("The provider stream was interrupted."),
             "failure summary should survive continue when recorded from a live patch: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn live_reasoning_patch_renders_the_full_trail_expanded() {
+        let turn = turn(1);
+        let response_id = turn.reply.id;
+        let activity_id = ActivityId::new();
+        // A long, multi-line reasoning body streamed live via a content patch
+        // (the exact shape the runtime publishes for ThinkingDelta). It must
+        // render through the dedicated full-trail variant: expanded by default
+        // and never truncated to the first line.
+        let body = (0..40)
+            .map(|line| format!("live thought line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let node = ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Assistant,
+            state: ActivityState::InProgress,
+            position: ContentPosition { index: 0 },
+            revision_seq: 2,
+            lifecycle: ActivityLifecycle {
+                started_at_ms: 2,
+                finished_at_ms: None,
+            },
+            payload: ActivityPayload::Reasoning(ReasoningActivity {
+                content: ReasoningPart {
+                    summary: vec![body.clone()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                },
+            }),
+            provenance: ActivityProvenance::default(),
+        });
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+
+        assert!(!transcript.apply_presentation_event(
+            &event(
+                RuntimePresentationEventKind::TranscriptPatch(Box::new(
+                    TranscriptPatch::ContentUpserted {
+                        seq_session: 2,
+                        owner: ActivityOwner::AssistantReply {
+                            reply_id: response_id,
+                        },
+                        node,
+                    },
+                )),
+                2,
+            ),
+            120,
+            20,
+        ));
+
+        let rendered = transcript.rendered(120);
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("live thought line 0"), "rendered: {text}");
+        assert!(text.contains("live thought line 39"), "rendered: {text}");
+        assert!(!text.contains("truncated"), "rendered: {text}");
+        let node = rendered
+            .nodes
+            .iter()
+            .find(|node| {
+                matches!(
+                    node.key,
+                    agena_tui_transcript::TranscriptNodeKey::Activity { .. }
+                )
+            })
+            .expect("reasoning activity node");
+        assert!(node.expanded, "reasoning must default to expanded");
+        assert!(
+            node.copy_text.contains("live thought line 39"),
+            "expanded copy text must carry the full trail"
         );
     }
 }

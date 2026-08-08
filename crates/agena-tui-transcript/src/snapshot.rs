@@ -7,7 +7,9 @@
 
 use crate::TranscriptActivityPresentation;
 use agena_api::{
-    message_part::{MessageTextPartResource, PartExecutionStatusResource},
+    message_part::{
+        MessageReasoningPartResource, MessageTextPartResource, PartExecutionStatusResource,
+    },
     resource::{MessageRole, MessageStatus},
 };
 use agena_domain::{
@@ -518,6 +520,25 @@ fn user_activity_placeholder(payload: &ActivityPayload) -> String {
 }
 
 fn activity_entry_part<'a>(activity: &'a ActivityNode) -> TranscriptEntryPart<'a> {
+    // Reasoning must keep its dedicated full-trail rendering. The generic
+    // Canonical projection only carries the first non-empty line as its
+    // summary and exposes no expandable detail sections, so an expanded live
+    // "thinking" row would show just a preview instead of the model's complete
+    // reasoning. The live snapshot path (content nodes) reaches this
+    // projector; stored-message parts already use the dedicated variant.
+    if let ActivityPayload::Reasoning(reasoning) = &activity.payload {
+        return TranscriptEntryPart {
+            id: TranscriptContentId::Activity(activity.id),
+            status: activity_status(activity.state),
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
+                MessageReasoningPartResource {
+                    summary: reasoning.content.summary.clone(),
+                    raw_content: reasoning.content.raw_content.clone(),
+                    encrypted_content: reasoning.content.encrypted_content.clone(),
+                },
+            )),
+        };
+    }
     let (_schema, title, summary, problem) = activity_presentation(&activity.payload);
     let _generic = TranscriptActivityPresentation {
         title,
@@ -3655,5 +3676,86 @@ It has two lines.";
                 ..
             }] if text.text == "live answer"
         ));
+    }
+
+    #[test]
+    fn reasoning_activity_projects_to_the_dedicated_full_trail_variant() {
+        let response_id = agena_domain::AssistantReplyId::new();
+        let activity_id = agena_domain::ActivityId::new();
+        let body = (0..40)
+            .map(|line| format!("live thought line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let document = ContentDocument::new(vec![ContentNode::activity(ActivityNode {
+            id: activity_id,
+            owner: ActivityOwner::AssistantReply {
+                reply_id: response_id,
+            },
+            actor: ActivityActor::Assistant,
+            state: ActivityState::InProgress,
+            position: ContentPosition { index: 0 },
+            revision_seq: 2,
+            lifecycle: ActivityLifecycle::default(),
+            payload: ActivityPayload::Reasoning(agena_domain::ReasoningActivity {
+                content: agena_domain::ReasoningPart {
+                    summary: vec![body.clone()],
+                    raw_content: Vec::new(),
+                    encrypted_content: None,
+                },
+            }),
+            provenance: ActivityProvenance::default(),
+        })]);
+        let entry = assistant_reply_document_entry(
+            response_id,
+            MessageStatus::InProgress,
+            1,
+            &document,
+            None,
+            &[],
+            None,
+        );
+        assert!(matches!(
+            &entry.parts[0].content,
+            TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning))
+                if reasoning.preferred_text() == body
+        ));
+
+        // The dedicated variant defaults to expanded and renders the complete
+        // thought trail verbatim (never the first-line preview and never a
+        // truncation marker), even with the global activity default collapsed.
+        let rendered = crate::render_entry_detailed(
+            &entry,
+            120,
+            &agena_tui::i18n::I18n::english(),
+            crate::TranscriptDetailDefaults {
+                activity_expanded: false,
+            },
+            &Default::default(),
+        );
+        let text = rendered
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("live thought line 0"), "{text}");
+        assert!(text.contains("live thought line 39"), "{text}");
+        assert!(!text.contains("truncated"), "{text}");
+        let node = rendered
+            .nodes
+            .iter()
+            .find(|node| {
+                node.key
+                    == crate::TranscriptNodeKey::Activity {
+                        entry_id: TranscriptEntryId::AssistantReply(response_id),
+                        content_id: TranscriptContentId::Activity(activity_id),
+                    }
+            })
+            .expect("reasoning activity node");
+        assert!(node.expanded, "reasoning must default to expanded");
+        assert!(
+            node.copy_text.contains("live thought line 39"),
+            "expanded copy text must carry the full trail"
+        );
     }
 }

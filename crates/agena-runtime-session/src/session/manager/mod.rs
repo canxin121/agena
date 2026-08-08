@@ -31,7 +31,7 @@ use agena_storage::PersistedPermissionRule;
 use agena_tool::PreparedShellCommand;
 use std::path::PathBuf;
 
-use super::cache::SessionCachePolicy;
+use crate::SessionCachePolicy;
 use super::history::{
     MessageId as HistoryMessageId, RunAborted, RunCompleted, RunId as HistoryRunId, RunStarted,
     ToolCallCompleted, ToolCallId as HistoryToolCallId, TranscriptContent, UserMessageAppended,

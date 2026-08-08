@@ -13,7 +13,8 @@
 //! - [`ContextGovernor`] — context window budgeting and compaction policy.
 //! - [`ExecutionRegistry`] / [`ExecutionControl`] — manage running
 //!   executions (pause/cancel/resume).
-//! - [`event`] — runtime event types and the event bus.
+//! - [`SessionStore`] (from `agena-storage`) — the sealed data facade; there
+//!   is no event log in v2 (design 14.3).
 //! - [`activity`] — activity model shared with the transcript.
 //!
 //! The crate also re-exports [`config`], [`provider`], [`plugins`], and the
@@ -34,7 +35,6 @@ mod compaction_policy;
 mod completion_request;
 mod context_budget;
 mod context_governor;
-pub(crate) use agena_runtime_session_core::db;
 mod error;
 mod execution_registry;
 mod guards;
@@ -46,7 +46,6 @@ mod prompt_budget;
 mod prompt_merge;
 mod service_failure;
 pub mod session;
-mod session_cache;
 mod session_cache_policy;
 mod session_configuration;
 mod session_execution_control;
@@ -59,6 +58,7 @@ mod session_tool_execution;
 mod task_control;
 mod usage_stats;
 pub use session::model;
+pub use session_cache_policy::SessionCachePolicy;
 
 pub use agena_runtime_tools::{
     ActiveSnapshot, ManagedSnapshot, generated_image_artifact_path, list_active_snapshots,

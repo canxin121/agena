@@ -65,6 +65,14 @@ pub trait PersistenceEngine: Send + Sync {
     /// `(created_at_ms, part_id)` — one membership JOIN.
     async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError>;
 
+    /// The newest member part's `(created_at_ms, part_id)` cursor, if the
+    /// session has any parts. Used by the facade's memory layer for
+    /// cross-process catch-up: `sessions.version` catches session-meta writes,
+    /// and this cursor catches part additions (14.4). Both are compared on
+    /// cache hit; a change in either invalidates the cached view.
+    async fn newest_member_cursor(&self, session_id: i64)
+        -> Result<Option<(i64, i64)>, StoreError>;
+
     /// Rename a session (bumps `version`).
     async fn rename_session(
         &self,

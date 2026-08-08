@@ -10,7 +10,7 @@ use std::sync::Arc;
 use agena_domain::SessionRelationKind;
 use agena_storage::{WorkspaceRepository, store::{
     LeaseAcquire, NewPart, NewSession, PartRole, PartState, PartVisibility, PersistenceEngine,
-    RunOutcome, SessionView,
+    RunOutcome, SessionFacade, SessionStore, SessionView,
 }};
 use serde_json::json;
 
@@ -566,6 +566,81 @@ async fn lease_steal_aborts_stale_run_across_processes() {
     assert_eq!(marker.content["abort_reason"], "lease_stolen");
     let text = view.parts.iter().find(|part| part.kind == "text").expect("text");
     assert_eq!(text.state, PartState::Cancelled);
+}
+
+/// A facade caches a session view, a second facade (separate connection pool,
+/// modeling another process) writes to the same file, and the first facade's
+/// cache is invalidated on the next read — cross-process catch-up through the
+/// facade via version + newest-member cursor (gate 5, 14.4).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn facade_cross_process_cache_invalidation() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let db_a = connect_file(&directory, "facade.db").await;
+    initialize_schema(&db_a).await.expect("schema");
+    let engine_a = SqliteEngine::new(db_a.clone());
+    let facade_a = SessionFacade::new(engine_a, "owner-a", 16);
+
+    let workspace_id = SeaWorkspaceRepository::new(db_a.clone())
+        .ensure_id("/f/ws")
+        .await
+        .expect("workspace");
+    let session_id = facade_a
+        .engine()
+        .create_session(NewSession {
+            workspace_id,
+            parent_id: None,
+            relation_kind: SessionRelationKind::Root,
+            cutoff_part_id: None,
+            title: "cache".to_owned(),
+            task_id: None,
+            config_json: None,
+            provider_anchors_json: None,
+        })
+        .await
+        .expect("create session")
+        .id;
+    facade_a
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart::pending("text", PartRole::User, json!({"text": "first"}))],
+            None,
+        )
+        .await
+        .expect("first submit");
+
+    // facade_a caches the two-part view.
+    let cached = facade_a.load(session_id).await.expect("cached load");
+    assert_eq!(cached.parts.len(), 2);
+
+    // Process B (fresh connection) appends a part through its own facade.
+    let db_b = connect_file(&directory, "facade.db").await;
+    let facade_b = SessionFacade::new(SqliteEngine::new(db_b), "owner-a", 16);
+    let run_id = cached.parts[0].part_id;
+    facade_b
+        .append_parts(
+            session_id,
+            "owner-a",
+            run_id,
+            vec![NewPart::pending(
+                "text",
+                PartRole::Assistant,
+                json!({"text": "second"}),
+            )],
+        )
+        .await
+        .expect("process B appends");
+
+    // facade_a's cache is invalidated (cursor moved); it sees the new part.
+    let refreshed = facade_a.load(session_id).await.expect("refreshed load");
+    assert_eq!(refreshed.parts.len(), 3, "cache invalidated, catch-up read");
+    assert!(
+        refreshed
+            .parts
+            .iter()
+            .any(|part| part.content["text"] == "second"),
+        "newest member cursor catch-up sees process B's part"
+    );
 }
 
 /// Process B reads exactly what process A committed — cross-process catch-up

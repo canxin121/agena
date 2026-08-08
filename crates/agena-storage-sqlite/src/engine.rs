@@ -546,6 +546,30 @@ impl PersistenceEngine for SqliteEngine {
         Ok(SessionView { meta, parts })
     }
 
+    async fn newest_member_cursor(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<(i64, i64)>, StoreError> {
+        self.session_meta(session_id).await?;
+        self.db()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT p.created_at_ms, p.part_id FROM agena_parts p \
+                 JOIN agena_session_parts sp ON sp.part_id = p.part_id \
+                 WHERE sp.session_id = ? \
+                 ORDER BY p.created_at_ms DESC, p.part_id DESC LIMIT 1",
+                [session_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?
+            .map(|row| {
+                let created_at_ms: i64 = row.try_get("", "created_at_ms").map_err(map_db_err)?;
+                let part_id: i64 = row.try_get("", "part_id").map_err(map_db_err)?;
+                Ok((created_at_ms, part_id))
+            })
+            .transpose()
+    }
+
     async fn rename_session(
         &self,
         session_id: i64,

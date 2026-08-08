@@ -7,6 +7,7 @@
 //! engine. The facade cannot distinguish the two (design 15.4).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::RwLock;
 
@@ -41,19 +42,19 @@ impl Default for InMemoryEngineConfig {
 }
 
 /// An in-memory [`PersistenceEngine`] for tests and small deployments.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InMemoryEngine {
-    next_part_id: AtomicI64,
-    next_session_id: AtomicI64,
-    now_ms: RwLock<i64>,
-    sessions: RwLock<BTreeMap<i64, SessionMeta>>,
-    parts: RwLock<HashMap<i64, Part>>,
+    next_part_id: Arc<AtomicI64>,
+    next_session_id: Arc<AtomicI64>,
+    now_ms: Arc<RwLock<i64>>,
+    sessions: Arc<RwLock<BTreeMap<i64, SessionMeta>>>,
+    parts: Arc<RwLock<HashMap<i64, Part>>>,
     /// session_id -> ordered set of member part_ids.
-    membership: RwLock<HashMap<i64, BTreeSet<i64>>>,
-    leases: RwLock<HashMap<i64, LeaseState>>,
-    usage: RwLock<Vec<UsageRecord>>,
+    membership: Arc<RwLock<HashMap<i64, BTreeSet<i64>>>>,
+    leases: Arc<RwLock<HashMap<i64, LeaseState>>>,
+    usage: Arc<RwLock<Vec<UsageRecord>>>,
     /// (session_id, idempotency_key) -> run_id.
-    idempotency: RwLock<HashMap<(i64, String), i64>>,
+    idempotency: Arc<RwLock<HashMap<(i64, String), i64>>>,
 }
 
 impl Default for InMemoryEngine {
@@ -65,20 +66,20 @@ impl Default for InMemoryEngine {
 impl InMemoryEngine {
     pub fn new(config: InMemoryEngineConfig) -> Self {
         Self {
-            next_part_id: AtomicI64::new(config.first_part_id),
-            next_session_id: AtomicI64::new(1),
-            now_ms: RwLock::new(
+            next_part_id: Arc::new(AtomicI64::new(config.first_part_id)),
+            next_session_id: Arc::new(AtomicI64::new(1)),
+            now_ms: Arc::new(RwLock::new(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(0),
-            ),
-            sessions: RwLock::new(BTreeMap::new()),
-            parts: RwLock::new(HashMap::new()),
-            membership: RwLock::new(HashMap::new()),
-            leases: RwLock::new(HashMap::new()),
-            usage: RwLock::new(Vec::new()),
-            idempotency: RwLock::new(HashMap::new()),
+            )),
+            sessions: Arc::new(RwLock::new(BTreeMap::new())),
+            parts: Arc::new(RwLock::new(HashMap::new())),
+            membership: Arc::new(RwLock::new(HashMap::new())),
+            leases: Arc::new(RwLock::new(HashMap::new())),
+            usage: Arc::new(RwLock::new(Vec::new())),
+            idempotency: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -397,6 +398,24 @@ impl PersistenceEngine for InMemoryEngine {
         let meta = self.session_meta(session_id).await?;
         let parts = self.ordered_parts(session_id);
         Ok(SessionView { meta, parts })
+    }
+
+    async fn newest_member_cursor(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<(i64, i64)>, StoreError> {
+        self.session_meta(session_id).await?;
+        let (membership, parts) = (
+            self.membership.read().expect("membership lock"),
+            self.parts.read().expect("parts lock"),
+        );
+        let newest = membership
+            .get(&session_id)
+            .into_iter()
+            .flat_map(|set| set.iter().copied())
+            .filter_map(|id| parts.get(&id))
+            .max_by_key(|part| (part.created_at_ms, part.part_id));
+        Ok(newest.map(|part| (part.created_at_ms, part.part_id)))
     }
 
     async fn rename_session(

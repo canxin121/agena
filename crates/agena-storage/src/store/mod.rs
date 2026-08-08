@@ -7,6 +7,7 @@
 
 mod engine;
 mod error;
+mod facade;
 mod in_memory;
 mod jsonl;
 mod state;
@@ -14,6 +15,9 @@ mod types;
 
 pub use engine::{MaintenanceOutcome, PersistenceEngine, SessionChange};
 pub use error::StoreError;
+pub use facade::{
+    MemoryLayer, NotificationBus, SessionFacade, SessionObserver, SessionStore, Subscription,
+};
 pub use in_memory::{InMemoryEngine, InMemoryEngineConfig};
 pub use jsonl::{ExportRecord, ParsedBundle, parse, serialize};
 pub use state::{

@@ -144,24 +144,48 @@ background). It carries the batch state and abort reason; the reply/status the U
 needs is the marker state. `parts.run_id` references the marker part so
 「all parts of run X」 is a flat indexed query (no recursion).
 
+#### 4.1.2 User message shape — one text with ref placeholders + N ref parts
+
+A user message is NOT one blob: it is **1 `text` part + N reference parts**
+(`file_ref` / `skill_ref` / `paste_ref`), all under the run marker:
+
+```
+run marker (role=user)
+  ├─ text part:      "please review [[ref:102]] and [[ref:103]]"
+  ├─ file_ref part (id=102): {path, name, mime, sha}
+  ├─ skill_ref part (id=103): {skill, args}
+  └─ paste_ref part (id=104): {text: "...full pasted content..."}   (optional)
+```
+
+- The `text` part carries **placeholder markers** (`[[ref:<part_id>]]`) so the AI
+  knows exactly which reference corresponds to which slot in the sentence. The
+  placeholder embeds the ref part's `part_id` — global, unique, stable across
+  forks (shared refs keep their ids).
+- Reference payloads live in their own parts (paths, skill names, full pasted
+  text); the text part stays small and readable.
+- Prompt assembly (execution engine) resolves placeholders when building the
+  model request: file refs → the file path/contents, skill refs → the skill
+  descriptor, paste refs → the pasted text (full text is stored inline, never a
+  blob reference).
+- Every part carries `created_at_ms` (ordering basis) and a unique `part_id`
+  (tie-breaker); ordering is always `ORDER BY created_at_ms, part_id` (4.2).
+
 ### 4.2 `session_parts` — the only ownership mechanism
 
 ```sql
 CREATE TABLE session_parts (
     session_id  INTEGER NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     part_id     INTEGER NOT NULL REFERENCES parts(part_id),
-    seq         INTEGER NOT NULL,                 -- per-session order; MAX(seq)+1 on append
     added_at_ms INTEGER NOT NULL,
-    PRIMARY KEY (session_id, part_id),
-    UNIQUE (session_id, seq)
+    PRIMARY KEY (session_id, part_id)
 );
 
 CREATE INDEX idx_session_parts_part ON session_parts(part_id);  -- reverse: which sessions share a part
 ```
 
-- `seq` is assigned inside the same write transaction as the insert
-  (`MAX(seq)+1` for the session), protected by the SQLite write lock, so
-  concurrent appends cannot collide.
+- No per-session ordering column: order is derived from the part itself
+  (`ORDER BY parts.created_at_ms, parts.part_id`), so every part needs only its
+  own timestamp + unique id (see 4.1.2). Appends need no MAX+1 bookkeeping.
 - Deleting a session cascades only the edges, never the parts (other sessions may
   still reference them).
 - This is where 「one part belongs to many sessions」 lives: the same `parts` row is
@@ -333,7 +357,7 @@ CREATE TABLE idempotency (
    `revision` monotonic, timestamps self-consistent (CHECKs above).
 2. **parts identity immutable**: `part_id, role, kind, parent_part_id,
    origin_session_id, created_at_ms` may not be updated.
-3. **session_parts references**: part and session must exist; `seq` unique per session.
+3. **session_parts references**: part and session must exist.
 4. **sessions relations**: `fork`/`rewind` require `parent_id` and `cutoff_part_id`;
    lifecycle transitions legal; `version` monotonic.
 5. **runs (marker parts)**: a `run` part must be the root of its batch
@@ -350,7 +374,8 @@ CREATE TABLE idempotency (
 1. Allocate a `part_id` for the run marker; create marker part
    (`kind='run'`, `role='user'`, `state='pending'`).
 2. Create user content parts (`text`, `file_ref`, ...) with `run_id = marker`.
-3. Insert membership rows: marker + content parts with `seq = MAX(seq)+1` each.
+3. Insert membership rows: marker + content parts (order derives from
+   `created_at_ms`/`part_id`; no sequence bookkeeping).
 4. Insert `idempotency` row (if keyed).
 5. Acquire the session lease first (whole batch is the executing run).
 
@@ -372,9 +397,15 @@ GCs orphans even for sessions nobody reopens.
 ```sql
 INSERT INTO sessions (session_id, workspace_id, parent_id, relation_kind, cutoff_part_id, title, ...)
 VALUES (...);
-INSERT INTO session_parts (session_id, part_id, seq, added_at_ms)
-SELECT :child_id, part_id, seq, :now FROM session_parts WHERE session_id = :parent AND seq <= :cutoff;
--- rewind: seq < :cutoff, relation_kind='rewind'
+-- copy membership edges whose part sorts at or before the cutoff part
+-- (cutoff = (created_at_ms, part_id) of the cutoff part)
+INSERT INTO session_parts (session_id, part_id, added_at_ms)
+SELECT :child_id, sp.part_id, :now FROM session_parts sp
+JOIN parts p ON p.part_id = sp.part_id
+WHERE sp.session_id = :parent
+  AND (p.created_at_ms < :cutoff_created_at
+       OR (p.created_at_ms = :cutoff_created_at AND p.part_id <= :cutoff_part_id));
+-- rewind: strictly before the cutoff part; relation_kind='rewind'
 ```
 
 Cost O(shared edges); zero content copy, zero id remap. Forking a session while the
@@ -383,8 +414,9 @@ parent is streaming is safe under the shared-part rule (4.3 below).
 ### 7.4 Read a session transcript (one query)
 
 ```sql
-SELECT p.*, sp.seq FROM session_parts sp JOIN parts p ON p.part_id = sp.part_id
-WHERE sp.session_id = :session ORDER BY sp.seq;
+SELECT p.* FROM session_parts sp JOIN parts p ON p.part_id = sp.part_id
+WHERE sp.session_id = :session
+ORDER BY p.created_at_ms, p.part_id;   -- time is the ordering basis; id breaks ties
 ```
 
 UI groups by run markers; model prompt assembly groups by run and splits by role.
@@ -487,11 +519,11 @@ session mutation.
 | `agena_model_message_parts` | → `parts` |
 | `agena_content_nodes` | → `parts` (node_id→part_id, owner→membership, title→summary, payload→content, lifecycle→part columns) |
 | `agena_turns` / `agena_assistant_replies` / `agena_reply_executions` | deleted (run marker + interaction parts cover turn/reply/execution) |
-| `agena_session_messages` | → `session_parts` (+seq) |
+| `agena_session_messages` | → `session_parts` (no order column; order = created_at_ms, part_id) |
 | `agena_sessions` + `agena_session_lineage` | → `sessions` (lineage folded in) |
 | `agena_events` | deleted (parts are the truth; no replay) |
 | `agena_model_projection_states` | deleted (no projection, no watermark) |
-| `agena_session_sequences` | deleted (seq = MAX+1 in txn) |
+| `agena_session_sequences` | deleted (no per-session sequence needed; order = part timestamps) |
 | `agena_sequences` | → `sequences` (part_id + write-lock sentinel) |
 | `agena_execution_leases` | kept (same, + steal-with-reconcile) |
 | `agena_user_message_idempotency` | → `idempotency` (run_id → marker part_id) |
@@ -519,7 +551,7 @@ session mutation.
 | D1 | fork child transcript renders shared prefix turns/content | render (by design of run-marker sharing) |
 | D2 | in-flight streaming parts at fork time | share by reference (child sees them complete) |
 | D3 | migration policy | fresh DB + optional one-shot migration tool |
-| D4 | per-session ordering | explicit `seq` (stable, reorderable) |
+| D4 | per-session ordering | part timestamps: `ORDER BY created_at_ms, part_id` (no seq; id breaks same-ms ties) |
 | D5 | `config_json` scope | execution config only; workflow state derived from parts |
 | D6 | run demotion | `runs` table dropped; run = `kind='run'` marker part (decided) |
 
@@ -528,7 +560,7 @@ session mutation.
 - Write amplification is the theoretical minimum: one row per content part, one
   membership edge, plus one tiny run-marker row per batch. No events, no
   projections, no content-node mirror, no tail copy, no id remap.
-- Fork: O(shared edges); rewind: O(cutoff); read: one JOIN ordered by seq;
+- Fork: O(shared edges); rewind: O(cutoff); read: one JOIN ordered by `created_at_ms, part_id`;
   recovery: one indexed scan over `parts(kind, state)`.
 - The run marker adds ~2 small rows and 2 state UPDATEs per batch; reads need no
   extra join (reply status is on the marker row).
@@ -649,7 +681,7 @@ ownership (origin session); visibility is available for fork-aware UIs.
 | v1 API | v2 replacement |
 |--------|----------------|
 | `list_session_events` / `stream_session_events` (REST, event envelopes) | persisted history = ordered parts (no event concept remains); live updates = part-patch stream over the in-memory bus plus ephemeral runtime signals (retry/progress) that are never persisted; wire format changes from event envelopes to part patches |
-| `latest_event_seq` | `sessions.version` or `MAX(session_parts.seq)` |
+| `latest_event_seq` | `sessions.version` or the newest member part (`MAX(created_at_ms, part_id)`) |
 | `export_session_jsonl` | serialize session meta + ordered parts (markers carry provider_state; anchors from 13.3); one part per line |
 | `import_session_jsonl` | re-create session + parts + membership with fresh ids; remap `parent_part_id`/`run_id` chains; restore provider_state/anchors; drop ALL lineage — import always yields an independent root session (matches v1: create_session with parent None; subtask events filtered) |
 | `TranscriptSnapshot`/`TranscriptPatch` (turns) | marker-grouped parts (turns = run marker + its parts); UI renders markers as turn boundaries |
@@ -661,7 +693,7 @@ Note — 「events/timeline」 conflates three needs, and only the first disappe
 patches (new/updated/removed part) plus ephemeral bus signals (retry/progress)
 that are never persisted — the in-memory bus stays, its payload language changes;
 (3) catch-up after reconnect / cross-process refresh → `sessions.version` /
-`MAX(session_parts.seq)` based 「parts after seq X」. Consumers: TUI
+newest member part (`created_at_ms`, `part_id`) based 「parts after (time, id)」. Consumers: TUI
 (TranscriptPatch → part patches), web UI session timeline command (reads ordered
 parts grouped by run markers).
 
@@ -734,12 +766,12 @@ memory/DB boundary completely. Persistence is purely internal.
 ```rust
 // Pure data model — no DB types leak out
 pub struct Part { part_id, kind, role, state, content, summary, parent_part_id, run_id, ... }
-pub struct SessionView { meta: SessionMeta, parts: Vec<Part> }  // ordered by seq
+pub struct SessionView { meta: SessionMeta, parts: Vec<Part> }  // ordered by created_at_ms, part_id
 
 // The ONLY live-update concept: change notifications, not an event log.
 // Derived from operations, emitted after commit, never persisted, never replayed.
 pub enum SessionChange {
-    PartAdded   { seq, part },
+    PartAdded   { part },
     PartUpdated { part_id, revision, state, content },   // streaming deltas
     PartRemoved { part_id },
     SessionMetaUpdated { meta },
@@ -753,8 +785,8 @@ pub trait SessionStore {
     async fn update_part(&self, session_id, part_id, delta) -> Result<()>;                // streaming delta
     async fn complete_run(&self, session_id, run_id, outcome) -> Result<()>;
     async fn answer_interaction(&self, session_id, interaction_part_id, reply) -> Result<()>;
-    async fn fork(&self, session_id, at_seq, title) -> Result<i64>;
-    async fn rewind(&self, session_id, at_seq, title) -> Result<i64>;
+        async fn fork(&self, session_id, at_part_id, title) -> Result<i64>;
+    async fn rewind(&self, session_id, at_part_id, title) -> Result<i64>;
     async fn delete(&self, session_id) -> Result<()>;
     fn subscribe(&self, session_id, observer: impl Fn(SessionChange)) -> Subscription;
 }
@@ -848,7 +880,7 @@ External callers (TUI / Web / CLI / API server / tests)
 v1 `SessionCache` (LRU + TTL + byte budget + max sessions + stats,
 `session_cache.rs`) is kept and extended:
 
-- Per-session LRU cache of `SessionView` (parts ordered by seq).
+- Per-session LRU cache of `SessionView` (parts ordered by `created_at_ms, part_id`).
 - Streaming buffers: in-progress parts held in memory, flushed per the
   throttle policy (13.9) with `revision` guards; UI sees deltas instantly.
 - Read hot path: cache hit -> zero DB; miss -> one membership JOIN -> insert.

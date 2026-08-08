@@ -3404,8 +3404,9 @@ mod live_transcript_tests {
     use agena_domain::{
         ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
         ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
-        AssistantReplyStatus, ComposerDocument, ComposerNode, ContentDocument, ContentNode,
-        ContentPosition, EventMeta, ReasoningActivity, ReasoningPart, TextSegmentId,
+        AssistantReplyStatus, ComposerActivity, ComposerDocument, ComposerNode, ContentDocument,
+        ContentNode, ContentPosition, EventMeta, ReasoningActivity, ReasoningPart,
+        ResourceActivity, ResourceKind, ResourceReference, TextArtifactActivity, TextSegmentId,
         TranscriptPatch, TranscriptSnapshot, TurnId, TurnSnapshot,
     };
     use agena_runtime::{RuntimePresentationEvent, RuntimePresentationEventKind};
@@ -3969,6 +3970,188 @@ mod live_transcript_tests {
         assert!(
             node.copy_text.contains("live thought line 39"),
             "expanded copy text must carry the full trail"
+        );
+    }
+
+    #[test]
+    fn pasted_text_and_attachment_activities_render_above_the_user_document() {
+        let mut turn = turn(1);
+        turn.input = ContentDocument::default();
+        let turn_id = turn.id;
+        let artifact_id = ActivityId::new();
+        let file_id = ActivityId::new();
+        let pasted = "x".repeat(1_000);
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+        transcript.add_pending_user_message(PendingUserMessage {
+            id: 47,
+            document: ComposerDocument(vec![
+                ComposerNode::Text {
+                    text: "review this paste".to_owned(),
+                },
+                ComposerNode::Activity {
+                    activity: Box::new(ComposerActivity {
+                        id: artifact_id,
+                        payload: ActivityPayload::TextArtifact(TextArtifactActivity {
+                            text: pasted.clone(),
+                            language: None,
+                            label: Some("paste 1000 chars".to_owned()),
+                        }),
+                        provenance: ActivityProvenance::default(),
+                    }),
+                },
+                ComposerNode::Activity {
+                    activity: Box::new(ComposerActivity {
+                        id: file_id,
+                        payload: ActivityPayload::Resource(ResourceActivity {
+                            kind: ResourceKind::File,
+                            reference: ResourceReference::WorkspacePath {
+                                path: "notes.txt".to_owned(),
+                            },
+                            name: "notes.txt".to_owned(),
+                            media_type: Some("text/plain".to_owned()),
+                            size_bytes: Some(12),
+                            width: None,
+                            height: None,
+                            duration_ms: None,
+                            page_count: None,
+                        }),
+                        provenance: ActivityProvenance::default(),
+                    }),
+                },
+            ]),
+            confirmed: false,
+        });
+
+        let lines = transcript
+            .rendered(100)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        let joined = lines.join("\n");
+        let artifact_headline = lines
+            .iter()
+            .position(|line| line.contains("paste 1000 chars"))
+            .expect("text artifact activity headline must render");
+        let document_line = lines
+            .iter()
+            .position(|line| line.contains("review this paste"))
+            .expect("user document must render");
+        assert!(
+            artifact_headline < document_line,
+            "activities must render above the user text: {joined}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("notes.txt")),
+            "attachment activity must render: {joined}"
+        );
+        assert!(
+            !joined.contains(&pasted),
+            "the raw pasted text must not leak into the body: {joined}"
+        );
+
+        // Materialize the durable turn input through live patches; the
+        // optimistic entry must be replaced by the stored projection that
+        // keeps the same activity-above-text layout.
+        let activity = |id, position, payload| ActivityNode {
+            id,
+            owner: ActivityOwner::TurnInput { turn_id },
+            actor: ActivityActor::User,
+            state: ActivityState::Completed,
+            position: ContentPosition { index: position },
+            revision_seq: 1,
+            lifecycle: ActivityLifecycle::default(),
+            payload,
+            provenance: ActivityProvenance::default(),
+        };
+        let mut upsert = |seq, node| {
+            assert!(!transcript.apply_presentation_event(
+                &event(
+                    RuntimePresentationEventKind::TranscriptPatch(Box::new(
+                        TranscriptPatch::ContentUpserted {
+                            seq_session: seq,
+                            owner: ActivityOwner::TurnInput { turn_id },
+                            node,
+                        },
+                    )),
+                    seq,
+                ),
+                100,
+                20,
+            ));
+        };
+        upsert(
+            2,
+            ContentNode::text_at(TextSegmentId::new(), "review this paste", 0, 2),
+        );
+        upsert(
+            3,
+            ContentNode::activity(activity(
+                artifact_id,
+                1,
+                ActivityPayload::TextArtifact(TextArtifactActivity {
+                    text: pasted.clone(),
+                    language: None,
+                    label: Some("paste 1000 chars".to_owned()),
+                }),
+            )),
+        );
+        upsert(
+            4,
+            ContentNode::activity(activity(
+                file_id,
+                2,
+                ActivityPayload::Resource(ResourceActivity {
+                    kind: ResourceKind::File,
+                    reference: ResourceReference::WorkspacePath {
+                        path: "notes.txt".to_owned(),
+                    },
+                    name: "notes.txt".to_owned(),
+                    media_type: Some("text/plain".to_owned()),
+                    size_bytes: Some(12),
+                    width: None,
+                    height: None,
+                    duration_ms: None,
+                    page_count: None,
+                }),
+            )),
+        );
+
+        assert!(transcript.pending_user_messages.is_empty());
+        let materialized = transcript
+            .rendered(100)
+            .lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        let joined = materialized.join("\n");
+        let artifact_headline = materialized
+            .iter()
+            .position(|line| line.contains("paste 1000 chars"))
+            .expect("materialized text artifact activity headline");
+        let document_line = materialized
+            .iter()
+            .position(|line| line.contains("review this paste"))
+            .expect("materialized user document");
+        assert!(
+            artifact_headline < document_line,
+            "materialized activities must render above the user text: {joined}"
+        );
+        assert!(
+            materialized.iter().any(|line| line.contains("notes.txt")),
+            "materialized attachment activity must render: {joined}"
+        );
+        assert!(
+            !joined.contains(&pasted),
+            "materialized body must not leak the raw pasted text: {joined}"
         );
     }
 }

@@ -28,9 +28,18 @@ pub enum RuntimePresentationEventKind {
 
 #[derive(Debug, Clone)]
 /// A presentation event delivered to live subscribers.
+///
+/// `durable` mirrors whether the underlying domain event was written to the
+/// persistent event log (`EventKind::is_persistent`). Live-only events
+/// (`ActivityV2`, streamed text upserts, retry notices) consume a global
+/// sequence number but are never persisted, so consumers that use
+/// `meta.seq_global` as a high-water mark against the durable log (for
+/// example the TUI's staleness check against the server's durable
+/// `latest_event_seq`) must only count durable events.
 pub struct RuntimePresentationEvent {
     pub meta: agena_domain::EventMeta,
     pub invalidates_ancestor_projection: bool,
+    pub durable: bool,
     pub kind: RuntimePresentationEventKind,
 }
 

@@ -569,6 +569,11 @@ fn project_runtime_presentation_event(
     Ok(kind.map(|kind| agena_runtime::RuntimePresentationEvent {
         meta: event.meta.clone(),
         invalidates_ancestor_projection: event.kind.invalidates_ancestor_projection(),
+        // Live-only kinds consume a global sequence number but are never
+        // written to the durable log; consumers reconcile their local
+        // high-water mark against the durable watermark, so the flag must
+        // mirror `EventKind::is_persistent` exactly.
+        durable: event.kind.is_persistent(),
         kind,
     }))
 }
@@ -1853,6 +1858,68 @@ mod tests {
                 force_refresh: true
             }
         ));
+    }
+
+    #[test]
+    fn presentation_events_carry_the_durable_flag_of_the_source_kind() {
+        // The TUI reconciles its local high-water mark against the server's
+        // durable `latest_event_seq`. Live-only kinds (ActivityV2, streamed
+        // text upserts) consume a global sequence number but are never
+        // persisted, so the projection must mark them non-durable or the TUI
+        // watermark races ahead of the durable log and drops the terminal
+        // execution.
+        let event = crate::event::DomainEvent {
+            meta: agena_domain::EventMeta {
+                id: uuid::Uuid::new_v4(),
+                seq_global: 1,
+                seq_session: Some(1),
+                session_id: Some(42),
+                workspace_id: Some(1),
+                created_at: chrono::Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
+            },
+            kind: crate::event::EventKind::ExecutionStarted(agena_domain::ExecutionStartedEvent {
+                session_id: 42,
+                execution_id: agena_domain::ExecutionId::new(),
+                turn_id: agena_domain::TurnId::new(),
+                reply_id: agena_domain::AssistantReplyId::new(),
+                source: agena_domain::ExecutionSource::User,
+                ts_ms: 1,
+            }),
+        };
+        let durable = project_runtime_presentation_event(&event)
+            .expect("projection")
+            .expect("execution start projects");
+        assert!(durable.durable, "ExecutionStarted is durable");
+
+        let live = crate::event::DomainEvent {
+            meta: agena_domain::EventMeta {
+                id: uuid::Uuid::new_v4(),
+                seq_global: 2,
+                seq_session: Some(2),
+                session_id: Some(42),
+                workspace_id: Some(1),
+                created_at: chrono::Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: agena_domain::EVENT_ENVELOPE_SCHEMA_VERSION,
+            },
+            kind: crate::event::EventKind::ActivityV2(Box::new(
+                crate::activity::ActivityLiveEvent::StateChanged {
+                    activity_id: agena_domain::ActivityId::new(),
+                    state: agena_domain::ActivityState::Completed,
+                },
+            )),
+        };
+        let live_projected = project_runtime_presentation_event(&live)
+            .expect("projection")
+            .expect("activity v2 projects");
+        assert!(
+            !live_projected.durable,
+            "ActivityV2 is live-only and must be marked non-durable"
+        );
     }
 
     #[test]

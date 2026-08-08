@@ -3433,6 +3433,7 @@ mod live_transcript_tests {
                 envelope_schema: 1,
             },
             invalidates_ancestor_projection: false,
+            durable: true,
             kind,
         }
     }
@@ -3509,6 +3510,62 @@ mod live_transcript_tests {
         assert!(
             rendered.contains("Grok"),
             "rendered transcript: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn live_only_events_do_not_advance_the_durable_watermark() {
+        let turn = turn(1);
+        let response_id = turn.reply.id;
+        let segment_id = TextSegmentId::new();
+        let mut transcript = TranscriptState {
+            session_id: Some(7),
+            snapshot: TranscriptSnapshot {
+                session_id: 7,
+                turns: vec![turn],
+                ..Default::default()
+            },
+            ..TranscriptState::default()
+        };
+
+        // A durable transcript patch advances the watermark.
+        assert!(!transcript.apply_presentation_event(
+            &text_patch(response_id, segment_id, "hello", 2),
+            80,
+            20,
+        ));
+        assert_eq!(transcript.last_event_seq, Some(2));
+
+        // A live-only ActivityV2 event at a HIGHER seq must not advance it:
+        // the server's durable `latest_event_seq` never includes live-only
+        // events, so counting one would make every later refresh look stale
+        // and drop the terminal execution + completed reply.
+        let live = RuntimePresentationEvent {
+            meta: EventMeta {
+                id: Uuid::new_v4(),
+                seq_global: 50,
+                seq_session: Some(50),
+                session_id: Some(7),
+                workspace_id: None,
+                created_at: Utc::now(),
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: 1,
+            },
+            invalidates_ancestor_projection: false,
+            durable: false,
+            kind: RuntimePresentationEventKind::ActivityV2(Box::new(
+                agena_runtime::session::activity::ActivityLiveEvent::StateChanged {
+                    activity_id: ActivityId::new(),
+                    state: ActivityState::Completed,
+                },
+            )),
+        };
+        assert!(!transcript.apply_presentation_event(&live, 80, 20));
+        assert_eq!(
+            transcript.last_event_seq,
+            Some(2),
+            "live-only events must not advance the durable watermark"
         );
     }
 

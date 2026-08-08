@@ -238,7 +238,14 @@ impl TranscriptState {
             }
         };
 
-        if !refresh_needed {
+        // The local watermark must only count events the server's durable
+        // `latest_event_seq` also counts. Live-only events (ActivityV2,
+        // streamed text upserts, retry notices) consume global sequence
+        // numbers but are never written to the durable log; counting them
+        // here would push the watermark ahead of the durable log and make
+        // every later refresh look stale, dropping the terminal execution
+        // and leaving the final reply stuck as an InProgress "Text" card.
+        if !refresh_needed && event.durable {
             self.last_event_seq = Some(event.meta.seq_global);
         }
 
@@ -3338,6 +3345,9 @@ mod activity_v2_tests {
                 envelope_schema: 1,
             },
             invalidates_ancestor_projection: false,
+            // ActivityV2 is live-only: it must never advance the durable
+            // watermark used for staleness comparisons.
+            durable: false,
             kind: RuntimePresentationEventKind::ActivityV2(Box::new(activity)),
         }
     }

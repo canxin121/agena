@@ -109,6 +109,32 @@ pub(crate) fn execution_update_is_stale(
     }
 }
 
+/// Whether to skip an incoming execution update, honoring terminal finality.
+///
+/// A terminal execution (`active_execution == None`) delivered for a session
+/// whose execution the TUI does not know yet is the server's current durable
+/// truth: the server reports `active_execution == None` only when no run is
+/// registered, so applying it cannot regress a newer run. It must therefore
+/// never be dropped merely because a live-only event advanced the local
+/// watermark past the server's durable `latest_event_seq` — dropping it is
+/// what leaves the transcript stuck on an InProgress reply with the final
+/// body rendered as a collapsible "Text" card.
+///
+/// When the TUI already knows a *running* execution, an older terminal must
+/// not clobber it (a newer run may have started since the server snapshot);
+/// the plain staleness check still protects that path.
+pub(crate) fn execution_update_is_stale_with_terminal(
+    current_latest_event_seq: Option<i64>,
+    incoming_latest_event_seq: Option<i64>,
+    incoming_is_terminal: bool,
+    current_execution_absent: bool,
+) -> bool {
+    if incoming_is_terminal && current_execution_absent {
+        return false;
+    }
+    execution_update_is_stale(current_latest_event_seq, incoming_latest_event_seq)
+}
+
 pub(crate) fn permission_overlay_matches_pending_request(
     overlay: &PermissionOverlay,
     _session_id: Option<i64>,
@@ -349,3 +375,68 @@ use crate::{
     PermissionOverlayChoice, PermissionPromptDecision, PermissionPromptPage, PermissionReplyKind,
     PermissionScope, SessionExecutionResource, SessionResource, UserInputOverlay, ui_text,
 };
+
+#[cfg(test)]
+mod terminal_staleness_tests {
+    use super::execution_update_is_stale_with_terminal;
+
+    #[test]
+    fn terminal_update_is_never_stale_when_no_execution_is_known_locally() {
+        // The local watermark sits ahead (live-only events inflated it) and
+        // the incoming terminal snapshot carries an older durable seq. It is
+        // still the server's current truth (no run registered), so it must be
+        // applied or the reply stays stuck on an InProgress "Text" card.
+        assert!(!execution_update_is_stale_with_terminal(
+            Some(100),
+            Some(90),
+            true,
+            true,
+        ));
+        assert!(!execution_update_is_stale_with_terminal(
+            Some(100),
+            None,
+            true,
+            true,
+        ));
+        assert!(!execution_update_is_stale_with_terminal(
+            None,
+            Some(90),
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn older_terminal_cannot_clobber_a_locally_running_execution() {
+        // A genuinely older terminal snapshot must not regress a newer run
+        // the TUI already knows about.
+        assert!(execution_update_is_stale_with_terminal(
+            Some(100),
+            Some(90),
+            true,
+            false,
+        ));
+    }
+
+    #[test]
+    fn running_updates_keep_the_plain_staleness_rules() {
+        assert!(execution_update_is_stale_with_terminal(
+            Some(100),
+            Some(90),
+            false,
+            false,
+        ));
+        assert!(!execution_update_is_stale_with_terminal(
+            Some(100),
+            Some(110),
+            false,
+            false,
+        ));
+        assert!(!execution_update_is_stale_with_terminal(
+            None,
+            Some(90),
+            false,
+            false,
+        ));
+    }
+}

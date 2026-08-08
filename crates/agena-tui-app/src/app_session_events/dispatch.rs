@@ -367,6 +367,50 @@ impl App {
                     self.transcript.last_event_seq,
                     refresh.latest_event_seq,
                 ) {
+                    // The server's durable watermark is authoritative over
+                    // the local high-water mark: live-only events
+                    // (ActivityV2, streamed text upserts, retry notices)
+                    // consume global sequence numbers but are never
+                    // persisted, so the local watermark can sit ahead of
+                    // the durable log. Clamp back to the server's durable
+                    // max so the next refresh can observe new durable
+                    // events again.
+                    let mut clamped = false;
+                    if let Some(server_latest) = refresh.latest_event_seq
+                        && self
+                            .transcript
+                            .last_event_seq
+                            .is_some_and(|local| local > server_latest)
+                    {
+                        self.transcript.last_event_seq = Some(server_latest);
+                        clamped = true;
+                    }
+                    // A terminal execution is the final durable state for
+                    // its reply identity: never drop it merely because the
+                    // seq looks stale. Apply it even now (the terminal-aware
+                    // staleness check inside `apply_transcript_execution`
+                    // still protects a running execution), then drain any
+                    // parked message.
+                    if let Some(execution) = refresh.execution {
+                        let session_id = execution.session.id;
+                        let execution_is_terminal = execution.active_execution.is_none();
+                        if self.apply_transcript_execution(execution) {
+                            self.sync_pending_interactive_after_execution(session_id);
+                            self.sync_session_list_selection_to_current_execution();
+                            if execution_is_terminal {
+                                self.try_send_pending();
+                            }
+                        }
+                    } else if clamped {
+                        // The stale response was an empty "no change"
+                        // reply: the durable log had no new events because
+                        // live-only events inflated the local watermark.
+                        // With the watermark clamped, force one refresh so
+                        // the full execution (terminal state + completed
+                        // reply) is re-delivered instead of being skipped
+                        // forever.
+                        self.request_refresh(session_id, true);
+                    }
                     if let Some((pending_session_id, force)) = pending {
                         self.request_refresh(pending_session_id, force);
                     }

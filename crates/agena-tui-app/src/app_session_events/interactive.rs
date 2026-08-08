@@ -69,7 +69,14 @@ impl App {
         }) {
             return false;
         }
-        if execution_update_is_stale(self.transcript.last_event_seq, execution.latest_event_seq) {
+        let is_terminal = execution.active_execution.is_none();
+        let current_execution_absent = self.transcript.execution.is_none();
+        if execution_update_is_stale_with_terminal(
+            self.transcript.last_event_seq,
+            execution.latest_event_seq,
+            is_terminal,
+            current_execution_absent,
+        ) {
             return false;
         }
         let was_running = self
@@ -77,7 +84,6 @@ impl App {
             .execution
             .as_ref()
             .is_some_and(|current| current.active_execution.is_some());
-        let is_terminal = execution.active_execution.is_none();
         let session_id = execution.session.id;
         let sequence = execution.latest_event_seq;
         self.transcript.apply_execution(execution);
@@ -226,7 +232,7 @@ impl App {
 }
 use crate::{
     App, AppMessage, DraftSlot, LiveEvent, ModelRef, Overlay, PendingInteractiveKind,
-    SessionExecutionResource, execution_update_is_stale, pending_interactive_request_id,
+    SessionExecutionResource, execution_update_is_stale_with_terminal, pending_interactive_request_id,
     pending_interactive_request_matches_kind, permission_overlay_matches_pending_request,
     user_input_overlay_matches_pending_request,
 };

@@ -96,8 +96,11 @@ CREATE TABLE parts (
                       CHECK (role IN ('user','assistant','system','tool','runtime')),
     state             TEXT    NOT NULL DEFAULT 'pending'
                       CHECK (state IN ('pending','in_progress','completed','failed','cancelled')),
-    content           JSON    NOT NULL,           -- typed payload per kind
+        content           JSON    NOT NULL,           -- typed payload per kind (raw data the AI sees)
     summary           TEXT,                       -- compact label (O(1) list updates)
+    visibility        TEXT    NOT NULL DEFAULT 'both'
+                      CHECK (visibility IN ('both','user','ai')),  -- who sees this part (18.3)
+    rendered_markdown TEXT,                       -- human-friendly markdown rendered by the producing plugin/tool (18.4)
     parent_part_id    INTEGER REFERENCES parts(part_id),  -- tool_result→tool_call; reply→interaction; child→parent activity
     run_id            INTEGER REFERENCES parts(part_id),  -- the run marker part of this batch; NULL on the marker itself
     origin_session_id INTEGER,                    -- provenance only, informational
@@ -353,8 +356,10 @@ CREATE TABLE idempotency (
 
 ## 6. Invariants (triggers)
 
-1. **parts lifecycle**: legal state transitions (pending → in_progress → terminal),
-   `revision` monotonic, timestamps self-consistent (CHECKs above).
+1. **parts lifecycle**: legal state transitions (pending → in_progress →
+   completed/failed/cancelled, plus retry `failed → in_progress` with `revision++`
+   and `finished_at` cleared), `revision` monotonic, timestamps self-consistent
+   (CHECKs above); `visibility` CHECK enforced in DDL.
 2. **parts identity immutable**: `part_id, role, kind, parent_part_id,
    origin_session_id, created_at_ms` may not be updated.
 3. **session_parts references**: part and session must exist.
@@ -1046,13 +1051,19 @@ hook / run marker) uses the same state enum with the same transitions:
 
 ```
 pending ──► in_progress ──► completed
-   │            │             failed
-   └────────────┴──────────►  cancelled
+   │            │  ▲           failed
+   └────────────┴──┴──────►  cancelled
+                  (retry)
 ```
 
 - `pending → in_progress | cancelled`
 - `in_progress → completed | failed | cancelled`
-- terminal states are immutable; `revision` is monotonic on every update.
+- `failed → in_progress` (retry; `revision++`, `finished_at` cleared, retry policy
+  lives in the engine, 18.2)
+- terminal states (`completed` / `cancelled`) are immutable; `revision` is
+  monotonic on every update.
+- Errors are durable records: an `error` part is never deleted; after a retry
+  succeeds, the error part(s) AND the successful result part both remain (18.1).
 - `abort_reason` (JSON in content) is required on run markers reaching
   failed/cancelled, and mirrors v1 reasons: `process_restart`, `user_cancelled`,
   `provider_error`, `fork_cutoff`, `replaced`, `budget_limited`, `lease_stolen`.
@@ -1154,6 +1165,83 @@ activity statuses) are per-part data shown alongside, not session state.
 - Recovery is idempotent: re-running the resume algorithm on an already
   reconciled session is a no-op (markers already terminal, interactions answered
   or cancelled).
+
+---
+
+_End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._
+
+---
+
+## 18. Errors, retries, visibility, and rendering
+
+### 18.1 Errors are parts, and they are durable
+
+Every runtime failure produces an `error` part (`kind='error'`, `role='runtime'`
+or `'tool'`, `state='failed'`) so the session keeps a complete record:
+
+```json
+{"code":"provider.response_failed","category":"dependency",
+ "message":"...","detail":{...},"retryable":true,"attempt":1}
+```
+
+- Error parts are **never deleted** — they are history, exactly like messages.
+- They are non-gating: an `error` part alone never changes `SessionState`
+  (17.3). A run that ended in failure is expressed by the run marker's terminal
+  state, with the `error` part(s) as the explanation.
+
+### 18.2 Retry semantics (part updates, nothing deleted)
+
+1. The operation part (e.g., `tool_call`) transitions `in_progress → failed`,
+   and a child `error` part is created for the attempt.
+2. Retry: the operation part transitions `failed → in_progress`
+   (`revision++`, `finished_at` cleared); the engine re-runs the operation.
+3. On success the result part (`tool_result`) is created `completed` and the
+   operation part finishes `completed`.
+4. History: the `error` part(s) and the successful `tool_result` part both
+   remain — retries leave an audit trail, success leaves the usable result.
+
+Retry policy (max attempts, backoff, when to give up) is engine logic recorded
+in the error part's `attempt`/`retryable` fields, not storage logic. The same
+pattern applies to provider calls (run marker `failed → in_progress` is NOT
+allowed for a marker — a failed run is terminal; retrying a run creates a new
+`continue` run, matching 17.4).
+
+### 18.3 Visibility: who sees each part
+
+```sql
+visibility TEXT NOT NULL DEFAULT 'both' CHECK (visibility IN ('both','user','ai'))
+```
+
+| value | prompt (AI) | UI (human) | examples |
+|-------|-------------|------------|----------|
+| `both` | yes | yes | normal text, tool calls/results, interactions |
+| `ai`   | yes | no | internal tool data, hidden context, raw function payloads |
+| `user` | no  | yes | session notices, user-facing errors, permission explanations (v1: 「session Notice nodes never reach the model prompt」) |
+
+Rules: the prompt builder includes parts with `visibility IN ('both','ai')`;
+the UI renders parts with `visibility IN ('both','user')`. Fork shares parts as
+they are — visibility is per part, not per session.
+
+### 18.4 Rendering: plugin/tool renders Markdown for humans; AI gets raw data
+
+- `content` is the canonical raw data — exactly what the AI sees.
+- `rendered_markdown` (nullable) is the human-friendly Markdown produced by the
+  plugin or tool that created the part (its own renderer, its own formatting).
+- UI rule: show `rendered_markdown` when present; otherwise fall back to a
+  generic rendering of `content`/`summary`.
+- AI rule: the prompt always uses `content` (raw), never the rendered markdown.
+- `rendered_markdown` may be (re)rendered at any time (`revision++`); it is
+  cached on the part so display works even when the producing plugin is not
+  loaded (offline/other process).
+
+### 18.5 State-machine impact
+
+- Errors and retries never introduce a new session state: `error` parts are
+  non-gating, and retrying an operation is an internal part transition
+  (`failed → in_progress`).
+- Visibility and rendering do not affect the state machine at all — they only
+  change prompt/UI filtering and display. `SessionPresentation` (17.6) stays the
+  single source of session state; per-part visibility/rendering is detail.
 
 ---
 

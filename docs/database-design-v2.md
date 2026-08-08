@@ -1018,3 +1018,143 @@ External callers never touch the table and cannot distinguish memory/DB.
 ---
 
 _End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._
+
+---
+
+## 17. Data-driven session state machine
+
+Goal: every session condition is reconstructible from parts alone. Closing or
+crashing at ANY point leaves enough data to reopen, derive the exact state, and
+continue the right next step. There is exactly ONE session state for display —
+no conflicting fields.
+
+### 17.1 Principles
+
+1. **State is a projection of parts, not stored separately.** Run markers and
+   interaction parts carry the execution state; a pure derivation function maps
+   DB rows to the single `SessionState`. Any process derives the same state
+   from the same rows (consistent, unique).
+2. **Everything recoverable**: no in-memory state that is not rebuildable from
+   parts. The runtime's execution registry is an execution cache, not state.
+3. **One uniform part lifecycle** for every part kind; transitions enforced by
+   triggers (6).
+
+### 17.2 Part lifecycle (uniform)
+
+Every part (text / think / tool_call / tool_result / interaction / notice /
+hook / run marker) uses the same state enum with the same transitions:
+
+```
+pending ──► in_progress ──► completed
+   │            │             failed
+   └────────────┴──────────►  cancelled
+```
+
+- `pending → in_progress | cancelled`
+- `in_progress → completed | failed | cancelled`
+- terminal states are immutable; `revision` is monotonic on every update.
+- `abort_reason` (JSON in content) is required on run markers reaching
+  failed/cancelled, and mirrors v1 reasons: `process_restart`, `user_cancelled`,
+  `provider_error`, `fork_cutoff`, `replaced`, `budget_limited`, `lease_stolen`.
+
+### 17.3 The single derived SessionState
+
+```rust
+enum SessionState {
+    Creating,      // sessions.lifecycle_state = creating
+    Ready,         // no in-flight run, no pending interaction
+    Running,       // in-flight run marker, fresh lease (this process or another)
+    AwaitingUser,  // a pending interaction part (ask_user / plan_review / permission)
+    Interrupted,   // in-flight run marker, stale/no lease (crash) — reconciling
+    Failed,        // lifecycle failed, or last run terminally failed and not resumable
+}
+
+fn derive_session_state(session, in_flight_run, pending_interactions, lease) -> SessionState {
+    if session.lifecycle_state == Creating { return Creating }
+    if session.lifecycle_state == Failed  { return Failed }
+    if !pending_interactions.is_empty()   { return AwaitingUser }   // user's turn wins
+    if let Some(marker) = in_flight_run {
+        return if lease_is_fresh(lease) { Running } else { Interrupted }
+    }
+    Ready
+}
+```
+
+Only **interactions** (pending) and **run markers** (in-flight) gate the session
+state. All other parts (text, tool calls, hooks, notices) have their own
+lifecycle but never block the session — hooks and notices are non-gating by
+construction.
+
+### 17.4 Resume algorithm (exactly one correct next step on open)
+
+```
+open_session(session_id):
+  1. lifecycle = creating  -> finalize or fail the session row, then re-derive
+  2. for every in-flight run marker (state pending|in_progress):
+       a. if the run owns a pending interaction -> leave it (the run is paused
+          on the user, NOT crashed); state = AwaitingUser
+       b. else if lease is fresh -> another process is actively running it;
+          state = Running
+       c. else (stale/no lease) -> reconcile: mark the run failed
+          (abort_reason = process_restart), mark its non-terminal child parts
+          cancelled; state becomes Ready
+  3. derive SessionState and return it together with the pending interaction
+     (if any) and last failure (if any)
+```
+
+Every possible DB combination has a defined outcome: creating → finalize;
+ready + pending interaction → AwaitingUser; ready + in-flight run + fresh lease
+→ Running; ready + in-flight run + stale lease → Interrupted → reconcile →
+Ready; failed → Failed.
+
+### 17.5 Answer-and-continue flows
+
+- **ask_user / plan_review / permission** (`interaction` part, `state=pending`):
+  UI shows the interaction; the user answers via `answer_interaction` ->
+  transaction { interaction → completed; append reply part
+  (`parent_part_id` = interaction, `run_id` = owning run marker) }.
+  Then: if the owning run marker is still in_progress, the engine resumes that
+  run (rebuild prompt from parts including the answer, call the provider);
+  otherwise it starts a new continue run. State → Running.
+- **continue after interruption**: the run was reconciled to failed
+  (`process_restart`); the user (or policy) starts a `continue` run — a new run
+  marker whose prompt is rebuilt from the completed parts. The prompt builder
+  decides how to present interrupted/failed parts (exclude, or include a
+  synthetic tool_result for an aborted tool_call).
+- **user cancel**: current run marker → cancelled, its non-terminal parts →
+  cancelled; state → Ready.
+- **steer input**: appends a user part to the in-flight run; state unchanged
+  (Running).
+
+### 17.6 Display contract
+
+UI reads ONE object from the facade:
+
+```rust
+struct SessionPresentation {
+    state: SessionState,              // the only session-level state
+    pending_interaction: Option<InteractionRef>,  // type + prompt + part_id when AwaitingUser
+    active_run_id: Option<i64>,       // run marker part_id when Running
+    last_failure: Option<Failure>,    // when Failed / after Interrupted reconcile
+    // streaming progress is in-memory only, never persisted, never part of state
+}
+```
+
+No other field may contradict `state`; part-level details (tool progress,
+activity statuses) are per-part data shown alongside, not session state.
+
+### 17.7 Consistency rules
+
+- One derivation function, one enum — same rows, same state, any process.
+- Triggers enforce part transition validity (6) and run-marker invariants
+  (`run_id IS NULL` on markers; abort_reason on terminal failure).
+- Lease is the only cross-process arbiter: it converts 「in-flight run」 into
+  Running vs Interrupted; the reconcile step is the only mutator of a crashed
+  run's parts, and it runs exactly once (idempotent transitions).
+- Recovery is idempotent: re-running the resume algorithm on an already
+  reconciled session is a no-op (markers already terminal, interactions answered
+  or cancelled).
+
+---
+
+_End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._

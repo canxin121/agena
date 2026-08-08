@@ -2,7 +2,7 @@
 //!
 //! [`bundled_tools_markdown_reference`] renders a deterministic, human-readable
 //! reference from the real plugin manifests. The output is committed at
-//! `docs/generated/tools-reference.md` and embedded into rustdoc through
+//! `generated/tools-reference.md` (in this crate) and embedded into rustdoc through
 //! `include_str!`, so `cargo doc` shows every tool definition together with its
 //! detailed help text, examples, tags, runtime flags, and JSON Schema
 //! contracts.
@@ -50,7 +50,7 @@ fn render_header(out: &mut String, plugin_count: usize, tool_count: usize) {
     writeln!(out).unwrap();
     writeln!(
         out,
-        "> Generated file — do not edit by hand. Regenerate with:\n>\n> ```bash\n> agena inspect --tools-reference > docs/generated/tools-reference.md\n> ```"
+        "> Generated file — do not edit by hand. Regenerate with:\n>\n> ```bash\n> agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md\n> ```"
     )
     .unwrap();
     writeln!(out).unwrap();

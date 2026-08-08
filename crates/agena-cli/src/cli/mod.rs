@@ -470,7 +470,7 @@ pub struct InspectArgs {
     #[arg(long, requires = "json")]
     pub identity_snapshot: bool,
     /// Emit the generated Markdown tool reference committed at
-    /// `docs/generated/tools-reference.md` and embedded into `cargo doc`.
+    /// `crates/agena-bundled-plugins/generated/tools-reference.md` and embedded into `cargo doc`.
     #[arg(long)]
     pub tools_reference: bool,
 }

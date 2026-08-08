@@ -1,9 +1,9 @@
-//! Regenerate `docs/generated/tools-reference.md` from the real bundled
+//! Regenerate `crates/agena-bundled-plugins/generated/tools-reference.md` from the real bundled
 //! plugin manifests:
 //!
 //! ```bash
 //! cargo run -p agena-bundled-plugins --example generate_tools_reference \
-//!   > docs/generated/tools-reference.md
+//!   > crates/agena-bundled-plugins/generated/tools-reference.md
 //! ```
 //!
 //! The same document is embedded into rustdoc via `include_str!`, so `cargo

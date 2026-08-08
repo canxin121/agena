@@ -1,8 +1,7 @@
 {
   "version": 1,
   "must_exist": [
-    "crates/agena-failure/src/lib.rs",
-    "docs/failure-semantics.md"
+        "crates/agena-failure/src/lib.rs"
   ],
   "text_rules": [
     {

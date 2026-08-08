@@ -1043,7 +1043,7 @@ def generate_report(root: pathlib.Path, metadata: dict) -> str:
     append("### 2.3 重建命令")
     append("")
     append("```bash")
-    append("python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysis.md")
+    append("python3 scripts/rust-architecture-report.py --output target/rust-workspace-analysis.md")
     append("```")
     append("")
     append("生成器只要求 Python 3 标准库、Git 和与仓库匹配的 Cargo；不要求全局安装 `cargo-modules`、"
@@ -1311,8 +1311,8 @@ def generate_report(root: pathlib.Path, metadata: dict) -> str:
     append("### 9.3 建议的持续集成校验")
     append("")
     append("```bash")
-    append("python3 scripts/rust-architecture-report.py --output docs/rust-workspace-analysis.md")
-    append("git diff --exit-code -- docs/rust-workspace-analysis.md")
+    append("python3 scripts/rust-architecture-report.py --output target/rust-workspace-analysis.md")
+    append("git diff --exit-code -- target/rust-workspace-analysis.md")
     append("cargo check --workspace --all-targets --locked")
     append("```")
     append("")
@@ -1327,7 +1327,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=pathlib.Path,
-        default=pathlib.Path("docs/rust-workspace-analysis.md"),
+        default=pathlib.Path("target/rust-workspace-analysis.md"),
         help="report path, relative to the repository root by default",
     )
     parser.add_argument(

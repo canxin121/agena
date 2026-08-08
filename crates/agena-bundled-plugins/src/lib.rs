@@ -15,10 +15,10 @@ pub mod web;
 /// Generated Markdown reference for every bundled tool: definitions, detailed
 /// help text, examples, tags, runtime flags, and JSON Schema contracts.
 ///
-/// The committed copy lives at `docs/generated/tools-reference.md` and is
+/// The committed copy lives at `generated/tools-reference.md` (in this crate) and is
 /// regenerated with `agena inspect --tools-reference`; a CI drift test keeps
 /// it in sync with the real plugin manifests.
-#[doc = include_str!("../../../docs/generated/tools-reference.md")]
+#[doc = include_str!("../generated/tools-reference.md")]
 pub mod tools_docs {}
 
 pub use capability_manifest::{

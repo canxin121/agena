@@ -3,7 +3,7 @@
 > Generated file — do not edit by hand. Regenerate with:
 >
 > ```bash
-> agena inspect --tools-reference > docs/generated/tools-reference.md
+> agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
 This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **24 plugins and 142 tool definitions**.

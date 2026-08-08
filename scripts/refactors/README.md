@@ -168,7 +168,7 @@ Example manifest:
   "version": 1,
   "must_exist": [
     "apps/agena/src/main.rs",
-    "docs/agena-unified-binary-and-continuous-decomposition-plan.md"
+    "crates/agena-runtime/src/lib.rs"
   ],
   "must_not_exist": [
     "apps/agena"

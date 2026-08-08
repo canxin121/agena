@@ -48,7 +48,7 @@ fn bundled_manifest_separates_gateway_and_execution_tools() {
 #[test]
 fn capability_identity_snapshot_matches_committed_json() {
     let snapshot_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/generated/bundled-capability-identities.json");
+        .join("generated/bundled-capability-identities.json");
     let committed = std::fs::read_to_string(&snapshot_path).unwrap_or_else(|error| {
         panic!(
             "failed to read committed capability snapshot {}: {error}",

@@ -2925,6 +2925,7 @@ Structured code search and syntax inspection tools.
 {
   "$defs": {
     "CodeLanguage": {
+      "description": "Language of a code search target.",
       "enum": [
         "auto",
         "bash",
@@ -3022,6 +3023,7 @@ Structured code search and syntax inspection tools.
 {
   "$defs": {
     "CodeLanguage": {
+      "description": "Language of a code search target.",
       "enum": [
         "auto",
         "bash",
@@ -3205,6 +3207,7 @@ Cron-style and one-shot wakeup scheduling tools.
       "x-agena-order": "000004"
     }
   },
+  "description": "Input of the cron create tool.",
   "properties": {
     "expression": {
       "description": "6-field cron expression: `<sec> <min> <hour> <day-of-month> <month> <day-of-week>`.",
@@ -3264,6 +3267,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the cron delete tool.",
   "properties": {
     "id": {
       "minLength": 1,
@@ -3296,6 +3300,7 @@ Cron-style and one-shot wakeup scheduling tools.
 ```json
 {
   "additionalProperties": false,
+  "description": "Input of the cron history tool.",
   "properties": {
     "id": {
       "description": "Restrict history to one job. Omitting it returns newest records across\nall retained jobs.",
@@ -3329,6 +3334,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the cron list tool.",
   "properties": {},
   "type": "object"
 }
@@ -3350,6 +3356,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the cron job control tool.",
   "properties": {
     "id": {
       "minLength": 1,
@@ -3380,6 +3387,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the cron job control tool.",
   "properties": {
     "id": {
       "minLength": 1,
@@ -3417,6 +3425,7 @@ Cron-style and one-shot wakeup scheduling tools.
 {
   "$defs": {
     "CronMisfirePolicyInput": {
+      "description": "Policy applied when a scheduled job misses its fire time.",
       "enum": [
         "skip",
         "run_once_now",
@@ -3460,6 +3469,7 @@ Cron-style and one-shot wakeup scheduling tools.
       "type": "object"
     }
   },
+  "description": "Input of the cron update tool.",
   "properties": {
     "expression": {
       "description": "Optional replacement cron expression. Valid only for cron jobs.",
@@ -3542,6 +3552,7 @@ Cron-style and one-shot wakeup scheduling tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the schedule wakeup tool.",
   "properties": {
     "delay_seconds": {
       "format": "uint32",
@@ -3784,6 +3795,7 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "description": "Input of the glob tool.",
   "properties": {
     "include_ignored": {
       "default": false,
@@ -3864,6 +3876,7 @@ Filesystem command tools for read/search and explicit edits.
 **Input schema**:
 ```json
 {
+  "description": "Input of the grep tool.",
   "properties": {
     "include": {
       "description": "Optional glob filter applied before matching lines.",
@@ -3939,6 +3952,7 @@ Filesystem command tools for read/search and explicit edits.
       "x-agena-order": "000003"
     }
   },
+  "description": "Input of the file read tool.",
   "properties": {
     "file_path": {
       "description": "File or directory path to read. Relative paths are resolved from the\nworkspace root.",
@@ -5143,6 +5157,7 @@ User interaction tools.
 {
   "$defs": {
     "UserInputOption": {
+      "description": "Option offered in a user input question.",
       "properties": {
         "description": {
           "type": "string"
@@ -5162,6 +5177,7 @@ User interaction tools.
       "type": "object"
     },
     "UserInputQuestion": {
+      "description": "Question asked to the user with selectable options.",
       "properties": {
         "allow_custom": {
           "type": "boolean"
@@ -5196,6 +5212,7 @@ User interaction tools.
       "type": "object"
     }
   },
+  "description": "Input of the ask-user tool.",
   "properties": {
     "auto_resolution_ms": {
       "description": "Automatically continue without an answer after this many milliseconds.\nValues are limited to 60 seconds through 10 minutes.",
@@ -5278,6 +5295,7 @@ User interaction tools.
       "x-agena-order": "000002"
     }
   },
+  "description": "Input of the interaction notify tool.",
   "properties": {
     "body_markdown": {
       "description": "Markdown notification body. This tool never waits for a reply.",
@@ -5329,6 +5347,7 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the LSP definition tool.",
   "properties": {
     "character": {
       "format": "uint32",
@@ -5374,6 +5393,7 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the LSP diagnostics tool.",
   "properties": {
     "file_path": {
       "minLength": 1,
@@ -5407,6 +5427,7 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the LSP hover tool.",
   "properties": {
     "character": {
       "format": "uint32",
@@ -5455,6 +5476,7 @@ LSP read-only observability and navigation tools.
 **Input schema**:
 ```json
 {
+  "description": "Input of the LSP references tool.",
   "properties": {
     "character": {
       "format": "uint32",
@@ -6235,7 +6257,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine. Present the finished plan for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.
+> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `tasks.run` exploration when the scope spans multiple areas), clarify with `ask`, and refine. By default the plan must be approved by the user before it becomes active: pass `request_approval: true` (or omit it) unless the user has already declared that the plan can be created directly without approval, in which case pass `request_approval: false`. Present the finished plan for approval through the plan phase transition; never ask whether the plan is acceptable via `ask`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6243,6 +6265,7 @@ Plan orchestration and plan-autorun tools.
 | `autorun` | `boolean / null` | — | — |  |
 | `document_markdown` | `string / null` | — | — |  |
 | `objective` | `string` | ✓ | — |  |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval before the plan becomes active. Defaults to true when omitted: request approval unless the user has already declared that the plan can be created directly without approval. |
 | `steps` | `array<WorkflowPlanStepInput>` | — | — | Ordered plan steps. Each step item uses `title`; nested checks use `text`. |
 | `title` | `string / null` | — | — |  |
 
@@ -6343,7 +6366,7 @@ Plan orchestration and plan-autorun tools.
     }
   },
   "additionalProperties": false,
-  "description": "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically.",
+  "description": "Create or overwrite the current active-session plan in planning. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. `request_approval` controls whether the user must approve the plan before it becomes active; it defaults to requesting approval unless the user has already declared the plan needs none.",
   "properties": {
     "autorun": {
       "type": [
@@ -6362,6 +6385,14 @@ Plan orchestration and plan-autorun tools.
     "objective": {
       "type": "string",
       "x-agena-order": "000000"
+    },
+    "request_approval": {
+      "description": "Whether to request user approval before the plan becomes active. Defaults to true when omitted: request approval unless the user has already declared that the plan can be created directly without approval.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000005"
     },
     "steps": {
       "description": "Ordered plan steps. Each step item uses `title`; nested checks use `text`.",
@@ -6395,7 +6426,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: ✗ not concurrency-safe · streaming `buffered` · non-strict
 
 **Help**:
-> Keep plan-level updates separate from step/check updates: do not send `phase` together with `step`, `check`, `status`, `wait_until_ms`, or `note`. Address steps and checks by 1-based index (`step`, `check`). To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.
+> Keep plan-level updates separate from step/check updates: do not send `phase` / `request_approval` together with `step`, `check`, `status`, `wait_until_ms`, or `note`. Address steps and checks by 1-based index (`step`, `check`). For plan-level phase changes, pass `request_approval: true` (or omit it) to ask the user to approve the transition, unless the user has already declared it needs no approval, in which case pass `request_approval: false`. To complete a plan with steps, mark the required steps/checks `completed` first, then call update separately with `phase: completed`.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -6404,6 +6435,7 @@ Plan orchestration and plan-autorun tools.
 | `check` | `integer / null` | — | — | 1-based index of the check within the step to update (1 = first check). Requires `step`. |
 | `note` | `string / null` | — | — |  |
 | `phase` | `WorkflowPlanPhase / null` | — | — | Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`. |
+| `request_approval` | `boolean / null` | — | — | Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval. |
 | `status` | `WorkflowPlanStepStatus / null` | — | — |  |
 | `step` | `integer / null` | — | — | 1-based index of the step to update (1 = first step). |
 | `summary` | `string / null` | — | — | Optional completion summary. This is only applied when `phase` is `completed`. |
@@ -6435,7 +6467,7 @@ Plan orchestration and plan-autorun tools.
     }
   },
   "additionalProperties": false,
-  "description": "Update the current plan. Use `phase` / `autorun` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`.",
+  "description": "Update the current plan. Use `phase` / `autorun` / `request_approval` for plan-level state changes, `step` + `status` to update a step, or `step` + `check` + `status` to update a check. Steps and checks are addressed by their 1-based index (step 1 is the first step; check 1 is the first check within the step). Do not combine plan-level fields (`phase`, `autorun`, `summary`, `request_approval`) with step/check fields. To complete a plan with steps, first mark the relevant steps or checks `completed`, then make a separate plan-level update with `phase: completed`. Canonical phase values are `planning`, `active`, `blocked`, `completed`, and `cancelled`.",
   "properties": {
     "autorun": {
       "description": "Whether an approved active plan should keep running automatically.",
@@ -6443,7 +6475,7 @@ Plan orchestration and plan-autorun tools.
         "boolean",
         "null"
       ],
-      "x-agena-order": "000001"
+      "x-agena-order": "000002"
     },
     "check": {
       "description": "1-based index of the check within the step to update (1 = first check). Requires `step`.",
@@ -6453,14 +6485,14 @@ Plan orchestration and plan-autorun tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "note": {
       "type": [
         "string",
         "null"
       ],
-      "x-agena-order": "000007"
+      "x-agena-order": "000008"
     },
     "phase": {
       "anyOf": [
@@ -6474,6 +6506,14 @@ Plan orchestration and plan-autorun tools.
       "description": "Canonical plan phase. Use `planning`, `active`, `blocked`, `completed`, or `cancelled`.",
       "x-agena-order": "000000"
     },
+    "request_approval": {
+      "description": "Whether to request user approval for this plan-level phase change. Defaults to true when omitted: request approval unless the user has already declared that the change needs no approval.",
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
     "status": {
       "anyOf": [
         {
@@ -6483,7 +6523,7 @@ Plan orchestration and plan-autorun tools.
           "type": "null"
         }
       ],
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "step": {
       "description": "1-based index of the step to update (1 = first step).",
@@ -6493,7 +6533,7 @@ Plan orchestration and plan-autorun tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "summary": {
       "description": "Optional completion summary. This is only applied when `phase` is `completed`.",
@@ -6501,7 +6541,7 @@ Plan orchestration and plan-autorun tools.
         "string",
         "null"
       ],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "wait_until_ms": {
       "format": "int64",
@@ -6509,7 +6549,7 @@ Plan orchestration and plan-autorun tools.
         "integer",
         "null"
       ],
-      "x-agena-order": "000006"
+      "x-agena-order": "000007"
     }
   },
   "type": "object"
@@ -6795,6 +6835,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 {
   "$defs": {
     "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
       "enum": [
         "global",
         "workspace"
@@ -6871,6 +6912,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 {
   "$defs": {
     "ConfigSettingsSource": {
+      "description": "Source layer of a settings read or write.",
       "enum": [
         "effective",
         "file"
@@ -6878,6 +6920,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
       "type": "string"
     },
     "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
       "enum": [
         "global",
         "workspace"
@@ -6999,6 +7042,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 {
   "$defs": {
     "ConfigSettingsSource": {
+      "description": "Source layer of a settings read or write.",
       "enum": [
         "effective",
         "file"
@@ -7006,6 +7050,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
       "type": "string"
     },
     "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
       "enum": [
         "global",
         "workspace"
@@ -7105,6 +7150,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 {
   "$defs": {
     "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
       "enum": [
         "global",
         "workspace"
@@ -7189,6 +7235,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 {
   "$defs": {
     "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
       "enum": [
         "global",
         "workspace"
@@ -7263,6 +7310,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 {
   "$defs": {
     "SettingsLayer": {
+      "description": "Config file layer targeted by a settings edit.",
       "enum": [
         "global",
         "workspace"
@@ -7399,6 +7447,7 @@ Shell command execution and background process tools.
 {
   "$defs": {
     "ProcessShell": {
+      "description": "Shell used to run a process.",
       "enum": [
         "bash",
         "powershell"
@@ -7408,7 +7457,7 @@ Shell command execution and background process tools.
     },
     "ShellMonitorInput": {
       "additionalProperties": false,
-      "description": "Optional completion and capture policy for a managed shell process. Adding\nthis object makes `shell.run` a monitored background invocation and returns\nthe same `process_id` consumed by `shell.list`, `shell.logs` and `shell.stop`.",
+      "description": "Optional completion and capture policy for a managed shell process. Adding\nthis object makes `shell.run` a monitored background invocation and returns\nthe same `process_id` consumed by `shell.list`, `shell.logs` and `shell.stop`.\nPatterns that determine shell command success or failure.",
       "properties": {
         "capture_stderr": {
           "default": true,
@@ -7472,6 +7521,7 @@ Shell command execution and background process tools.
       "type": "object"
     },
     "ShellMonitorPatternKind": {
+      "description": "How a shell monitor pattern is matched.",
       "enum": [
         "literal",
         "regex"
@@ -7480,6 +7530,7 @@ Shell command execution and background process tools.
     }
   },
   "additionalProperties": false,
+  "description": "Input of a shell command execution.",
   "properties": {
     "background": {
       "default": false,
@@ -8141,6 +8192,7 @@ Delegated subtask orchestration tools.
     }
   },
   "additionalProperties": false,
+  "description": "Input of the task tool.",
   "properties": {
     "access": {
       "$ref": "#/$defs/TaskAccess",
@@ -8533,6 +8585,7 @@ Delegated subtask orchestration tools.
     }
   },
   "additionalProperties": false,
+  "description": "Input of the task tool.",
   "properties": {
     "access": {
       "$ref": "#/$defs/TaskAccess",

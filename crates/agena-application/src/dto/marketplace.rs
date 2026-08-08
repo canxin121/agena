@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Serialize)]
+/// A plugin entry in the marketplace.
 pub struct MarketplacePluginResource {
     pub plugin_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -17,6 +18,7 @@ pub struct MarketplacePluginResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Search results from a marketplace registry.
 pub struct MarketplaceSearchResponse {
     pub registry_id: String,
     pub registry_url: String,
@@ -24,6 +26,7 @@ pub struct MarketplaceSearchResponse {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request referencing a marketplace registry.
 pub struct MarketplaceRegistryRequest {
     #[serde(default)]
     pub registry_id: Option<String>,
@@ -31,6 +34,7 @@ pub struct MarketplaceRegistryRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Request referencing a marketplace registry with optional override.
 pub struct MarketplaceRegistryOverrideRequest {
     #[serde(default)]
     pub registry_id: Option<String>,
@@ -39,6 +43,7 @@ pub struct MarketplaceRegistryOverrideRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to search a marketplace registry.
 pub struct MarketplaceSearchRequest {
     #[serde(flatten)]
     pub registry: MarketplaceRegistryRequest,
@@ -49,6 +54,7 @@ pub struct MarketplaceSearchRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Result of syncing a marketplace registry.
 pub struct MarketplaceSyncResponse {
     pub registry_id: String,
     pub registry_url: String,
@@ -56,6 +62,7 @@ pub struct MarketplaceSyncResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A plugin installed from the marketplace.
 pub struct MarketplaceInstalledPluginResource {
     pub plugin_id: String,
     pub version: String,
@@ -72,6 +79,7 @@ pub struct MarketplaceInstalledPluginResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// An installed plugin with a newer marketplace version.
 pub struct MarketplaceOutdatedPluginResource {
     pub plugin_id: String,
     pub installed_version: String,
@@ -79,6 +87,7 @@ pub struct MarketplaceOutdatedPluginResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to install a marketplace plugin.
 pub struct MarketplaceInstallRequest {
     pub spec: String,
     #[serde(flatten)]
@@ -96,6 +105,7 @@ pub struct MarketplaceInstallRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Outcome of installing a marketplace plugin.
 pub struct MarketplaceInstallOutcomeResource {
     pub plugin_id: String,
     pub version: String,
@@ -106,6 +116,7 @@ pub struct MarketplaceInstallOutcomeResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to uninstall a marketplace plugin.
 pub struct MarketplaceUninstallRequestBody {
     pub plugin_id: String,
     #[serde(default)]
@@ -113,6 +124,7 @@ pub struct MarketplaceUninstallRequestBody {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Outcome of uninstalling a marketplace plugin.
 pub struct MarketplaceUninstallOutcomeResource {
     pub plugin_id: String,
     pub version: String,
@@ -120,6 +132,7 @@ pub struct MarketplaceUninstallOutcomeResource {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Request to upgrade marketplace plugins.
 pub struct MarketplaceUpgradeRequest {
     #[serde(default)]
     pub plugin_id: Option<String>,
@@ -130,6 +143,7 @@ pub struct MarketplaceUpgradeRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Outcome of upgrading a marketplace plugin.
 pub struct MarketplaceUpgradeOutcomeResource {
     pub plugin_id: String,
     pub previous_version: String,

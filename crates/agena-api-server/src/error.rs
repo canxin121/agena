@@ -1,3 +1,5 @@
+//! Error types and response mapping for the API server transports.
+
 use agena_api::error::ApiError;
 use agena_application::ApplicationError;
 use agena_failure::FailureCategory;

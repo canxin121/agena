@@ -1,3 +1,5 @@
+//! Runtime support helpers used by generated macro code.
+
 use std::sync::{OnceLock, RwLock};
 
 use schemars::{JsonSchema, schema_for};

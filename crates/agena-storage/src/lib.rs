@@ -1,8 +1,27 @@
+//! # agena-storage
+//!
 //! Storage contracts shared by application services and concrete backends.
 //!
 //! This crate intentionally has no database, filesystem, or runtime-specific
-//! implementation dependency. Concrete SQLite/SeaORM adapters implement these
-//! traits in their infrastructure layer.
+//! implementation dependency. Concrete SQLite/SeaORM adapters
+//! ([`agena_storage_sqlite`]) implement these traits in their infrastructure
+//! layer.
+//!
+//! ## Repositories
+//!
+//! - Event store — session event persistence, with [`EventStoreError`].
+//! - [`SequenceAllocator`] — monotonic id allocation for events.
+//! - [`MemoryRepository`] — durable memory records.
+//! - [`WorkspaceRepository`] — workspace metadata.
+//! - [`ModelCatalogRepository`] — model catalog cache records.
+//! - [`PermissionRuleRepository`] — permission rules and transactions.
+//! - [`SessionStatsRepository`] — per-session statistics.
+//! - [`UsageRepository`] — usage samples and totals.
+//! - [`ProjectionLookupRepository`] — projection id lookups.
+//! - [`ModelMessageRepository`] — model message/part persistence.
+//!
+//! [`MemoryStore`] provides an in-memory implementation of most contracts for
+//! tests and small deployments; [`StorageConfig`] carries store configuration.
 
 use std::collections::hash_map::DefaultHasher;
 use std::future::Future;
@@ -34,6 +53,7 @@ pub struct StorageConfig {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error preparing storage configuration (for example creating the database directory).
 pub enum StorageConfigError {
     #[error("failed to prepare database directory: {0}")]
     Io(#[from] io::Error),
@@ -182,6 +202,7 @@ impl Default for TransactionEffects {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the session event store.
 pub enum EventStoreError {
     #[error("event store backend error: {0}")]
     Backend(String),
@@ -342,6 +363,7 @@ impl MemoryType {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+/// Parsed frontmatter of a memory document.
 pub struct MemoryFrontmatter {
     #[serde(default)]
     pub name: String,
@@ -352,6 +374,7 @@ pub struct MemoryFrontmatter {
 }
 
 #[derive(Debug, Clone)]
+/// A memory document as stored on disk.
 pub struct MemoryRecord {
     pub file_name: String,
     pub path: PathBuf,
@@ -360,6 +383,7 @@ pub struct MemoryRecord {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error reading or writing memory records.
 pub enum MemoryError {
     #[error("io error: {0}")]
     Io(#[from] io::Error),
@@ -371,6 +395,7 @@ pub enum MemoryError {
     NotFound(String),
 }
 
+/// Result alias for memory operations.
 pub type MemoryResult<T> = Result<T, MemoryError>;
 
 /// Provider-independent memory persistence port.
@@ -385,6 +410,7 @@ pub trait MemoryRepository: Send + Sync {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the workspace repository.
 pub enum WorkspaceRepositoryError {
     #[error("invalid workspace path: {0}")]
     InvalidPath(String),
@@ -432,6 +458,7 @@ pub trait WorkspaceRepository: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A stored workspace (id, path, timestamps).
 pub struct WorkspaceRecord {
     pub id: i64,
     pub path: String,
@@ -440,6 +467,7 @@ pub struct WorkspaceRecord {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Query for listing workspaces.
 pub struct WorkspaceListQuery {
     pub search: Option<String>,
     pub before_updated_at_ms: Option<i64>,
@@ -457,6 +485,7 @@ pub struct ModelCatalogCacheRecord {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the model catalog repository.
 pub enum ModelCatalogRepositoryError {
     #[error("model catalog repository backend error: {0}")]
     Backend(String),
@@ -503,6 +532,7 @@ pub struct PermissionRuleRecord {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Query for listing permission rules.
 pub struct PermissionRuleListQuery {
     pub search: Option<String>,
     pub before_updated_at_ms: Option<i64>,
@@ -511,6 +541,7 @@ pub struct PermissionRuleListQuery {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the permission rule repository.
 pub enum PermissionRuleRepositoryError {
     #[error("permission rule repository backend error: {0}")]
     Backend(String),
@@ -581,12 +612,14 @@ pub trait PermissionRuleRepository: Send + Sync {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Per-session event statistics.
 pub struct SessionEventStats {
     pub message_count: i64,
     pub last_message_at_ms: Option<i64>,
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the session stats repository.
 pub enum SessionStatsRepositoryError {
     #[error("session stats repository backend error: {0}")]
     Backend(String),
@@ -620,6 +653,7 @@ pub struct UsageSample {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// One usage record (session, provider, model, and sample).
 pub struct UsageRecord {
     pub session_id: i64,
     pub session_title: String,
@@ -631,6 +665,7 @@ pub struct UsageRecord {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the usage repository.
 pub enum UsageRepositoryError {
     #[error("usage repository backend error: {0}")]
     Backend(String),
@@ -649,6 +684,7 @@ pub trait UsageRepository: Send + Sync {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the projection lookup repository.
 pub enum ProjectionLookupRepositoryError {
     #[error("projection lookup repository backend error: {0}")]
     Backend(String),
@@ -684,6 +720,7 @@ pub struct ModelMessageHeaderRecord {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Stored part of a model message.
 pub struct ModelMessagePartRecord {
     pub part_id: i64,
     pub message_id: i64,
@@ -702,6 +739,7 @@ pub struct ModelMessagePartRecord {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the model message repository.
 pub enum ModelMessageRepositoryError {
     #[error("message projection repository backend error: {0}")]
     Backend(String),
@@ -788,6 +826,7 @@ pub struct ModelMessagePartWrite {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Open identity of a model message (run or execution id).
 pub enum ModelMessageOpenIdentity {
     RunId(String),
     ExecutionId(String),
@@ -834,6 +873,7 @@ pub trait ModelMessageTransactionWriter<Transaction>: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Stored session summary row.
 pub struct SessionSummaryRecord {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -854,6 +894,7 @@ pub struct SessionSummaryRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Session summary plus derived counts (messages and children).
 pub struct SessionTreeRecord {
     pub summary: SessionSummaryRecord,
     pub message_count: i64,
@@ -862,6 +903,7 @@ pub struct SessionTreeRecord {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the session summary repository.
 pub enum SessionSummaryRepositoryError {
     #[error("session summary repository backend error: {0}")]
     Backend(String),
@@ -893,6 +935,7 @@ pub trait SessionSummaryRepository: Send + Sync {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Query for listing session summaries.
 pub struct SessionSummaryListQuery {
     pub workspace_id: Option<i64>,
     pub roots_only: bool,
@@ -906,6 +949,7 @@ pub struct SessionSummaryListQuery {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Backend error from the session mutation repository.
 pub enum SessionMutationRepositoryError {
     #[error("session mutation repository backend error: {0}")]
     Backend(String),
@@ -936,6 +980,7 @@ pub trait MessageIdAllocator {
 }
 
 #[derive(Debug, Default)]
+/// In-process sequential id allocator.
 pub struct SequentialIdAllocator {
     next: i64,
 }
@@ -1056,6 +1101,7 @@ impl MemoryDir {
 }
 
 #[derive(Debug, Clone)]
+/// Input for creating a new memory record.
 pub struct NewMemory {
     pub name: String,
     pub description: String,

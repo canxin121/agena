@@ -1,3 +1,5 @@
+//! Shared application state held by the HTTP/WS/SSE/JSON-RPC transports.
+
 use std::sync::Arc;
 
 use agena_api::subscribe::SubscribeRequest;

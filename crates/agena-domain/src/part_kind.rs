@@ -10,6 +10,7 @@ use strum::{AsRefStr, Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Kind of a message part.
 pub enum PartKind {
     Text,
     Activity,

@@ -8,6 +8,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, V
 const SESSION_TABLE: &str = "agena_sessions";
 const EVENT_TABLE: &str = "agena_events";
 
+/// SQLite-backed session stats repository.
 pub struct SeaSessionStatsRepository {
     db: Arc<DatabaseConnection>,
 }

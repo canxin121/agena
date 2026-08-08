@@ -1,3 +1,5 @@
+//! Shortcut bar widget.
+
 use std::borrow::Cow;
 
 use ratatui::{

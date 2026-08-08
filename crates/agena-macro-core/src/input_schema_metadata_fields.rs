@@ -1,3 +1,5 @@
+//! Field-level JSON Schema metadata for tool inputs.
+
 use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Fields, LitStr, Result};

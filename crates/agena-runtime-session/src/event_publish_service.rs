@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
+/// Request to publish a runtime event.
 pub enum RuntimeEventPublishRequest {
     PermissionRuleCreated(agena_domain::PermissionRuleEvent),
     PermissionRuleUpdated(agena_domain::PermissionRuleEvent),
@@ -15,6 +16,7 @@ pub enum RuntimeEventPublishRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Error publishing a runtime event.
 pub struct RuntimeEventPublishError {
     pub failure: agena_failure::Failure,
 }
@@ -40,6 +42,7 @@ impl std::fmt::Display for RuntimeEventPublishError {
 impl std::error::Error for RuntimeEventPublishError {}
 
 #[async_trait]
+/// Service that publishes runtime events.
 pub trait RuntimeEventPublishService: Send + Sync {
     async fn publish_event(
         &self,

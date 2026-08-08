@@ -1,3 +1,5 @@
+//! Workbench widget: content area with overlays.
+
 use std::{borrow::Cow, cmp::max};
 
 use ratatui::{

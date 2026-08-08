@@ -1,3 +1,5 @@
+//! Typed configuration for each LSP server (command, args, root).
+
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};

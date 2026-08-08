@@ -12,6 +12,7 @@ use crate::auto::{DenialBudget, auto_fast_path, heuristic_decision};
 
 /// Static context for one synchronous decision.
 #[derive(Debug, Clone, Default)]
+/// Context of a permission decision.
 pub struct DecisionContext<'a> {
     /// Runtime-owned project-state directory; writes inside it are safe.
     pub managed_project_root: Option<&'a str>,
@@ -20,12 +21,14 @@ pub struct DecisionContext<'a> {
 /// One classifier evaluation unit. The host groups candidates from the same
 /// tool invocation so a single transcript/model setup serves them all.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A candidate action for classifier review.
 pub struct ClassifierCandidate {
     pub action: ActionSpec,
     pub policy_reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Outcome of a synchronous permission decision.
 pub enum SyncOutcome {
     Final(PermissionDecision),
     Classifier(ClassifierCandidate),

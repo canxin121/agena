@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::{GeminiContent, GeminiUsageMetadata};
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of a Gemini generate response.
 pub struct GeminiGenerateResponse {
     #[serde(default)]
     pub candidates: Vec<GeminiCandidate>,
@@ -14,6 +15,7 @@ pub struct GeminiGenerateResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of a Gemini response candidate.
 pub struct GeminiCandidate {
     #[serde(default)]
     pub content: Option<GeminiContent>,

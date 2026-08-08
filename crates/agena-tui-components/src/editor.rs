@@ -1,3 +1,5 @@
+//! Text editor widget.
+
 use std::{
     cmp::{max, min},
     ops::Range,

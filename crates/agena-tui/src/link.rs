@@ -1,3 +1,5 @@
+//! Link handling and URL detection in the TUI.
+
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};

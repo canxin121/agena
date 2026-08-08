@@ -1,6 +1,7 @@
 //! Stable doom-loop detection policy and result values.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Policy detecting repeated identical tool calls (doom loop).
 pub struct DoomLoopPolicy {
     /// Number of immediately-consecutive identical tool calls that constitute
     /// a doom loop. Values below 2 disable the check.
@@ -28,6 +29,7 @@ impl DoomLoopPolicy {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A detected doom-loop hit (repeated tool invocation).
 pub struct DoomLoopHit {
     pub tool_label: String,
     pub repeat_count: u8,

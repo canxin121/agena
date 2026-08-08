@@ -1,3 +1,5 @@
+//! Detail dialog widget for long-form content.
+
 use std::borrow::Cow;
 
 use ratatui::{

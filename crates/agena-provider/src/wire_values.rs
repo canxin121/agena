@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
+/// A chunk of a chat completion stream.
 pub struct ChatStreamChunk {
     #[serde(default)]
     pub choices: Vec<ChatStreamChoice>,
@@ -8,6 +9,7 @@ pub struct ChatStreamChunk {
     pub usage: Option<serde_json::Value>,
 }
 #[derive(Debug, Deserialize, Clone)]
+/// A choice inside a chat stream chunk.
 pub struct ChatStreamChoice {
     #[serde(default)]
     pub delta: Option<ChatStreamDelta>,
@@ -17,6 +19,7 @@ pub struct ChatStreamChoice {
     pub finish_reason: Option<String>,
 }
 #[derive(Debug, Deserialize, Clone)]
+/// A delta inside a chat stream choice.
 pub struct ChatStreamDelta {
     #[serde(default)]
     pub content: Option<serde_json::Value>,
@@ -32,12 +35,14 @@ pub struct ChatStreamDelta {
     pub tool_calls: Option<Vec<serde_json::Value>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a Responses API tool event.
 pub enum ResponsesToolEventKind {
     Added,
     Delta,
     Done,
 }
 #[derive(Debug, Clone)]
+/// A tool event from the Responses API stream.
 pub struct ResponsesToolEvent {
     pub kind: ResponsesToolEventKind,
     pub output_index: Option<usize>,

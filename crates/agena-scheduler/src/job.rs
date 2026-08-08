@@ -1,3 +1,5 @@
+//! Job definitions (cron / one-shot) and fire state.
+
 use std::str::FromStr;
 
 use chrono::{DateTime, Duration, Utc};
@@ -32,6 +34,7 @@ fn scheduler_outcome_failure(
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Kind of a scheduled job.
 pub enum JobKind {
     /// Recurring job driven by a cron expression.  After
     /// `max_age_days` we fire one last time and delete the job.
@@ -45,6 +48,7 @@ pub enum JobKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Status of a job run.
 pub enum JobRunStatus {
     Submitted,
     Skipped,
@@ -137,6 +141,7 @@ pub struct JobDeliveryAttempt {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Record of one job run.
 pub struct JobRunRecord {
     pub triggered_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
@@ -171,6 +176,7 @@ pub struct SchedulerHistoryEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of delivering a job to the sink.
 pub struct JobDeliveryResult {
     pub status: JobRunStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,6 +212,7 @@ impl JobDeliveryResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A scheduled job.
 pub struct ScheduledJob {
     pub id: Uuid,
     pub kind: JobKind,
@@ -612,6 +619,7 @@ impl ScheduledJob {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Outcome of delivering a job.
 pub enum JobOutcome {
     Continued,
     Expired,

@@ -15,6 +15,7 @@ pub enum CapabilitySourceKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Describes why a capability is unavailable and whether the request is retryable.
 pub struct CapabilityUnavailableResult {
     pub capability: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -27,6 +28,7 @@ pub struct CapabilityUnavailableResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Describes why a tool is unavailable, with suggestions.
 pub struct ToolUnavailableResult {
     pub tool_name: String,
     pub reason: String,

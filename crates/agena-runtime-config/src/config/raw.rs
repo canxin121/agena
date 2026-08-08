@@ -38,6 +38,7 @@ const DEFAULT_LOG_FILTER: &str = "info";
 const DEFAULT_DATABASE_LOG_LEVEL: &str = "error";
 
 #[derive(Debug, Clone)]
+/// A raw config file together with whether it was found and its merge keys.
 pub struct RawConfigFile {
     pub config: RawConfig,
     pub found: bool,
@@ -73,6 +74,7 @@ impl RawConfigFile {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// Which top-level project config sections participate in merging.
 pub struct RawProjectMergeKeys {
     plugins_host: bool,
     plugins_host_timeouts: bool,
@@ -287,6 +289,7 @@ fn reject_unsupported_fields_value(value: &Value) -> Result<(), ConfigError> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default)]
+/// Raw provider configuration with a default selection and per-provider overlays.
 pub struct RawProvidersConfig {
     #[merge(strategy = option_override)]
     pub default: Option<String>,
@@ -328,6 +331,7 @@ impl Merge for RawProvidersConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Raw, unvalidated configuration as parsed from file or environment.
 pub struct RawConfig {
     pub tracing: Option<RawTracingConfig>,
     pub ui: Option<RawUiConfig>,
@@ -789,6 +793,7 @@ impl Merge for HarnessesConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw tracing configuration.
 pub struct RawTracingConfig {
     #[merge(strategy = option_override)]
     pub filter: Option<String>,
@@ -813,6 +818,7 @@ fn validate_tracing_level(field: &str, value: &str) -> Result<(), ConfigError> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw UI configuration.
 pub struct RawUiConfig {
     #[merge(strategy = option_override)]
     pub locale: Option<String>,
@@ -822,6 +828,7 @@ pub struct RawUiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw TUI configuration.
 pub struct RawTuiUiConfig {
     #[merge(strategy = option_override)]
     pub color_scheme: Option<TuiColorSchemeConfig>,
@@ -833,6 +840,7 @@ pub struct RawTuiUiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw runtime configuration.
 pub struct RawRuntimeConfig {
     #[merge(strategy = option_struct_merge)]
     pub providers: Option<RawRuntimeProvidersConfig>,
@@ -840,6 +848,7 @@ pub struct RawRuntimeConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw runtime provider settings.
 pub struct RawRuntimeProvidersConfig {
     #[merge(strategy = option_struct_merge)]
     pub client_versions: Option<RawProviderClientVersionSettings>,
@@ -847,6 +856,7 @@ pub struct RawRuntimeProvidersConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw provider client version settings.
 pub struct RawProviderClientVersionSettings {
     #[merge(strategy = option_override)]
     pub codex: Option<String>,
@@ -912,6 +922,7 @@ fn normalize_provider_client_version(
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw session configuration.
 pub struct RawSessionConfig {
     #[merge(strategy = option_struct_merge)]
     pub compaction: Option<RawSessionCompactionConfig>,
@@ -923,6 +934,7 @@ pub struct RawSessionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Raw session compaction configuration.
 pub struct RawSessionCompactionConfig {
     #[merge(strategy = option_override)]
     pub auto: Option<bool>,
@@ -959,6 +971,7 @@ impl Merge for agena_domain::PermissionMode {
 // directly via serde; no `from_raw` adapter needed.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// Provider protocol family used by an adapter.
 pub enum ProviderKind {
     #[serde(rename = "ollama")]
     Ollama,
@@ -998,6 +1011,7 @@ impl std::str::FromStr for ProviderKind {
     }
 }
 
+/// Merges an overlay value into a base value.
 pub trait Merge {
     fn merge_from(&mut self, overlay: Self);
 }

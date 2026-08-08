@@ -2,6 +2,7 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// How a native provider tool is routed.
 pub enum ProviderNativeToolRoute {
     Disabled,
     Plugin,
@@ -12,6 +13,7 @@ pub enum ProviderNativeToolRoute {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Freshness policy for native provider tools.
 pub enum ProviderNativeToolFreshness {
     Auto,
     Cached,
@@ -233,6 +235,7 @@ pub struct ProviderDefaults {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Summary of a configured provider adapter.
 pub struct ProviderAdapterSummary {
     pub adapter_id: String,
     pub enabled: bool,
@@ -250,6 +253,7 @@ pub struct ProviderConfiguredAdapterModels {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Routing of a provider across its adapters.
 pub struct ProviderConfiguredRouting {
     pub provider_id: ProviderId,
     pub adapters: Vec<ProviderConfiguredAdapterModels>,
@@ -269,6 +273,7 @@ pub struct ProviderConfiguredEditor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Auth configuration for an editor provider.
 pub enum ProviderConfiguredEditorAuth {
     None,
     Api {
@@ -308,6 +313,7 @@ pub struct ProviderCatalogEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Protocol path overrides for OpenAI, Anthropic, and Gemini.
 pub struct ProviderProtocolPaths {
     pub openai: String,
     pub anthropic: String,
@@ -325,6 +331,7 @@ impl Default for ProviderProtocolPaths {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Where an API key comes from (inline or environment).
 pub enum ProviderApiKeySource {
     Inline(String),
     Environment(String),
@@ -376,6 +383,7 @@ pub enum DraftProviderAdapterModelsRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Draft request to configure an HTTP provider adapter.
 pub struct DraftHttpProviderAdapterModelsRequest {
     pub provider_id: Option<String>,
     pub base_url: String,
@@ -385,6 +393,7 @@ pub struct DraftHttpProviderAdapterModelsRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Adapter entry with resolved models and an optional failure.
 pub struct ProviderAdapterModelsEntry {
     pub adapter_id: String,
     pub enabled: bool,
@@ -394,6 +403,7 @@ pub struct ProviderAdapterModelsEntry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Listing of adapter model entries for a provider.
 pub struct ProviderAdapterModelsListing {
     pub provider_id: String,
     pub adapters: Vec<ProviderAdapterModelsEntry>,

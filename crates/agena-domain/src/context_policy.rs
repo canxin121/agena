@@ -1,6 +1,7 @@
 //! Prompt context policy values independent of session orchestration.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Limits and headroom policy for prompt and context sizing.
 pub struct ContextPolicy {
     pub max_prompt_chars: usize,
     pub prompt_budget_headroom_pct: u8,

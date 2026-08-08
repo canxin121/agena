@@ -1,6 +1,9 @@
+//! Scheduler error types.
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Error from the scheduler.
 pub enum SchedulerError {
     #[error("invalid cron expression '{expr}': {source}")]
     InvalidCron {
@@ -22,4 +25,5 @@ pub enum SchedulerError {
     InvalidUpdate(String),
 }
 
+/// Result alias for scheduler operations.
 pub type SchedulerResult<T> = Result<T, SchedulerError>;

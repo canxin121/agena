@@ -32,12 +32,14 @@ pub struct ChatUsage {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of chat output token details.
 pub struct ChatOutputTokensDetails {
     #[serde(default)]
     pub reasoning_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of chat input token details.
 pub struct ChatInputTokensDetails {
     #[serde(default)]
     pub cached_tokens: Option<u64>,

@@ -1,3 +1,5 @@
+//! CLI argument schema, command definitions, and dispatch.
+
 use agena_domain::{
     Model, ModelCapabilities, ModelRef, PermissionReply, Role, SessionCostSummary,
     SessionListRequest, SessionSummary, UsageStatsQuery, WorkflowState,

@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use crate::error::{RolloutError, RolloutResult};
 use crate::frame::{RolloutFrame, RolloutKind};
 
+/// Recorder of rollout frames.
 pub struct RolloutRecorder {
     path: PathBuf,
     file: Mutex<File>,

@@ -1,3 +1,5 @@
+//! Attachment source discovery (files, directories, devices).
+
 use std::{fs, path::PathBuf};
 
 use crate::{

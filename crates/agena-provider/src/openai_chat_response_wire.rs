@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::ChatUsage;
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an OpenAI-compatible chat completion response.
 pub struct ChatCompletionResponse {
     #[serde(default)]
     pub id: Option<String>,
@@ -18,6 +19,7 @@ pub struct ChatCompletionResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of a chat completion choice.
 pub struct ChatCompletionChoice {
     #[serde(default)]
     pub message: Option<ChatDeltaOrMessage>,
@@ -30,6 +32,7 @@ pub struct ChatCompletionChoice {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of a chat message or delta.
 pub struct ChatDeltaOrMessage {
     #[serde(default)]
     pub content: Option<Value>,
@@ -46,6 +49,7 @@ pub struct ChatDeltaOrMessage {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of a chat tool call.
 pub struct ChatToolCallWire {
     #[serde(default)]
     pub index: Option<usize>,
@@ -56,6 +60,7 @@ pub struct ChatToolCallWire {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of a chat function call.
 pub struct ChatFunctionCallWire {
     #[serde(default)]
     pub name: Option<String>,

@@ -277,6 +277,7 @@ impl StreamReplayPolicy {
     }
 }
 
+/// Registry of model providers.
 pub struct ProviderRegistry {
     providers: HashMap<String, Arc<dyn ModelRuntime>>,
     retry_policy: RequestRetryPolicy,

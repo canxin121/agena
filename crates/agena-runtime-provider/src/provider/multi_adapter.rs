@@ -27,6 +27,7 @@ use agena_provider::{
 };
 
 #[derive(Debug, Clone)]
+/// Route of a provider model.
 pub struct ProviderModelRoute {
     pub enabled: bool,
     pub native_compaction: bool,
@@ -36,6 +37,7 @@ pub struct ProviderModelRoute {
 }
 
 #[derive(Clone)]
+/// Provider dispatching across multiple adapters.
 pub struct MultiAdapterProvider {
     id: String,
     default_adapter: AdapterId,

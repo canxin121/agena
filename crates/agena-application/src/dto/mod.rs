@@ -1,3 +1,5 @@
+//! Data-transfer objects (DTOs) exposed to frontends.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +35,7 @@ pub use sessions::*;
 pub use workspaces::*;
 
 #[derive(Debug, Clone, Serialize)]
+/// Runtime health response for the application service.
 pub struct HealthResponse {
     pub status: &'static str,
     pub generation: u64,
@@ -41,11 +44,13 @@ pub struct HealthResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Simple non-paginated item list.
 pub struct ItemsResponse<T> {
     pub items: Vec<T>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Cursor-based pagination query.
 pub struct CursorPaginationQuery {
     #[serde(default)]
     pub cursor: Option<String>,
@@ -54,6 +59,7 @@ pub struct CursorPaginationQuery {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Pagination query with an optional search term.
 pub struct SearchPaginationQuery {
     #[serde(flatten)]
     pub pagination: CursorPaginationQuery,
@@ -86,12 +92,14 @@ impl SearchPaginationQuery {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A recurring runtime task and whether it is enabled.
 pub struct RuntimeTaskResource {
     pub enabled: bool,
     pub interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Session cache limits and statistics.
 pub struct RuntimeSessionCacheResource {
     pub max_sessions: usize,
     pub ttl_secs: u64,
@@ -105,6 +113,7 @@ pub struct RuntimeSessionCacheResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Runtime-wide automation overview.
 pub struct RuntimeAutomationResource {
     pub enabled: bool,
     pub job_count: usize,
@@ -112,6 +121,7 @@ pub struct RuntimeAutomationResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Overall runtime status.
 pub struct RuntimeStatusResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,

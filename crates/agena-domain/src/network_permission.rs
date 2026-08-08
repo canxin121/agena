@@ -7,6 +7,7 @@ use crate::PermissionMode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Permission configuration for network access by target class.
 pub struct NetworkPermissionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub internet: Option<PermissionMode>,

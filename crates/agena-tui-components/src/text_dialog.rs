@@ -1,3 +1,5 @@
+//! Multi-line text dialog widget.
+
 use std::borrow::Cow;
 
 use ratatui::{

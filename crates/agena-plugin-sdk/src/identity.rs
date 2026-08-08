@@ -1,3 +1,5 @@
+//! Stable plugin and tool identifiers.
+
 use std::fmt;
 use std::str::FromStr;
 
@@ -6,6 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::error::PluginError;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Stable identifier of a plugin.
 pub struct PluginKey {
     namespace: KeySegment,
     name: KeySegment,
@@ -76,6 +79,7 @@ impl<'de> Deserialize<'de> for PluginKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Stable identifier of a tool.
 pub struct ToolKey {
     plugin: PluginKey,
     name: ToolName,
@@ -184,6 +188,7 @@ impl ToolName {
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+/// Error parsing a plugin key.
 pub enum PluginKeyParseError {
     #[error("plugin key `{0}` must use `namespace.plugin` format")]
     MissingSeparator(String),
@@ -196,6 +201,7 @@ pub enum PluginKeyParseError {
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+/// Error parsing a tool key.
 pub enum ToolKeyParseError {
     #[error("tool key `{0}` must include `namespace.plugin`")]
     MissingPlugin(String),

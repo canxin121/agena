@@ -15,6 +15,7 @@ pub use agena_domain::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Declared manifest of a plugin.
 pub struct PluginManifest {
     pub schema_version: u32,
     pub namespace: String,
@@ -70,6 +71,7 @@ pub struct PluginManifest {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Transport used to talk to a plugin.
 pub enum TransportKind {
     Static,
     Cdylib,
@@ -222,6 +224,7 @@ impl From<&ToolTag> for ToolTag {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Definition of a plugin tool.
 pub struct ToolDefinition {
     pub name: String,
     #[serde(default)]
@@ -248,6 +251,7 @@ pub struct ToolDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Input and output contract of a tool.
 pub struct ToolContract {
     #[serde(default)]
     pub input_schema: serde_json::Value,
@@ -261,12 +265,14 @@ pub struct ToolContract {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// Model-facing surface of a tool (examples).
 pub struct ToolModelSurface {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub examples: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// Documentation of a tool.
 pub struct ToolDocs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_help: Option<String>,
@@ -279,6 +285,7 @@ pub struct ToolDocs {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Runtime behavior policy of a tool.
 pub struct ToolRuntimePolicy {
     #[serde(default)]
     pub concurrency_safe: bool,
@@ -289,6 +296,7 @@ pub struct ToolRuntimePolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// Display preferences of a tool.
 pub struct ToolDisplay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description_mode: Option<ToolDescriptionMode>,
@@ -316,6 +324,7 @@ impl Default for ToolRuntimePolicy {
     }
 }
 
+/// Types that can be used as tool input.
 pub trait ToolInput: Sized {
     fn input_schema() -> serde_json::Value;
     fn parse_input(input: serde_json::Value) -> crate::Result<Self>;
@@ -494,6 +503,7 @@ impl ToolDefinition {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Streaming mode of a tool.
 pub enum ToolStreamingMode {
     #[default]
     Buffered,
@@ -502,6 +512,7 @@ pub enum ToolStreamingMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Description verbosity of a tool.
 pub enum ToolDescriptionMode {
     #[default]
     Detailed,
@@ -510,6 +521,7 @@ pub enum ToolDescriptionMode {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Text display verbosity for UI.
 pub enum UiTextDisplayMode {
     #[default]
     Detailed,
@@ -517,6 +529,7 @@ pub enum UiTextDisplayMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Policy for rendering tool results.
 pub struct ToolResultPolicy {
     /// Maximum text characters sent back to the model. The host truncates
     /// `ToolInvokeOutput.output_text` after `tool.execute.after` hooks.
@@ -541,6 +554,7 @@ impl ToolResultPolicy {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// How a tool result is rendered.
 pub enum ToolResultRenderKind {
     #[default]
     Text,
@@ -552,6 +566,7 @@ pub enum ToolResultRenderKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Preset display style of a tool.
 pub enum ToolDisplayPreset {
     #[default]
     Detailed,
@@ -577,6 +592,7 @@ impl ToolDisplayPreset {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// UI contributions declared by a plugin.
 pub struct PluginUiContributions {
     /// Declarative display contributions (Phase 6): pure content plus a kind,
     /// no location/color. The host decides placement and priority.
@@ -595,6 +611,7 @@ impl PluginUiContributions {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// TUI UI contributions of a plugin.
 pub struct PluginTuiUiContributions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<PluginUiThemePalette>,
@@ -607,6 +624,7 @@ impl PluginTuiUiContributions {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Studio UI contributions of a plugin.
 pub struct PluginStudioUiContributions {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub controls: Vec<PluginStudioControl>,
@@ -622,6 +640,7 @@ impl PluginStudioUiContributions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// A display contribution of a plugin.
 pub struct PluginDisplayContribution {
     pub id: String,
     pub kind: ContributionKind,
@@ -632,6 +651,7 @@ pub struct PluginDisplayContribution {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a plugin display contribution.
 pub enum ContributionKind {
     StatusLineText,
     Progress,
@@ -643,6 +663,7 @@ pub enum ContributionKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Content of a plugin display contribution.
 pub enum PluginDisplayContent {
     Text { text: String },
     Progress { current: u32, total: u32 },
@@ -651,6 +672,7 @@ pub enum PluginDisplayContent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A plugin theme palette.
 pub struct PluginUiThemePalette {
     pub id: String,
     pub display_name: String,
@@ -660,6 +682,7 @@ pub struct PluginUiThemePalette {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
+/// A TUI color value.
 pub struct PluginTuiColor(String);
 
 impl PluginTuiColor {
@@ -722,6 +745,7 @@ fn is_tui_color(value: &str) -> bool {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+/// Colors of a plugin TUI theme.
 pub struct PluginTuiThemeColors {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub muted: Option<PluginTuiColor>,
@@ -744,6 +768,7 @@ pub struct PluginTuiThemeColors {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Definition of a plugin command.
 pub struct PluginCommandDefinition {
     pub id: String,
     pub title: String,
@@ -775,9 +800,11 @@ pub struct PluginCommandDefinition {
     pub action: PluginUiAction,
 }
 
+/// A plugin studio command (alias of [`PluginCommandDefinition`]).
 pub type PluginStudioCommand = PluginCommandDefinition;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A plugin studio control.
 pub struct PluginStudioControl {
     pub id: String,
     pub title: String,
@@ -796,6 +823,7 @@ pub struct PluginStudioControl {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// An option of a plugin studio control.
 pub struct PluginStudioControlOption {
     pub label: String,
     pub value: String,
@@ -804,6 +832,7 @@ pub struct PluginStudioControlOption {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A plugin studio view.
 pub struct PluginStudioView {
     pub id: String,
     pub title: String,
@@ -823,6 +852,7 @@ pub struct PluginStudioView {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Action triggered by a plugin UI element.
 pub enum PluginUiAction {
     #[default]
     None,

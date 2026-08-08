@@ -17,6 +17,7 @@ pub enum PermissionMode {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Scope of a permission decision or rule: session, workspace, or global.
 pub enum PermissionScope {
     Session,
     Workspace,

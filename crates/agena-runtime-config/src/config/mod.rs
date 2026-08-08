@@ -1,3 +1,5 @@
+//! The `AgenaConfig` model and its typed sub-configurations.
+
 mod edit;
 mod loader;
 mod overrides;

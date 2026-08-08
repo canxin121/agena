@@ -9,6 +9,7 @@ use serde::Deserialize;
 use super::{DirectoryQuery, is_safe_repo_rel_path, require_locked_directory};
 
 #[derive(Debug, Deserialize)]
+/// Body of a git ignore request.
 pub struct GitIgnoreBody {
     pub path: Option<String>,
 }

@@ -8,6 +8,7 @@ use super::ToolPayloadOutput;
 use agena_tool::ApplyPatchExecution;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// View of a tool execution result.
 pub struct ToolExecutionView {
     pub title: String,
     pub summary: String,
@@ -91,6 +92,7 @@ impl ToolExecutionView {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of a payload-based tool execution.
 pub struct ToolPayloadExecution {
     pub output: ToolPayloadOutput,
     pub view: ToolExecutionView,
@@ -115,6 +117,7 @@ impl ToolPayloadExecution {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of a tool invocation execution.
 pub struct ToolInvocationExecution {
     pub output: ToolOutput,
     pub view: ToolExecutionView,

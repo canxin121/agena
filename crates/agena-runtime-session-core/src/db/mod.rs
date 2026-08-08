@@ -1,3 +1,5 @@
+//! Database access layer shared by session persistence.
+
 pub mod crud;
 pub mod entities;
 #[cfg(test)]

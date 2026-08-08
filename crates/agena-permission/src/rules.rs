@@ -11,6 +11,7 @@ use agena_domain::{
 
 /// Host-agnostic view of one stored permission rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A permission rule entry.
 pub struct RuleEntry {
     pub id: Option<i64>,
     pub revision_ms: Option<i64>,

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use agena_domain::{AssistantReasoningField, MessageSource};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
+/// Provider-specific state attached to a message.
 pub struct MessageProviderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<AssistantReasoningField>,
@@ -63,6 +64,7 @@ impl From<agena_provider::CompletionInputProviderState> for MessageProviderState
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
+/// Metadata attached to a message.
 pub struct MessageMetadata {
     pub source: MessageSource,
     /// Optional caller-provided key used to make an externally scheduled or

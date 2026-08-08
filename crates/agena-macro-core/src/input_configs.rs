@@ -1,3 +1,5 @@
+//! Configuration values attached to tool inputs.
+
 use syn::{Expr, LitStr, Path, Result, Variant};
 
 use super::{

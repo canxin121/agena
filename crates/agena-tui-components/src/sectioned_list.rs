@@ -1,3 +1,5 @@
+//! Sectioned list widget.
+
 use crate::selection::{SelectionCursor, clamped_selected_index};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

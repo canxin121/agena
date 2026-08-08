@@ -1,3 +1,5 @@
+//! Dispatch glue generation for tool inputs.
+
 use quote::{format_ident, quote};
 use syn::{Data, Fields, Result, Variant};
 

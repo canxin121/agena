@@ -1,3 +1,5 @@
+//! Builtin argument kinds (path, network, stream, ...) and their handling.
+
 use quote::quote;
 use syn::{LitStr, Type};
 

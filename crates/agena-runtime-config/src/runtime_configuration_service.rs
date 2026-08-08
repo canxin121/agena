@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
+/// Snapshot of the effective runtime configuration.
 pub struct RuntimeConfigurationSnapshot {
     pub config_path: PathBuf,
     pub config_found: bool,
@@ -26,6 +27,7 @@ pub struct RuntimeConfigurationSnapshot {
 }
 
 #[derive(Debug, Clone, Default)]
+/// UI-relevant runtime configuration.
 pub struct RuntimeUiConfiguration {
     pub locale: Option<String>,
     pub theme: Option<String>,
@@ -34,6 +36,7 @@ pub struct RuntimeUiConfiguration {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// TUI color scheme preference.
 pub enum RuntimeTuiColorScheme {
     #[default]
     Auto,
@@ -42,6 +45,7 @@ pub enum RuntimeTuiColorScheme {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// TUI graphics mode preference.
 pub enum RuntimeTuiGraphicsMode {
     #[default]
     Auto,
@@ -51,6 +55,7 @@ pub enum RuntimeTuiGraphicsMode {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[error("runtime configuration projection failed: {message}")]
+/// Error reading the runtime configuration snapshot.
 pub struct RuntimeConfigurationError {
     message: String,
 }
@@ -64,6 +69,7 @@ impl RuntimeConfigurationError {
 }
 
 #[async_trait]
+/// Service providing the effective runtime configuration.
 pub trait RuntimeConfigurationService: Send + Sync {
     fn runtime_configuration(
         &self,

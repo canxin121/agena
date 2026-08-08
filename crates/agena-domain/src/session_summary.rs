@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::{ExecutionAccess, SessionLifecycleState, SessionRelationKind, SubtaskStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Pagination and filter request for listing sessions.
 pub struct SessionListRequest {
     #[serde(default)]
     pub offset: u64,
@@ -14,6 +15,7 @@ pub struct SessionListRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Summary of a session (identity, relation, lifecycle).
 pub struct SessionSummary {
     pub id: i64,
     pub parent_id: Option<i64>,

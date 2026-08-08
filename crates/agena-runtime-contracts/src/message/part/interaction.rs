@@ -7,6 +7,7 @@ use agena_domain::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "request_type", rename_all = "snake_case")]
+/// A pending interactive request part (permission or user input).
 pub enum RequestPart {
     UserInput(InteractiveRequestPart<UserInputRequest, UserInputReply>),
 }
@@ -44,6 +45,7 @@ impl RequestPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// An interactive request with an optional reply.
 pub struct InteractiveRequestPart<Request, Reply> {
     pub request: Request,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -17,6 +17,7 @@ use strum::{Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Kind of background activity: shell, task, runtime, or browser.
 pub enum BackgroundActivityKind {
     /// A long-lived shell process or monitor spawned by `shell.run`.
     Shell,
@@ -30,6 +31,7 @@ pub enum BackgroundActivityKind {
 }
 
 impl BackgroundActivityKind {
+/// All background activity kinds.
     pub const ALL: [Self; 4] = [Self::Shell, Self::Task, Self::Runtime, Self::Browser];
 
     pub fn as_str(self) -> &'static str {
@@ -48,6 +50,7 @@ impl BackgroundActivityKind {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Status of a background activity.
 pub enum BackgroundActivityStatus {
     /// Created but not yet executing (delegated tasks queue behind admission
     /// limits).
@@ -171,6 +174,7 @@ pub struct BackgroundActivityLogRead {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Reason a background activity event was emitted.
 pub enum BackgroundActivityEventReason {
     Started,
     Updated,

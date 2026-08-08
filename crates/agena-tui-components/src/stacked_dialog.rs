@@ -1,3 +1,5 @@
+//! Stacked dialog container.
+
 use std::borrow::Cow;
 
 use ratatui::{

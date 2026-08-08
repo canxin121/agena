@@ -1,3 +1,5 @@
+//! Decision dialog widget for multiple-choice prompts.
+
 use std::borrow::Cow;
 
 use ratatui::{Frame, layout::Rect, style::Style, text::Text, widgets::ListItem};

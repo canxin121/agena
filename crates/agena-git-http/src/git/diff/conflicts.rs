@@ -17,6 +17,7 @@ use super::file_diff::GitFileDiffQuery;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// List of conflicted files.
 pub struct GitConflictsListResponse {
     pub files: Vec<String>,
 }
@@ -54,6 +55,7 @@ pub async fn git_conflicts_list(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+/// A conflict block of a file.
 pub struct ConflictBlock {
     pub id: usize,
     pub ours_label: Option<String>,
@@ -66,6 +68,7 @@ pub struct ConflictBlock {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Conflict view of one file.
 pub struct GitConflictFileResponse {
     pub path: String,
     pub text: String,
@@ -211,6 +214,7 @@ pub async fn git_conflict_file(Query(q): Query<GitFileDiffQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a conflict resolution request.
 pub struct GitConflictResolveBody {
     pub path: Option<String>,
     // "ours" | "theirs" | "base" | "both" | "manual"

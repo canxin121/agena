@@ -1,9 +1,12 @@
+//! MCP protocol types used by the client and server.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of an MCP tool.
 pub struct ToolDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -39,6 +42,7 @@ pub struct ToolDescriptor {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Result of listing MCP tools.
 pub struct ListToolsResult {
     #[serde(default)]
     pub tools: Vec<ToolDescriptor>,
@@ -51,6 +55,7 @@ pub struct ListToolsResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters of an MCP tool call.
 pub struct CallToolParams {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,6 +64,7 @@ pub struct CallToolParams {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Content block of an MCP result.
 pub enum ContentBlock {
     Text {
         text: String,
@@ -102,6 +108,7 @@ pub enum ContentBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Contents of an MCP resource.
 pub struct ResourceContents {
     pub uri: String,
     #[serde(default, rename = "mimeType", skip_serializing_if = "Option::is_none")]
@@ -115,6 +122,7 @@ pub struct ResourceContents {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Result of an MCP tool call.
 pub struct CallToolResult {
     #[serde(default)]
     pub content: Vec<ContentBlock>,
@@ -131,6 +139,7 @@ pub struct CallToolResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of an MCP resource.
 pub struct ResourceDescriptor {
     pub uri: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,6 +161,7 @@ pub struct ResourceDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of an MCP resource template.
 pub struct ResourceTemplateDescriptor {
     #[serde(rename = "uriTemplate")]
     pub uri_template: String,
@@ -171,6 +181,7 @@ pub struct ResourceTemplateDescriptor {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Result of listing MCP resource templates.
 pub struct ListResourceTemplatesResult {
     #[serde(default, rename = "resourceTemplates")]
     pub resource_templates: Vec<ResourceTemplateDescriptor>,
@@ -183,6 +194,7 @@ pub struct ListResourceTemplatesResult {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Result of listing MCP resources.
 pub struct ListResourcesResult {
     #[serde(default)]
     pub resources: Vec<ResourceDescriptor>,
@@ -195,17 +207,20 @@ pub struct ListResourcesResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters of an MCP resource read.
 pub struct ReadResourceParams {
     pub uri: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Result of an MCP resource read.
 pub struct ReadResourceResult {
     #[serde(default)]
     pub contents: Vec<ResourceContents>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Argument of an MCP prompt.
 pub struct PromptArgument {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +234,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of an MCP prompt.
 pub struct PromptDescriptor {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -228,6 +244,7 @@ pub struct PromptDescriptor {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Result of listing MCP prompts.
 pub struct ListPromptsResult {
     #[serde(default)]
     pub prompts: Vec<PromptDescriptor>,
@@ -240,6 +257,7 @@ pub struct ListPromptsResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters of an MCP prompt fetch.
 pub struct GetPromptParams {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -247,12 +265,14 @@ pub struct GetPromptParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A message inside an MCP prompt result.
 pub struct PromptMessage {
     pub role: String,
     pub content: ContentBlock,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Result of fetching an MCP prompt.
 pub struct GetPromptResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,

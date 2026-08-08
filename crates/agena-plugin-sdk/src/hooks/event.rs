@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Envelope of a runtime event delivered to a plugin.
 pub struct EventEnvelope {
     pub kind: String,
     pub timestamp_ms: i64,

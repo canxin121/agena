@@ -1,3 +1,5 @@
+//! Layout computation helpers for workbenches.
+
 use std::cmp::{max, min};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};

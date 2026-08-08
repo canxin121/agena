@@ -1,3 +1,5 @@
+//! Shared plugin type aliases used by generated code.
+
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Expr, Ident, LitStr, Meta, Result, Token, Type};
 

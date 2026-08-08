@@ -1,3 +1,5 @@
+//! Plugin manifest generation (metadata, tools, hooks, config).
+
 use quote::quote;
 use syn::{Result, Type};
 

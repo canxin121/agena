@@ -1,3 +1,5 @@
+//! Confirm dialog widget and rendering.
+
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},

@@ -1,3 +1,5 @@
+//! Parsed skill model (frontmatter + body).
+
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -7,6 +9,7 @@ use crate::error::{SkillError, SkillResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// Frontmatter metadata of a skill.
 pub struct SkillFrontmatter {
     #[serde(default)]
     pub name: String,
@@ -19,6 +22,7 @@ pub struct SkillFrontmatter {
 }
 
 #[derive(Debug, Clone)]
+/// A discovered skill.
 pub struct Skill {
     pub frontmatter: SkillFrontmatter,
     pub body: String,

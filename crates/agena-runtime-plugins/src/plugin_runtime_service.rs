@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
+/// Error from the plugin runtime RPC service.
 pub enum PluginRuntimeRpcError {
     #[error("invalid or missing plugin callback bearer token")]
     InvalidCallbackToken,
@@ -15,6 +16,7 @@ pub enum PluginRuntimeRpcError {
 }
 
 #[derive(Debug, Clone)]
+/// Descriptor of a plugin tool.
 pub struct PluginToolDescriptor {
     pub canonical_name: String,
     pub plugin_full_name: String,
@@ -31,6 +33,7 @@ pub struct RuntimePluginToolCatalogItem {
 }
 
 #[async_trait]
+/// Service exposing plugin runtime information.
 pub trait PluginRuntimeService: Send + Sync {
     fn plugin_statuses(&self) -> Vec<agena_plugin_host::status::PluginStatus>;
 

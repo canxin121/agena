@@ -30,6 +30,7 @@ pub struct PluginCommandInvokeInput {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Context of a plugin command invocation.
 pub struct PluginCommandContext<'a> {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
@@ -62,6 +63,7 @@ impl PluginCommandInvokeInput {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Output of a plugin command.
 pub enum PluginCommandOutput {
     #[default]
     None,
@@ -144,6 +146,7 @@ impl PluginCommandOutput {
     }
 }
 
+/// Conversion into a plugin command output.
 pub trait IntoPluginCommandOutput {
     fn into_plugin_command_output(self) -> crate::Result<PluginCommandOutput>;
 }
@@ -206,6 +209,7 @@ where
 // ── command.execute.before ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of a command-before hook.
 pub struct CommandBeforeInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
@@ -233,6 +237,7 @@ pub enum CommandBeforeResponse {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied to a command before execution.
 pub struct CommandBeforePatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -255,6 +260,7 @@ pub enum CommandBeforeOutcome {
 // ── command.execute.after ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of a command-after hook.
 pub struct CommandAfterInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
@@ -269,6 +275,7 @@ pub struct CommandAfterInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied to a command result after execution.
 pub struct CommandAfterPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stdout: Option<String>,

@@ -1,3 +1,5 @@
+//! Dialog widget rendering a question flow.
+
 use std::borrow::Cow;
 
 use ratatui::{Frame, layout::Rect, text::Text, widgets::Borders};

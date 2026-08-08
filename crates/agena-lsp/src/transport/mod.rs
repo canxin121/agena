@@ -7,6 +7,7 @@ use crate::error::LspResult;
 use crate::protocol::InboundMessage;
 
 #[async_trait]
+/// Transport used to exchange messages with an LSP server.
 pub trait LspTransport: Send + Sync {
     async fn send(&self, payload: Value) -> LspResult<()>;
     async fn recv(&self) -> LspResult<InboundMessage>;

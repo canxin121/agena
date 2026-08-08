@@ -19,6 +19,7 @@ use super::{
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Details of a git branch.
 pub struct GitBranchDetails {
     pub current: bool,
     pub name: String,

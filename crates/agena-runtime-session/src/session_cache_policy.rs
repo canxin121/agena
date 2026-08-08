@@ -2,6 +2,7 @@ use std::time::Duration;
 
 /// Runtime cache limits derived from the stable session-cache configuration.
 #[derive(Debug, Clone, Copy)]
+/// Policy controlling the session cache.
 pub struct SessionCachePolicy {
     pub max_sessions: usize,
     pub ttl: Duration,

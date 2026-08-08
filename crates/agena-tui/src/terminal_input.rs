@@ -1,3 +1,5 @@
+//! Terminal input parsing and key event handling.
+
 use std::{
     collections::VecDeque,
     io,

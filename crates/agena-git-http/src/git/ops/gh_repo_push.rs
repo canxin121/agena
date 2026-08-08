@@ -17,6 +17,7 @@ use super::super::{DirectoryQuery, map_git_failure, require_locked_directory, ru
 const GH_TIMEOUT: Duration = Duration::from_secs(45);
 
 #[derive(Debug, Deserialize)]
+/// Body of a create-GitHub-repo-and-push request.
 pub struct GitCreateGithubRepoAndPushBody {
     pub name: Option<String>,
     pub remote: Option<String>,
@@ -30,6 +31,7 @@ fn default_private_repo() -> bool {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Result of creating a GitHub repo and pushing.
 pub struct GitCreateGithubRepoAndPushResult {
     pub success: bool,
     pub owner: String,

@@ -1,3 +1,5 @@
+//! Launching an external pager.
+
 use std::{env, io, process::Command};
 
 use tempfile::NamedTempFile;

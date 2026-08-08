@@ -1,3 +1,5 @@
+//! Projection of runtime events into frontend-visible resources.
+
 use agena_api::{EventKindTag, EventMetaResource, EventResource};
 
 /// Projects a runtime event into the public API envelope without allowing the

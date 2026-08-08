@@ -1,3 +1,5 @@
+//! Helpers for generating plugin hook implementations.
+
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;

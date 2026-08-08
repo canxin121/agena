@@ -1,3 +1,15 @@
+//! # agena-tui-backend
+//!
+//! Runtime backend bridge for the Agena terminal UI.
+//!
+//! Implements the command/query surface the TUI needs (sessions, permissions,
+//! providers, configuration, workspace, plugins, events) by dispatching to the
+//! shared [`agena_application`] layer and translating API resources into
+//! UI-friendly forms.
+//!
+//! The main [`Backend`] type is owned by the TUI app and exposes typed methods
+//! plus a live event stream ([`LiveEvent`]).
+
 use std::{
     collections::HashSet,
     collections::hash_map::DefaultHasher,

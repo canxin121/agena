@@ -1,3 +1,5 @@
+//! Host configuration for loading and running plugins.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -18,6 +20,7 @@ pub use crate::quota::QuotaConfig;
 /// against the plugin manifest at load time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
+/// Top-level plugin configuration.
 pub struct PluginsConfig {
     #[serde(default, skip_serializing_if = "PluginHostConfig::is_default")]
     pub host: PluginHostConfig,
@@ -29,6 +32,7 @@ pub struct PluginsConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+/// Policy configuration for plugin presentation.
 pub struct PluginPolicyConfig {
     /// Controls how tool descriptions are shown to the model. Brief mode
     /// keeps detailed help available through host/tool help APIs.
@@ -47,6 +51,7 @@ impl PluginPolicyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+/// Tool description presentation configuration.
 pub struct ToolPresentationConfig {
     pub default_mode: ToolDescriptionMode,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -88,6 +93,7 @@ impl ToolPresentationConfig {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Override of tool description verbosity.
 pub enum ToolDescriptionOverride {
     #[default]
     ToolDefault,
@@ -109,6 +115,7 @@ fn resolve_tool_description_override(
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+/// UI text presentation configuration.
 pub struct UiPresentationConfig {
     pub default_mode: UiTextDisplayMode,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -150,6 +157,7 @@ impl UiPresentationConfig {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Override of UI text display verbosity.
 pub enum UiPresentationOverride {
     #[default]
     Default,
@@ -171,6 +179,7 @@ fn resolve_ui_presentation_override(
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+/// Configuration of the plugin host.
 pub struct PluginHostConfig {
     pub timeouts: TimeoutsConfig,
     /// Global default quota applied to plugins without their own quota.
@@ -196,6 +205,7 @@ impl PluginHostConfig {
 /// ed25519 signature over a plugin artifact. The public key is looked up by
 /// `key_id` in `plugins.host.trusted_keys`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Signature material of a plugin package.
 pub struct PluginSignature {
     pub key_id: String,
     /// Hex-encoded raw signature bytes (64 bytes for ed25519).
@@ -206,6 +216,7 @@ pub struct PluginSignature {
 /// load the `package`; `config` is plugin-owned JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// Configured plugin entry.
 pub struct ConfiguredPlugin {
     #[serde(default = "default_plugin_enabled")]
     pub enabled: bool,
@@ -235,6 +246,7 @@ fn default_plugin_enabled() -> bool {
 /// `Static` package kind as any other in-process plugin available to the host.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+/// How a plugin is packaged and loaded.
 pub enum PluginPackage {
     Static {},
     Cdylib {
@@ -316,6 +328,7 @@ impl ConfiguredPlugin {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Timeouts applied to plugin operations.
 pub struct TimeoutsConfig {
     /// `meta/init` timeout (default 10s).
     pub init: Option<DurationSpec>,
@@ -366,6 +379,7 @@ impl TimeoutsConfig {
 
 /// Parses strings like `"5s"`, `"30s"`, `"2m"` for human-readable timeouts.
 #[derive(Debug, Clone, PartialEq)]
+/// A duration specification.
 pub struct DurationSpec(pub Duration);
 
 impl Serialize for DurationSpec {
@@ -406,6 +420,7 @@ impl<'de> Deserialize<'de> for DurationSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Restart policy of a plugin transport.
 pub struct RestartPolicy {
     #[serde(default = "default_restart_policy")]
     pub policy: RestartMode,
@@ -430,6 +445,7 @@ impl Default for RestartPolicy {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
+/// Mode of plugin restart.
 pub enum RestartMode {
     Never,
     OnFailure,
@@ -455,6 +471,7 @@ fn default_max_retries() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[derive(Default)]
+/// HTTP authentication of a plugin endpoint.
 pub enum HttpAuth {
     #[default]
     None,

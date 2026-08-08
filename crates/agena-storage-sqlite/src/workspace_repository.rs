@@ -10,6 +10,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, V
 
 const TABLE: &str = "agena_workspaces";
 
+/// SQLite-backed workspace repository.
 pub struct SeaWorkspaceRepository {
     db: Arc<DatabaseConnection>,
 }

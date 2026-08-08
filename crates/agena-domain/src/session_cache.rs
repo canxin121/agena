@@ -1,6 +1,7 @@
 //! Stable cache statistics value; cache storage remains an orchestration detail.
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Statistics for the session cache.
 pub struct SessionCacheStats {
     pub hits: u64,
     pub misses: u64,

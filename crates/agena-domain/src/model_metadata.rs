@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{ModelId, ModelLifecycle};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Token limit metadata for a model.
 pub struct ModelTokenLimits {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window_tokens: Option<u32>,
@@ -29,6 +30,7 @@ impl ModelTokenLimits {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Pricing metadata for a model.
 pub struct ModelPricing {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_usd_per_million_tokens: Option<String>,
@@ -52,6 +54,7 @@ impl ModelPricing {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Pricing tier (context size) within model pricing.
 pub struct ModelPricingTier {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier_type: Option<String>,
@@ -78,6 +81,7 @@ impl ModelPricingTier {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Full metadata for a model: lifecycle, limits, pricing, description.
 pub struct ModelMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,

@@ -17,6 +17,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
+/// Source layer of a settings read or write.
 pub enum ConfigSettingsSource {
     #[default]
     Effective,
@@ -26,6 +27,7 @@ pub enum ConfigSettingsSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "snake_case")]
 #[schemars(rename = "SettingsLayer")]
+/// Config file layer targeted by a settings edit.
 pub enum ConfigSettingsLayer {
     #[default]
     Global,
@@ -46,12 +48,14 @@ pub fn config_settings_layer_path<'a>(
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
+/// Input selecting a settings path.
 pub struct ConfigSettingsPathInput {
     pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(default)]
+/// Options for a settings edit operation.
 pub struct ConfigSettingsEditOptions {
     pub dry_run: bool,
     #[serde(default = "default_true")]
@@ -62,6 +66,7 @@ pub struct ConfigSettingsEditOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
+/// Input for reading a settings value.
 pub struct ConfigSettingsGetInput {
     #[serde(flatten)]
     pub target: ConfigSettingsPathInput,
@@ -70,6 +75,7 @@ pub struct ConfigSettingsGetInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
+/// Input for listing settings values.
 pub struct ConfigSettingsListInput {
     #[serde(flatten)]
     pub target: ConfigSettingsPathInput,
@@ -78,6 +84,7 @@ pub struct ConfigSettingsListInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Input for setting a settings value.
 pub struct ConfigSettingsSetInput {
     pub path: String,
     pub value: JsonValue,
@@ -86,6 +93,7 @@ pub struct ConfigSettingsSetInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Input for deleting a settings value.
 pub struct ConfigSettingsDeleteInput {
     pub path: String,
     #[serde(flatten)]
@@ -93,6 +101,7 @@ pub struct ConfigSettingsDeleteInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Input for patching settings values.
 pub struct ConfigSettingsPatchInput {
     #[serde(flatten)]
     pub target: ConfigSettingsPathInput,
@@ -103,12 +112,14 @@ pub struct ConfigSettingsPatchInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default)]
+/// Input for validating settings.
 pub struct ConfigSettingsValidateInput {
     #[serde(flatten)]
     pub target: ConfigSettingsPathInput,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response of a settings read.
 pub struct ConfigSettingsReadResponse {
     pub config_path: PathBuf,
     pub config_found: bool,
@@ -119,6 +130,7 @@ pub struct ConfigSettingsReadResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// One listed settings item.
 pub struct ConfigSettingsListItem {
     pub path: String,
     pub kind: String,
@@ -127,6 +139,7 @@ pub struct ConfigSettingsListItem {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response of a settings listing.
 pub struct ConfigSettingsListResponse {
     pub config_path: PathBuf,
     pub config_found: bool,
@@ -137,6 +150,7 @@ pub struct ConfigSettingsListResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response of a settings edit.
 pub struct ConfigSettingsEditResponse {
     pub config_path: PathBuf,
     pub config_found: bool,
@@ -157,6 +171,7 @@ pub struct ConfigSettingsEditResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response of a settings reload.
 pub struct ConfigSettingsReloadResponse {
     pub previous_generation: u64,
     pub generation: u64,
@@ -164,6 +179,7 @@ pub struct ConfigSettingsReloadResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response of a settings validation.
 pub struct ConfigSettingsValidateResponse {
     pub config_path: PathBuf,
     pub config_found: bool,
@@ -171,12 +187,14 @@ pub struct ConfigSettingsValidateResponse {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a settings service error.
 pub enum RuntimeConfigSettingsErrorKind {
     InvalidInput,
     Internal,
 }
 
 #[derive(Debug, Clone)]
+/// Error returned by the settings service.
 pub struct RuntimeConfigSettingsError {
     kind: RuntimeConfigSettingsErrorKind,
     failure: Box<agena_failure::Failure>,
@@ -260,6 +278,7 @@ impl std::fmt::Display for RuntimeConfigSettingsError {
 
 impl std::error::Error for RuntimeConfigSettingsError {}
 
+/// Service for reading and editing runtime config settings.
 pub trait RuntimeConfigSettingsService: Send + Sync {
     fn read_file_settings(
         &self,

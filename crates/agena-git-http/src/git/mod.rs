@@ -29,6 +29,7 @@ mod worktrees;
 pub(crate) const MAX_BLOB_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
+/// Query carrying an optional git directory.
 pub struct DirectoryQuery {
     pub directory: Option<String>,
 }

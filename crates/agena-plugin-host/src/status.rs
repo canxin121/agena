@@ -16,6 +16,7 @@ use crate::sdk::PluginKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Run state of a plugin.
 pub enum PluginRunState {
     Running,
     Restarting,
@@ -41,6 +42,7 @@ impl fmt::Display for PluginRunState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Status of a plugin.
 pub struct PluginStatus {
     pub plugin_id: PluginKey,
     pub kind: &'static str,
@@ -81,6 +83,7 @@ pub fn now_ms() -> i64 {
 /// Process-local registry shared between [`crate::host::PluginHost`] and the
 /// transports that update lifecycle state.
 #[derive(Debug, Default)]
+/// Registry of plugin statuses.
 pub struct StatusRegistry {
     inner: RwLock<HashMap<PluginKey, PluginStatus>>,
 }

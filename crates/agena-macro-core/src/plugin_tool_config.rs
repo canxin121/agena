@@ -1,3 +1,5 @@
+//! Tool configuration parsing for `#[tool(...)]`.
+
 use quote::quote;
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;

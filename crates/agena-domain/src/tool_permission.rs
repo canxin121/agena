@@ -7,6 +7,7 @@ use crate::PermissionMode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+/// Per-tool permission rules: a mode or an ordered name-to-mode map.
 pub enum ToolPermissionRules {
     Mode(PermissionMode),
     Ordered(IndexMap<String, PermissionMode>),

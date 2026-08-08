@@ -1,4 +1,11 @@
+//! # agena-tui-permission-studio
+//!
 //! Pure permission-rule and permission-configuration presentation contracts.
+//!
+//! Owns the display model and reducer for the permission studio:
+//! rule helpers ([`permission_helpers`]), the rule studio
+//! ([`permission_rule_studio`]), the main studio ([`permission_studio`]),
+//! and the mode/action/effect enums driving the UI.
 
 pub mod permission_helpers;
 pub mod permission_rule_studio;

@@ -1,3 +1,5 @@
+//! Searching tools by name, summary, and tags.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use tantivy::collector::TopDocs;
@@ -12,6 +14,7 @@ use thiserror::Error;
 const NGRAM_TOKENIZER: &str = "tool_search_ngram";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A document indexed for tool search.
 pub struct ToolSearchDocument {
     pub id: String,
     pub name: String,
@@ -50,6 +53,7 @@ impl ToolSearchDocument {
 }
 
 #[derive(Debug, Error)]
+/// Error from tool search.
 pub enum ToolSearchError {
     #[error("tantivy error: {0}")]
     Tantivy(#[from] tantivy::TantivyError),

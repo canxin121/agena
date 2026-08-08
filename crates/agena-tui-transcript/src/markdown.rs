@@ -1,3 +1,5 @@
+//! Markdown rendering pipeline for transcript content.
+
 use crate::RenderedLine;
 use crate::math::{
     display_math_source, inline_math_unicode_text, push_inline_math, push_math_block,

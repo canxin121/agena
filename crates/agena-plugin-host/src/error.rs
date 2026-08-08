@@ -1,6 +1,9 @@
+//! Host-side error types.
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Error from the plugin host.
 pub enum HostError {
     #[error("plugin `{plugin}` failed to load: {message}")]
     Load { plugin: String, message: String },
@@ -15,6 +18,7 @@ pub enum HostError {
 }
 
 #[derive(Debug, Error)]
+/// Error from a plugin transport.
 pub enum TransportError {
     #[error("transport cancelled")]
     Cancelled,

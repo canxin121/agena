@@ -1,6 +1,7 @@
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an OpenAI Responses API response.
 pub struct OpenAiResponsesResponse {
     #[serde(default)]
     pub id: Option<String>,
@@ -60,12 +61,14 @@ impl OpenAiResponsesResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of OpenAI incomplete details.
 pub struct OpenAiIncompleteDetails {
     #[serde(default)]
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an OpenAI output item.
 pub struct OpenAiOutputItem {
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
@@ -93,6 +96,7 @@ pub struct OpenAiOutputItem {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of OpenAI output content.
 pub struct OpenAiOutputContent {
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
@@ -101,12 +105,14 @@ pub struct OpenAiOutputContent {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of OpenAI reasoning summary content.
 pub struct OpenAiReasoningSummaryContent {
     #[serde(default)]
     pub text: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of OpenAI usage counters.
 pub struct OpenAiUsage {
     #[serde(default)]
     pub input_tokens: Option<u64>,
@@ -124,12 +130,14 @@ pub struct OpenAiUsage {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of OpenAI output token details.
 pub struct OpenAiOutputTokenDetails {
     #[serde(default)]
     pub reasoning_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of OpenAI input token details.
 pub struct OpenAiInputTokenDetails {
     #[serde(default)]
     pub cached_tokens: Option<u64>,

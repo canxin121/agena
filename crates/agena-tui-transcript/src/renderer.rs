@@ -1,3 +1,5 @@
+//! Transcript renderer driving the terminal frame.
+
 use agena_api::resource::{MessageRole, MessageStatus, SessionExecutionResource};
 use agena_tui::i18n::I18n;
 use agena_tui_components::trim_empty_line_edges;

@@ -4,6 +4,7 @@ use crate::{DecisionTraceStep, PermissionAction, PermissionReplyKind};
 use crate::{PolicyDeniedResult, UserDeclinedResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when a permission request is created.
 pub struct PermissionRequestedEvent {
     pub session_id: i64,
     pub operation_id: String,
@@ -29,6 +30,7 @@ pub struct PermissionRequestedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when a permission request is answered.
 pub struct PermissionRepliedEvent {
     pub session_id: i64,
     pub operation_id: String,
@@ -43,6 +45,7 @@ pub struct PermissionRepliedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when a permission rule changes.
 pub struct PermissionRuleEvent {
     pub session_id: Option<i64>,
     pub rule_id: i64,
@@ -62,6 +65,7 @@ pub struct PermissionRuleEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when a tool call is denied by policy.
 pub struct ToolPolicyDeniedEvent {
     pub session_id: i64,
     pub call_id: i64,
@@ -70,6 +74,7 @@ pub struct ToolPolicyDeniedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when the user declines a tool call.
 pub struct ToolUserDeclinedEvent {
     pub session_id: i64,
     pub call_id: i64,

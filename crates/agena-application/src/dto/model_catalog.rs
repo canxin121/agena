@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Serialize)]
+/// Summary of the model catalog.
 pub struct ModelCatalogResponse {
     #[serde(default)]
     pub refreshing: bool,
@@ -12,6 +13,7 @@ pub struct ModelCatalogResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response to refreshing the model catalog.
 pub struct ModelCatalogRefreshResponse {
     pub started: bool,
     pub task: RuntimeBackgroundTaskResource,
@@ -19,6 +21,7 @@ pub struct ModelCatalogRefreshResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Paginated listing of catalog models with a summary.
 pub struct ModelCatalogListResponse {
     pub summary: ModelCatalogResponse,
     pub total: usize,
@@ -31,12 +34,14 @@ pub struct ModelCatalogListResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Source of a catalog model entry.
 pub enum ModelCatalogSourceKind {
     Generated,
     Cache,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A model entry in the catalog.
 pub struct CatalogModelResource {
     pub model_id: String,
     pub source: ModelCatalogSourceKind,
@@ -154,6 +159,7 @@ impl CatalogModelResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to look up catalog models by id.
 pub struct ModelCatalogLookupRequest {
     #[serde(default)]
     pub model_ids: Vec<String>,

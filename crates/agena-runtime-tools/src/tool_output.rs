@@ -1,3 +1,5 @@
+//! Tool output truncation and rendering helpers.
+
 /// Truncate a model-facing tool-output string without splitting UTF-8 scalar
 /// values, and append a stable explanation when truncation occurred.
 pub fn truncate_tool_output_text(value: &str, max_chars: usize) -> String {

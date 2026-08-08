@@ -1,3 +1,20 @@
+//! # agena-macros
+//!
+//! Procedural macros for the Agena plugin SDK.
+//!
+//! This crate is the compiler-facing entry point; all expansion logic lives in
+//! [`agena_macro_core`]. It exports:
+//!
+//! - [`agena_plugin`] — attribute macro that turns a plugin `impl` block into
+//!   a complete plugin registration (metadata, tool handlers, hooks, config).
+//! - [`ToolInput`] — derive macro that generates the hidden JSON input schema
+//!   and dispatch glue for a tool input struct.
+//! - [`PluginConfigStore`] — derive macro that aggregates plugin configuration
+//!   fields and generates the config schema.
+//!
+//! Plugin authors normally use these through the `agena-plugin-sdk` prelude
+//! rather than depending on this crate directly.
+
 use proc_macro::TokenStream;
 use syn::{DeriveInput, ItemImpl, parse_macro_input};
 

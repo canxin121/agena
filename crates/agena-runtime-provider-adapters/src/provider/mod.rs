@@ -1,3 +1,5 @@
+//! Concrete provider adapter implementations (Anthropic, OpenAI, Gemini, ...).
+
 pub use agena_domain::{Model, ModelId, ModelSpeedMode, ModelThinkingMode};
 pub use agena_runtime_provider::provider::{
     CatalogedModelsProvider, MultiAdapterProvider, ProjectedSessionPart,

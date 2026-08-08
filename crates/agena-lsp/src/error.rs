@@ -1,6 +1,9 @@
+//! LSP client error types.
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Error from the LSP subsystem.
 pub enum LspError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -22,4 +25,5 @@ pub enum LspError {
     UnknownServer(String),
 }
 
+/// Result alias for LSP operations.
 pub type LspResult<T> = Result<T, LspError>;

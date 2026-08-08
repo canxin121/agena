@@ -90,6 +90,7 @@ impl EventScope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Filter selecting runtime events by scope, kind, and sequence.
 pub struct EventFilter {
     pub scope: EventScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -5,6 +5,7 @@ use strum::Display;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema, Display)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Filesystem access level of an effect.
 pub enum FilesystemAccess {
     Read,
     Write,
@@ -19,6 +20,7 @@ impl FilesystemAccess {
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// A filesystem access effect of a tool.
 pub struct FilesystemEffect {
     pub path: String,
     pub access: FilesystemAccess,
@@ -121,6 +123,7 @@ impl FilesystemEffects {
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// A network access effect of a tool.
 pub struct NetworkEffect {
     pub target: String,
 }

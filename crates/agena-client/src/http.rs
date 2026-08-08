@@ -32,6 +32,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::error::ClientError;
 use crate::ws::SubscriptionEvent;
 
+/// Handle to an active HTTP notification subscription.
 pub struct NotificationSubscription {
     rx: mpsc::Receiver<Result<SubscriptionEvent, ClientError>>,
     task: Option<JoinHandle<()>>,
@@ -64,6 +65,7 @@ struct ParsedSseEvent {
 /// Stateless REST client. Holds a `reqwest::Client` and the base URL like
 /// `http://localhost:7878`.
 #[derive(Debug, Clone)]
+/// HTTP client for the Agena runtime API.
 pub struct AgenaClient {
     base_url: url::Url,
     http: reqwest::Client,

@@ -1,3 +1,5 @@
+//! Text measurement and rendering helpers.
+
 use std::{borrow::Cow, cmp::min};
 
 use ratatui::{

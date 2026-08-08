@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Declared permission contract of a tool (paths and networks).
 pub struct ToolPermissionContract {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_paths: Vec<InputPathSpec>,
@@ -43,6 +44,7 @@ pub struct ToolPermissionContract {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Path kind in a permission contract.
 pub enum PathKind {
     Read,
     Write,

@@ -1,4 +1,11 @@
-//! Provider-facing contracts reserved for the next runtime ownership cut.
+//! # agena-runtime-provider
+//!
+//! Provider-facing contracts reserved for the runtime provider layer.
+//!
+//! Owns the provider adapter contract ([`provider`]), configuration support
+//! ([`config_support`]), SSE handling ([`provider_sse`]), the provider error
+//! type ([`ProviderError`]), request context ([`ProviderRequestContext`]),
+//! model selection and priorities, and the runtime Codex user-agent.
 
 mod codex_user_agent;
 pub mod config_support;
@@ -25,6 +32,7 @@ pub use provider_sse::*;
 use agena_provider::ProviderErrorKind;
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the provider runtime.
 pub enum ProviderError {
     #[error("configuration error: {0}")]
     Config(String),
@@ -103,6 +111,7 @@ impl From<agena_runtime_config::ConfigError> for ProviderError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Context of a provider request.
 pub struct ProviderRequestContext {
     pub provider_id: String,
     pub model_id: String,

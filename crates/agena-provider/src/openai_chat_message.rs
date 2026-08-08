@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::{ChatToolCallRequest, PromptCacheControl};
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Wire shape of an OpenAI-compatible chat message.
 pub struct ChatMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "type")]

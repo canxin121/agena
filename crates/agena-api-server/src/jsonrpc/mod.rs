@@ -1,3 +1,5 @@
+//! JSON-RPC app-server transport (feature-gated).
+
 pub mod protocol;
 mod server;
 

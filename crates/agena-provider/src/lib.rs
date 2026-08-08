@@ -1,8 +1,26 @@
+//! # agena-provider
+//!
 //! Provider-facing ports shared by application services and concrete adapters.
 //!
-//! This crate deliberately owns contracts only. Provider SDK clients, runtime
-//! composition, configuration parsing, and catalog decoration remain in their
-//! respective concrete layers until each has a dedicated migration slice.
+//! This crate deliberately owns contracts only: provider client traits, wire
+//! types, auth values, catalog contracts, usage/cost models, and
+//! protocol-specific data shapes (Anthropic, Gemini, Ollama, Bedrock). SDK
+//! clients, runtime composition, configuration parsing, and catalog
+//! decoration live in their respective concrete layers.
+//!
+//! ## Key items
+//!
+//! - [`CredentialIssuer`] — OAuth/credential issuing flow used by login.
+//! - [`AuthData`] — provider credential material.
+//! - [`ProviderOverlay`] / [`ProviderAdapterOverlay`] — configuration
+//!   overlays applied on top of provider defaults.
+//! - [`CatalogModelDefinition`] / [`ProviderCapabilityFamilyConfig`] —
+//!   catalog entries and capability families.
+//! - [`BedrockSigv4AuthConfig`] — AWS SigV4 auth configuration.
+//! - [`CopilotModelExtension`] — GitHub Copilot model metadata extension.
+//!
+//! Wire-type modules (`anthropic_*`, `gemini_*`, `ollama_*`, `prompt_cache_*`,
+//! `usage_cost`, `http_utils`, ...) are re-exported from the crate root.
 
 use std::{
     collections::{BTreeMap, HashMap},

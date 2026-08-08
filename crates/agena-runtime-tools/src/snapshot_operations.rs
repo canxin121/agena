@@ -12,12 +12,14 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+/// Result of creating a snapshot.
 pub struct SnapshotCreation {
     pub session: SnapshotSession,
     pub note: Option<String>,
 }
 
 #[derive(Debug, Clone)]
+/// Error of a snapshot operation.
 pub struct SnapshotOperationError(String);
 
 impl fmt::Display for SnapshotOperationError {

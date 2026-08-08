@@ -8,6 +8,7 @@ use crate::{PermissionMode, ToolPermissionRules};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
 #[serde(deny_unknown_fields)]
+/// Permission configuration for tools.
 pub struct ToolPermissionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<PermissionMode>,

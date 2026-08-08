@@ -45,6 +45,7 @@ pub struct SessionRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Input describing how a session relates to its parent.
 pub struct SessionLineageInput {
     pub relation_kind: SessionRelationKind,
     pub source_cutoff_seq_global: Option<i64>,
@@ -189,6 +190,7 @@ fn materialize_record(
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Message statistics of a session.
 pub struct SessionMessageStats {
     pub message_count: i64,
     pub last_message_at_ms: Option<i64>,

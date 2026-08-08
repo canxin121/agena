@@ -17,6 +17,7 @@ use super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Body of a git commit request.
 pub struct GitCommitBody {
     pub message: Option<String>,
     #[serde(default, rename = "addAll")]
@@ -50,12 +51,14 @@ pub struct GitCommitResult {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git undo-commit request.
 pub struct GitUndoCommitBody {
     // "soft" (default) | "mixed"
     pub mode: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git reset request.
 pub struct GitResetCommitBody {
     pub commit: Option<String>,
     pub mode: Option<String>,
@@ -239,6 +242,7 @@ pub async fn git_reset_commit(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response carrying the commit template.
 pub struct GitCommitTemplateResponse {
     pub configured: bool,
     pub path: Option<String>,

@@ -1,3 +1,5 @@
+//! Configuration load/parse/resolve error types.
+
 use std::path::PathBuf;
 
 use thiserror::Error;

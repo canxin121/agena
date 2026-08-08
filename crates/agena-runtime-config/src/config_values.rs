@@ -1,3 +1,5 @@
+//! Typed configuration value structs.
+
 use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};

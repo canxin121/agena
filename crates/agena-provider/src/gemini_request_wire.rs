@@ -19,11 +19,13 @@ pub struct GeminiGenerateRequest {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of a Gemini system instruction.
 pub struct GeminiInstruction {
     pub parts: Vec<GeminiPart>,
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of a Gemini function declaration.
 pub struct GeminiFunctionDeclaration {
     pub name: String,
     pub description: String,
@@ -35,17 +37,20 @@ pub struct GeminiFunctionDeclaration {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of a Gemini tool config.
 pub struct GeminiToolConfig {
     #[serde(rename = "functionCallingConfig")]
     pub function_calling_config: GeminiFunctionCallingConfig,
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of Gemini function calling config.
 pub struct GeminiFunctionCallingConfig {
     pub mode: String,
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of Gemini generation config.
 pub struct GeminiGenerationConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -72,6 +77,7 @@ pub struct GeminiGenerationConfig {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of a Gemini live conversation request.
 pub struct GeminiLiveConversationRequest {
     pub setup: GeminiLiveSetup,
     #[serde(rename = "clientContent")]
@@ -79,6 +85,7 @@ pub struct GeminiLiveConversationRequest {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of Gemini live session setup.
 pub struct GeminiLiveSetup {
     pub model: String,
     #[serde(rename = "generationConfig")]
@@ -90,6 +97,7 @@ pub struct GeminiLiveSetup {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of Gemini live client content.
 pub struct GeminiLiveClientContent {
     pub turns: Vec<GeminiContent>,
     #[serde(rename = "turnComplete", skip_serializing_if = "Option::is_none")]

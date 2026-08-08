@@ -1,4 +1,9 @@
+//! # agena-provider-bedrock-signing
+//!
 //! Concrete AWS SigV4 signing adapter for Amazon Bedrock requests.
+//!
+//! Computes the SigV4 signed headers ([`signed_headers`]) for Bedrock API
+//! calls, with typed errors ([`BedrockSigningError`]).
 
 use agena_provider_bedrock_auth::AwsCredentials;
 use aws_sigv4::{

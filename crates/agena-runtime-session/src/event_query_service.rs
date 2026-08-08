@@ -7,6 +7,7 @@
 use async_trait::async_trait;
 
 #[derive(Debug, Clone, PartialEq)]
+/// A runtime event.
 pub struct RuntimeEvent {
     pub meta: agena_domain::EventMeta,
     pub kind: String,
@@ -20,6 +21,7 @@ pub struct RuntimeEvent {
 /// that a UI would need to deserialize into a concrete Runtime event enum. The
 /// concrete adapter formats its event once into stable display fields.
 #[derive(Debug, Clone, PartialEq)]
+/// An event in a runtime timeline.
 pub struct RuntimeTimelineEvent {
     pub meta: agena_domain::EventMeta,
     pub kind: String,
@@ -30,24 +32,28 @@ pub struct RuntimeTimelineEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A detail line of a timeline event.
 pub struct RuntimeTimelineDetailLine {
     pub label: String,
     pub value: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A range of runtime events.
 pub struct RuntimeEventRange {
     pub after_seq_global: i64,
     pub limit: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A reverse range of runtime events.
 pub struct RuntimeReverseEventRange {
     pub before_seq_global: Option<i64>,
     pub limit: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Error of a runtime event query.
 pub struct RuntimeEventQueryError {
     pub failure: Box<agena_failure::Failure>,
 }
@@ -73,6 +79,7 @@ impl std::fmt::Display for RuntimeEventQueryError {
 impl std::error::Error for RuntimeEventQueryError {}
 
 #[async_trait]
+/// Service that queries runtime events.
 pub trait RuntimeEventQueryService: Send + Sync {
     async fn list_events(
         &self,
@@ -97,12 +104,14 @@ pub trait RuntimeEventQueryService: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Item received on a live event subscription.
 pub enum RuntimeLiveEventSubscriptionItem {
     Event(RuntimeEvent),
     Lagged(u64),
 }
 
 #[async_trait]
+/// A live subscription to runtime events.
 pub trait RuntimeLiveEventSubscription: Send {
     async fn recv(&mut self) -> Option<RuntimeLiveEventSubscriptionItem>;
 }

@@ -1,3 +1,5 @@
+//! Plugin-facing error types.
+
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
     RecoveryDirective, RetryDirective, UserPresentation,
@@ -18,6 +20,7 @@ pub struct PluginError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Structured diagnostic attached to a plugin error.
 pub struct PluginDiagnostic {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -33,6 +36,7 @@ const PUBLIC_PROBLEM_DATA_KEY: &str = "agena_public_problem";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a plugin error.
 pub enum PluginErrorKind {
     Internal,
     NotImplemented,
@@ -305,10 +309,12 @@ impl From<serde_json::Error> for PluginError {
 
 #[derive(Debug, Error)]
 #[error("plugin transport error: {message}")]
+/// Serializable representation of a transport error.
 pub struct TransportErrorRepr {
     pub message: String,
 }
 
+/// Result alias for plugin SDK operations.
 pub type Result<T> = std::result::Result<T, PluginError>;
 
 #[cfg(test)]

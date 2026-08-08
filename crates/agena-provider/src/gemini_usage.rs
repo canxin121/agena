@@ -5,6 +5,7 @@ use serde::Deserialize;
 use crate::CompletionUsage;
 
 #[derive(Debug, Deserialize, Clone)]
+/// Wire shape of Gemini usage metadata.
 pub struct GeminiUsageMetadata {
     #[serde(default, rename = "promptTokenCount")]
     pub prompt_token_count: Option<u64>,

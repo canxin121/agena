@@ -1,4 +1,10 @@
+//! # agena-git-http
+//!
 //! Git HTTP handlers and Git operation helpers used by Agena.
+//!
+//! Exposes [`GitHttpState`] (the shared state required by git routes),
+//! repository open helpers ([`open_repo_discover`], [`Git2OpenError`]), and
+//! path normalization utilities used by the git API surface.
 
 use std::sync::Arc;
 use std::{future::Future, path::PathBuf, pin::Pin};

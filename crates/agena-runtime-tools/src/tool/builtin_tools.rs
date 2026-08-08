@@ -3,6 +3,7 @@ use agena_plugin_host::registry::RegisteredTool;
 use agena_tool::BuiltinToolProfile;
 
 #[derive(Debug, Clone)]
+/// Set of builtin tools.
 pub struct BuiltinToolSet {
     profile: BuiltinToolProfile,
 }

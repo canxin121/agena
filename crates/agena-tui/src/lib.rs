@@ -1,8 +1,24 @@
+//! # agena-tui
+//!
 //! Terminal presentation primitives and application library.
 //!
 //! This crate owns TUI behavior. It deliberately contains no process-wide
 //! initialization, CLI parser, HTTP transport, database connection, or
 //! concrete provider implementation.
+//!
+//! ## Areas
+//!
+//! - **Composer & input** — [`composer`], [`input`], [`file_attach`],
+//!   [`file_mentions`], [`command_palette`], [`prompt_history`].
+//! - **Transcript & timeline** — [`timeline`], [`plan_viewer`],
+//!   [`activities`], [`session_status`].
+//! - **Permissions & choices** — [`permission_prompt`], [`choice`],
+//!   [`selection_picker`], [`user_input`], [`model_chooser`].
+//! - **Terminal** — [`terminal`], [`terminal_capabilities`],
+//!   [`terminal_color`], [`terminal_graphics`], [`terminal_input`],
+//!   [`terminal_lifecycle`], [`terminal_protocol`], [`terminal_transaction`].
+//! - **Chrome** — [`status_line`], [`help`], [`keymap`], [`slash_commands`],
+//!   [`usage`], [`i18n`], [`main_focus`].
 
 pub mod activities;
 pub mod choice;

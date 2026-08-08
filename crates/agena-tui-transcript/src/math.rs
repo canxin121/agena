@@ -1,3 +1,5 @@
+//! Inline and block math rendering integration.
+
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 

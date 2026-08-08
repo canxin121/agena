@@ -17,6 +17,7 @@ use strum::{Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Shell used to run a process.
 pub enum ProcessShell {
     #[default]
     Bash,
@@ -27,6 +28,7 @@ pub enum ProcessShell {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Output stream of a process event.
 pub enum ProcessStream {
     Stdout,
     Stderr,
@@ -36,6 +38,7 @@ pub enum ProcessStream {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Status of a monitored process.
 pub enum ProcessStatus {
     Running,
     Exited,
@@ -44,6 +47,7 @@ pub enum ProcessStatus {
     Failed,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// One line of process output.
 pub struct ProcessEvent {
     pub seq: u64,
     pub stream: ProcessStream,
@@ -51,6 +55,7 @@ pub struct ProcessEvent {
     pub line: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Summary of a monitored process.
 pub struct ProcessSummary {
     pub process_id: String,
     pub command: String,

@@ -9,6 +9,7 @@ use walkdir::WalkDir;
 use crate::error::{RolloutError, RolloutResult};
 use crate::frame::{RolloutFrame, RolloutKind, SessionMeta};
 
+/// Reader over rollout recordings.
 pub struct RolloutReader {
     path: PathBuf,
 }
@@ -54,6 +55,7 @@ impl RolloutReader {
     }
 }
 
+/// Iterator over rollout frames.
 pub struct FrameIter {
     inner: std::io::Lines<BufReader<File>>,
 }

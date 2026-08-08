@@ -19,6 +19,7 @@ use strum::{AsRefStr, Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Status of an execution: pending, running, or terminal.
 pub enum ExecutionStatus {
     #[default]
     Pending,
@@ -74,6 +75,7 @@ impl ExecutionStatus {
 
 #[derive(Debug, thiserror::Error)]
 #[error("invalid execution status transition: {from:?} -> {to:?}")]
+/// Error for an invalid execution status transition.
 pub struct ExecutionStatusTransitionError {
     pub from: ExecutionStatus,
     pub to: ExecutionStatus,

@@ -14,6 +14,7 @@ use agena_domain::{
 use agena_tool::SnapshotBackend;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Error of a session execution control operation.
 pub struct SessionExecutionControlError {
     pub failure: agena_failure::Failure,
 }
@@ -41,6 +42,7 @@ impl std::error::Error for SessionExecutionControlError {}
 /// Stable active-snapshot projection for callers that inspect execution state.
 /// The Runtime retains the mutable registry and snapshot-tool composition.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// An active runtime snapshot.
 pub struct RuntimeActiveSnapshot {
     pub session_id: i64,
     pub path: String,
@@ -51,6 +53,7 @@ pub struct RuntimeActiveSnapshot {
 
 /// Stable managed-snapshot projection for callers that inspect workspace state.
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A managed runtime snapshot.
 pub struct RuntimeManagedSnapshot {
     pub stale: bool,
     pub path: String,
@@ -63,6 +66,7 @@ pub struct RuntimeManagedSnapshot {
 
 /// Snapshot state available through the composed execution-control service.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Runtime snapshot status.
 pub struct RuntimeSnapshotStatus {
     pub active: Vec<RuntimeActiveSnapshot>,
     pub managed: Vec<RuntimeManagedSnapshot>,
@@ -70,6 +74,7 @@ pub struct RuntimeSnapshotStatus {
 
 /// Narrow control port for a composed session execution service.
 #[async_trait]
+/// Control interface for session execution.
 pub trait SessionExecutionControl: Send + Sync {
     /// Returns the current registry-backed lifecycle, if an execution exists.
     async fn active_execution(&self, session_id: i64) -> Option<ExecutionLifecycle>;

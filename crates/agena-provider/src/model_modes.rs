@@ -12,6 +12,7 @@ use agena_domain::{
 use crate::{CapabilityFamily, ModelModeResolver};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// Registry of known model modes.
 pub struct ModelModeRegistry;
 
 impl ModelModeRegistry {

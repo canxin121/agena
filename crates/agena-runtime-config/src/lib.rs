@@ -1,4 +1,15 @@
+//! # agena-runtime-config
+//!
 //! Stable configuration contracts for runtime composition.
+//!
+//! Defines the configuration model (`agena.json` + environment overlays):
+//! typed config values ([`config_values`]), environment handling
+//! ([`config_environment`]), CLI `--set` overrides ([`config_override`]),
+//! path resolution ([`config_paths`]), error types ([`config_error`]), and
+//! the services that read and resolve configuration at runtime
+//! ([`runtime_configuration_service`], [`runtime_config_settings_service`]).
+//! LSP and MCP plugin configuration live in [`lsp_config`] and
+//! [`mcp_config`].
 
 pub mod config;
 pub mod config_error;

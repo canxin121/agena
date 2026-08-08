@@ -1,3 +1,5 @@
+//! Detail text rendering helpers.
+
 use std::borrow::Cow;
 
 use ratatui::{

@@ -20,6 +20,7 @@ use url::Url;
 
 use crate::{KeyringOAuthCredentialStore, McpError, McpResult};
 
+/// An MCP OAuth login session.
 pub struct McpOAuthLoginSession {
     authorization: AuthorizationSession,
     authorization_url: String,

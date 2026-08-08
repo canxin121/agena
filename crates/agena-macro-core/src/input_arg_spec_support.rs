@@ -1,3 +1,5 @@
+//! Applying parsed argument attributes to the tool input spec.
+
 use std::collections::BTreeMap;
 
 use syn::{LitStr, Type};

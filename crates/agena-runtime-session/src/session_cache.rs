@@ -12,6 +12,7 @@ struct CachedSessionRecord<T> {
 }
 
 #[derive(Debug)]
+/// LRU cache of session entries.
 pub struct SessionCache<T: CacheEntry> {
     sessions: HashMap<i64, CachedSessionRecord<T>>,
     access_order: VecDeque<i64>,
@@ -19,6 +20,7 @@ pub struct SessionCache<T: CacheEntry> {
     stats: agena_domain::SessionCacheStats,
 }
 
+/// Entry stored in a [`SessionCache`].
 pub trait CacheEntry: Clone {
     fn cache_key(&self) -> i64;
     fn approx_cache_bytes(&self) -> usize;

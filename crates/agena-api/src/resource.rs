@@ -23,6 +23,7 @@ fn is_false(value: &bool) -> bool {
 // ─── Health / runtime ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Runtime health response.
 pub struct HealthResponse {
     pub status: String,
     pub generation: u64,
@@ -31,12 +32,14 @@ pub struct HealthResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A recurring runtime background task and whether it is enabled.
 pub struct RuntimeTaskResource {
     pub enabled: bool,
     pub interval_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Session cache limits and statistics.
 pub struct RuntimeSessionCacheResource {
     pub max_sessions: usize,
     pub ttl_secs: u64,
@@ -50,6 +53,7 @@ pub struct RuntimeSessionCacheResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One run of a scheduled job.
 pub struct ScheduledJobRunResource {
     pub triggered_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
@@ -84,6 +88,7 @@ mod scheduled_job_status_tests {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A scheduled job definition.
 pub struct ScheduledJobResource {
     pub id: String,
     pub kind: String,
@@ -103,6 +108,7 @@ pub struct ScheduledJobResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Automation (scheduled jobs) attached to a session.
 pub struct SessionAutomationResource {
     pub job_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,6 +116,7 @@ pub struct SessionAutomationResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Runtime-wide automation overview.
 pub struct RuntimeAutomationResource {
     pub enabled: bool,
     pub job_count: usize,
@@ -117,6 +124,7 @@ pub struct RuntimeAutomationResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Runtime operator surface: MCP, LSP, agent, skills, and plugin UI.
 pub struct RuntimeOperatorResource {
     pub mcp: RuntimeMcpResource,
     pub lsp: RuntimeLspResource,
@@ -126,6 +134,7 @@ pub struct RuntimeOperatorResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Plugin UI catalog with the tool registry generation it reflects.
 pub struct RuntimePluginUiResource {
     #[serde(default)]
     pub catalog: PluginUiCatalogResource,
@@ -135,12 +144,14 @@ pub struct RuntimePluginUiResource {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Plugin UI catalog combining TUI and studio contributions.
 pub struct PluginUiCatalogResource {
     pub tui: PluginTuiUiCatalogResource,
     pub studio: PluginStudioUiCatalogResource,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// TUI plugin UI contributions (display blocks and themes).
 pub struct PluginTuiUiCatalogResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display: Vec<PluginDisplayContributionResource>,
@@ -149,6 +160,7 @@ pub struct PluginTuiUiCatalogResource {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Studio plugin UI contributions (commands, controls, and views).
 pub struct PluginStudioUiCatalogResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<PluginCommandResource>,
@@ -159,6 +171,7 @@ pub struct PluginStudioUiCatalogResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A display contribution provided by a plugin.
 pub struct PluginDisplayContributionResource {
     pub plugin_id: String,
     pub id: String,
@@ -169,6 +182,7 @@ pub struct PluginDisplayContributionResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A plugin-provided theme palette.
 pub struct PluginThemePaletteResource {
     pub id: String,
     pub plugin_id: String,
@@ -178,6 +192,7 @@ pub struct PluginThemePaletteResource {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+/// Colors of a plugin theme palette.
 pub struct PluginThemeColorsResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub muted: Option<String>,
@@ -200,6 +215,7 @@ pub struct PluginThemeColorsResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A plugin studio command.
 pub struct PluginCommandResource {
     pub plugin_id: String,
     pub id: String,
@@ -223,6 +239,7 @@ pub struct PluginCommandResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A plugin studio control.
 pub struct PluginStudioControlResource {
     pub plugin_id: String,
     pub id: String,
@@ -240,6 +257,7 @@ pub struct PluginStudioControlResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// An option of a plugin studio control.
 pub struct PluginStudioControlOptionResource {
     pub label: String,
     pub value: String,
@@ -248,6 +266,7 @@ pub struct PluginStudioControlOptionResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A plugin studio view.
 pub struct PluginStudioViewResource {
     pub plugin_id: String,
     pub id: String,
@@ -266,6 +285,7 @@ pub struct PluginStudioViewResource {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Action triggered by a plugin UI element.
 pub enum PluginUiActionResource {
     #[default]
     None,
@@ -354,6 +374,7 @@ mod plugin_ui_catalog_contract_tests {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// MCP servers running inside the runtime.
 pub struct RuntimeMcpResource {
     pub server_count: usize,
     pub tool_count: usize,
@@ -361,12 +382,14 @@ pub struct RuntimeMcpResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One MCP server with its tool count.
 pub struct RuntimeMcpServerResource {
     pub name: String,
     pub tool_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// LSP servers and diagnostics overview.
 pub struct RuntimeLspResource {
     pub server_count: usize,
     pub diagnostics_count: usize,
@@ -375,6 +398,7 @@ pub struct RuntimeLspResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One LSP server definition.
 pub struct RuntimeLspServerResource {
     pub name: String,
     pub command: String,
@@ -383,6 +407,7 @@ pub struct RuntimeLspServerResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Loaded skills and skill commands.
 pub struct RuntimeSkillsResource {
     pub skill_count: usize,
     pub command_count: usize,
@@ -391,6 +416,7 @@ pub struct RuntimeSkillsResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One loaded skill or skill command.
 pub struct RuntimeSkillResource {
     pub name: String,
     pub description: String,
@@ -419,6 +445,7 @@ pub struct DefaultSelectionResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Overall runtime status.
 pub struct RuntimeStatusResponse {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
@@ -444,6 +471,7 @@ pub struct RuntimeStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A runtime background task.
 pub struct RuntimeBackgroundTaskResource {
     pub id: String,
     pub kind: RuntimeBackgroundTaskKind,
@@ -463,6 +491,7 @@ pub struct RuntimeBackgroundTaskResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a runtime background task.
 pub enum RuntimeBackgroundTaskKind {
     ModelCatalogRefresh,
     RuntimeReload,
@@ -474,6 +503,7 @@ pub enum RuntimeBackgroundTaskKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Origin of a runtime background task.
 pub enum RuntimeBackgroundTaskOrigin {
     System,
     User,
@@ -481,6 +511,7 @@ pub enum RuntimeBackgroundTaskOrigin {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Status of a runtime background task.
 pub enum RuntimeBackgroundTaskStatus {
     Running,
     Succeeded,
@@ -489,22 +520,26 @@ pub enum RuntimeBackgroundTaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// List of runtime background tasks.
 pub struct RuntimeBackgroundTaskListResponse {
     pub items: Vec<RuntimeBackgroundTaskResource>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response to starting a runtime background task.
 pub struct RuntimeBackgroundTaskStartResponse {
     pub started: bool,
     pub task: RuntimeBackgroundTaskResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response to cancelling a runtime background task.
 pub struct RuntimeBackgroundTaskCancelResponse {
     pub task: RuntimeBackgroundTaskResource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of the model catalog.
 pub struct ModelCatalogResponse {
     #[serde(default)]
     pub refreshing: bool,
@@ -533,12 +568,14 @@ pub struct ModelCatalogListResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request to look up catalog models by id.
 pub struct ModelCatalogLookupRequest {
     #[serde(default)]
     pub model_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response to refreshing the model catalog.
 pub struct ModelCatalogRefreshResponse {
     pub started: bool,
     pub task: RuntimeBackgroundTaskResource,
@@ -547,12 +584,14 @@ pub struct ModelCatalogRefreshResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Source of a catalog model entry.
 pub enum ModelCatalogSourceKind {
     Generated,
     Cache,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A model entry in the catalog.
 pub struct CatalogModelResource {
     pub model_id: String,
     pub source: ModelCatalogSourceKind,
@@ -914,6 +953,7 @@ mod model_pricing_contract_tests {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response to a runtime configuration reload.
 pub struct RuntimeReloadResponse {
     pub cause: String,
     pub previous_generation: u64,
@@ -924,6 +964,7 @@ pub struct RuntimeReloadResponse {
 // ─── Workspaces ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A workspace resource.
 pub struct WorkspaceResource {
     pub id: i64,
     pub path: String,
@@ -936,6 +977,7 @@ pub struct WorkspaceResource {
 // ─── Sessions ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A session resource.
 pub struct SessionResource {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -968,6 +1010,7 @@ pub struct SessionResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Relation of a session to its parent session.
 pub enum SessionRelationKind {
     #[default]
     Root,
@@ -979,6 +1022,7 @@ pub enum SessionRelationKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Lifecycle state of a session.
 pub enum SessionLifecycleState {
     Creating,
     #[default]
@@ -988,6 +1032,7 @@ pub enum SessionLifecycleState {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Status of a subtask.
 pub enum SubtaskStatus {
     #[default]
     Created,
@@ -1000,6 +1045,7 @@ pub enum SubtaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// An active execution inside a session.
 pub struct ActiveExecutionResource {
     pub execution_id: Uuid,
     pub phase: ExecutionPhase,
@@ -1007,6 +1053,7 @@ pub struct ActiveExecutionResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Phase of an active execution.
 pub enum ExecutionPhase {
     Starting,
     PreparingModel,
@@ -1018,6 +1065,7 @@ pub enum ExecutionPhase {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Workflow state of a session.
 pub enum WorkflowState {
     #[default]
     Quiescent,
@@ -1027,6 +1075,7 @@ pub enum WorkflowState {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Execution access mode of a session.
 pub enum ExecutionAccess {
     #[default]
     Inherit,
@@ -1034,6 +1083,7 @@ pub enum ExecutionAccess {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Execution context of a session: agent, access, and permission configuration.
 pub struct SessionExecutionContextResource {
     pub agent_id: String,
     pub execution_access: ExecutionAccess,
@@ -1073,12 +1123,14 @@ pub struct SessionExecutionContextResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Basis of a session usage limit.
 pub enum SessionUsageLimitBasis {
     ContextWindow,
     PromptThreshold,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Token usage of a session.
 pub struct SessionUsageResource {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub measured_prompt_tokens: Option<u64>,
@@ -1100,6 +1152,7 @@ pub struct SessionUsageResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Full execution view of a session.
 pub struct SessionExecutionResource {
     pub session: SessionResource,
     pub transcript: agena_domain::TranscriptSnapshot,
@@ -1128,6 +1181,7 @@ pub struct OperationDetailResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A pending interactive request (permission or user input).
 pub struct PendingInteractiveRequestResource {
     pub session_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1140,6 +1194,7 @@ pub struct PendingInteractiveRequestResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Run options for a session execution.
 pub struct RunOptions {
     #[serde(default)]
     pub model: Option<ModelRef>,
@@ -1342,6 +1397,7 @@ pub enum PartLoadMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A message in a session transcript.
 pub struct MessageResource {
     pub id: i64,
     pub session_id: i64,
@@ -1359,6 +1415,7 @@ pub struct MessageResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// Reference to a skill attached to a message.
 pub struct MessageSkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1371,6 +1428,7 @@ pub struct MessageSkillReference {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// An attachment of a message part.
 pub struct MessageAttachment {
     pub kind: MessageAttachmentKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1396,6 +1454,7 @@ pub struct MessageAttachment {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a message attachment.
 pub enum MessageAttachmentKind {
     Image,
     Audio,
@@ -1406,6 +1465,7 @@ pub enum MessageAttachmentKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case")]
+/// Source of a message attachment.
 pub enum MessageAttachmentSource {
     Url { url: String },
     DataUrl { url: String },
@@ -1417,6 +1477,7 @@ pub enum MessageAttachmentSource {
 // ─── Permission rules ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A persisted permission rule.
 pub struct PermissionRuleResource {
     pub id: i64,
     pub action_key: String,
@@ -1665,6 +1726,7 @@ pub enum PermissionReplyKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Reply to a pending permission request.
 pub struct PermissionReply {
     pub request_id: String,
     pub kind: PermissionReplyKind,
@@ -1676,6 +1738,7 @@ pub struct PermissionReply {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a user-input reply.
 pub enum UserInputReplyKind {
     Submit,
     Cancel,
@@ -1683,6 +1746,7 @@ pub enum UserInputReplyKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Reply to a pending user-input request.
 pub struct UserInputReply {
     pub request_id: String,
     pub kind: UserInputReplyKind,
@@ -1698,6 +1762,7 @@ pub struct UserInputReply {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// An action subject to permission checks.
 pub enum PermissionActionResource {
     Tool {
         tool_name: String,
@@ -1719,6 +1784,7 @@ pub enum PermissionActionResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Source of a permission policy decision.
 pub enum PolicySourceKind {
     StaticPolicy,
     PersistedRule,
@@ -1727,6 +1793,7 @@ pub enum PolicySourceKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One step of a permission decision trace.
 pub struct DecisionTraceStep {
     pub source_kind: PolicySourceKind,
     pub summary: String,
@@ -1739,6 +1806,7 @@ pub struct DecisionTraceStep {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A pending permission request.
 pub struct PermissionRequest {
     pub request_id: String,
     pub session_id: Option<i64>,
@@ -1762,6 +1830,7 @@ pub struct PermissionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// An option of a user-input question.
 pub struct UserInputOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1771,6 +1840,7 @@ pub struct UserInputOption {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A question asked to the user.
 pub struct UserInputQuestion {
     pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -1845,6 +1915,7 @@ mod provider_model_resource_contract_tests {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request to probe adapter models from a provider endpoint.
 pub struct ProviderAdapterModelsRequest {
     #[serde(default)]
     pub provider_id: Option<String>,
@@ -1858,12 +1929,14 @@ pub struct ProviderAdapterModelsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request to list saved provider adapter models.
 pub struct SavedProviderAdapterModelsRequest {
     #[serde(default)]
     pub adapter_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Adapter model probe result for one adapter.
 pub struct ProviderAdapterModelsResource {
     pub adapter_id: String,
     pub enabled: bool,
@@ -1876,6 +1949,7 @@ pub struct ProviderAdapterModelsResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response containing provider adapter model probes.
 pub struct ProviderAdapterModelsResponse {
     pub provider_id: String,
     pub adapters: Vec<ProviderAdapterModelsResource>,

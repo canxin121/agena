@@ -1,3 +1,5 @@
+//! Terminal lifecycle management (init/teardown).
+
 use std::{
     io,
     sync::atomic::{AtomicBool, Ordering},

@@ -13,6 +13,7 @@ use super::super::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// A stash record.
 pub struct GitStashRecord {
     pub r#ref: String,
     pub title: String,
@@ -20,6 +21,7 @@ pub struct GitStashRecord {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response listing stashes.
 pub struct GitStashListResponse {
     pub stashes: Vec<GitStashRecord>,
 }
@@ -81,6 +83,7 @@ pub async fn git_stash_list(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a stash push request.
 pub struct GitStashPushBody {
     pub message: Option<String>,
     #[serde(default)]
@@ -138,6 +141,7 @@ pub async fn git_stash_push(
 }
 
 #[derive(Debug, Deserialize)]
+/// Query showing a stash.
 pub struct GitStashShowQuery {
     pub directory: Option<String>,
     pub r#ref: Option<String>,
@@ -145,6 +149,7 @@ pub struct GitStashShowQuery {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response showing a stash.
 pub struct GitStashShowResponse {
     pub r#ref: String,
     pub diff: String,
@@ -173,6 +178,7 @@ pub async fn git_stash_show(Query(q): Query<GitStashShowQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a stash ref request.
 pub struct GitStashRefBody {
     pub r#ref: Option<String>,
 }
@@ -246,6 +252,7 @@ pub async fn git_stash_drop_all(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a stash branch request.
 pub struct GitStashBranchBody {
     pub branch: Option<String>,
     pub r#ref: Option<String>,

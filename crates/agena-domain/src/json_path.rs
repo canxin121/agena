@@ -7,6 +7,7 @@
 use serde_json::Value as JsonValue;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+/// Error parsing or evaluating a JSON path.
 pub enum JsonPathError {
     #[error("invalid settings path `{path}`: trailing escape")]
     TrailingEscape { path: String },

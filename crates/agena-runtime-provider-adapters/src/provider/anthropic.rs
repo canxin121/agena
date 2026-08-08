@@ -31,6 +31,7 @@ const DEFAULT_COPILOT_ANTHROPIC_BETA_HEADER: &str = "interleaved-thinking-2025-0
 const ADAPTER_KIND: &str = "anthropic";
 
 #[derive(Clone)]
+/// Adapter for Anthropic.
 pub struct AnthropicAdapter {
     id: String,
     client: reqwest::Client,
@@ -48,6 +49,7 @@ pub struct AnthropicAdapter {
 }
 
 #[derive(Clone)]
+/// Options for the Anthropic adapter.
 pub struct AnthropicAdapterOptions {
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
     pub auth_header: String,

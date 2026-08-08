@@ -10,6 +10,7 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
+/// Provider/adapter/model selection for an execution, with overrides.
 pub struct ExecutionSelection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,

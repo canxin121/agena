@@ -24,6 +24,7 @@ use agena_provider::{
 };
 
 #[derive(Clone)]
+/// Provider that serves models from the catalog.
 pub struct CatalogedModelsProvider {
     target: Arc<dyn ModelRuntime>,
     provider: Arc<ProviderModelCatalog>,

@@ -1,3 +1,5 @@
+//! axum server for the plugin marketplace registry and tarball serving.
+
 use std::{collections::BTreeMap, net::SocketAddr, sync::Arc};
 
 use axum::{
@@ -11,6 +13,7 @@ use axum::{
 use serde_json::Value;
 
 #[derive(Debug, Clone, Default)]
+/// Snapshot of a marketplace registry.
 pub struct RegistrySnapshot {
     pub index: Value,
     pub plugins: BTreeMap<String, Value>,
@@ -18,6 +21,7 @@ pub struct RegistrySnapshot {
 }
 
 #[derive(Debug, Clone)]
+/// An artifact stored in the registry.
 pub struct RegistryArtifact {
     pub bytes: Vec<u8>,
     pub content_type: String,

@@ -1,3 +1,5 @@
+//! Editor panel layout in workbenches.
+
 use std::borrow::Cow;
 
 use ratatui::{

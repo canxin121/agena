@@ -335,6 +335,7 @@ impl<P: Plugin> PluginDispatcher<P> {
     }
 }
 
+/// Handle to a tool stream.
 pub struct StreamHandle {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,

@@ -3,6 +3,7 @@ use serde::Serialize;
 use crate::UsageBillableUnitTotal;
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
+/// Cost and token breakdown per model.
 pub struct ModelCostBreakdown {
     pub provider_id: String,
     pub model_id: String,
@@ -45,6 +46,7 @@ impl ModelCostBreakdown {
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
+/// Aggregated cost summary for a session.
 pub struct SessionCostSummary {
     pub runs: u64,
     pub input_tokens: u64,

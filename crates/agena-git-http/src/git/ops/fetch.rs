@@ -12,6 +12,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Body of a git fetch request.
 pub struct GitFetchBody {
     pub remote: Option<String>,
     pub branch: Option<String>,

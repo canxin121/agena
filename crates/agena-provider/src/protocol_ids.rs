@@ -3,6 +3,7 @@ use std::{fmt, str::FromStr};
 const OPENAI_RESPONSES_CALL_ID_MAX_CHARS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Key identifying a provider stream.
 pub struct ProviderStreamKey(String);
 
 impl AsRef<str> for ProviderStreamKey {
@@ -23,6 +24,7 @@ impl FromStr for ProviderStreamKey {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Model-side identifier of a tool call.
 pub struct ModelToolCallId(String);
 
 impl AsRef<str> for ModelToolCallId {
@@ -55,6 +57,7 @@ impl fmt::Display for ModelToolCallId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Provider-side identifier of a response item.
 pub struct ProviderItemId(String);
 
 impl AsRef<str> for ProviderItemId {

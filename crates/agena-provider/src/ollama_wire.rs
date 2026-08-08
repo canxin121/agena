@@ -4,12 +4,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an Ollama tags response.
 pub struct OllamaTagsResponse {
     #[serde(default)]
     pub models: Vec<OllamaTagModel>,
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an Ollama tag model entry.
 pub struct OllamaTagModel {
     pub name: Option<String>,
     pub model: Option<String>,
@@ -18,12 +20,14 @@ pub struct OllamaTagModel {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of Ollama model details.
 pub struct OllamaModelDetails {
     #[serde(default)]
     pub family: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of an Ollama chat request.
 pub struct OllamaChatRequest {
     pub model: String,
     pub messages: Vec<OllamaChatMessage>,
@@ -35,12 +39,14 @@ pub struct OllamaChatRequest {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of an Ollama chat message.
 pub struct OllamaChatMessage {
     pub role: String,
     pub content: String,
 }
 
 #[derive(Debug, Serialize, Default)]
+/// Wire shape of Ollama generation options.
 pub struct OllamaOptions {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
@@ -68,6 +74,7 @@ impl OllamaOptions {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of an Ollama tool definition.
 pub struct OllamaToolDefinition {
     #[serde(rename = "type")]
     pub kind: &'static str,
@@ -75,6 +82,7 @@ pub struct OllamaToolDefinition {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of an Ollama function definition.
 pub struct OllamaFunctionDefinition {
     pub name: String,
     pub description: String,
@@ -82,6 +90,7 @@ pub struct OllamaFunctionDefinition {
 }
 
 #[derive(Debug, Deserialize, Default)]
+/// Wire shape of an Ollama chat message response.
 pub struct OllamaChatMessageResponse {
     #[serde(default)]
     pub content: Option<String>,
@@ -90,11 +99,13 @@ pub struct OllamaChatMessageResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an Ollama tool call.
 pub struct OllamaToolCall {
     pub function: OllamaFunctionCall,
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an Ollama function call.
 pub struct OllamaFunctionCall {
     #[serde(default)]
     pub name: Option<String>,
@@ -103,6 +114,7 @@ pub struct OllamaFunctionCall {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an Ollama chat response.
 pub struct OllamaChatResponse {
     #[serde(default)]
     pub model: Option<String>,

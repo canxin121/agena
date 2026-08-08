@@ -28,6 +28,7 @@ use agena_runtime_contracts::message::{
 // ─── Runtime-private type ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A wire-level message part.
 pub enum WirePart {
     Text {
         text: String,

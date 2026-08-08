@@ -1,3 +1,5 @@
+//! Plugin log capture and storage.
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -10,6 +12,7 @@ use crate::status::now_ms;
 const DEFAULT_MAX_ENTRIES_PER_PLUGIN: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A log record produced by a plugin.
 pub struct PluginLogRecord {
     pub seq: u64,
     pub timestamp_ms: i64,
@@ -21,6 +24,7 @@ pub struct PluginLogRecord {
 }
 
 #[derive(Debug)]
+/// In-memory store of plugin log records.
 pub struct PluginLogStore {
     max_entries_per_plugin: usize,
     next_seq: AtomicU64,

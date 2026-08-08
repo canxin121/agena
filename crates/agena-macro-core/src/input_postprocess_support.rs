@@ -1,3 +1,5 @@
+//! Post-processing of parsed tool input values.
+
 use std::collections::BTreeSet;
 
 use quote::quote;

@@ -10,6 +10,7 @@ pub const LSP_PLUGIN_ID: &str = "agena.lsp";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// LSP server configuration.
 pub struct LspConfig {
     pub defaults: LspServerDefaultsConfig,
     pub servers: BTreeMap<String, LspServerConfig>,
@@ -17,6 +18,7 @@ pub struct LspConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Default settings applied to all LSP servers.
 pub struct LspServerDefaultsConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -28,6 +30,7 @@ pub struct LspServerDefaultsConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Configuration of one LSP server.
 pub struct LspServerConfig {
     pub process: LspServerProcessConfig,
     pub routing: LspServerRoutingConfig,
@@ -36,6 +39,7 @@ pub struct LspServerConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Process settings of an LSP server.
 pub struct LspServerProcessConfig {
     pub command: String,
     #[serde(default)]
@@ -46,6 +50,7 @@ pub struct LspServerProcessConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Routing settings of an LSP server.
 pub struct LspServerRoutingConfig {
     #[serde(default)]
     pub file_extensions: Vec<String>,
@@ -55,6 +60,7 @@ pub struct LspServerRoutingConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Per-session settings of an LSP server.
 pub struct LspServerSessionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initialization_options: Option<serde_json::Value>,

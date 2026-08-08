@@ -1,3 +1,5 @@
+//! Provider adapter contract: client construction, auth, completion, and streaming.
+
 pub mod auth;
 pub mod credential;
 

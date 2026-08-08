@@ -8,6 +8,7 @@ pub use agena_api::resource::{
 };
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for listing sessions.
 pub struct SessionListQuery {
     #[serde(flatten)]
     pub pagination: SearchPaginationQuery,
@@ -20,6 +21,7 @@ pub struct SessionListQuery {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to create a session in the session hierarchy.
 pub struct SessionHierarchyRequest {
     pub title: String,
     #[serde(default)]
@@ -28,17 +30,20 @@ pub struct SessionHierarchyRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Request to update session metadata.
 pub struct SessionUpdateRequest {
     pub title: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Request to update the permission configuration of a session.
 pub struct SessionPermissionUpdateRequest {
     pub permission: agena_api::resource::PermissionConfigResource,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to create a session.
 pub struct SessionCreateRequest {
     pub workspace_id: i64,
     #[serde(flatten)]
@@ -46,6 +51,7 @@ pub struct SessionCreateRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to submit a message to a session.
 pub struct SessionMessageRequest {
     #[serde(flatten)]
     pub run: SessionRunRequestBody,
@@ -54,6 +60,7 @@ pub struct SessionMessageRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Body of a session run request.
 pub struct SessionRunRequestBody {
     #[serde(flatten)]
     pub options: SessionRunOptionsRequest,
@@ -84,6 +91,7 @@ where
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Body of a session reply request.
 pub struct SessionReplyRequestBody<T> {
     #[serde(flatten)]
     pub run: SessionRunRequestBody,
@@ -91,6 +99,7 @@ pub struct SessionReplyRequestBody<T> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Body of a session rewind request.
 pub struct SessionRewindRequestBody {
     pub turn_id: agena_domain::TurnId,
 }

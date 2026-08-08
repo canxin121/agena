@@ -1,3 +1,5 @@
+//! Argument handling for plugin methods.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use quote::format_ident;

@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Serialize)]
+/// A workspace resource.
 pub struct WorkspaceResource {
     pub id: i64,
     pub path: String,
@@ -9,6 +10,7 @@ pub struct WorkspaceResource {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for listing workspaces.
 pub struct WorkspaceListQuery {
     #[serde(flatten)]
     pub pagination: SearchPaginationQuery,
@@ -17,11 +19,13 @@ pub struct WorkspaceListQuery {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request keyed by workspace path.
 pub struct WorkspacePathRequest {
     pub path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to resolve a workspace path, optionally creating it.
 pub struct WorkspaceResolveRequest {
     #[serde(flatten)]
     pub workspace: WorkspacePathRequest,
@@ -30,6 +34,7 @@ pub struct WorkspaceResolveRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for a workspace file tree.
 pub struct WorkspaceFileTreeQuery {
     #[serde(default)]
     pub path: Option<String>,
@@ -40,12 +45,14 @@ pub struct WorkspaceFileTreeQuery {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Query to download a workspace file.
 pub struct WorkspaceFileDownloadQuery {
     pub path: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a workspace file entry.
 pub enum WorkspaceFileKind {
     Directory,
     File,
@@ -54,6 +61,7 @@ pub enum WorkspaceFileKind {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A node in a workspace file tree.
 pub struct WorkspaceFileNode {
     pub name: String,
     pub path: String,
@@ -65,6 +73,7 @@ pub struct WorkspaceFileNode {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A workspace file tree.
 pub struct WorkspaceFileTreeResource {
     pub workspace_id: i64,
     pub root: String,

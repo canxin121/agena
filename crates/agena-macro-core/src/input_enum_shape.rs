@@ -1,3 +1,5 @@
+//! Enum-shape handling for tool input schemas.
+
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::{Fields, LitStr, Result, Token, Type, Variant};

@@ -25,6 +25,7 @@ use crate::frame::{RolloutFrame, RolloutKind, SessionMeta};
 use crate::reader::RolloutReader;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of a recorded session.
 pub struct SessionSummary {
     pub session_id: String,
     pub agena_version: String,

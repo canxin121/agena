@@ -1,8 +1,11 @@
+//! MCP client error types.
+
 use std::io;
 
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Error from the MCP client.
 pub enum McpError {
     #[error("transport closed")]
     TransportClosed,
@@ -80,4 +83,5 @@ impl From<rmcp::service::ClientInitializeError> for McpError {
     }
 }
 
+/// Result alias for MCP client operations.
 pub type McpResult<T> = Result<T, McpError>;

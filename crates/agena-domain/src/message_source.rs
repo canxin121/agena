@@ -18,6 +18,7 @@ use strum::{AsRefStr, Display, EnumIter, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Origin of a message: user, assistant, or system.
 pub enum MessageSource {
     User,
     Assistant,

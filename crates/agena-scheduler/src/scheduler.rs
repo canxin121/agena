@@ -1,3 +1,5 @@
+//! The `Scheduler` runtime loop.
+
 use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -11,6 +13,7 @@ use crate::error::SchedulerResult;
 use crate::job::{JobDeliveryAttempt, JobOutcome, JobSink, ScheduledJob, SchedulerHistoryEntry};
 use crate::store::{JobStore, MAX_RETAINED_HISTORY_ENTRIES};
 
+/// Background scheduler that fires jobs on their schedule.
 pub struct Scheduler {
     store: Arc<dyn JobStore>,
     sink: Arc<dyn JobSink>,

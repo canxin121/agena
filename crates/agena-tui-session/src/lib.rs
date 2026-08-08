@@ -1,4 +1,11 @@
+//! # agena-tui-session
+//!
 //! Session presentation and runtime-neutral session control contracts.
+//!
+//! Owns the TUI's session view model: list/navigation/search helpers
+//! ([`session_list`], [`session_navigation`], [`session_search`],
+//! [`session_view`]), the session page/summary/message shapes, live events,
+//! and the [`SessionController`] that maps UI actions to runtime commands.
 
 pub mod session_helpers;
 pub mod session_list;

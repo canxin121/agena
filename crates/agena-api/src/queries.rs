@@ -13,6 +13,7 @@ use crate::resource::{
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
+/// A validated read-only query sent to the runtime.
 pub enum Query {
     Health,
     Runtime,
@@ -39,6 +40,7 @@ pub enum Query {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
+/// Result of a [`Query`].
 pub enum QueryResult {
     Health(HealthResponse),
     Runtime(RuntimeStatusResponse),
@@ -60,6 +62,7 @@ pub enum QueryResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A page of events with pagination metadata.
 pub struct PaginatedEvents {
     pub items: Vec<crate::EventResource>,
     pub page: PageInfo,
@@ -68,11 +71,13 @@ pub struct PaginatedEvents {
 // ─── params ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for listing models of a provider.
 pub struct ListProviderModelsParams {
     pub provider_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Parameters for probing adapter models from a provider endpoint.
 pub struct ListProviderAdapterModelsParams {
     #[serde(default)]
     pub provider_id: Option<String>,
@@ -150,6 +155,7 @@ mod provider_discovery_contract_tests {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Parameters for listing saved provider adapter models.
 pub struct ListSavedProviderAdapterModelsParams {
     pub provider_id: String,
     #[serde(default)]
@@ -157,6 +163,7 @@ pub struct ListSavedProviderAdapterModelsParams {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Parameters for listing workspaces.
 pub struct ListWorkspacesParams {
     #[serde(default)]
     pub cursor: Option<String>,
@@ -169,11 +176,13 @@ pub struct ListWorkspacesParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for fetching a workspace by id.
 pub struct GetWorkspaceParams {
     pub workspace_id: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Parameters for listing sessions.
 pub struct ListSessionsParams {
     #[serde(default)]
     pub cursor: Option<String>,
@@ -190,17 +199,20 @@ pub struct ListSessionsParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for fetching a session by id.
 pub struct GetSessionParams {
     pub session_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for fetching the detail of an operation (activity) in a session.
 pub struct GetOperationDetailParams {
     pub session_id: i64,
     pub activity_id: agena_domain::ActivityId,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Parameters for listing runtime events.
 pub struct ListEventsParams {
     /// Defaults to global scope.
     #[serde(default = "default_scope")]
@@ -219,6 +231,7 @@ fn default_scope() -> crate::Scope {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Parameters for listing permission rules.
 pub struct ListPermissionRulesParams {
     #[serde(default)]
     pub cursor: Option<String>,
@@ -229,11 +242,13 @@ pub struct ListPermissionRulesParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for fetching a permission rule by id.
 pub struct GetPermissionRuleParams {
     pub rule_id: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Parameters for listing background activities.
 pub struct ListActivitiesParams {
     /// Comma-separated kind filters (`shell`, `task`, `runtime`, `browser`).
     #[serde(default)]
@@ -250,11 +265,13 @@ pub struct ListActivitiesParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for fetching a background activity by id.
 pub struct GetActivityParams {
     pub activity_id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Parameters for reading activity log lines.
 pub struct ActivityLogsParams {
     pub activity_id: String,
     /// Cursor: lines with `seq > since_seq` are returned.

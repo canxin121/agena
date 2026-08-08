@@ -226,6 +226,7 @@ pub async fn git_gpg_disable_signing(Query(q): Query<DirectoryQuery>) -> Respons
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git signing-key request.
 pub struct GitGpgSetSigningKeyBody {
     pub signing_key: Option<String>,
 }

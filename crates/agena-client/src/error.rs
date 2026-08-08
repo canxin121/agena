@@ -1,6 +1,9 @@
+//! Client-side error types for the `agena-client` SDK.
+
 use agena_api::error::ApiError;
 
 #[derive(Debug)]
+/// Error returned by the API client: transport, decoding, API, or protocol failures.
 pub enum ClientError {
     Transport(String),
     Decode(serde_json::Error),

@@ -8,6 +8,7 @@ use crate::AuthData;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+/// Source of a provider secret (inline or env).
 pub enum ProviderSecretSourceConfig {
     Inline(String),
     Env(String),
@@ -47,6 +48,7 @@ impl fmt::Debug for ProviderSecretSourceConfig {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
+/// GitLab API access configuration.
 pub enum ProviderGitlabApiAccessConfig {
     ApiKey { source: ProviderSecretSourceConfig },
     Credential { credential: AuthData },

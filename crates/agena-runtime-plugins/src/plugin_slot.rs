@@ -1,3 +1,5 @@
+//! Plugin slots: typed handles for configured plugin instances.
+
 use std::sync::{Arc, OnceLock};
 
 use agena_plugin_host::PluginHost;

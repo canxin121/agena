@@ -1,3 +1,5 @@
+//! Tooling helpers used by plugin macro expansion.
+
 use quote::{format_ident, quote};
 use syn::{Ident, LitStr, Result};
 

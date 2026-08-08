@@ -49,6 +49,7 @@ fn image_mime(path: &str) -> &'static str {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for a file diff.
 pub struct GitFileDiffQuery {
     pub directory: Option<String>,
     pub path: Option<String>,
@@ -235,6 +236,7 @@ pub async fn git_file_diff(Query(q): Query<GitFileDiffQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Query comparing two revisions.
 pub struct GitCompareQuery {
     pub directory: Option<String>,
     pub base: Option<String>,

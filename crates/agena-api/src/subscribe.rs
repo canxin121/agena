@@ -10,6 +10,7 @@ use crate::{EventKindTag, Scope};
 pub type SubscriptionId = SmolStr;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to subscribe to runtime events.
 pub struct SubscribeRequest {
     /// Required scope (Global / Workspace / Session).
     pub scope: Scope,

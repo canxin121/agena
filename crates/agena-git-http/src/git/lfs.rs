@@ -68,6 +68,7 @@ async fn run_locked_lfs_checked(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// LFS status response.
 pub struct GitLfsStatusResponse {
     pub installed: bool,
     pub version: Option<String>,
@@ -156,6 +157,7 @@ pub async fn git_lfs_status(Query(q): Query<DirectoryQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of an LFS install request.
 pub struct GitLfsInstallBody {
     #[serde(default)]
     pub force: bool,
@@ -185,6 +187,7 @@ pub async fn git_lfs_install(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of an LFS track request.
 pub struct GitLfsTrackBody {
     pub pattern: Option<String>,
 }
@@ -222,6 +225,7 @@ pub async fn git_lfs_track(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Information about an LFS lock.
 pub struct GitLfsLockInfo {
     pub id: String,
     pub path: String,
@@ -230,6 +234,7 @@ pub struct GitLfsLockInfo {
 }
 
 #[derive(Debug, Serialize)]
+/// Response listing LFS locks.
 pub struct GitLfsLocksResponse {
     pub locks: Vec<GitLfsLockInfo>,
 }
@@ -293,6 +298,7 @@ pub async fn git_lfs_locks(Query(q): Query<DirectoryQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of an LFS lock request.
 pub struct GitLfsLockBody {
     pub path: Option<String>,
 }
@@ -329,6 +335,7 @@ pub async fn git_lfs_lock(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of an LFS unlock request.
 pub struct GitLfsUnlockBody {
     pub path: Option<String>,
     #[serde(default)]

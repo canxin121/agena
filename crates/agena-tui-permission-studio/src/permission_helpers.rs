@@ -1,3 +1,5 @@
+//! Helpers for projecting permission rules into presentation state.
+
 use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathAccessRuleConfig, PathPermissionConfig,
     PermissionConfig, PermissionMode, ToolPermissionConfig, ToolPermissionRules,

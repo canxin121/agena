@@ -13,6 +13,7 @@ use crate::{
 const ENTRYPOINT_NAME: &str = "MEMORY.md";
 
 #[derive(Debug, Clone)]
+/// In-memory implementation of the storage contracts for tests and small deployments.
 pub struct MemoryStore {
     dir: PathBuf,
 }

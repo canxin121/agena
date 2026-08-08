@@ -6,6 +6,7 @@ use agena_domain::{ThinkingDisplay, ThinkingRequest};
 use serde_json::Value;
 
 #[derive(Debug, Default)]
+/// State of an Anthropic extended-thinking block.
 pub struct AnthropicThinkingBlockState {
     pub kind: String,
     pub thinking: String,
@@ -105,6 +106,7 @@ pub fn map_anthropic_usage(u: AnthropicUsage) -> CompletionUsage {
 }
 
 #[derive(Debug, Default)]
+/// Extracted thinking parts and output config from an Anthropic response.
 pub struct AnthropicThinkingParts {
     pub thinking: Option<serde_json::Value>,
     pub output_config: Option<AnthropicOutputConfig>,

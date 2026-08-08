@@ -1,3 +1,5 @@
+//! Core plugin contract: `Plugin`, `PluginConfig`, lifecycle, and tool streaming.
+
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -11,6 +13,7 @@ use crate::identity::PluginKey;
 use crate::manifest::PluginManifest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Context passed to a plugin at initialization.
 pub struct InitContext {
     pub agena_version: String,
     pub workspace_root: PathBuf,
@@ -29,6 +32,7 @@ pub struct InitContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Outcome of plugin initialization.
 pub struct InitOutcome {
     pub manifest: PluginManifest,
     pub protocol_version: u32,
@@ -44,6 +48,7 @@ impl InitOutcome {
 }
 
 #[derive(Debug)]
+/// Typed plugin configuration with deferred access.
 pub struct PluginConfig<T> {
     value: OnceLock<T>,
 }
@@ -92,6 +97,7 @@ where
 }
 
 #[doc(hidden)]
+/// Access to the plugin config store.
 pub trait PluginConfigStoreAccess {
     fn plugin_config_schema() -> serde_json::Value;
 

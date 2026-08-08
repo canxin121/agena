@@ -1,3 +1,5 @@
+//! Dashboard workbench widgets (panels, overlays, sections).
+
 use std::{borrow::Cow, cmp::max};
 
 use ratatui::{

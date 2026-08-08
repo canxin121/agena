@@ -27,6 +27,7 @@ Respond only with a strict JSON object: {\"thinking\": string, \"shouldBlock\": 
 \"reason\": string}.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Fast-path decision of the auto-approval classifier.
 pub enum AutoFastPath {
     Allow,
     Ask { reason: String },

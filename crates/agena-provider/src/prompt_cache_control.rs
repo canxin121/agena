@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Cache-control directive for a prompt block.
 pub struct PromptCacheControl {
     #[serde(rename = "type")]
     kind: String,

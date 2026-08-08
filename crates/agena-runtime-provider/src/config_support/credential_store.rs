@@ -16,6 +16,7 @@ use agena_runtime_config::{
 };
 
 #[derive(Debug, Clone)]
+/// Credential store backed by the provider config file.
 pub struct ProviderConfigCredentialStore {
     config_path: PathBuf,
 }
@@ -192,18 +193,21 @@ pub fn provider_auth_data(resolved: &ResolvedProviderConfig) -> Option<AuthData>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// OAuth target of a provider credential flow.
 pub enum ProviderOAuthTarget {
     OpenAi,
     Gitlab { instance_url: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Device-auth target of a provider credential flow.
 pub enum ProviderDeviceAuthTarget {
     OpenAi,
     Copilot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Error resolving a provider auth target.
 pub enum ProviderAuthTargetError {
     AmbiguousProvider,
     AmbiguousGitlab,

@@ -6,6 +6,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Body of a git abort request.
 pub struct GitAbortBody {}
 
 async fn run_abort_command(q: &DirectoryQuery, args: &[&str]) -> Response {

@@ -1,3 +1,5 @@
+//! Terminal theme definitions and application.
+
 use std::sync::{OnceLock, RwLock};
 
 use ratatui::style::{Color, Modifier, Style};

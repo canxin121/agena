@@ -1,9 +1,12 @@
+//! Attachment types shared between plugins and the host.
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a message attachment.
 pub enum AttachmentKind {
     Image,
     Audio,
@@ -88,6 +91,7 @@ impl AttachmentKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case")]
+/// Source of a message attachment.
 pub enum AttachmentSource {
     Url { url: String },
     DataUrl { url: String },
@@ -129,6 +133,7 @@ impl AttachmentSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// An attachment item attached to a message or tool result.
 pub struct AttachmentItem {
     pub kind: AttachmentKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -180,6 +185,7 @@ impl AttachmentItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+/// A message part carrying attachments.
 pub struct AttachmentPart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,

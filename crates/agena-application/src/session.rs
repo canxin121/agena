@@ -1,3 +1,5 @@
+//! Session-facing application services and state.
+
 use crate::{Application, ApplicationError};
 use agena_api::resource::{
     PermissionReply, PermissionReplyKind, PermissionScope, RunOptions, SessionExecutionResource,

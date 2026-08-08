@@ -1,3 +1,5 @@
+//! Core session data model types.
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -16,6 +18,7 @@ use agena_domain::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+/// Runtime state of a subtask.
 pub struct SubtaskRuntimeState {
     pub status: SubtaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -36,6 +39,7 @@ impl SubtaskRuntimeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Reference to a part inside a session.
 pub struct SessionPartRef {
     #[serde(default, skip_serializing)]
     pub message_index: usize,
@@ -57,11 +61,13 @@ impl SessionPartRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A pending tool operation inside a session.
 pub struct SessionPendingTool {
     pub part: SessionPartRef,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// State of a recorded tool call.
 pub enum ToolCallRecordState {
     Queued,
     Running,
@@ -78,6 +84,7 @@ impl ToolCallRecordState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Record of a tool call.
 pub struct ToolCallRecord {
     pub operation_id: String,
     pub call_id: i64,
@@ -88,6 +95,7 @@ pub struct ToolCallRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A pending interactive request in a session.
 pub struct SessionPendingInteractiveRequest {
     pub request: SessionPartRef,
     pub tool: SessionPendingTool,
@@ -104,6 +112,7 @@ pub struct SessionPendingPermissionRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// A pending operation in a session.
 pub enum SessionPendingOperation {
     Tool {
         tool: SessionPendingTool,
@@ -156,6 +165,7 @@ impl SessionPendingOperation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+/// Runtime state of the session workflow.
 pub struct WorkflowRuntimeState {
     #[serde(default)]
     pub state: WorkflowState,
@@ -166,6 +176,7 @@ pub struct WorkflowRuntimeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Runtime state of a pending tool call.
 pub struct PendingToolCallRuntime {
     pub operation_id: String,
     pub call_id: i64,
@@ -184,6 +195,7 @@ impl WorkflowRuntimeState {
 use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A message included in a prompt compaction summary.
 pub struct PromptCompactionMessage {
     pub id: i64,
     pub role: Role,
@@ -193,6 +205,7 @@ pub struct PromptCompactionMessage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Content of a prompt compaction.
 pub enum PromptCompactionContent {
     TextSummary {
         summary: String,
@@ -209,6 +222,7 @@ pub enum PromptCompactionContent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+/// Runtime state of a prompt compaction.
 pub struct PromptCompactionRuntime {
     pub checkpoint_id: String,
     pub compacted_through_message_id: i64,
@@ -243,6 +257,7 @@ impl PromptCompactionRuntime {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+/// Runtime state of the prompt window.
 pub struct PromptWindowRuntime {
     #[serde(default)]
     pub generation: u64,
@@ -371,6 +386,7 @@ fn prompt_token_usage_snapshot(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+/// Runtime state of prompt token accounting.
 pub struct PromptTokenRuntime {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_successful_usage: Option<PromptTokenUsageSnapshot>,
@@ -450,6 +466,7 @@ impl PromptTokenRuntime {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+/// Provider-side anchor for prompt continuation.
 pub struct ProviderPromptAnchor {
     pub provider_id: String,
     pub model_id: String,
@@ -468,6 +485,7 @@ pub struct ProviderPromptAnchor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+/// Full runtime state of a session.
 pub struct SessionRuntimeState {
     #[serde(default, skip_serializing_if = "WorkflowRuntimeState::is_empty")]
     pub workflow: WorkflowRuntimeState,
@@ -484,6 +502,7 @@ pub struct SessionRuntimeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+/// Execution context of a session.
 pub struct SessionExecutionContext {
     #[serde(flatten)]
     pub selection: ExecutionSelection,
@@ -725,6 +744,7 @@ impl SessionRuntimeState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
+/// A session with its runtime state.
 pub struct Session {
     pub id: i64,
     pub parent_id: Option<i64>,

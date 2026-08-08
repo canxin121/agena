@@ -1,6 +1,7 @@
 /// Runtime policy for deciding whether an already-measured prompt payload
 /// should be compacted before provider execution.
 #[derive(Debug, Clone)]
+/// Governor enforcing context window limits.
 pub struct ContextGovernor {
     policy: agena_domain::ContextPolicy,
 }

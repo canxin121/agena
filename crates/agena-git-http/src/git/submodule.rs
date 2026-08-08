@@ -13,6 +13,7 @@ use super::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Information about a git submodule.
 pub struct GitSubmoduleInfo {
     pub path: String,
     pub url: String,
@@ -20,6 +21,7 @@ pub struct GitSubmoduleInfo {
 }
 
 #[derive(Debug, Serialize)]
+/// Response listing git submodules.
 pub struct GitSubmoduleListResponse {
     pub submodules: Vec<GitSubmoduleInfo>,
 }

@@ -14,6 +14,7 @@ pub type NotificationId = String;
 /// 严重级别（替代 TUI NoticeSeverity 与 Web toast kind 的重复定义）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// Severity of a notification.
 pub enum NotificationSeverity {
     Info,
     Success,
@@ -24,6 +25,7 @@ pub enum NotificationSeverity {
 /// 作用域（替代 TUI NoticeScope 与 Web scope_kind 的重复定义）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// Scope of a notification.
 pub enum NotificationScope {
     Global,
     Session(i64),
@@ -37,6 +39,7 @@ pub enum NotificationScope {
 /// 通知来源（谁发出）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// Source of a notification.
 pub enum NotificationSource {
     #[default]
     Runtime,
@@ -49,6 +52,7 @@ pub enum NotificationSource {
 /// 状态类通知的取值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// State of a notification.
 pub enum NotificationState {
     Idle,
     Running,
@@ -62,6 +66,7 @@ pub enum NotificationState {
 /// Run 状态类通知的取值（plan / workflow 执行）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// State of a run notification.
 pub enum RunNotificationState {
     Queued,
     Running,
@@ -76,6 +81,7 @@ pub enum RunNotificationState {
 /// 插件自定义通知载荷（kind = Custom）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+/// A custom notification.
 pub struct CustomNotification {
     pub plugin_id: String,
     pub code: String,
@@ -86,6 +92,7 @@ pub struct CustomNotification {
 /// 机器可读类别（枚举 + 插件扩展点），全系统收敛为 16 种，见文档附录 A。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Kind of a notification.
 pub enum NotificationKind {
     Notice {
         code: String,
@@ -151,6 +158,7 @@ pub enum NotificationKind {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
+/// Surface of a notification.
 pub enum NotificationSurface {
     /// 顶部横幅（Web .notice / TUI 顶栏）。
     Banner,
@@ -189,6 +197,7 @@ pub enum NotificationSurface {
 /// 通知自身的操作（对通知对象的操作；前端本地处理，不经服务端）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// Control action of a notification.
 pub enum NotificationControl {
     #[default]
     Dismiss,
@@ -199,6 +208,7 @@ pub enum NotificationControl {
 /// 通知上渲染的按钮：外部动作入口（不属于通知领域，点击后转交各自系统执行）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "target", rename_all = "snake_case")]
+/// Target of a notification action.
 pub enum ActionTarget {
     /// 失败恢复指令（agena-failure::RecoveryDirective；运行时翻译为命令）。
     Recovery(RecoveryDirective),
@@ -217,6 +227,7 @@ pub enum ActionTarget {
 /// 用户可执行的单一动作（入口）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// An action of a notification.
 pub struct NotificationAction {
     pub id: String,
     pub label: String,
@@ -226,6 +237,7 @@ pub struct NotificationAction {
 /// 一条完整通知。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// A notification.
 pub struct Notification {
     pub id: NotificationId,
     pub kind: NotificationKind,

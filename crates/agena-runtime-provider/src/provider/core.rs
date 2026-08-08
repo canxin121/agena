@@ -79,6 +79,7 @@ macro_rules! impl_model_runtime_target_methods {
 pub(crate) use impl_model_runtime_target_methods;
 
 #[async_trait]
+/// Runtime interface of a model provider.
 pub trait ModelRuntime: Send + Sync {
     fn id(&self) -> &str;
     fn default_model(&self) -> &ModelId;
@@ -424,6 +425,7 @@ pub trait ModelRuntime: Send + Sync {
 }
 
 #[async_trait]
+/// Model runtime that forwards to a target runtime.
 pub trait ForwardingModelRuntime: Send + Sync {
     fn target(&self) -> &dyn ModelRuntime;
 

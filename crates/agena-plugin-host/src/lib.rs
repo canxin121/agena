@@ -1,5 +1,20 @@
-//! Host-side runtime for agena plugins. Loads them from config, dispatches
-//! hooks, multiplexes plugin → host callbacks.
+//! # agena-plugin-host
+//!
+//! Host-side runtime for Agena plugins.
+//!
+//! Loads plugins from configuration, verifies and transports their artifacts
+//! (in-process, cdylib, stdio, HTTP), dispatches hooks, multiplexes
+//! plugin→host callbacks, enforces quotas, and records logs and status.
+//!
+//! ## Key items
+//!
+//! - [`HostError`] / [`TransportError`] — host and transport failures.
+//! - [`PluginToolRegistry`] — registry of tools published by loaded plugins.
+//! - [`sdk`] — re-export of the [`agena_plugin_sdk`] types used by the host.
+//! - [`HostThemePalette`] — theme palette provided to plugins by the host.
+//!
+//! The `host`, `loader`, `dispatcher`, `transport`, `quota`, `logs`, and
+//! `status` modules hold the concrete implementations.
 
 pub mod config;
 pub mod dispatcher;

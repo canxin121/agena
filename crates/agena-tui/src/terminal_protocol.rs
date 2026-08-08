@@ -1,3 +1,5 @@
+//! Terminal protocol detection (kitty, iterm2, ...).
+
 use std::io::{self, Write};
 
 use anyhow::{Result, bail};

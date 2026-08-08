@@ -17,6 +17,7 @@ use chrono::{DateTime, Utc};
 /// Stable session-level presentation fields for consumers that do not need a
 /// concrete transcript aggregate.
 #[derive(Debug, Clone)]
+/// Presentation view of a session.
 pub struct SessionPresentation {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -30,6 +31,7 @@ pub struct SessionPresentation {
 }
 
 #[derive(Debug, Clone)]
+/// Header of a projected message.
 pub struct SessionProjectedMessageHeader {
     pub id: i64,
     pub role: agena_domain::Role,
@@ -48,6 +50,7 @@ pub struct SessionProjectedMessageHeader {
 /// Activity drops it, so detail is neither persisted nor transferred while
 /// collapsed.
 #[derive(Debug, Clone)]
+/// Detail of an operation.
 pub struct OperationDetail {
     pub activity_id: agena_domain::ActivityId,
     pub markdown: String,
@@ -60,6 +63,7 @@ pub struct OperationDetail {
 /// summaries without depending on private message aggregates. Detail payloads
 /// remain opaque JSON until the full transcript detail contract moves.
 #[derive(Debug, Clone)]
+/// A projected session message.
 pub struct SessionProjectedMessage {
     pub id: i64,
     pub role: agena_domain::Role,
@@ -71,6 +75,7 @@ pub struct SessionProjectedMessage {
 }
 
 #[derive(Debug, Clone)]
+/// A projected message part.
 pub struct SessionProjectedMessagePart {
     pub id: i64,
     pub message_id: i64,
@@ -92,6 +97,7 @@ pub struct SessionProjectedMessagePart {
 /// persisted Runtime aggregate is adapted to this value; consumers must not use
 /// its JSON serialization as an API contract.
 #[derive(Debug, Clone)]
+/// A projected operation part.
 pub struct SessionProjectedOperationPart {
     pub call_id: i64,
     pub invocation: agena_domain::ToolInvocation,
@@ -115,6 +121,7 @@ pub struct SessionProjectedOperationPart {
 /// (for example the workflow plan's `agent.stop` autorun continuation) rides
 /// the same transcript pipeline as tool calls.
 #[derive(Debug, Clone)]
+/// A projected hook part.
 pub struct SessionProjectedHookPart {
     pub hook: String,
     pub plugin_id: Option<String>,
@@ -123,6 +130,7 @@ pub struct SessionProjectedHookPart {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Model-visible output of a projected tool result.
 pub struct SessionProjectedModelVisibleOutput {
     pub text: String,
     pub attachments: Vec<agena_plugin_host::sdk::attachment::AttachmentItem>,
@@ -130,6 +138,7 @@ pub struct SessionProjectedModelVisibleOutput {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Projected tool result.
 pub struct SessionProjectedToolResult {
     pub state: agena_domain::ToolResultState,
     pub structured: Option<serde_json::Value>,
@@ -147,6 +156,7 @@ pub struct SessionProjectedToolResult {
 /// transcript consumers can map each value to their own protocol without
 /// depending on Runtime's private message implementation.
 #[derive(Debug, Clone)]
+/// A block of a projected operation.
 pub enum SessionProjectedOperationBlock {
     Text {
         text: String,
@@ -238,6 +248,7 @@ pub enum SessionProjectedOperationBlock {
 /// aggregate. `Opaque` remains solely for legacy/missing persisted content;
 /// every current message-part variant has an explicit projection.
 #[derive(Debug, Clone)]
+/// Detail kind of a projected part.
 pub enum SessionProjectedPartDetail {
     Text {
         text: String,
@@ -269,6 +280,7 @@ pub enum SessionProjectedPartDetail {
 /// Stable execution-state projection needed by application presentation.
 /// Runtime retains session/message persistence and lifecycle materialization.
 #[derive(Debug, Clone)]
+/// Execution context of a session.
 pub struct SessionExecutionContext {
     pub workflow_state: WorkflowState,
     pub agent_id: String,
@@ -292,6 +304,7 @@ pub struct SessionExecutionContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Error of a session query.
 pub struct SessionQueryError {
     pub failure: Box<agena_failure::Failure>,
 }
@@ -318,6 +331,7 @@ impl std::error::Error for SessionQueryError {}
 
 /// Read-only session capabilities with stable result types.
 #[async_trait]
+/// Service for querying projected session state.
 pub trait SessionQueryService: Send + Sync {
     /// Resolve a persisted projected message to its owning session without
     /// exposing the concrete transcript repository.

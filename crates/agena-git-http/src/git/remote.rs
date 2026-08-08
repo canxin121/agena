@@ -20,6 +20,7 @@ use super::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Information about a git remote.
 pub struct GitRemoteInfo {
     pub name: String,
     pub url: String,
@@ -30,6 +31,7 @@ pub struct GitRemoteInfo {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response listing git remotes.
 pub struct GitRemoteInfoResponse {
     pub remotes: Vec<GitRemoteInfo>,
 }
@@ -127,6 +129,7 @@ pub async fn git_remote_info(Query(q): Query<DirectoryQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git remote add request.
 pub struct GitRemoteAddBody {
     pub name: Option<String>,
     pub url: Option<String>,
@@ -176,6 +179,7 @@ pub async fn git_remote_add(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git remote rename request.
 pub struct GitRemoteRenameBody {
     pub name: Option<String>,
     pub new_name: Option<String>,
@@ -224,6 +228,7 @@ pub async fn git_remote_rename(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git remote set-url request.
 pub struct GitRemoteSetUrlBody {
     pub name: Option<String>,
     pub url: Option<String>,
@@ -272,6 +277,7 @@ pub async fn git_remote_set_url(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git remote remove request.
 pub struct GitRemoteRemoveBody {
     pub name: Option<String>,
 }
@@ -308,6 +314,7 @@ pub async fn git_remote_remove(
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response with git signing information.
 pub struct GitSigningInfoResponse {
     pub commit_gpgsign: bool,
     pub gpg_format: String,
@@ -528,6 +535,7 @@ async fn ssh_agent_probe() -> (bool, bool, Option<String>) {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// State of a git repository.
 pub struct GitRepoStateResponse {
     pub current_branch: Option<String>,
     pub upstream: Option<String>,
@@ -580,6 +588,7 @@ pub async fn git_state(Query(q): Query<DirectoryQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for remote branches.
 pub struct GitRemoteBranchesQuery {
     pub directory: Option<String>,
     pub remote: Option<String>,
@@ -587,6 +596,7 @@ pub struct GitRemoteBranchesQuery {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response listing remote branches.
 pub struct GitRemoteBranchListResponse {
     pub remote: String,
     pub branches: Vec<String>,

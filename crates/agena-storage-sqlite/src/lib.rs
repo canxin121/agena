@@ -1,7 +1,21 @@
+//! # agena-storage-sqlite
+//!
 //! SQLite/SeaORM implementations of storage contracts.
 //!
-//! This crate owns concrete database adapters. `agena-storage` remains the
+//! This crate owns concrete database adapters. [`agena_storage`] remains the
 //! backend-neutral contract crate and must not gain SeaORM types.
+//!
+//! ## Key items
+//!
+//! - [`SeaEventStore`] — SQLite-backed session event store.
+//! - [`SeaModelCatalogRepository`], [`SeaWorkspaceRepository`], and
+//!   [`SeaUsageRepository`] — SQLite-backed repositories.
+//! - [`SqliteSequenceAllocator`] — event id allocation on SQLite.
+//! - [`initialize_schema`] — create and migrate the database schema.
+//! - [`CURRENT_SCHEMA_VERSION`] — the schema version this build targets.
+//!
+//! The `schema_invariants` module installs database triggers that keep
+//! invariants enforced at the storage layer.
 
 mod event_store;
 mod model_catalog_repository;

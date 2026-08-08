@@ -15,6 +15,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Body of a git push request.
 pub struct GitPushBody {
     pub remote: Option<String>,
     pub branch: Option<String>,
@@ -33,6 +34,7 @@ pub struct GitPushBody {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Result of a git push.
 pub struct GitPushResult {
     pub success: bool,
     pub pushed: Vec<serde_json::Value>,

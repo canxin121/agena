@@ -1,3 +1,5 @@
+//! Editor state and reducer.
+
 use crossterm::event::KeyEvent;
 
 use crate::{Editor, InputDialogAction, input_dialog_action};

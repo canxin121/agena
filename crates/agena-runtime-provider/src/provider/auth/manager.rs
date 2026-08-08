@@ -20,6 +20,7 @@ struct StoredOAuthCredential {
     user: Option<OAuthUserInfo>,
 }
 
+/// Manages provider authentication state.
 pub struct AuthManager<S: AuthStore> {
     store: S,
 }

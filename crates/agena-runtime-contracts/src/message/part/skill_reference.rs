@@ -19,6 +19,7 @@ pub struct SkillReference {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// A message part referencing skills.
 pub struct SkillReferencePart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<SkillReference>,

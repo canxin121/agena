@@ -78,6 +78,7 @@ async fn git_common_dir(dir: &Path) -> Option<String> {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Information about a git worktree.
 pub struct GitWorktreeInfo {
     pub worktree: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -180,6 +181,7 @@ pub async fn git_worktrees(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git worktree add request.
 pub struct GitWorktreeAddBody {
     pub path: Option<String>,
     pub branch: Option<String>,
@@ -294,6 +296,7 @@ pub async fn git_worktree_add(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git worktree remove request.
 pub struct GitWorktreeRemoveBody {
     pub path: Option<String>,
 }
@@ -350,6 +353,7 @@ pub async fn git_worktree_prune(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git worktree migrate request.
 pub struct GitWorktreeMigrateBody {
     pub source_path: Option<String>,
     #[serde(default = "default_true")]

@@ -13,6 +13,7 @@ pub const AUTO_APPROVAL_TOTAL_DENIAL_LIMIT: usize = 20;
 pub const AUTO_APPROVAL_MAX_RECENT_DECISIONS: usize = 8;
 
 #[derive(Debug, Clone, Default)]
+/// Budget tracking consecutive permission denials.
 pub struct DenialBudget {
     consecutive_denials: usize,
     total_denials: usize,

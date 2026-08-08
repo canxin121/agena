@@ -7,6 +7,7 @@ use serde_json::Value;
 pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC request.
 pub struct Request {
     pub jsonrpc: JsonRpcVersion,
     pub id: RequestId,
@@ -16,6 +17,7 @@ pub struct Request {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC notification.
 pub struct Notification {
     pub jsonrpc: JsonRpcVersion,
     pub method: String,
@@ -24,6 +26,7 @@ pub struct Notification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC response.
 pub struct Response {
     pub jsonrpc: JsonRpcVersion,
     pub id: RequestId,
@@ -33,12 +36,14 @@ pub struct Response {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
+/// Payload of a JSON-RPC response.
 pub enum ResponsePayload {
     Ok { result: Value },
     Err { error: ErrorObject },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC error object.
 pub struct ErrorObject {
     pub code: i32,
     pub message: String,
@@ -47,6 +52,7 @@ pub struct ErrorObject {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Marker for the JSON-RPC version field.
 pub struct JsonRpcVersion;
 
 impl Default for JsonRpcVersion {
@@ -74,6 +80,7 @@ impl<'de> Deserialize<'de> for JsonRpcVersion {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(untagged)]
+/// Identifier of a JSON-RPC request.
 pub enum RequestId {
     Num(i64),
     Str(String),

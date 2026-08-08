@@ -24,6 +24,7 @@ pub struct ProviderDefaultsConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "mode", rename_all = "snake_case")]
+/// Authentication configuration of a provider.
 pub enum ProviderAuthConfig {
     None,
     Api(ProviderApiAuthConfig),
@@ -226,6 +227,7 @@ impl fmt::Debug for ProviderApiAuthConfig {
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
+/// GitLab-specific authentication configuration.
 pub struct ProviderGitlabAuthConfig {
     pub access: ProviderGitlabApiAccessConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -251,6 +253,7 @@ impl fmt::Debug for ProviderGitlabAuthConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Resolved configuration of one provider adapter.
 pub struct ResolvedProviderAdapterConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "is_default")]
@@ -261,6 +264,7 @@ pub struct ResolvedProviderAdapterConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Resolved definition of a provider adapter.
 pub enum ProviderAdapterDefinition {
     Ollama(OllamaProviderOptions),
     OpenAiResponses(HttpProviderAdapterConfig<OpenAiResponsesProviderOptions>),
@@ -273,11 +277,13 @@ pub enum ProviderAdapterDefinition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for the Ollama adapter.
 pub struct OllamaProviderOptions {
     pub base_url: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
+/// Common HTTP adapter settings plus protocol-specific options.
 pub struct HttpProviderAdapterConfig<T> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
@@ -310,6 +316,7 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for the OpenAI Responses adapter.
 pub struct OpenAiResponsesProviderOptions {
     pub backend: OpenAiResponsesBackendConfig,
     pub models_url: Option<String>,
@@ -320,6 +327,7 @@ pub struct OpenAiResponsesProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for the OpenAI Chat Completions adapter.
 pub struct OpenAiChatCompletionsProviderOptions {
     pub models_url: Option<String>,
     pub auth_header: String,
@@ -329,6 +337,7 @@ pub struct OpenAiChatCompletionsProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for the OpenAI Realtime adapter.
 pub struct OpenAiRealtimeProviderOptions {
     pub realtime_ws_url: Option<String>,
     pub models_url: Option<String>,
@@ -339,6 +348,7 @@ pub struct OpenAiRealtimeProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for the Anthropic adapter.
 pub struct AnthropicProviderOptions {
     pub models_url: Option<String>,
     pub messages_url: Option<String>,
@@ -349,6 +359,7 @@ pub struct AnthropicProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for the Gemini adapter.
 pub struct GeminiProviderOptions {
     pub auth_header: Option<String>,
     pub auth_scheme: Option<String>,
@@ -357,12 +368,14 @@ pub struct GeminiProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for a simple HTTP adapter.
 pub struct SimpleHttpProviderOptions {
     pub auth_header: Option<String>,
     pub auth_scheme: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
+/// Options for the GitLab adapter.
 pub struct GitlabProviderOptions {
     pub instance_url: Option<String>,
     pub ai_gateway_url: Option<String>,
@@ -382,4 +395,5 @@ impl fmt::Debug for GitlabProviderOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// Options for the Amazon Bedrock adapter (currently empty).
 pub struct AmazonBedrockProviderOptions;

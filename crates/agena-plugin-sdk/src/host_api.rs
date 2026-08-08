@@ -19,6 +19,7 @@ use crate::manifest::{PluginDisplayContribution, PluginTuiThemeColors, ToolDefin
 use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 
 #[async_trait]
+/// Client interface used by plugins to call host capabilities.
 pub trait HostClient: Send + Sync + 'static {
     async fn log(&self, level: LogLevel, message: String, fields: serde_json::Value);
 
@@ -363,6 +364,7 @@ pub trait HostClient: Send + Sync + 'static {
 /// state uses [`PluginDisplayContribution`] via `host.display_contribute`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
+/// Request to notify the user from a plugin.
 pub struct PluginNotifyRequest {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub title: String,
@@ -380,6 +382,7 @@ pub struct PluginNotifyRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// Action offered in a plugin notification.
 pub struct PluginNotifyAction {
     pub label: String,
     pub target: PluginNotifyActionTarget,
@@ -389,6 +392,7 @@ pub struct PluginNotifyAction {
 /// that plugins may produce (recovery is app-owned).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Target of a plugin notification action.
 pub enum PluginNotifyActionTarget {
     Command {
         command: String,
@@ -405,6 +409,7 @@ pub enum PluginNotifyActionTarget {
 
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+/// Log level of a plugin log record.
 pub enum LogLevel {
     Trace,
     Debug,
@@ -414,11 +419,13 @@ pub enum LogLevel {
 }
 
 #[derive(Debug, Clone)]
+/// Subscription to runtime events.
 pub struct EventSubscription {
     pub id: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Context of a host callback executed on behalf of a plugin.
 pub struct HostCallbackContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin_id: Option<String>,
@@ -472,6 +479,7 @@ pub fn current_host_callback_context() -> Option<HostCallbackContext> {
 // ---------------- ask_user ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// An option offered by an ask-user request.
 pub struct AskUserOption {
     pub label: String,
     #[serde(default)]
@@ -481,6 +489,7 @@ pub struct AskUserOption {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A question asked to the user by a plugin.
 pub struct AskUserQuestion {
     pub id: String,
     #[serde(default)]
@@ -495,6 +504,7 @@ pub struct AskUserQuestion {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Request to ask the user something.
 pub struct AskUserRequest {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
@@ -519,6 +529,7 @@ pub struct AskUserRequest {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Response to an ask-user request.
 pub struct AskUserResponse {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reply: String,
@@ -534,6 +545,7 @@ pub struct AskUserResponse {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Access mode of a subtask.
 pub enum RunSubtaskAccess {
     #[default]
     Inherit,
@@ -542,6 +554,7 @@ pub enum RunSubtaskAccess {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Request to run a subtask.
 pub struct RunSubtaskRequest {
     /// Explicit parent used by asynchronous plugin tasks after the originating
     /// callback scope has ended. When absent, the current callback session is used.
@@ -570,6 +583,7 @@ pub struct RunSubtaskRequest {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
+/// Model selection of a subtask.
 pub struct RunSubtaskModelSelection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
@@ -589,6 +603,7 @@ pub struct RunSubtaskModelSelection {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Status of a subtask.
 pub enum RunSubtaskStatus {
     Created,
     Running,
@@ -601,6 +616,7 @@ pub enum RunSubtaskStatus {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+/// Usage of a subtask.
 pub struct RunSubtaskUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -611,6 +627,7 @@ pub struct RunSubtaskUsage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of a subtask run.
 pub struct RunSubtaskResponse {
     pub task_id: String,
     pub session_id: i64,
@@ -639,6 +656,7 @@ pub struct RunSubtaskResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Request to cancel a subtask.
 pub struct CancelSubtaskRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
@@ -647,6 +665,7 @@ pub struct CancelSubtaskRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Request to send a message to a subtask.
 pub struct MessageSubtaskRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
@@ -655,6 +674,7 @@ pub struct MessageSubtaskRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of a subtask control operation.
 pub struct SubtaskControlResponse {
     pub task_id: String,
     pub session_id: i64,
@@ -663,6 +683,7 @@ pub struct SubtaskControlResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Request to read subtask output.
 pub struct ReadSubtaskOutputRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<i64>,
@@ -678,6 +699,7 @@ const fn default_subtask_output_limit() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A chunk of subtask output.
 pub struct SubtaskOutputChunk {
     pub cursor: i64,
     pub role: String,
@@ -686,6 +708,7 @@ pub struct SubtaskOutputChunk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response with subtask output chunks.
 pub struct ReadSubtaskOutputResponse {
     pub task_id: String,
     pub session_id: i64,
@@ -697,6 +720,7 @@ pub struct ReadSubtaskOutputResponse {
 // ---------------- list_tools ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of a tool visible to a plugin.
 pub struct ToolDescriptor {
     pub name: String,
     /// Fully qualified plugin id that publishes this tool, e.g. `agena.fs`.
@@ -713,6 +737,7 @@ pub struct ToolDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Session information visible to a plugin.
 pub struct HostSession {
     pub id: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -726,12 +751,14 @@ pub struct HostSession {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// Request for host context status.
 pub struct HostContextStatusRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Host context status response.
 pub struct HostContextStatusResponse {
     pub session_id: i64,
     pub current_tokens: u64,
@@ -773,6 +800,7 @@ pub struct HostContextStatusResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request to fetch session information from the host.
 pub struct HostGetSessionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,

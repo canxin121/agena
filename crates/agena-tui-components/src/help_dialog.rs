@@ -1,3 +1,5 @@
+//! Help dialog widget.
+
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},

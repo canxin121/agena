@@ -14,11 +14,13 @@ use crate::server_spec::LspServerSpec;
 use crate::transport::StdioTransport;
 
 #[derive(Debug, Error)]
+/// Error resolving an LSP server.
 pub enum ResolveError {
     #[error("no LSP server matches `{0}`")]
     NoServer(String),
 }
 
+/// Registry of LSP servers.
 pub struct LspRegistry {
     workspace_root: PathBuf,
     client_name: String,

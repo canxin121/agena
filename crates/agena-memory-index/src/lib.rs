@@ -24,6 +24,7 @@ use tantivy::{
 const NGRAM_TOKENIZER: &str = "memory_ngram";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A document indexed for memory search.
 pub struct MemorySearchDocument {
     pub id: String,
     pub name: String,
@@ -66,6 +67,7 @@ impl MemorySearchDocument {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the memory index.
 pub enum MemoryIndexError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -74,6 +76,7 @@ pub enum MemoryIndexError {
 }
 
 #[derive(Clone)]
+/// Full-text index over memory documents.
 pub struct MemoryIndex {
     dir: PathBuf,
 }

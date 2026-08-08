@@ -41,6 +41,7 @@ pub struct TodoItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Column definition for a table message part.
 pub struct TableColumn {
     pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -48,6 +49,7 @@ pub struct TableColumn {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Search result item in a message part.
 pub struct SearchResultItem {
     pub title: String,
     pub uri: String,
@@ -58,6 +60,7 @@ pub struct SearchResultItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Reference to an artifact (URI, MIME, size, hash).
 pub struct ArtifactRef {
     pub uri: String,
     pub mime: String,
@@ -74,6 +77,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// Option offered in a user input question.
 pub struct UserInputOption {
     pub label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -83,6 +87,7 @@ pub struct UserInputOption {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+/// Question asked to the user with selectable options.
 pub struct UserInputQuestion {
     pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -126,6 +131,7 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Request for user input presented to the user.
 pub struct UserInputRequest {
     pub request_id: String,
     pub session_id: Option<i64>,
@@ -154,6 +160,7 @@ pub struct UserInputRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// The user's reply to a [`UserInputRequest`].
 pub struct UserInputReply {
     pub request_id: String,
     pub kind: crate::UserInputReplyKind,

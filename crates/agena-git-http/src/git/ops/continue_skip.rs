@@ -6,6 +6,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Body of a git continue request.
 pub struct GitContinueBody {}
 
 async fn run_continue_command(q: &DirectoryQuery, args: &[&str]) -> Response {

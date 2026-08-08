@@ -1,3 +1,5 @@
+//! Internationalization strings and helpers.
+
 use std::borrow::Cow;
 use std::collections::HashMap;
 

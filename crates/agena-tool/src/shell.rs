@@ -1,3 +1,5 @@
+//! Shell command execution contracts (`ShellRequest`, `ShellOutput`).
+
 use std::cmp::min;
 
 /// Default timeout for a shell-tool process invocation.

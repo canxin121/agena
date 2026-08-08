@@ -7,6 +7,7 @@
 use crate::{ExecutionId, ExecutionOutcome, ExecutionPhase};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Lifecycle state machine of a model execution.
 pub enum ExecutionLifecycle {
     Active {
         execution_id: ExecutionId,
@@ -117,6 +118,7 @@ fn phase_transition_allowed(from: ExecutionPhase, to: ExecutionPhase) -> bool {
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
+/// Error for an invalid execution lifecycle transition.
 pub enum ExecutionTransitionError {
     #[error("execution is already terminal")]
     AlreadyTerminal,

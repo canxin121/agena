@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Shape of a prompt for cache key computation.
 pub struct PromptCacheShape {
     pub provider_id: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -121,6 +122,7 @@ fn field_value(shape: Option<&PromptCacheShape>, key: &str) -> Option<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A single change in prompt cache shape.
 pub struct PromptCacheShapeChange {
     pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -130,6 +132,7 @@ pub struct PromptCacheShapeChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Diff of prompt cache shape between revisions.
 pub struct PromptCacheShapeDiff {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub changes: Vec<PromptCacheShapeChange>,

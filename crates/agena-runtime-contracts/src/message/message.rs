@@ -12,6 +12,7 @@ use agena_domain::Role;
 use agena_provider::CompletionUsage;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A message in a session transcript.
 pub struct Message {
     pub id: i64,
     pub role: Role,

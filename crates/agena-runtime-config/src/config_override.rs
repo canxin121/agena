@@ -1,3 +1,5 @@
+//! CLI `--set` override parsing and application.
+
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -75,6 +77,7 @@ pub fn parse_config_override_expressions(
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+/// Error applying a runtime configuration override.
 pub enum RuntimeConfigOverrideError {
     #[error("config modes are no longer supported; remove `{field}` and use a single config file")]
     UnsupportedModeConfig { field: &'static str },

@@ -1,3 +1,5 @@
+//! Terminal color parsing and conversion.
+
 use std::{env, time::Duration};
 
 use agena_tui_components::TerminalRgb;

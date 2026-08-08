@@ -4,6 +4,7 @@ use crate::{CapabilityFamily, CapabilityResolver};
 use agena_domain::{CapabilitySupport, ModelCapabilities};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Registry of provider capability family profiles.
 pub struct CapabilityRegistry {
     families: Vec<CapabilityFamilyProfile>,
 }

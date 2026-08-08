@@ -1,3 +1,5 @@
+//! Runtime-neutral permission types shared across layers.
+
 use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
@@ -10,6 +12,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
+/// Permission policy for tool execution.
 pub struct ToolPermissionPolicy {
     pub(crate) default_mode: PermissionMode,
     pub(crate) tool_modes: HashMap<String, PermissionMode>,
@@ -19,6 +22,7 @@ pub struct ToolPermissionPolicy {
 }
 
 #[derive(Debug, Clone)]
+/// A bash command pattern rule with a permission mode.
 pub struct BashPatternRule {
     matcher: CommandPatternMatcher,
     pattern: String,
@@ -390,6 +394,7 @@ pub fn combine_permission_modes(left: PermissionMode, right: PermissionMode) -> 
 }
 
 #[derive(Debug, Error)]
+/// Error building a permission policy from configuration.
 pub enum PermissionConfigError {
     #[error("unknown permission path marker `{alias}` in pattern `{pattern}`")]
     UnknownPathAlias { pattern: String, alias: String },
@@ -402,6 +407,7 @@ pub enum PermissionConfigError {
 }
 
 #[derive(Debug, Clone)]
+/// Permission policy for network access.
 pub struct NetworkPermissionPolicy {
     pub(crate) internet_default: PermissionMode,
     pub(crate) private_default: PermissionMode,
@@ -761,6 +767,7 @@ fn ipv6_to_u128(addr: Ipv6Addr) -> u128 {
 }
 
 #[derive(Debug, Clone)]
+/// Permission policy for workspace and external paths.
 pub struct PermissionPolicy {
     pub(crate) workspace_read_default: PermissionMode,
     pub(crate) workspace_write_default: PermissionMode,
@@ -841,6 +848,7 @@ impl PermissionPolicy {
 }
 
 #[derive(Debug, Clone)]
+/// A single permission rule.
 pub struct PermissionRule {
     selector: AccessSelector,
     mode: PermissionMode,

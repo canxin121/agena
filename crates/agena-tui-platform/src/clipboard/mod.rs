@@ -1,3 +1,5 @@
+//! Clipboard read/write integration.
+
 mod image;
 mod path;
 mod text;

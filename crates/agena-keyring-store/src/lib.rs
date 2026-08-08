@@ -9,6 +9,7 @@ use keyring::{Entry, Error as KeyringError};
 pub const DEFAULT_SERVICE: &str = "agena";
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the secret store.
 pub enum SecretStoreError {
     #[error("secret not found")]
     NotFound,
@@ -39,6 +40,7 @@ impl From<KeyringError> for SecretStoreError {
     }
 }
 
+/// Storage for secrets.
 pub trait SecretStore: Send + Sync {
     fn get_secret(&self, key: &str) -> Result<Option<String>, SecretStoreError>;
     fn set_secret(&self, key: &str, value: &str) -> Result<(), SecretStoreError>;
@@ -46,6 +48,7 @@ pub trait SecretStore: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
+/// Keyring-backed secret store.
 pub struct KeyringSecretStore {
     service: String,
 }

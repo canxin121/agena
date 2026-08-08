@@ -1,3 +1,5 @@
+//! Runtime-neutral message types shared across layers.
+
 #![allow(clippy::module_inception)]
 
 mod message;

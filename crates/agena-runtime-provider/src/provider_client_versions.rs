@@ -82,6 +82,7 @@ fn gemini_node_architecture() -> &'static str {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error fetching provider client versions.
 pub enum ProviderClientVersionFetchError {
     #[error("failed to fetch latest {package} client version: {message}")]
     Fetch {

@@ -1,3 +1,5 @@
+//! Connection manager for MCP servers.
+
 #![expect(
     deprecated,
     reason = "MCP roots remain required for compatible servers"
@@ -36,6 +38,7 @@ use crate::protocol::{
 use crate::{KeyringOAuthCredentialStore, OAuthCredentialHealth};
 
 #[derive(Debug, Clone)]
+/// Specification of an MCP server.
 pub enum ServerSpec {
     Stdio {
         command: String,
@@ -53,6 +56,7 @@ pub enum ServerSpec {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Policy filtering MCP tools.
 pub struct McpToolPolicy {
     pub include: Vec<String>,
     pub exclude: Vec<String>,
@@ -181,6 +185,7 @@ impl ServerSpec {
 }
 
 #[derive(Debug, Clone)]
+/// HTTP authentication of an MCP server.
 pub enum HttpAuth {
     Bearer(String),
     BearerFromEnv(String),
@@ -397,6 +402,7 @@ impl ClientHandler for AgenaMcpClientHandler {
     }
 }
 
+/// A connected MCP server.
 pub struct ConnectedServer {
     name: String,
     peer: Peer<RoleClient>,
@@ -429,6 +435,7 @@ impl ConnectedServer {
     }
 }
 
+/// Manages connections to MCP servers.
 pub struct McpConnectionManager {
     inner: Arc<RwLock<Inner>>,
     client_name: String,
@@ -448,6 +455,7 @@ struct Inner {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Status of an MCP server.
 pub struct McpServerStatus {
     pub name: String,
     pub connected: bool,
@@ -1575,6 +1583,7 @@ fn convert_prompt_message(message: rmcp::model::PromptMessage) -> crate::protoco
     }
 }
 
+/// Storage of MCP OAuth bearer tokens.
 pub trait TokenStore: Send + Sync {
     fn bearer(&self, server: &str) -> Option<String>;
 

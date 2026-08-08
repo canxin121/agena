@@ -1,3 +1,5 @@
+//! Title rendering helpers for panels and dialogs.
+
 use unicode_width::UnicodeWidthStr;
 
 use crate::truncate_display_text;

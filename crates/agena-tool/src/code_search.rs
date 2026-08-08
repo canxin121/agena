@@ -19,6 +19,7 @@ pub const SUPPORTED_CODE_LANGUAGES: &str = "bash, c, cpp, csharp, css, dart, eli
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// Language of a code search target.
 pub enum CodeLanguage {
     Auto,
     #[serde(alias = "sh", alias = "shell")]
@@ -162,6 +163,7 @@ impl CodeLanguage {
 }
 
 #[derive(Debug, Clone)]
+/// Request for a structural (AST) code search.
 pub struct StructuralSearchRequest {
     pub path: PathBuf,
     pub pattern: String,
@@ -170,6 +172,7 @@ pub struct StructuralSearchRequest {
 }
 
 #[derive(Debug, Clone)]
+/// Request for a syntax tree of a source file.
 pub struct SyntaxTreeRequest {
     pub path: PathBuf,
     pub language: Option<CodeLanguage>,
@@ -177,6 +180,7 @@ pub struct SyntaxTreeRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Result of a structural code search.
 pub struct StructuralSearchResult {
     pub language: String,
     pub scanned_files: usize,
@@ -184,6 +188,7 @@ pub struct StructuralSearchResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A single structural match with its source location.
 pub struct StructuralCodeMatch {
     pub path: String,
     pub start_line: usize,
@@ -194,6 +199,7 @@ pub struct StructuralCodeMatch {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Syntax tree result for a source file.
 pub struct SyntaxTreeResult {
     pub path: String,
     pub language: String,
@@ -203,6 +209,7 @@ pub struct SyntaxTreeResult {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A node view inside a syntax tree.
 pub struct SyntaxNodeView {
     pub kind: String,
     pub start_line: usize,
@@ -214,6 +221,7 @@ pub struct SyntaxNodeView {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error from structural code search.
 pub enum CodeSearchError {
     #[error("{0}")]
     InvalidParameters(String),

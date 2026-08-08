@@ -57,6 +57,7 @@ fn collect_output_paths(output: &str) -> Vec<String> {
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git revert request.
 pub struct GitRevertBody {
     pub path: Option<String>,
 }
@@ -117,6 +118,7 @@ pub async fn git_revert(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git stage request.
 pub struct GitStageBody {
     pub path: Option<String>,
     #[serde(default)]
@@ -255,6 +257,7 @@ pub async fn git_stage(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git unstage request.
 pub struct GitUnstageBody {
     pub path: Option<String>,
     #[serde(default)]
@@ -317,6 +320,7 @@ pub async fn git_unstage(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git clean request.
 pub struct GitCleanBody {
     // "untracked" (default) | "all" | "tracked"
     pub scope: Option<String>,
@@ -386,6 +390,7 @@ pub async fn git_clean(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git rename request.
 pub struct GitRenameBody {
     pub from: String,
     pub to: String,
@@ -441,6 +446,7 @@ pub async fn git_rename(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git delete request.
 pub struct GitDeleteBody {
     pub path: String,
     #[serde(default)]

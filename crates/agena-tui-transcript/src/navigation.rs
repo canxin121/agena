@@ -1,3 +1,5 @@
+//! Transcript viewport navigation state.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptBlockCursor {
     pub key: TranscriptNodeKey,

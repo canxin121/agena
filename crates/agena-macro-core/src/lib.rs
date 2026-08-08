@@ -1,4 +1,13 @@
-//! Ordinary-library implementation support shared by Agena proc-macro entrypoints.
+//! # agena-macro-core
+//!
+//! Ordinary-library implementation support shared by Agena proc-macro
+//! entrypoints.
+//!
+//! All expansion logic for the `agena-plugin-sdk` macros lives here:
+//! tool input shape/schema generation (`input_*` modules), plugin expansion
+//! and manifest construction (`plugin_*` modules), and shared parsing/serde
+//! helpers. The thin [`agena_macros`] crate re-exports the entrypoints as
+//! `#[proc_macro]` items.
 
 pub mod input_arg_output_support;
 pub mod input_arg_parse_support;

@@ -32,6 +32,7 @@ const ADAPTER_KIND: &str = "gemini";
 const GEMINI_FINAL_PART_SIGNATURE_KEY: &str = "$final_part";
 
 #[derive(Clone)]
+/// Adapter for Gemini.
 pub struct GeminiAdapter {
     client: reqwest::Client,
     api_key: ManagedCredential,
@@ -55,6 +56,7 @@ enum GeminiAuthMode {
 }
 
 #[derive(Clone)]
+/// Options for the Gemini adapter.
 pub struct GeminiAdapterOptions {
     pub auth_header: Option<(String, Option<String>)>,
     pub auth_query_parameter: Option<String>,

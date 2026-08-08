@@ -1,3 +1,5 @@
+//! Panel splitting and sizing.
+
 use std::borrow::Cow;
 
 use crate::layout::list_panel_height;

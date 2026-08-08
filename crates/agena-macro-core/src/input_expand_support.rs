@@ -1,3 +1,5 @@
+//! Expansion entrypoint for the `ToolInput` derive macro.
+
 use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Result};
 

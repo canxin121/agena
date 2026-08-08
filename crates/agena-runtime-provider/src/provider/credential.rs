@@ -22,6 +22,7 @@ use agena_provider_google_auth::{GoogleAdcError, access_token as google_adc_acce
 const EAGER_REFRESH_BUFFER_MS: i64 = 5 * 60 * 1_000;
 
 #[derive(Clone)]
+/// A managed provider credential.
 pub struct ManagedCredential {
     inner: Arc<ManagedCredentialInner>,
 }

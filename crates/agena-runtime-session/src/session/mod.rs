@@ -1,3 +1,5 @@
+//! Session model: state, persistence, history, and execution services.
+
 mod cache;
 pub(crate) mod cost;
 mod doom_loop;

@@ -12,6 +12,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Body of a git pull request.
 pub struct GitPullBody {
     pub remote: Option<String>,
     pub branch: Option<String>,
@@ -26,6 +27,7 @@ pub struct GitPullBody {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Summary of a pulled commit.
 pub struct GitCommitSummary {
     pub changes: i32,
     pub insertions: i32,
@@ -34,6 +36,7 @@ pub struct GitCommitSummary {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Result of a git pull.
 pub struct GitPullResult {
     pub success: bool,
     pub summary: GitCommitSummary,

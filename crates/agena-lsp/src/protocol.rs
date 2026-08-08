@@ -17,12 +17,14 @@ pub const JSONRPC_VERSION: &str = "2.0";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
+/// Identifier of a JSON-RPC request.
 pub enum RequestId {
     Number(i64),
     // Strings appear in the wild though we never produce them.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC request.
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
     pub id: RequestId,
@@ -32,6 +34,7 @@ pub struct JsonRpcRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC notification.
 pub struct JsonRpcNotification {
     pub jsonrpc: String,
     pub method: String,
@@ -40,6 +43,7 @@ pub struct JsonRpcNotification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC response.
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub id: RequestId,
@@ -50,6 +54,7 @@ pub struct JsonRpcResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A JSON-RPC error.
 pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
@@ -58,6 +63,7 @@ pub struct JsonRpcError {
 }
 
 #[derive(Debug, Clone)]
+/// A message received from an LSP server.
 pub enum InboundMessage {
     Response(JsonRpcResponse),
     Notification(JsonRpcNotification),

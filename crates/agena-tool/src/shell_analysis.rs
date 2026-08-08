@@ -1,3 +1,5 @@
+//! Static analysis of shell command shapes for permissions and tooling.
+
 /// Parsed summary of a shell command used for policy and result handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandAnalysis {

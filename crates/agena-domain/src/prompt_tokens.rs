@@ -1,6 +1,7 @@
 //! Provider/session-neutral prompt token measurements.
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+/// Token usage snapshot for a prompt or run.
 pub struct PromptTokenUsageSnapshot {
     #[serde(default)]
     pub input_tokens: u64,

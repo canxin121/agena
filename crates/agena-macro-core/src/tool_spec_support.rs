@@ -1,3 +1,5 @@
+//! Tool spec generation shared by input and plugin expansion.
+
 use syn::{Expr, LitStr, Path, Type};
 
 use crate::{PluginInputFieldMetadata, PluginInputNetworkSpec, PluginInputPathSpec};

@@ -6,6 +6,7 @@ use crate::SessionCachePolicy;
 
 /// Configuration consumed by the concrete session manager.
 #[derive(Debug, Clone)]
+/// Configuration of the runtime session manager.
 pub struct RuntimeSessionManagerConfig {
     pub default_selection: ExecutionSelection,
     pub permission: PermissionConfig,

@@ -1,5 +1,10 @@
-//! `agena-mcp-client` — MCP client wrapper built on top of the official
-//! Rust SDK (`rmcp`).
+//! # agena-mcp-client
+//!
+//! MCP client wrapper built on top of the official Rust SDK (`rmcp`).
+//!
+//! Provides the MCP protocol types ([`protocol`]), connection management
+//! ([`manager`]), OAuth login sessions ([`oauth`]), token storage
+//! ([`token_store`]), and typed errors ([`McpError`] / [`McpResult`]).
 
 pub mod error;
 pub mod manager;

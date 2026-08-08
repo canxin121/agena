@@ -22,11 +22,13 @@ use crate::error::ClientError;
 /// Item delivered to a subscriber.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
+/// Event received on a websocket subscription.
 pub enum SubscriptionEvent {
     Event(EventResource),
     Lagged(u64),
 }
 
+/// Handle to an active websocket subscription.
 pub struct Subscription {
     id: SubscriptionId,
     rx: mpsc::Receiver<SubscriptionEvent>,
@@ -48,6 +50,7 @@ struct Subscribers {
 }
 
 #[derive(Clone)]
+/// Websocket client for the Agena runtime event stream.
 pub struct WsClient {
     out_tx: mpsc::Sender<ClientMessage>,
     subscribers: Arc<Mutex<Subscribers>>,

@@ -17,6 +17,7 @@ pub struct AgentStopInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch describing how the agent run should stop.
 pub struct AgentStopPatch {
     /// If set, the stop is blocked and this message is injected as the next
     /// user message, causing the next run to continue automatically.

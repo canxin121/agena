@@ -1,3 +1,5 @@
+//! Workbench frame drawing.
+
 use std::borrow::Cow;
 
 use ratatui::{

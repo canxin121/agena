@@ -1,3 +1,5 @@
+//! Single-line input dialog widget.
+
 use ratatui::{
     Frame,
     layout::Rect,

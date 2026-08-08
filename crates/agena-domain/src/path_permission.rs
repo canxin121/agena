@@ -7,6 +7,7 @@ use crate::{PathAccessModes, PathAccessRuleConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Permission configuration for path access by class and per-rule.
 pub struct PathPermissionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<PathAccessModes>,

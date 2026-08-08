@@ -15,6 +15,7 @@ use agena_domain::{ComposerDocument, ExecutionId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
+/// A validated command sent to the runtime, expressed as typed parameters.
 pub enum Command {
     // ── workspace ──
     CreateWorkspace(CreateWorkspaceParams),
@@ -61,6 +62,7 @@ pub enum Command {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)] // protocol-shaped enum; boxing breaks wire format
+/// Result of executing a [`Command`].
 pub enum CommandResult {
     Workspace(WorkspaceResource),
     WorkspaceDeleted { id: i64 },
@@ -81,11 +83,13 @@ pub enum CommandResult {
 // ─── workspace ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for creating a workspace.
 pub struct CreateWorkspaceParams {
     pub path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for updating a workspace (path and optimistic version).
 pub struct UpdateWorkspaceParams {
     pub workspace_id: i64,
     pub path: String,
@@ -95,11 +99,13 @@ pub struct UpdateWorkspaceParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for deleting a workspace.
 pub struct DeleteWorkspaceParams {
     pub workspace_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for resolving a workspace by path, optionally creating it.
 pub struct ResolveWorkspaceParams {
     pub path: String,
     #[serde(default)]
@@ -109,6 +115,7 @@ pub struct ResolveWorkspaceParams {
 // ─── session ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for creating a session inside a workspace.
 pub struct CreateSessionParams {
     pub workspace_id: i64,
     pub title: String,
@@ -117,6 +124,7 @@ pub struct CreateSessionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for updating session metadata.
 pub struct UpdateSessionParams {
     pub session_id: i64,
     pub title: String,
@@ -125,6 +133,7 @@ pub struct UpdateSessionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for updating the run selection (model, thinking, speed mode) of a session.
 pub struct UpdateSessionSelectionParams {
     pub session_id: i64,
     #[serde(default)]
@@ -132,6 +141,7 @@ pub struct UpdateSessionSelectionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for deleting a session.
 pub struct DeleteSessionParams {
     pub session_id: i64,
     #[serde(default)]
@@ -141,6 +151,7 @@ pub struct DeleteSessionParams {
 // ─── message / run ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for submitting a user message (composer document) to a session.
 pub struct SubmitMessageParams {
     pub session_id: i64,
     #[serde(default)]
@@ -149,6 +160,7 @@ pub struct SubmitMessageParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for continuing a paused or interrupted run.
 pub struct ContinueRunParams {
     pub session_id: i64,
     #[serde(default)]
@@ -156,6 +168,7 @@ pub struct ContinueRunParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for requesting context compaction of a session.
 pub struct CompactSessionParams {
     pub session_id: i64,
     #[serde(default)]
@@ -163,12 +176,14 @@ pub struct CompactSessionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for cancelling an active execution.
 pub struct CancelRunParams {
     pub session_id: i64,
     pub execution_id: ExecutionId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for rewinding a session to an earlier turn.
 pub struct RewindSessionParams {
     pub session_id: i64,
     pub turn_id: agena_domain::TurnId,
@@ -210,6 +225,7 @@ pub struct ImportSessionParams {
 // ─── interactive replies ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for replying to a pending permission request.
 pub struct ReplyPermissionParams {
     pub session_id: i64,
     #[serde(default)]
@@ -218,6 +234,7 @@ pub struct ReplyPermissionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for replying to a pending user-input request.
 pub struct ReplyUserInputParams {
     pub session_id: i64,
     #[serde(default)]
@@ -226,6 +243,7 @@ pub struct ReplyUserInputParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for marking an interactive request as presented to the user.
 pub struct MarkInteractiveRequestPresentedParams {
     pub session_id: i64,
     pub request_id: String,
@@ -234,6 +252,7 @@ pub struct MarkInteractiveRequestPresentedParams {
 // ─── permission rules ───────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for creating or updating a permission rule.
 pub struct UpsertPermissionRuleParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_key: Option<String>,
@@ -263,6 +282,7 @@ pub struct UpsertPermissionRuleParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for replacing an existing permission rule by id.
 pub struct ReplacePermissionRuleParams {
     pub rule_id: i64,
     #[serde(flatten)]
@@ -270,6 +290,7 @@ pub struct ReplacePermissionRuleParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for revoking a permission rule.
 pub struct RevokePermissionRuleParams {
     pub rule_id: i64,
     #[serde(default)]
@@ -277,6 +298,7 @@ pub struct RevokePermissionRuleParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for deleting a permission rule.
 pub struct DeletePermissionRuleParams {
     pub rule_id: i64,
 }
@@ -284,11 +306,13 @@ pub struct DeletePermissionRuleParams {
 // ─── background activities ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for stopping a background activity.
 pub struct StopActivityParams {
     pub activity_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Parameters for dismissing a background activity.
 pub struct DismissActivityParams {
     pub activity_id: String,
 }

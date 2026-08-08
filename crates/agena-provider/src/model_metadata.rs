@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 use crate::CapabilityFamily;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// Registry of known model metadata.
 pub struct ModelMetadataRegistry;
 
 impl ModelMetadataRegistry {

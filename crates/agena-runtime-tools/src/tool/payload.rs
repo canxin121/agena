@@ -29,6 +29,7 @@ fn is_zero_u64(value: &u64) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "tool", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Input payload of a tool execution.
 pub enum ToolPayloadInput {
     #[serde(alias = "process")]
     Shell(ShellToolInput),
@@ -185,6 +186,7 @@ impl ToolPayloadInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Output of reading an attachment.
 pub struct ReadAttachmentOutput {
     pub path: String,
     pub kind: AttachmentKind,
@@ -204,6 +206,7 @@ pub struct ReadAttachmentOutput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "tool", rename_all = "snake_case")]
+/// Output payload of a tool execution.
 pub enum ToolPayloadOutput {
     Read {
         #[serde(default, skip_serializing_if = "Option::is_none")]

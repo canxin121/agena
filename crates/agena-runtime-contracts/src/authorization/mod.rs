@@ -244,6 +244,7 @@ fn sorted_rule_entries(entries: &IndexMap<String, PermissionMode>) -> Vec<(&str,
 }
 
 #[derive(Debug, Clone)]
+/// Principal of an execution: blocked flag and permission policies.
 pub struct ExecutionPrincipal {
     pub blocked: bool,
     pub permission_policy: PermissionPolicy,

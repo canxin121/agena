@@ -6,6 +6,7 @@ use sea_orm::entity::prelude::{DeriveActiveEnum, EnumIter};
 /// Persisted SQLite representation of [`Role`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "i8", db_type = "TinyInteger")]
+/// Stored representation of a message role.
 pub enum StoredRole {
     #[sea_orm(num_value = 1)]
     User,
@@ -40,6 +41,7 @@ impl From<StoredRole> for Role {
 /// Persisted SQLite representation of [`ExecutionStatus`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "i8", db_type = "TinyInteger")]
+/// Stored representation of an execution status.
 pub enum StoredExecutionStatus {
     #[sea_orm(num_value = 1)]
     Pending,
@@ -94,6 +96,7 @@ impl From<StoredExecutionStatus> for ExecutionStatus {
 /// Persisted SQLite representation of [`PartKind`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum)]
 #[sea_orm(rs_type = "i8", db_type = "TinyInteger")]
+/// Stored representation of a part kind.
 pub enum StoredPartKind {
     #[sea_orm(num_value = 1)]
     Text,

@@ -14,6 +14,7 @@ pub struct SnapshotSession {
     pub created_here: bool,
 }
 
+/// Shared registry of active snapshots.
 pub type SnapshotRegistry = Arc<RwLock<HashMap<i64, SnapshotSession>>>;
 
 pub fn snapshot_registry() -> SnapshotRegistry {

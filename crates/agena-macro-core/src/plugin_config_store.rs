@@ -1,3 +1,5 @@
+//! Expansion of the `PluginConfigStore` derive macro.
+
 use quote::quote;
 use syn::ext::IdentExt;
 use syn::parse::{Parse, ParseStream};

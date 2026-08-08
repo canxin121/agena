@@ -1,3 +1,5 @@
+//! Provider and model catalog queries for the application layer.
+
 use agena_api::{
     queries::{
         ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams, ProviderSecretSource,

@@ -20,6 +20,7 @@ impl StructuredObject {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A named structured value field.
 pub struct StructuredField {
     pub name: String,
     pub value: StructuredValue,
@@ -27,6 +28,7 @@ pub struct StructuredField {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// A structured value (null, boolean, number, string, array, object).
 pub enum StructuredValue {
     Null,
     Boolean {

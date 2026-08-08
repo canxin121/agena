@@ -10,6 +10,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when an execution starts.
 pub struct ExecutionStartedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
@@ -20,6 +21,7 @@ pub struct ExecutionStartedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when an execution finishes.
 pub struct ExecutionFinishedEvent {
     pub session_id: i64,
     pub execution_id: ExecutionId,
@@ -29,6 +31,7 @@ pub struct ExecutionFinishedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when a subtask changes status.
 pub struct SubtaskStatusChangedEvent {
     pub session_id: i64,
     pub parent_session_id: i64,

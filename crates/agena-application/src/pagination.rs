@@ -5,7 +5,9 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::ApplicationError;
 
+/// Default page limit used when no limit is requested.
 pub const DEFAULT_PAGE_LIMIT: u64 = 50;
+/// Maximum allowed page limit.
 pub const MAX_PAGE_LIMIT: u64 = 200;
 
 /// Normalizes a caller-provided page limit to the product-wide safe range.
@@ -15,12 +17,14 @@ pub fn normalize_limit(limit: Option<u64>) -> u64 {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Ordering of a page of results.
 pub enum PageOrder {
     Asc,
     Desc,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Pagination metadata for one page of results.
 pub struct PageInfo {
     pub limit: u64,
     pub returned: usize,
@@ -31,6 +35,7 @@ pub struct PageInfo {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A page of items together with its [`PageInfo`].
 pub struct PaginatedResponse<T> {
     pub items: Vec<T>,
     pub page: PageInfo,

@@ -16,6 +16,7 @@ const EVENTS: &str = "agena_events";
 
 /// SQLite implementation of [`SequenceAllocator`].
 #[derive(Debug)]
+/// SQLite-backed sequential id allocator.
 pub struct SqliteSequenceAllocator {
     db: Arc<DatabaseConnection>,
 }

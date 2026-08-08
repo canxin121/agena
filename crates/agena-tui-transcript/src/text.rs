@@ -1,3 +1,5 @@
+//! Transcript text measurement and wrapping helpers.
+
 use std::path::Path;
 
 use agena_api::resource::{

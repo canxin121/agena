@@ -39,6 +39,7 @@ pub struct PermissionReply {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Permission request awaiting a decision.
 pub struct PendingPermission {
     pub request: PermissionRequest,
 }

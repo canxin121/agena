@@ -1,9 +1,12 @@
+//! SSE parsing helpers for streaming provider responses.
+
 use async_stream::try_stream;
 use futures_core::Stream;
 use futures_util::StreamExt;
 use serde_json::Value;
 
 #[derive(Debug, thiserror::Error)]
+/// Error reading a provider JSON stream.
 pub enum ProviderJsonStreamError {
     #[error("HTTP stream error: {0}")]
     Http(#[from] reqwest::Error),
@@ -44,6 +47,7 @@ fn decode_utf8_prefix(bytes: &[u8]) -> (String, Vec<u8>) {
 }
 
 #[derive(Debug, PartialEq)]
+/// Payload of a provider JSON event.
 pub enum JsonEventPayload {
     Event(Value),
     Done,

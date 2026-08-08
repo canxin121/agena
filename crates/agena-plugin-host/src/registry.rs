@@ -1,3 +1,5 @@
+//! Registry of tools published by loaded plugins.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
@@ -69,6 +71,7 @@ fn validate_schema_shape(
 }
 
 #[derive(Debug, Clone)]
+/// Registry of tools provided by plugins.
 pub struct PluginToolRegistry {
     by_key: BTreeMap<ToolKey, RegisteredTool>,
     by_canonical_name: BTreeMap<String, ToolKey>,
@@ -78,12 +81,14 @@ pub struct PluginToolRegistry {
 }
 
 #[derive(Debug, Clone)]
+/// Snapshot of the plugin tool registry.
 pub struct ToolRegistrySnapshot {
     pub generation: u64,
     pub tools: Vec<RegisteredTool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A registered plugin tool.
 pub struct RegisteredTool {
     pub key: ToolKey,
     pub definition: ToolDefinition,

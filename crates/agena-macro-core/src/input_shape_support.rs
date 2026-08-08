@@ -1,3 +1,5 @@
+//! Shape computation for tool input types.
+
 use quote::{format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;

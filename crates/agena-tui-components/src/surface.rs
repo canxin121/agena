@@ -1,3 +1,5 @@
+//! Shared surface geometry and focus state.
+
 use std::cmp::min;
 
 use ratatui::{

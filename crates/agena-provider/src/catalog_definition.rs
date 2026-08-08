@@ -201,6 +201,7 @@ pub struct CatalogDefinitionSourcePriority {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Catalog record for one provider.
 pub struct ModelCatalogProviderRecord {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, CatalogModelDefinition>,
@@ -223,6 +224,7 @@ impl ModelCatalogProviderRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// A model catalog document (map of model id to definition).
 pub struct ModelCatalogDocument {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, CatalogModelDefinition>,
@@ -241,6 +243,7 @@ impl ModelCatalogDocument {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Snapshot of the model catalog with refresh state.
 pub struct ModelCatalogSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,
@@ -309,6 +312,7 @@ impl ModelCatalogSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// API response carrying catalog models.
 pub struct ModelCatalogResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh_at: Option<DateTime<Utc>>,

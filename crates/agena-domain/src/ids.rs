@@ -97,6 +97,7 @@ impl ActivityId {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(transparent)]
+/// Identifier for a tool call within a session.
 pub struct ToolCallId(pub SmolStr);
 impl ToolCallId {
     pub fn new(id: impl Into<SmolStr>) -> Self {

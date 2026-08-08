@@ -72,6 +72,7 @@ pub use crate::tool_permission_contract::ToolPermissionContract;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// The action a permission request is about (tool call, path, network, ...).
 pub enum PermissionAction {
     Tool {
         tool_name: String,
@@ -93,6 +94,7 @@ pub enum PermissionAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Source of a policy decision step.
 pub enum PolicySourceKind {
     StaticPolicy,
     PersistedRule,
@@ -101,6 +103,7 @@ pub enum PolicySourceKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One step in a permission decision trace.
 pub struct DecisionTraceStep {
     pub source_kind: PolicySourceKind,
     pub summary: String,
@@ -113,6 +116,7 @@ pub struct DecisionTraceStep {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Full trace of a permission decision.
 pub struct DecisionTrace {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<DecisionTraceStep>,

@@ -1,7 +1,26 @@
+//! # agena-domain
+//!
 //! Stable domain values shared across Agena layers.
 //!
 //! This crate intentionally contains no database, runtime, transport, UI, or
-//! provider SDK dependency.
+//! provider SDK dependency: it is the vocabulary every other layer speaks.
+//!
+//! ## What lives here
+//!
+//! - **Models & execution** — [`Model`], [`ModelRef`], [`ModelCapabilities`],
+//!   execution status/lifecycle/selection, and finish reasons.
+//! - **Permissions** — [`PermissionConfig`], [`PermissionRequest`],
+//!   [`PermissionReplyKind`], path/network access rules, and resolution
+//!   outcomes.
+//! - **Sessions & messages** — session lifecycle, message activities and
+//!   parts, events, and pending interactive requests.
+//! - **Providers & catalog** — provider ids, model metadata, and catalog
+//!   values.
+//! - **Utilities** — [`ActivityId`], [`EventFilter`] / [`EventScope`],
+//!   [`ToolInvocation`], and [`get_json_path`] JSON path evaluation.
+//!
+//! Domain types are plain data: they serialize with `serde` and carry no
+//! behavior beyond validation helpers.
 
 mod access;
 mod activity;

@@ -1,4 +1,23 @@
+//! # agena-runtime-session
+//!
 //! Session model, persistence, history, and execution services.
+//!
+//! This crate implements the session layer of the runtime: it owns the
+//! session model ([`session::model`]), persists session state and events,
+//! builds completion requests, governs context budgets, and executes model
+//! runs with tool invocation, permission handling, and task control.
+//!
+//! ## Key items
+//!
+//! - [`AppError`] — the top-level application error type.
+//! - [`ContextGovernor`] — context window budgeting and compaction policy.
+//! - [`ExecutionRegistry`] / [`ExecutionControl`] — manage running
+//!   executions (pause/cancel/resume).
+//! - [`event`] — runtime event types and the event bus.
+//! - [`activity`] — activity model shared with the transcript.
+//!
+//! The crate also re-exports [`config`], [`provider`], [`plugins`], and the
+//! shared contracts (`authorization`, `identity`, `message`, `permission`).
 
 extern crate self as agena_runtime;
 

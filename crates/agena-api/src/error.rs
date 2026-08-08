@@ -11,6 +11,7 @@ use agena_failure::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Structured error returned by the runtime API, carrying a user-facing problem.
 pub struct ApiError {
     pub problem: UserProblem,
 }

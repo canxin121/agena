@@ -5,6 +5,7 @@ use super::{
 use agena_provider::{ProviderNetworkConfig, ResolvedProviderModelConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Resolved UI configuration.
 pub struct UiConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locale: Option<String>,
@@ -13,6 +14,7 @@ pub struct UiConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+/// TUI color scheme preference.
 pub enum TuiColorSchemeConfig {
     #[default]
     Auto,
@@ -37,6 +39,7 @@ impl std::str::FromStr for TuiColorSchemeConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+/// TUI graphics mode preference.
 pub enum TuiGraphicsModeConfig {
     /// Negotiate the best native image protocol when the complete terminal
     /// path can be established, otherwise retain semantic Unicode/text output.
@@ -66,6 +69,7 @@ impl std::str::FromStr for TuiGraphicsModeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// Resolved TUI configuration.
 pub struct TuiUiConfig {
     pub color_scheme: TuiColorSchemeConfig,
     pub graphics: TuiGraphicsModeConfig,
@@ -80,11 +84,13 @@ pub struct RuntimeConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// Resolved runtime provider settings.
 pub struct RuntimeProvidersConfig {
     pub client_versions: ProviderClientVersionSettings,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Preferred client versions for built-in providers.
 pub struct ProviderClientVersionSettings {
     pub codex: String,
     pub claude: String,
@@ -104,6 +110,7 @@ impl Default for ProviderClientVersionSettings {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
+/// Resolved session configuration.
 pub struct SessionConfig {
     pub compaction: SessionCompactionConfig,
     /// Cap on model turns within one stable run. `0` means unlimited;
@@ -114,6 +121,7 @@ pub struct SessionConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+/// Resolved session compaction configuration.
 pub struct SessionCompactionConfig {
     pub auto: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -130,6 +138,7 @@ impl Default for SessionCompactionConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Resolved configuration of one provider.
 pub struct ResolvedProviderConfig {
     pub enabled: bool,
     pub defaults: ProviderDefaultsConfig,

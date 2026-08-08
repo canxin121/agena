@@ -1,3 +1,5 @@
+//! Transcript render model: lines, blocks, and layout.
+
 use agena_api::{
     message_part::{
         MessageAttachmentPartResource, MessageErrorPartResource, MessageHookPartResource,

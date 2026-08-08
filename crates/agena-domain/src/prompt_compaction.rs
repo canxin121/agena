@@ -4,6 +4,7 @@ use crate::{ActivityId, ExecutionId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+/// Strategy used to compact a prompt.
 pub enum PromptCompactionStrategy {
     #[default]
     LocalSummary,
@@ -12,6 +13,7 @@ pub enum PromptCompactionStrategy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+/// What triggered prompt compaction.
 pub enum PromptCompactionTrigger {
     #[default]
     Manual,

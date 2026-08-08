@@ -1,3 +1,5 @@
+//! Hook descriptors and hook dispatch wiring for plugins.
+
 use quote::{format_ident, quote};
 use syn::{Attribute, Ident, ImplItemFn, Result, Type};
 

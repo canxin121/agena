@@ -20,6 +20,7 @@ use super::{MAX_BLOB_BYTES, git2_open_error_response, require_directory_raw, run
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// A file in the git status.
 pub struct GitStatusFile {
     pub path: String,
     pub index: String,
@@ -28,6 +29,7 @@ pub struct GitStatusFile {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response of a git status query.
 pub struct GitStatusResponse {
     pub current: String,
     pub tracking: Option<String>,
@@ -49,6 +51,7 @@ pub struct GitStatusResponse {
 }
 
 #[derive(Debug, Serialize, Clone, Copy)]
+/// Diff statistics.
 pub struct DiffStat {
     pub insertions: i32,
     pub deletions: i32,
@@ -147,6 +150,7 @@ async fn select_base_ref_for_unpublished(dir: &Path) -> Option<String> {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for git status.
 pub struct GitStatusQuery {
     pub directory: Option<String>,
     pub offset: Option<usize>,
@@ -458,6 +462,7 @@ pub async fn git_status(Query(q): Query<GitStatusQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for git watch.
 pub struct GitWatchQuery {
     pub directory: Option<String>,
     #[serde(rename = "intervalMs")]

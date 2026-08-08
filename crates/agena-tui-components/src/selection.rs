@@ -1,3 +1,5 @@
+//! Selection state primitives.
+
 use crossterm::event::KeyEvent;
 
 use crate::{NavigationAction, navigation_action, structural_navigation_action};

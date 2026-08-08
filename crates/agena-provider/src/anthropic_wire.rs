@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::{AnthropicTextBlock, CopilotModelExtension};
 
 #[derive(Debug, Serialize)]
+/// Wire shape of an Anthropic Messages API request.
 pub struct AnthropicMessagesRequest {
     pub model: String,
     pub max_tokens: u32,
@@ -33,12 +34,14 @@ pub struct AnthropicMessagesRequest {
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of an Anthropic output config (effort).
 pub struct AnthropicOutputConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
+/// Wire shape of a message inside an Anthropic request.
 pub struct AnthropicMessage {
     pub role: String,
     pub content: Vec<AnthropicTextBlock>,
@@ -46,6 +49,7 @@ pub struct AnthropicMessage {
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
+/// Wire shape of an Anthropic model list response.
 pub enum AnthropicModelListResponse {
     Wrapped { data: Vec<AnthropicModel> },
     Bare(Vec<AnthropicModel>),
@@ -60,6 +64,7 @@ impl AnthropicModelListResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an Anthropic model entry.
 pub struct AnthropicModel {
     pub id: String,
     #[serde(default, flatten)]
@@ -71,6 +76,7 @@ pub struct AnthropicModel {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of an Anthropic Messages API response.
 pub struct AnthropicMessagesResponse {
     pub model: String,
     #[serde(default)]
@@ -82,6 +88,7 @@ pub struct AnthropicMessagesResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Wire shape of Anthropic usage counters.
 pub struct AnthropicUsage {
     #[serde(default)]
     pub input_tokens: Option<u64>,
@@ -98,12 +105,14 @@ pub struct AnthropicUsage {
 }
 
 #[derive(Debug, Deserialize, Default)]
+/// Wire shape of Anthropic output token details.
 pub struct AnthropicOutputTokensDetails {
     #[serde(default)]
     pub thinking_tokens: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Default)]
+/// Wire shape of Anthropic cache creation counters.
 pub struct AnthropicCacheCreationUsage {
     #[serde(default)]
     pub ephemeral_1h_input_tokens: Option<u64>,
@@ -120,6 +129,7 @@ impl AnthropicCacheCreationUsage {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Wire shape of an Anthropic SSE event.
 pub enum AnthropicSseEvent {
     MessageStart {
         #[serde(default)]
@@ -160,6 +170,7 @@ pub enum AnthropicSseEvent {
 }
 
 #[derive(Debug, Deserialize, Default)]
+/// Wire shape of an Anthropic SSE content block.
 pub struct AnthropicSseContentBlock {
     #[serde(default, rename = "type")]
     pub kind: String,
@@ -178,6 +189,7 @@ pub struct AnthropicSseContentBlock {
 }
 
 #[derive(Debug, Deserialize, Default)]
+/// Wire shape of an Anthropic SSE delta.
 pub struct AnthropicSseDelta {
     #[serde(default, rename = "type")]
     pub kind: Option<String>,
@@ -192,12 +204,14 @@ pub struct AnthropicSseDelta {
 }
 
 #[derive(Debug, Deserialize, Default)]
+/// Wire shape of an Anthropic SSE message delta.
 pub struct AnthropicSseMessageDelta {
     #[serde(default)]
     pub stop_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
+/// Wire shape of an Anthropic SSE message.
 pub struct AnthropicSseMessage {
     #[serde(default)]
     pub stop_reason: Option<String>,
@@ -206,6 +220,7 @@ pub struct AnthropicSseMessage {
 }
 
 #[derive(Debug, Default)]
+/// Accumulated state of an Anthropic tool call.
 pub struct AnthropicToolCallState {
     pub id: String,
     pub name: String,

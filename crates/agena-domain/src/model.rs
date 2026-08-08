@@ -5,6 +5,7 @@ use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{field} cannot be empty")]
+/// Error for an invalid identifier.
 pub struct IdentifierError {
     field: &'static str,
 }
@@ -16,6 +17,7 @@ impl IdentifierError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
+/// Error parsing a `provider/model` model reference.
 pub enum ModelRefParseError {
     #[error("model reference must be in `provider/model` format")]
     MissingSeparator,
@@ -100,6 +102,7 @@ define_string_identifier!(AdapterId, "adapter id", "adapter id cannot be empty")
 define_string_identifier!(ModelId, "model id", "model id cannot be empty");
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// A `provider[/adapter]/model` reference identifying a model.
 pub struct ModelRef {
     pub provider_id: ProviderId,
     #[serde(default, skip_serializing_if = "Option::is_none")]

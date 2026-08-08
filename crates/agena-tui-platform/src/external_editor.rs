@@ -1,3 +1,5 @@
+//! Launching an external editor for text editing.
+
 use std::{
     env,
     path::{Path, PathBuf},

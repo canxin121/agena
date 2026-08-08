@@ -2,6 +2,7 @@ use std::{fmt, str::FromStr};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Parsed network target: host and optional port.
 pub struct NetworkTarget {
     original: String,
     host: String,
@@ -55,6 +56,7 @@ impl fmt::Display for NetworkTarget {
     }
 }
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
+/// Error parsing a network target string.
 pub enum NetworkTargetParseError {
     #[error("network target must not be empty")]
     Empty,

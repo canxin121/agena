@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
+/// Request to run a plugin command in a session.
 pub struct SessionPluginCommandRequest {
     pub session_id: i64,
     pub plugin_id: String,
@@ -17,6 +18,7 @@ pub struct SessionPluginCommandRequest {
 }
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
+/// Error running a plugin command.
 pub enum SessionPluginCommandError {
     #[error("plugin command execution failed: {0}")]
     Execution(String),
@@ -30,6 +32,7 @@ pub enum SessionPluginCommandError {
 /// shell, credential, or other effects must delegate them to a registered tool
 /// or a permission-enforcing Host API.
 #[async_trait]
+/// Service that runs plugin commands in sessions.
 pub trait SessionPluginCommandService: Send + Sync {
     async fn invoke_session_plugin_command(
         &self,

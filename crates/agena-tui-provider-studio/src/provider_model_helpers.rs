@@ -1,3 +1,5 @@
+//! Helpers for projecting providers and models into studio state.
+
 use std::collections::BTreeSet;
 
 use serde_json::Value as JsonValue;

@@ -1,3 +1,5 @@
+//! Frame drawing helpers.
+
 use std::borrow::Cow;
 
 use ratatui::{

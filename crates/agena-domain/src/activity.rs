@@ -222,6 +222,7 @@ impl ContentDocument {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Owner of an activity node: the user's turn input, an assistant reply, a parent activity, or the session.
 pub enum ActivityOwner {
     TurnInput { turn_id: TurnId },
     AssistantReply { reply_id: AssistantReplyId },
@@ -231,6 +232,7 @@ pub enum ActivityOwner {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Actor that produced an activity: user, assistant, runtime, tool, or plugin.
 pub enum ActivityActor {
     User,
     Assistant,
@@ -241,6 +243,7 @@ pub enum ActivityActor {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Lifecycle state of an activity: pending, in progress, or terminal.
 pub enum ActivityState {
     #[default]
     Pending,
@@ -257,12 +260,14 @@ impl ActivityState {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Position of a node inside an ordered content list.
 pub struct ContentPosition {
     /// Zero-based position inside the owner's ordered content sequence.
     pub index: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+/// Timing metadata for an activity (start and optional finish timestamps).
 pub struct ActivityLifecycle {
     pub started_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -271,6 +276,7 @@ pub struct ActivityLifecycle {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// Provenance metadata for an activity (source, content hash, plugin id).
 pub struct ActivityProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -282,6 +288,7 @@ pub struct ActivityProvenance {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// A single activity node in the session transcript.
 pub struct ActivityNode {
     pub id: ActivityId,
     pub owner: ActivityOwner,
@@ -353,6 +360,7 @@ pub enum ActivityPayload {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of resource referenced by a [`ResourceActivity`].
 pub enum ResourceKind {
     File,
     Directory,
@@ -366,6 +374,7 @@ pub enum ResourceKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "reference_type", rename_all = "snake_case")]
+/// Concrete reference to the resource behind a [`ResourceActivity`].
 pub enum ResourceReference {
     Artifact {
         sha256: String,
@@ -386,6 +395,7 @@ pub enum ResourceReference {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// An activity referencing a file, directory, URL, or other resource.
 pub struct ResourceActivity {
     pub kind: ResourceKind,
     pub reference: ResourceReference,
@@ -406,6 +416,7 @@ pub struct ResourceActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// An activity recording that a skill was referenced or loaded.
 pub struct SkillReferenceActivity {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -440,6 +451,7 @@ impl SkillReferenceActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// An activity carrying a text artifact (snippet, document, code).
 pub struct TextArtifactActivity {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -450,6 +462,7 @@ pub struct TextArtifactActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// An activity carrying model reasoning content.
 pub struct ReasoningActivity {
     pub content: ReasoningPart,
 }
@@ -527,6 +540,7 @@ impl OperationAuthorization {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// Permission request/reply pair attached to an operation activity.
 pub struct OperationPermission {
     pub request: PermissionRequest,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -537,6 +551,7 @@ pub struct OperationPermission {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// An activity for a tool or operation execution.
 pub struct OperationActivity {
     pub call_id: ToolCallId,
     pub invocation: ToolInvocation,
@@ -563,12 +578,14 @@ pub struct OperationActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// Error payload attached to a failed operation activity.
 pub struct OperationActivityError {
     pub problem: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "interaction_type", rename_all = "snake_case")]
+/// An activity representing an interactive user prompt (such as user input).
 pub enum InteractionActivity {
     UserInput {
         request: UserInputRequest,
@@ -579,6 +596,7 @@ pub enum InteractionActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// An activity representing an error with a user-facing problem.
 pub struct ErrorActivity {
     pub problem: agena_failure::UserProblem,
 }
@@ -613,6 +631,7 @@ pub struct TextSegmentActivity {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Status of an assistant reply within a turn.
 pub enum AssistantReplyStatus {
     #[default]
     Pending,
@@ -630,6 +649,7 @@ impl AssistantReplyStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// Immutable snapshot of an assistant reply.
 pub struct AssistantReplySnapshot {
     pub id: AssistantReplyId,
     pub turn_id: TurnId,
@@ -649,6 +669,7 @@ pub struct AssistantReplySnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// Immutable snapshot of a full turn (input plus reply).
 pub struct TurnSnapshot {
     pub id: TurnId,
     pub session_id: i64,
@@ -660,6 +681,7 @@ pub struct TurnSnapshot {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// Immutable snapshot of a session transcript.
 pub struct TranscriptSnapshot {
     pub session_id: i64,
     pub seq_session: i64,
@@ -670,6 +692,7 @@ pub struct TranscriptSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Patch describing a change applied to the transcript.
 pub enum TranscriptPatch {
     TurnOpened {
         seq_session: i64,
@@ -837,6 +860,7 @@ fn upsert_activity(activities: &mut Vec<ActivityNode>, activity: ActivityNode) {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// A node in the composer document (text, mention, or other content).
 pub enum ComposerNode {
     Text { text: String },
     Activity { activity: Box<ComposerActivity> },
@@ -852,6 +876,7 @@ impl ComposerNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+/// An activity as presented in the composer view.
 pub struct ComposerActivity {
     pub id: ActivityId,
     pub payload: ActivityPayload,
@@ -861,6 +886,7 @@ pub struct ComposerActivity {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(transparent)]
+/// The composer document: an ordered list of [`ComposerNode`]s.
 pub struct ComposerDocument(pub Vec<ComposerNode>);
 
 impl ComposerDocument {
@@ -921,6 +947,7 @@ impl ComposerDocument {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Outcome of requesting cancellation of an execution.
 pub enum CancellationResult {
     CancellationRequested,
     AlreadyTerminal,
@@ -930,6 +957,7 @@ pub enum CancellationResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// Identifies a running execution for cancellation and control.
 pub struct ExecutionTarget {
     pub session_id: i64,
     pub execution_id: ExecutionId,

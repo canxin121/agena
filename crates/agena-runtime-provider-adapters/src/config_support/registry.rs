@@ -35,6 +35,7 @@ static CLINE_API_PROTOCOL_PATHS: LazyLock<ProviderProtocolPathsConfig> =
     LazyLock::new(cline_api_protocol_paths);
 
 #[derive(Debug, Clone)]
+/// Model probe result for one adapter.
 pub struct ProviderAdapterModelsResult {
     pub adapter_id: String,
     pub enabled: bool,

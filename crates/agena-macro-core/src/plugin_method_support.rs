@@ -1,3 +1,5 @@
+//! Method dispatch glue for plugin tool/hook methods.
+
 use std::collections::BTreeSet;
 
 use syn::punctuated::Punctuated;

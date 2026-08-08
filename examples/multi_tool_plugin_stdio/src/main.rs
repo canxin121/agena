@@ -1,3 +1,13 @@
+//! # agena-multi-tool-plugin-stdio
+//!
+//! Example Agena stdio plugin exposing multiple tools.
+//!
+//! Demonstrates the recommended plugin shape: a single `agena_plugin`
+//! attribute macro on the plugin `impl`, one `#[tool(...)]` method per
+//! model-visible tool (`format`, `write`), derived `ToolInput` structs,
+//! structured outputs, a custom streaming path, and plugin configuration via
+//! `PluginConfig<T>`.
+
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;

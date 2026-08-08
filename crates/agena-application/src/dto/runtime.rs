@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Serialize)]
+/// Runtime operator surface: MCP, LSP, agent, skills, and plugin UI.
 pub struct RuntimeOperatorResource {
     pub mcp: RuntimeMcpResource,
     pub lsp: RuntimeLspResource,
@@ -8,6 +9,7 @@ pub struct RuntimeOperatorResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Plugin UI catalog with the tool registry generation it reflects.
 pub struct RuntimePluginUiResource {
     pub catalog: agena_plugin_host::PluginUiCatalog,
     pub tool_registry_generation: u64,
@@ -17,6 +19,7 @@ pub struct RuntimePluginUiResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// MCP servers running inside the runtime.
 pub struct RuntimeMcpResource {
     pub server_count: usize,
     pub tool_count: usize,
@@ -24,12 +27,14 @@ pub struct RuntimeMcpResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// One MCP server with its tool count.
 pub struct RuntimeMcpServerResource {
     pub name: String,
     pub tool_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// LSP servers and diagnostics overview.
 pub struct RuntimeLspResource {
     pub server_count: usize,
     pub diagnostics_count: usize,
@@ -38,6 +43,7 @@ pub struct RuntimeLspResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// One LSP server definition.
 pub struct RuntimeLspServerResource {
     pub name: String,
     pub command: String,
@@ -46,6 +52,7 @@ pub struct RuntimeLspServerResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Loaded skills and skill commands.
 pub struct RuntimeSkillsResource {
     pub skill_count: usize,
     pub command_count: usize,
@@ -54,6 +61,7 @@ pub struct RuntimeSkillsResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// One loaded skill or skill command.
 pub struct RuntimeSkillResource {
     pub name: String,
     pub description: String,
@@ -139,6 +147,7 @@ pub struct TuiPreferencesResource {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// Color scheme preference for the TUI.
 pub enum TuiColorSchemeResource {
     #[default]
     Auto,
@@ -147,6 +156,7 @@ pub enum TuiColorSchemeResource {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// Graphics mode preference for the TUI.
 pub enum TuiGraphicsModeResource {
     #[default]
     Auto,
@@ -174,6 +184,7 @@ impl From<agena_runtime::RuntimeUiConfiguration> for TuiPreferencesResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response to a runtime configuration reload.
 pub struct RuntimeReloadResponse {
     pub cause: &'static str,
     pub previous_generation: u64,
@@ -182,6 +193,7 @@ pub struct RuntimeReloadResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A runtime background task.
 pub struct RuntimeBackgroundTaskResource {
     pub id: String,
     pub kind: RuntimeBackgroundTaskKind,
@@ -218,12 +230,14 @@ impl From<RuntimeBackgroundTask> for RuntimeBackgroundTaskResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response to starting a runtime background task.
 pub struct RuntimeBackgroundTaskStartResponse {
     pub started: bool,
     pub task: RuntimeBackgroundTaskResource,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response to cancelling a runtime background task.
 pub struct RuntimeBackgroundTaskCancelResponse {
     pub task: RuntimeBackgroundTaskResource,
 }

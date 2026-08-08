@@ -15,6 +15,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A part of a message.
 pub struct MessagePart {
     pub id: i64,
     pub message_id: i64,

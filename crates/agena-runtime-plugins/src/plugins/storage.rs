@@ -16,6 +16,7 @@ use agena_plugin_sdk::PluginKey;
 use agena_plugin_host::sdk::host_api::{HostStorageScope, HostStorageVisibility};
 
 #[derive(Debug, thiserror::Error)]
+/// Error from plugin storage.
 pub enum PluginStorageError {
     #[error("session-scoped storage requires a session id")]
     MissingSessionId,
@@ -36,6 +37,7 @@ pub enum PluginStorageError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Locator of a plugin storage record.
 pub struct StorageLocator {
     pub scope: HostStorageScope,
     pub visibility: HostStorageVisibility,
@@ -79,11 +81,13 @@ impl StorageLocator {
 }
 
 #[derive(Debug, Clone, Default)]
+/// A stored plugin record.
 pub struct StoredRecord {
     pub namespace: String,
     pub key: String,
 }
 
+/// Storage available to plugins.
 pub trait PluginStorage: Send + Sync {
     fn get(
         &self,
@@ -112,6 +116,7 @@ pub trait PluginStorage: Send + Sync {
     ) -> Result<Vec<StoredRecord>, PluginStorageError>;
 }
 
+/// Secret storage available to plugins.
 pub trait PluginSecretStore: Send + Sync {
     fn get(&self, plugin_id: &PluginKey, name: &str) -> Result<Option<String>, PluginStorageError>;
     fn set(&self, plugin_id: &PluginKey, name: &str, value: &str)

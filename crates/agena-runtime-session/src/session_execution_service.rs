@@ -11,12 +11,14 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Outcome of a session execution command.
 pub struct SessionExecutionCommandOutcome {
     pub session_id: i64,
     pub receipt: Option<SessionExecutionReceipt>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Receipt of an accepted session execution.
 pub struct SessionExecutionReceipt {
     pub execution_id: agena_domain::ExecutionId,
     pub turn_id: agena_domain::TurnId,
@@ -49,6 +51,7 @@ impl SessionExecutionCommandOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Error of a session execution command.
 pub struct SessionExecutionCommandError {
     pub failure: agena_failure::Failure,
 }
@@ -68,6 +71,7 @@ impl std::fmt::Display for SessionExecutionCommandError {
 impl std::error::Error for SessionExecutionCommandError {}
 
 #[async_trait]
+/// Service that accepts session execution commands.
 pub trait SessionExecutionCommandService: Send + Sync {
     async fn create_session(
         &self,

@@ -20,6 +20,7 @@ use agena_provider::CompletionStreamEvent;
 const ADAPTER_KIND: &str = "ollama";
 
 #[derive(Clone)]
+/// Adapter for Ollama.
 pub struct OllamaAdapter {
     id: String,
     client: reqwest::Client,

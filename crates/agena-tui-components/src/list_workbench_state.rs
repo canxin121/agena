@@ -1,3 +1,5 @@
+//! Shared state for list-based workbenches.
+
 use crate::SelectableListState;
 
 #[derive(Debug, Clone)]

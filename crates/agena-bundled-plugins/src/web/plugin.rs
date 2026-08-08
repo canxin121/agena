@@ -63,6 +63,7 @@ pub(crate) struct WebConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Fetch configuration of the web plugin.
 pub struct WebFetchConfig {
     #[serde(default = "default_web_fetch_enabled")]
     pub enabled: bool,
@@ -82,6 +83,7 @@ impl Default for WebFetchConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Request behavior of the web plugin.
 pub struct WebRequestConfig {
     pub delay_ms: u64,
     pub timeout_secs: u64,
@@ -102,6 +104,7 @@ impl Default for WebRequestConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Cache configuration of the web plugin.
 pub struct WebFetchCacheConfig {
     pub ttl_secs: u64,
     pub capacity: u64,
@@ -118,6 +121,7 @@ impl Default for WebFetchCacheConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Crawl configuration of the web plugin.
 pub struct WebCrawlConfig {
     pub defaults: WebCrawlDefaultsConfig,
     pub limits: WebCrawlLimitsConfig,
@@ -126,6 +130,7 @@ pub struct WebCrawlConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Default crawl settings of the web plugin.
 pub struct WebCrawlDefaultsConfig {
     pub max_pages: u32,
     pub max_depth: u32,
@@ -144,6 +149,7 @@ impl Default for WebCrawlDefaultsConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Crawl limits of the web plugin.
 pub struct WebCrawlLimitsConfig {
     pub max_pages: u32,
     pub max_depth: u32,
@@ -160,6 +166,7 @@ impl Default for WebCrawlLimitsConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Indexing settings of the web plugin.
 pub struct WebCrawlIndexingConfig {
     pub document_cache_ttl_secs: u64,
     pub chunk_chars: u32,
@@ -178,6 +185,7 @@ impl Default for WebCrawlIndexingConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Search settings of the web plugin.
 pub struct WebSearchConfig {
     pub default_limit: u32,
     pub max_limit: u32,
@@ -194,12 +202,14 @@ impl Default for WebSearchConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Store settings of the web plugin.
 pub struct WebStoreConfig {
     pub retention: WebStoreRetentionConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Retention settings of the web plugin store.
 pub struct WebStoreRetentionConfig {
     pub max_documents: u32,
     pub max_bytes: u64,
@@ -216,6 +226,7 @@ impl Default for WebStoreRetentionConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Browser settings of the web plugin.
 pub struct WebBrowserConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -240,6 +251,7 @@ impl Default for WebBrowserConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Wait settings of the web plugin browser.
 pub struct WebBrowserWaitConfig {
     pub for_network_idle: bool,
     pub timeout_secs: u64,

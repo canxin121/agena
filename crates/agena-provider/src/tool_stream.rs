@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use crate::{ModelToolCallId, ProviderItemId, ProviderStreamKey};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a tool stream input event.
 pub enum ToolStreamInputKind {
     Start,
     Delta,
@@ -10,6 +11,7 @@ pub enum ToolStreamInputKind {
 }
 
 #[derive(Debug, Clone)]
+/// Input event for provider tool streaming.
 pub struct ToolStreamInput {
     pub kind: ToolStreamInputKind,
     pub stream_key_candidates: Vec<ProviderStreamKey>,
@@ -20,6 +22,7 @@ pub struct ToolStreamInput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Update emitted by the tool stream accumulator.
 pub enum ToolStreamUpdate {
     Registered {
         stream_key: String,
@@ -41,6 +44,7 @@ pub enum ToolStreamUpdate {
 }
 
 #[derive(Debug)]
+/// Accumulates provider tool stream events into tool calls.
 pub struct ToolStreamAccumulator {
     aliases: BTreeMap<String, ProviderStreamKey>,
     pending: BTreeMap<ProviderStreamKey, ToolStreamState>,
@@ -56,6 +60,7 @@ struct ToolStreamState {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error from provider tool streaming.
 pub enum ToolStreamError {
     #[error("{provider_id} returned tool event without stream key candidates")]
     MissingStreamKey { provider_id: String },

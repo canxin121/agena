@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Serialize)]
+/// A memory document as exposed by the application.
 pub struct MemoryResource {
     pub name: String,
     pub file_name: String,
@@ -10,6 +11,7 @@ pub struct MemoryResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to write a memory document.
 pub struct MemoryWriteRequest {
     #[serde(default)]
     pub description: String,

@@ -1,3 +1,5 @@
+//! Terminal file transfer helpers.
+
 use std::path::Path;
 
 use crate::{iterm2, kitty, provider_error::ProviderError, terminal::TerminalContext};

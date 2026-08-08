@@ -7,6 +7,7 @@ use crate::{PendingInteractiveRequestKind, PermissionRequest, UserInputRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// A request awaiting user interaction (permission or user input).
 pub enum PendingInteractiveRequest {
     Permission {
         #[serde(flatten)]

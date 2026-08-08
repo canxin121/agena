@@ -9,6 +9,7 @@ fn is_false(value: &bool) -> bool {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of credential issuer / login flow for a provider.
 pub enum CredentialIssuer {
     OpenaiChatgpt,
     GithubCopilot,
@@ -28,6 +29,7 @@ impl CredentialIssuer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// User info returned by an OAuth login.
 pub struct OAuthUserInfo {
     pub id: String,
     pub username: String,
@@ -42,6 +44,7 @@ pub struct OAuthUserInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
+/// Credential material for a provider (API key or OAuth token).
 pub enum AuthData {
     Api {
         key: String,
@@ -159,6 +162,7 @@ impl AuthData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// OAuth token response with refresh and access tokens.
 pub struct OAuthTokenResponse {
     pub refresh: String,
     pub access: String,
@@ -174,6 +178,7 @@ pub struct OAuthTokenResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// GitHub Copilot deployment (GitHub.com or Enterprise).
 pub enum CopilotDeployment {
     GitHubCom,
     Enterprise { domain: String },

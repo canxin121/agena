@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One frame of a rollout recording.
 pub struct RolloutFrame {
     pub seq: u64,
     pub ts: DateTime<Utc>,
@@ -17,6 +18,7 @@ pub struct RolloutFrame {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// Kind of a rollout frame.
 pub enum RolloutKind {
     /// First frame of the file: identity + boot context.
     SessionMeta(SessionMeta),
@@ -65,6 +67,7 @@ pub enum RolloutKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Session metadata attached to a rollout.
 pub struct SessionMeta {
     pub session_id: String,
     pub agena_version: String,

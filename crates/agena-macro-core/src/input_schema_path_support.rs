@@ -1,3 +1,5 @@
+//! Schema path helpers for tool input fields.
+
 use crate::PluginInputFieldMetadata;
 
 pub fn escape_json_pointer_segment(segment: &str) -> String {

@@ -1,3 +1,5 @@
+//! Job persistence stores (`SqliteJobStore`, `InMemoryJobStore`).
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -14,6 +16,7 @@ use crate::job::{ScheduledJob, SchedulerHistoryEntry};
 pub const MAX_RETAINED_HISTORY_ENTRIES: usize = 1_000;
 
 #[async_trait::async_trait]
+/// Persistence for scheduled jobs.
 pub trait JobStore: Send + Sync {
     async fn put(&self, job: ScheduledJob);
     async fn remove(&self, id: Uuid) -> bool;
@@ -57,6 +60,7 @@ pub trait JobStore: Send + Sync {
 }
 
 #[derive(Default, Clone)]
+/// In-memory job store.
 pub struct InMemoryJobStore {
     inner: Arc<RwLock<HashMap<Uuid, ScheduledJob>>>,
     history: Arc<RwLock<VecDeque<SchedulerHistoryEntry>>>,

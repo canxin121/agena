@@ -1,7 +1,23 @@
+//! # agena-tool
+//!
 //! Provider-independent tool contracts.
 //!
 //! Concrete executors, built-in tools, plugin hosts, and permission policy
 //! implementations belong in adapter/runtime crates rather than this crate.
+//!
+//! ## What lives here
+//!
+//! - **Tool descriptors** — normalization helpers ([`normalize_tool_title`],
+//!   [`normalize_tool_summary`], [`compose_tool_title`]) and
+//!   [`invocation_call_summary`].
+//! - **Execution contracts** — [`PreparedToolInvocation`],
+//!   [`ToolPermissionCheck`], [`ToolExecutionSummary`], [`ToolRuntimeEvent`],
+//!   and the runtime event sink.
+//! - **Shell** — [`shell`] provides [`ShellRequest`] / [`ShellOutput`] and
+//!   [`ShellError`]; [`shell_analysis`] analyzes command shapes.
+//! - **Search** — [`code_search`] and [`tool_search`] locate code and tools.
+//! - **Value types** — [`ReadMode`], [`SnapshotBackend`],
+//!   [`ToolAvailability`], patch operations, and cron summaries.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -273,6 +289,7 @@ pub struct ApplyPatchExecution {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a patch operation.
 pub enum PatchOpKind {
     Add,
     Update,
@@ -327,6 +344,7 @@ impl std::fmt::Display for SnapshotBackend {
 }
 
 #[derive(Debug, Clone)]
+/// Whether a snapshot backend is available and why.
 pub struct SnapshotBackendSupport {
     pub backend: SnapshotBackend,
     pub available: bool,
@@ -334,6 +352,7 @@ pub struct SnapshotBackendSupport {
 }
 
 #[derive(Debug, Clone)]
+/// Capabilities of the available snapshot backends.
 pub struct SnapshotBackendCapabilities {
     pub preferred_backend: Option<SnapshotBackend>,
     pub git: SnapshotBackendSupport,
@@ -486,6 +505,7 @@ impl Default for ToolOutputTruncationPolicy {
 }
 
 #[derive(Debug, Clone)]
+/// Request to execute a shell command.
 pub struct ShellRequest {
     pub command: Vec<String>,
     pub cwd: std::path::PathBuf,
@@ -494,6 +514,7 @@ pub struct ShellRequest {
 }
 
 #[derive(Debug, Clone)]
+/// Output of a shell command execution.
 pub struct ShellOutput {
     pub exit_code: i32,
     pub stdout: String,
@@ -515,9 +536,11 @@ pub enum ToolRuntimeEvent {
     CommandEnd(CommandEndEvent),
 }
 
+/// Sink receiving tool runtime events.
 pub type ToolRuntimeEventSink = Arc<dyn Fn(ToolRuntimeEvent) + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
+/// Error from shell command execution.
 pub enum ShellError {
     #[error("command cancelled")]
     Cancelled,

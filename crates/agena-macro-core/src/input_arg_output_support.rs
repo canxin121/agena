@@ -1,3 +1,5 @@
+//! Helpers that shape output metadata for tool input arguments.
+
 use std::collections::BTreeSet;
 
 use syn::{Expr, LitStr, Result, Type};

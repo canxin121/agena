@@ -1,3 +1,12 @@
+//! # agena-tui-components
+//!
+//! Reusable terminal UI components for Agena.
+//!
+//! A ratatui widget/component library: dialogs, editors, panels, workbench
+//! layouts, lists, keymaps, scroll/search state, themes, and the shared
+//! surfaces used by the Agena TUI. Components are intentionally
+//! application-agnostic so they can be reused outside the TUI app crate.
+
 pub mod confirm_dialog;
 pub mod confirm_state;
 pub mod dashboard;

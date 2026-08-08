@@ -1,3 +1,5 @@
+//! Application services: use cases that orchestrate the runtime.
+
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -74,6 +76,7 @@ pub struct PermissionRuleWriteCommand {
 }
 
 #[derive(Clone)]
+/// Application service implementing the runtime API surface on top of domain and storage layers.
 pub struct ApplicationService {
     workspace_root: String,
     publisher: Option<Arc<dyn agena_runtime::RuntimeEventPublishService>>,

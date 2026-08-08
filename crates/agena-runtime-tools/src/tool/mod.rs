@@ -1,3 +1,5 @@
+//! Builtin tool execution contracts and executors.
+
 pub(crate) mod apply_patch;
 pub mod ask_user;
 pub(crate) mod bash;

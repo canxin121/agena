@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+/// Authentication input for git network operations.
 pub struct GitAuthInput {
     pub username: Option<String>,
     pub password: Option<String>,

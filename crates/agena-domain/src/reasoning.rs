@@ -7,6 +7,7 @@ use strum::{AsRefStr, Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
+/// Field of the reasoning content an assistant produced.
 pub enum AssistantReasoningField {
     ReasoningContent,
     ReasoningDetails,

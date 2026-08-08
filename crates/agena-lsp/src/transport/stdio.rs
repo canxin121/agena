@@ -18,6 +18,7 @@ use crate::protocol::{FrameParser, InboundMessage, encode_frame};
 
 use super::LspTransport;
 
+/// Stdio transport for an LSP server.
 pub struct StdioTransport {
     server_name: String,
     stdin: Mutex<ChildStdin>,

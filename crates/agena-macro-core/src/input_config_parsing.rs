@@ -1,3 +1,5 @@
+//! Parsing of input-level configuration attributes.
+
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Meta, Result, Token, Variant};
 

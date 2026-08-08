@@ -1,6 +1,34 @@
 #![allow(unused_imports)]
 
-//! Runtime primitives, concrete adapters, and application composition for Agena.
+//! # agena-runtime
+//!
+//! Runtime primitives, concrete adapters, and application composition for
+//! Agena — the shared engine behind the CLI, TUI, and API server.
+//!
+//! This crate composes the contracts from [`agena_runtime_contracts`], the
+//! session machinery from [`agena_runtime_session`], and the provider
+//! adapters from [`agena_runtime_provider`] into one application runtime.
+//!
+//! ## Entry points
+//!
+//! - [`build_app_runtime`] — construct the full runtime (store, event bus,
+//!   plugin host, provider catalog) and run an async application on it.
+//! - [`ensure_default_thread_stack`] — configure the default thread stack
+//!   size before launching the async runtime.
+//!
+//! ## Public surfaces re-exported here
+//!
+//! - [`session`] — session model, persistence, history, and execution.
+//! - [`tool`] — tool contracts, shell execution, code search, and tool
+//!   search.
+//! - [`provider`] — provider-facing ports and wire types.
+//! - [`plugins`] — bundled plugin composition and registration.
+//! - `authorization`, `message`, `permission`, `identity` — the shared
+//!   contracts from [`agena_runtime_contracts`].
+//!
+//! Internal modules (composition, model catalog, background tasks, policy,
+//! reload, refresh) are private; the crate exposes the composed behavior
+//! through the application facade and the re-exported surfaces above.
 
 extern crate self as agena_runtime;
 

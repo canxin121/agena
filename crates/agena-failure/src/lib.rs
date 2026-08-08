@@ -64,6 +64,7 @@ impl std::fmt::Display for FailureCode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Machine category of a failure.
 pub enum FailureCategory {
     InvalidInput,
     NotFound,
@@ -82,6 +83,7 @@ pub enum FailureCategory {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Which party is responsible for resolving the failure.
 pub enum FailureResponsibility {
     Caller,
     Policy,
@@ -91,6 +93,7 @@ pub enum FailureResponsibility {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// How a retry of the failed operation should behave.
 pub enum RetryDirective {
     Never,
     CorrectInput,
@@ -104,6 +107,7 @@ pub enum RetryDirective {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// User-facing recovery action for a failure.
 pub enum RecoveryDirective {
     None,
     Refresh,
@@ -119,6 +123,7 @@ pub enum RecoveryDirective {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Impact level of a failure on the operation or runtime.
 pub enum FailureImpact {
     RequestRejected,
     OperationFailed,
@@ -191,6 +196,7 @@ impl UserPresentation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// An issue attached to a specific input field.
 pub struct FieldIssue {
     #[serde(deserialize_with = "deserialize_safe_field_path")]
     field: String,
@@ -199,6 +205,7 @@ pub struct FieldIssue {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a field issue.
 pub enum FieldIssueKind {
     Required,
     Invalid,
@@ -273,6 +280,7 @@ pub struct ModelFeedback {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Feedback kind returned to the model for a failed step.
 pub enum ModelFeedbackKind {
     InternalToolFailure,
     InvalidInput,

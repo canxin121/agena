@@ -1,4 +1,11 @@
+//! # agena-runtime-tools
+//!
 //! Built-in tool execution and tool-facing runtime ports.
+//!
+//! Implements concrete built-in tool execution ([`tool`]), tool output
+//! truncation ([`tool_output`]), process monitoring, project path
+//! resolution, snapshot backends/operations, and the shared
+//! [`ToolExecutionRequest`] plumbing used by executors.
 
 pub use agena_runtime_contracts::ToolSessionContext;
 pub use agena_runtime_contracts::{authorization, identity, message, permission};
@@ -39,6 +46,7 @@ pub use tool_output::truncate_tool_output_text;
 pub mod tool_output;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Request to execute a tool.
 pub struct ToolExecutionRequest {
     pub tool_name: String,
     pub input_json: String,

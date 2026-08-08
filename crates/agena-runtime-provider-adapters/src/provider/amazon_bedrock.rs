@@ -85,6 +85,7 @@ struct Sigv4Request<'a> {
 }
 
 #[derive(Clone)]
+/// Adapter for Amazon Bedrock.
 pub struct AmazonBedrockAdapter {
     client: reqwest::Client,
     base_url: String,

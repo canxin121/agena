@@ -1,3 +1,5 @@
+//! Expansion of the `agena_plugin` attribute macro.
+
 use quote::{format_ident, quote};
 use syn::{ImplItem, ItemImpl, LitStr, Result};
 

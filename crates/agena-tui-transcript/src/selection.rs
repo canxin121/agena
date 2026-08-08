@@ -1,3 +1,5 @@
+//! Transcript selection state and operations.
+
 use std::collections::BTreeSet;
 
 use unicode_segmentation::UnicodeSegmentation;

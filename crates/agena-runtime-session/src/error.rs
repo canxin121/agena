@@ -9,6 +9,7 @@ pub(crate) fn is_database_busy(error: &sea_orm::DbErr) -> bool {
 }
 
 #[derive(Debug, Error)]
+/// Top-level application error of the session runtime.
 pub enum AppError {
     #[error("configuration error: {0}")]
     Config(String),

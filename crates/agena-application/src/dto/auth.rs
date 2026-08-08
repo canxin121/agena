@@ -2,6 +2,7 @@ use agena_provider::{DeviceCodeStart, OAuthAuthorizeStart};
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Type of stored provider credential.
 pub enum AuthCredentialType {
     Api,
     Oauth,
@@ -10,6 +11,7 @@ pub enum AuthCredentialType {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Issuer of a provider credential.
 pub enum AuthCredentialIssuerResource {
     OpenaiChatgpt,
     GithubCopilot,
@@ -32,6 +34,7 @@ impl From<agena_provider::CredentialIssuer> for AuthCredentialIssuerResource {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Kind of provider login flow.
 pub enum AuthLoginKindResource {
     OpenaiChatgpt,
     GithubCopilot,
@@ -39,6 +42,7 @@ pub enum AuthLoginKindResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Authentication state of a provider.
 pub struct AuthProviderResource {
     pub provider_id: String,
     pub configured: bool,
@@ -80,11 +84,13 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to store an API key credential.
 pub struct AuthApiKeyWriteRequest {
     pub api_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Request referencing a provider.
 pub struct AuthProviderRequest {
     #[serde(default)]
     pub provider_id: Option<String>,
@@ -102,6 +108,7 @@ impl AuthProviderRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to start an OAuth redirect flow.
 pub struct AuthRedirectRequest {
     #[serde(flatten)]
     pub provider: AuthProviderRequest,
@@ -109,6 +116,7 @@ pub struct AuthRedirectRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to exchange an OAuth code for credentials.
 pub struct AuthCodeExchangeRequest {
     #[serde(flatten)]
     pub provider: AuthProviderRequest,
@@ -118,6 +126,7 @@ pub struct AuthCodeExchangeRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to poll an OAuth state.
 pub struct AuthStatePollRequest {
     #[serde(flatten)]
     pub provider: AuthProviderRequest,
@@ -125,6 +134,7 @@ pub struct AuthStatePollRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to poll a device-code flow.
 pub struct AuthUserCodeDevicePollRequest {
     #[serde(flatten)]
     pub provider: AuthProviderRequest,
@@ -133,6 +143,7 @@ pub struct AuthUserCodeDevicePollRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Request to start an enterprise device flow.
 pub struct AuthEnterpriseDeviceRequest {
     #[serde(flatten)]
     pub provider: AuthProviderRequest,
@@ -141,6 +152,7 @@ pub struct AuthEnterpriseDeviceRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to poll an enterprise device flow.
 pub struct AuthEnterpriseDevicePollRequest {
     #[serde(flatten)]
     pub provider: AuthProviderRequest,
@@ -150,6 +162,7 @@ pub struct AuthEnterpriseDevicePollRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Browser start details of an OAuth flow.
 pub struct AuthBrowserStartResource {
     pub provider_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -176,6 +189,7 @@ impl AuthBrowserStartResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Device start details of a device flow.
 pub struct AuthDeviceStartResource {
     pub provider_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -204,6 +218,7 @@ impl AuthDeviceStartResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Result of a provider login flow.
 pub struct AuthLoginResultResource {
     pub completed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

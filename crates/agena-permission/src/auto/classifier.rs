@@ -25,6 +25,7 @@ pub fn deny_reason(why: impl Into<String>) -> String {
 }
 
 #[derive(Debug, Clone)]
+/// Request to the auto-approval classifier.
 pub struct ClassifierRequest {
     pub action: ActionSpec,
     pub policy_reason: String,
@@ -33,6 +34,7 @@ pub struct ClassifierRequest {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the auto-approval classifier.
 pub enum AutoApprovalError {
     #[error("automatic approval model is unavailable: {0}")]
     Unavailable(String),
@@ -85,6 +87,7 @@ impl std::fmt::Display for ClassifyFailure {
 }
 
 #[async_trait::async_trait]
+/// Client for the auto-approval classifier.
 pub trait AutoApprovalClient: Send + Sync {
     /// Run the classifier and return the raw model text. The host owns model
     /// resolution, transcript projection, timeouts, and provider errors;

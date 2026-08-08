@@ -1,3 +1,5 @@
+//! Parsing of `#[arg(...)]` attributes on tool input fields.
+
 use std::collections::BTreeSet;
 
 use syn::{Attribute, Field, Fields, Meta, Result, Variant};

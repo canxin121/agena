@@ -1,3 +1,5 @@
+//! Plugin `impl`-level configuration parsing.
+
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{Expr, ExprLit, Ident, Lit, Meta, Result, Token, Type, parse_quote};

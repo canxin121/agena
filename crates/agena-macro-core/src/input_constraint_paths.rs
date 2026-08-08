@@ -1,3 +1,5 @@
+//! Path-constraint helpers for tool input fields.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::LitStr;

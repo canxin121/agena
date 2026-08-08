@@ -3,6 +3,7 @@ use agena_provider::{ProviderNativeToolHarnessKind, ProviderNativeToolHarnessRef
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Viewport size for a browser harness.
 pub struct HarnessViewportConfig {
     pub width: u32,
     pub height: u32,
@@ -16,6 +17,7 @@ impl HarnessViewportConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// Configuration of a browser harness.
 pub struct BrowserHarnessConfig {
     pub driver: String,
     pub headless: bool,
@@ -41,6 +43,7 @@ impl Default for BrowserHarnessConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// Configuration of a shell harness.
 pub struct ShellHarnessConfig {
     pub workspace_only: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -64,6 +67,7 @@ impl Default for ShellHarnessConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+/// Configuration of an editor harness.
 pub struct EditorHarnessConfig {
     pub workspace_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,6 +88,7 @@ impl Default for EditorHarnessConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Named harness configurations by kind.
 pub struct HarnessesConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub browser: BTreeMap<String, BrowserHarnessConfig>,

@@ -14,6 +14,7 @@ use super::super::{
 use super::unified::{parse_unified_diff_meta, patch_paths_are_safe, validate_unified_patch_hunks};
 
 #[derive(Debug, Deserialize)]
+/// Query for a git diff.
 pub struct GitDiffQuery {
     pub directory: Option<String>,
     pub path: Option<String>,
@@ -141,6 +142,7 @@ pub async fn git_diff(Query(q): Query<GitDiffQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a patch application request.
 pub struct GitApplyPatchBody {
     pub patch: Option<String>,
     pub mode: Option<String>,

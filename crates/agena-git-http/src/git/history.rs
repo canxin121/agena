@@ -15,6 +15,7 @@ use super::{
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// A commit in the git log.
 pub struct GitLogCommit {
     pub hash: String,
     pub short_hash: String,
@@ -33,6 +34,7 @@ pub struct GitLogCommit {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response of a git log query.
 pub struct GitLogResponse {
     pub commits: Vec<GitLogCommit>,
     pub has_more: bool,
@@ -40,6 +42,7 @@ pub struct GitLogResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for the git log.
 pub struct GitLogQuery {
     pub directory: Option<String>,
     pub limit: Option<usize>,
@@ -263,6 +266,7 @@ pub async fn git_log(Query(q): Query<GitLogQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for a commit diff.
 pub struct GitCommitDiffQuery {
     pub directory: Option<String>,
     pub commit: Option<String>,
@@ -317,6 +321,7 @@ pub async fn git_commit_diff(Query(q): Query<GitCommitDiffQuery>) -> Response {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// A file changed in a commit.
 pub struct GitCommitFile {
     pub path: String,
     pub status: String,
@@ -328,6 +333,7 @@ pub struct GitCommitFile {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Paginated files of a commit.
 pub struct GitCommitFilesResponse {
     pub files: Vec<GitCommitFile>,
     pub total: usize,
@@ -340,6 +346,7 @@ pub struct GitCommitFilesResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Query for commit files.
 pub struct GitCommitFilesQuery {
     pub directory: Option<String>,
     pub commit: Option<String>,
@@ -622,6 +629,7 @@ pub async fn git_commit_files(Query(q): Query<GitCommitFilesQuery>) -> Response 
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for a commit file diff.
 pub struct GitCommitFileDiffQuery {
     pub directory: Option<String>,
     pub commit: Option<String>,
@@ -699,6 +707,7 @@ pub async fn git_commit_file_diff(Query(q): Query<GitCommitFileDiffQuery>) -> Re
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Content of a file at a commit.
 pub struct GitCommitFileContentResponse {
     pub content: String,
     pub exists: bool,
@@ -707,6 +716,7 @@ pub struct GitCommitFileContentResponse {
 }
 
 #[derive(Debug, Deserialize)]
+/// Query for file content at a commit.
 pub struct GitCommitFileContentQuery {
     pub directory: Option<String>,
     pub commit: Option<String>,
@@ -825,6 +835,7 @@ pub async fn git_commit_file_content(Query(q): Query<GitCommitFileContentQuery>)
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a commit action request.
 pub struct GitCommitActionBody {
     pub commit: Option<String>,
 }

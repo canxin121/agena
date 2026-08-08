@@ -1,3 +1,17 @@
+//! # agena-web
+//!
+//! Web fetching, crawling, and search for Agena.
+//!
+//! - [`fetch_page`] — fetch and normalize a single page.
+//! - [`crawl_site`] / [`CrawlRunOptions`] — crawl a site with a local store
+//!   and retention/pruning ([`CrawlStore`], [`CrawlStoreRetention`]).
+//! - [`search_web`] / [`WebSearchEngine`] — web search backed by an engine
+//!   client or the local index.
+//! - [`rebuild_search_index`] / [`search_documents`] — local full-text
+//!   indexing and search.
+//! - [`WebFetchCoordinator`] — coordinates concurrent fetches under a shared
+//!   fetch budget.
+
 mod browser;
 mod error;
 mod extract;

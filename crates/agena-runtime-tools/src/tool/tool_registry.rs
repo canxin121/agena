@@ -338,12 +338,14 @@ pub(crate) fn unique_registered_tool_match(
 }
 
 #[derive(Debug, Clone, Default)]
+/// Runtime context of a tool execution.
 pub struct ToolRuntimeContext {
     pub session_id: Option<i64>,
     pub call_id: Option<i64>,
     pub prepared_shell_command: Option<PreparedShellCommand>,
 }
 
+/// Handle to a streaming tool execution.
 pub struct StreamingToolExecution {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<agena_plugin_host::sdk::ToolStreamChunk>,
@@ -380,6 +382,7 @@ impl std::fmt::Display for PluginToolFailure {
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Error)]
+/// Error from tool execution.
 pub enum ToolError {
     #[error("tool execution cancelled")]
     Cancelled,
@@ -632,6 +635,7 @@ pub(super) fn tool_summary(registered_tool: &RegisteredTool) -> String {
 }
 
 #[derive(Clone)]
+/// Executor that runs tools with permissions.
 pub struct ToolExecutor {
     pub(super) workspace_root: PathBuf,
     pub(super) principal: ExecutionPrincipal,

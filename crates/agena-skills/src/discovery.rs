@@ -1,3 +1,5 @@
+//! Skill discovery across the standard roots.
+
 use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
@@ -6,6 +8,7 @@ use crate::error::SkillResult;
 use crate::skill::Skill;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Diagnostic produced while discovering skills.
 pub struct DiscoveryDiagnostic {
     pub path: PathBuf,
     pub diagnostic: String,
@@ -13,6 +16,7 @@ pub struct DiscoveryDiagnostic {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Result of a skill discovery pass.
 pub struct DiscoveryReport {
     pub skills: Vec<Skill>,
     pub diagnostics: Vec<DiscoveryDiagnostic>,

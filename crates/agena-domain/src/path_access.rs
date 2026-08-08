@@ -6,6 +6,7 @@ use crate::PermissionMode;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Read/write permission modes for a path class.
 pub struct PathAccessModes {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read: Option<PermissionMode>,

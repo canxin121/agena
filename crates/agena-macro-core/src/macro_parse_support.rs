@@ -1,3 +1,5 @@
+//! Shared parsing helpers for proc-macro entrypoints.
+
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;

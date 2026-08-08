@@ -1,7 +1,40 @@
-//! Agena Plugin SDK — write a plugin once, ship it as in-process / cdylib / stdio / HTTP.
+//! # agena-plugin-sdk
 //!
-//! Implement [`Plugin`] for your type, fill in the hooks you care about (every method
-//! has a default no-op), and pick a transport with one of the `export_*!` macros.
+//! Agena Plugin SDK — write a plugin once, ship it as in-process / cdylib /
+//! stdio / HTTP.
+//!
+//! Implement [`Plugin`] for your type, fill in the hooks you care about
+//! (every method has a default no-op), and pick a transport with one of the
+//! `export_*!` macros.
+//!
+//! ## Quick start
+//!
+//! ```ignore
+//! use agena_plugin_sdk::prelude::*;
+//!
+//! #[derive(Default, PluginConfigStore)]
+//! struct MyPlugin;
+//!
+//! #[agena_plugin(namespace = "demo", name = "hello", version = "0.1.0", export = cdylib)]
+//! impl MyPlugin {
+//!     #[tool(name = "hello", summary = "Say hello", read_only)]
+//!     async fn hello(&self) -> Result<String> {
+//!         Ok("hello".into())
+//!     }
+//! }
+//! ```
+//!
+//! ## Key items
+//!
+//! - [`Plugin`], [`PluginConfig`], [`InitContext`], [`InitOutcome`] — plugin
+//!   contract and lifecycle.
+//! - [`ToolStreamSink`] — streaming output sink for tools.
+//! - [`PluginError`] — typed plugin errors.
+//! - [`PluginKey`] / [`ToolKey`] — stable identifiers.
+//! - [`AttachmentKind`] — attachment classification.
+//! - [`prelude`] — everything a plugin author needs in one import.
+//! - `agena_macros` re-exports: [`agena_plugin`], [`ToolInput`],
+//!   [`PluginConfigStore`].
 
 pub extern crate schemars;
 extern crate self as agena_plugin_sdk;

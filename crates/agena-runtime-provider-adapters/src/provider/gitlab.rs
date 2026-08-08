@@ -43,6 +43,7 @@ pub fn default_feature_flags() -> HashMap<String, bool> {
     ])
 }
 
+/// Provider for GitLab.
 pub struct GitlabProvider {
     client: reqwest::Client,
     api_key: ManagedCredential,

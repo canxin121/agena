@@ -1,3 +1,5 @@
+//! Type-name and path helpers used by macro expansion.
+
 use quote::quote;
 use syn::{LitStr, PathArguments, Result, Type};
 

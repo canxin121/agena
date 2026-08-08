@@ -20,6 +20,7 @@ const PROVIDER_TOOL_BODY_FIELDS: &[&str] = &[
 
 #[derive(Debug, thiserror::Error)]
 #[error("provider `{provider_id}` model `{model}` violated disabled Agena tools mode: {reason}")]
+/// Record of a tool-mode policy violation.
 pub struct ProviderToolModeViolation {
     provider_id: String,
     model: ModelId,

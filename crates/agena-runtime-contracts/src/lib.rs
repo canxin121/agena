@@ -1,7 +1,15 @@
+//! # agena-runtime-contracts
+//!
 //! Stable, runtime-neutral values and ports shared by feature crates.
 //!
 //! This crate is intentionally small. Concrete runtime services and
 //! application composition belong to their owning crates.
+//!
+//! It defines the shared authorization, identity, message, and permission
+//! surfaces ([`authorization`], [`identity`], [`message`], [`permission`])
+//! plus cross-cutting contracts such as [`ToolSessionContext`],
+//! [`RuntimeRequestContext`], [`NeutralToolExecutionResult`], and
+//! [`ConfigSnapshot`].
 
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +32,7 @@ pub trait ToolSessionContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Context of a runtime request.
 pub struct RuntimeRequestContext {
     pub request_id: String,
     pub cancellation_key: Option<String>,
@@ -39,6 +48,7 @@ impl RuntimeRequestContext {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Provider-neutral result of executing a tool.
 pub struct NeutralToolExecutionResult {
     pub tool_name: String,
     pub output: serde_json::Value,
@@ -46,12 +56,14 @@ pub struct NeutralToolExecutionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Binding of a tool to a plugin and its method.
 pub struct PluginToolBinding {
     pub plugin_id: String,
     pub tool_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// An invocation of a plugin method.
 pub struct PluginInvocation {
     pub plugin_id: String,
     pub method: String,
@@ -59,6 +71,7 @@ pub struct PluginInvocation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A snapshot of configuration affecting a run.
 pub struct ConfigSnapshot {
     pub source: String,
     pub revision: Option<String>,

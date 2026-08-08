@@ -20,6 +20,7 @@ use crate::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Capability family of a provider (OpenAI, Anthropic, Gemini, ...).
 pub enum ProviderCapabilityFamilyConfig {
     #[serde(rename = "openai")]
     OpenAi,
@@ -47,6 +48,7 @@ impl From<ProviderCapabilityFamilyConfig> for CapabilityFamily {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Transport mode for streaming responses.
 pub enum StreamTransportMode {
     Sse,
     #[serde(rename = "realtime_websocket")]
@@ -76,6 +78,7 @@ impl From<StreamTransportMode> for GeminiStreamMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
+/// Backend flavor for the OpenAI-compatible adapter.
 pub enum OpenAiResponsesBackendConfig {
     #[default]
     Api,
@@ -105,6 +108,7 @@ impl From<OpenAiResponsesBackendConfig> for OpenAiResponsesBackend {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Auth mode of a provider (none, api, credential).
 pub enum ProviderAuthMode {
     None,
     Api,
@@ -113,6 +117,7 @@ pub enum ProviderAuthMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// API subtype of a provider (custom, cline, gitlab, bedrock).
 pub enum ProviderApiSubtype {
     Custom,
     #[serde(rename = "cline_api")]
@@ -124,6 +129,7 @@ pub enum ProviderApiSubtype {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+/// Source of a secret in an overlay (inline or env).
 pub enum ProviderSecretSourceOverlay {
     Inline(String),
     Env(String),
@@ -132,6 +138,7 @@ pub enum ProviderSecretSourceOverlay {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
+/// GitLab API access overlay.
 pub enum ProviderGitlabApiAccessOverlay {
     ApiKey { source: ProviderSecretSourceOverlay },
     Credential { credential: AuthData },
@@ -139,6 +146,7 @@ pub enum ProviderGitlabApiAccessOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Optional protocol path overrides.
 pub struct ProviderProtocolPathsOverlay {
     #[merge(strategy = option_override)]
     pub openai: Option<String>,
@@ -150,6 +158,7 @@ pub struct ProviderProtocolPathsOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Default provider/adapter/model overlay.
 pub struct ProviderDefaultsOverlay {
     #[merge(strategy = option_override)]
     pub provider: Option<String>,
@@ -161,6 +170,7 @@ pub struct ProviderDefaultsOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Network timeout overlays.
 pub struct ProviderNetworkOverlay {
     #[merge(strategy = option_override)]
     pub request_timeout_secs: Option<u64>,
@@ -170,6 +180,7 @@ pub struct ProviderNetworkOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Auth overlay for a provider.
 pub struct ProviderAuthOverlay {
     #[merge(strategy = option_override)]
     pub mode: Option<ProviderAuthMode>,
@@ -211,6 +222,7 @@ pub struct ProviderAuthOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Overlay applied to a provider adapter.
 pub struct ProviderAdapterOverlay {
     #[merge(strategy = option_override)]
     pub backend: Option<OpenAiResponsesBackendConfig>,
@@ -256,6 +268,7 @@ pub struct ProviderAdapterOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Overlay for native tool routes.
 pub struct ProviderNativeToolRoutesOverlay {
     #[merge(strategy = option_override)]
     pub web_search: Option<ProviderNativeToolRoute>,
@@ -279,6 +292,7 @@ pub struct ProviderNativeToolRoutesOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Overlay for native tool user location.
 pub struct ProviderNativeToolUserLocationOverlay {
     #[merge(strategy = option_override)]
     pub country: Option<String>,
@@ -292,6 +306,7 @@ pub struct ProviderNativeToolUserLocationOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Overlay for hosted web search.
 pub struct ProviderHostedWebSearchOverlay {
     #[merge(strategy = option_override)]
     pub allowed_domains: Option<Vec<String>>,
@@ -311,6 +326,7 @@ pub struct ProviderHostedWebSearchOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Overlay for hosted file search.
 pub struct ProviderHostedFileSearchOverlay {
     #[merge(strategy = option_override)]
     pub vector_store_ids: Option<Vec<String>>,
@@ -324,6 +340,7 @@ pub struct ProviderHostedFileSearchOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Container overlay for hosted code execution.
 pub struct HostedCodeExecutionContainerOverlay {
     #[merge(strategy = option_override)]
     #[serde(rename = "type")]
@@ -338,6 +355,7 @@ pub struct HostedCodeExecutionContainerOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Overlay for hosted code execution.
 pub struct ProviderHostedCodeExecutionOverlay {
     #[merge(strategy = option_struct_merge)]
     pub container: Option<HostedCodeExecutionContainerOverlay>,
@@ -347,6 +365,7 @@ pub struct ProviderHostedCodeExecutionOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Overlay for hosted image generation.
 pub struct ProviderHostedImageGenerationOverlay {
     #[merge(strategy = option_override)]
     pub background: Option<String>,

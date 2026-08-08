@@ -11,6 +11,7 @@ use super::super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Body of a git merge request.
 pub struct GitMergeBody {
     pub branch: Option<String>,
 }
@@ -53,6 +54,7 @@ pub async fn git_merge(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a git rebase request.
 pub struct GitRebaseBody {
     pub branch: Option<String>,
 }

@@ -193,6 +193,7 @@ pub(crate) fn push_hook_runs_into(
     }
 }
 
+/// A loaded plugin with its manifest and transport.
 pub struct LoadedPlugin {
     pub kind: &'static str,
     pub configured_plugin: crate::config::ConfiguredPlugin,
@@ -347,6 +348,7 @@ where
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Summary of a plugin authority and capabilities.
 pub struct PluginAuthoritySummary {
     pub trust_level: String,
     pub provenance: Vec<String>,
@@ -355,6 +357,7 @@ pub struct PluginAuthoritySummary {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Inspection view of a plugin.
 pub struct PluginInspect {
     pub status: crate::status::PluginStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -368,12 +371,14 @@ pub struct PluginInspect {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Plugin UI catalog.
 pub struct PluginUiCatalog {
     pub tui: PluginTuiUiCatalog,
     pub studio: PluginStudioUiCatalog,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// TUI plugin UI catalog.
 pub struct PluginTuiUiCatalog {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub display: Vec<HostDisplayContribution>,
@@ -382,6 +387,7 @@ pub struct PluginTuiUiCatalog {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Studio plugin UI catalog.
 pub struct PluginStudioUiCatalog {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<PluginCommandCatalogItem>,
@@ -392,6 +398,7 @@ pub struct PluginStudioUiCatalog {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Catalog item of a plugin command.
 pub struct PluginCommandCatalogItem {
     pub plugin_id: PluginKey,
     #[serde(flatten)]
@@ -408,6 +415,7 @@ pub struct HostDisplayContribution {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Catalog item of a plugin studio control.
 pub struct PluginStudioControlCatalogItem {
     pub plugin_id: PluginKey,
     #[serde(flatten)]
@@ -415,6 +423,7 @@ pub struct PluginStudioControlCatalogItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Catalog item of a plugin studio view.
 pub struct PluginStudioViewCatalogItem {
     pub plugin_id: PluginKey,
     #[serde(flatten)]

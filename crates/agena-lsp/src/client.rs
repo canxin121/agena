@@ -73,6 +73,7 @@ impl DocumentSyncStatus {
     }
 }
 
+/// Client for one LSP server.
 pub struct LspClient {
     inner: Arc<Inner>,
 }

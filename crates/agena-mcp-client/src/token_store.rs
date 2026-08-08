@@ -114,6 +114,7 @@ impl OAuthCredentialHealth {
 }
 
 #[derive(Debug, Error)]
+/// Error from the MCP token store.
 pub enum TokenStoreError {
     #[error("io error: {0}")]
     Io(#[from] io::Error),
@@ -386,6 +387,7 @@ struct ServerTokenRecord {
 }
 
 #[derive(Debug)]
+/// File-backed MCP token store.
 pub struct FileTokenStore {
     path: PathBuf,
     inner: Mutex<StoreFile>,

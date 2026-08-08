@@ -1,3 +1,5 @@
+//! Serde rename policy helpers for generated schemas.
+
 use syn::parse::Parser;
 use syn::punctuated::Punctuated;
 use syn::{Attribute, Field, Ident, LitStr, Meta, Result, Token};

@@ -6,12 +6,14 @@ use async_trait::async_trait;
 
 /// Infrastructure or execution failure for a session-scoped invocation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// Error of a session tool execution.
 pub enum SessionToolExecutionError {
     #[error("tool invocation failed: {0}")]
     Execution(String),
 }
 
 #[derive(Debug)]
+/// Outcome of a session tool execution.
 pub enum SessionToolExecutionOutcome {
     Completed(ToolExecutionSummary),
     CapabilityUnavailable(Box<agena_domain::CapabilityUnavailableResult>),
@@ -73,6 +75,7 @@ impl SessionToolExecutionOutcome {
 /// Executes a session-scoped application tool through a runtime-neutral
 /// summary contract. Model permission checks do not apply to this surface.
 #[async_trait]
+/// Service that executes tools within a session.
 pub trait SessionToolExecutionService: Send + Sync {
     async fn execute_session_tool(
         &self,

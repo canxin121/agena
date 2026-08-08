@@ -37,6 +37,7 @@ pub enum ToolApiFunction {
 pub const TOOLS_CALL_ARGUMENTS_DIAGNOSTIC_FIELD: &str = "__tools_call_arguments_diagnostic";
 
 impl ToolApiFunction {
+/// All Tool API function kinds.
     pub const ALL: [Self; 8] = [
         Self::List,
         Self::Search,

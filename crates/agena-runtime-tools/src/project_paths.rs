@@ -12,6 +12,7 @@ const GENERATED_IMAGE_ARTIFACTS_DIR: &str = "generated_images";
 pub const MAX_GENERATED_IMAGE_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A generated image artifact managed by the runtime.
 pub struct ManagedGeneratedImageArtifact {
     pub path: String,
     pub filename: String,
@@ -20,6 +21,7 @@ pub struct ManagedGeneratedImageArtifact {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error managing generated image artifacts.
 pub enum ManagedGeneratedImageError {
     #[error("generated image payload exceeds {limit_mib} MiB limit")]
     TooLarge { limit_mib: usize },

@@ -5,6 +5,7 @@ use crate::{
 };
 
 #[derive(Debug, Serialize)]
+/// Wire shape of an OpenAI-compatible chat completion request.
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,

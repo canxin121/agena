@@ -17,6 +17,7 @@ use super::{
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Query for git repositories.
 pub struct GitReposQuery {
     pub directory: Option<String>,
     pub page: Option<usize>,
@@ -25,6 +26,7 @@ pub struct GitReposQuery {
 }
 
 #[derive(Debug, Serialize)]
+/// Response indicating whether a path is a git repository.
 pub struct GitCheckResponse {
     #[serde(rename = "isGitRepository")]
     pub is_git_repository: bool,
@@ -68,6 +70,7 @@ pub async fn git_check(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+/// Information about a git repository.
 pub struct GitRepoInfo {
     pub root: String,
     pub relative: String,
@@ -275,6 +278,7 @@ pub async fn git_safe_directory(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git init request.
 pub struct GitInitBody {
     pub path: Option<String>,
     pub default_branch: Option<String>,
@@ -369,6 +373,7 @@ pub async fn git_init(Query(q): Query<DirectoryQuery>, Json(body): Json<GitInitB
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a git clone request.
 pub struct GitCloneBody {
     pub url: Option<String>,
     pub path: Option<String>,

@@ -1,6 +1,9 @@
+//! Skill parsing and discovery error types.
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Error from the skills subsystem.
 pub enum SkillError {
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
@@ -24,4 +27,5 @@ pub enum SkillError {
     ResourceNotText(String),
 }
 
+/// Result alias for skills operations.
 pub type SkillResult<T> = Result<T, SkillError>;

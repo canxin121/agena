@@ -8,6 +8,7 @@ use agena_plugin_host::PluginsConfig as PluginConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Source of a configuration layer.
 pub enum ConfigSource {
     Default,
     File,
@@ -17,12 +18,14 @@ pub enum ConfigSource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// One applied configuration layer and its source.
 pub struct AppliedLayer {
     pub source: ConfigSource,
     pub description: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Metadata about how a configuration was resolved.
 pub struct ConfigResolutionMeta {
     pub config_path: PathBuf,
     pub config_found: bool,
@@ -89,6 +92,7 @@ impl ConfigResolutionMeta {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+/// A resolved configuration together with its metadata.
 pub struct ConfigResolution {
     pub config: ResolvedConfig,
     pub meta: ConfigResolutionMeta,
@@ -232,6 +236,7 @@ fn inject_resolved_provider_defaults(
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
+/// Validated configuration used at runtime.
 pub struct ResolvedConfig {
     #[serde(skip_serializing)]
     pub default_selection: ExecutionSelection,

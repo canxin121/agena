@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Serialize)]
+/// A persisted permission rule.
 pub struct PermissionRuleResource {
     pub id: i64,
     pub action_key: String,
@@ -41,6 +42,7 @@ pub struct PermissionRuleResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Git status of a workspace.
 pub struct GitStatusResource {
     pub workspace_root: String,
     pub git_available: bool,
@@ -64,6 +66,7 @@ pub struct GitStatusResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Whether a snapshot backend is available and why.
 pub struct SnapshotBackendSupportResource {
     pub backend: String,
     pub available: bool,
@@ -71,6 +74,7 @@ pub struct SnapshotBackendSupportResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// An active workspace snapshot.
 pub struct ActiveSnapshotResource {
     pub session_id: i64,
     pub path: String,
@@ -80,6 +84,7 @@ pub struct ActiveSnapshotResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A managed workspace snapshot.
 pub struct ManagedSnapshotResource {
     pub path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +99,7 @@ pub struct ManagedSnapshotResource {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Snapshot backends, active and managed snapshots.
 pub struct SnapshotStatusResource {
     pub workspace_root: String,
     pub session_runtime_available: bool,
@@ -107,17 +113,20 @@ pub struct SnapshotStatusResource {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Request to stage paths in git.
 pub struct GitStageRequest {
     #[serde(default)]
     pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to commit staged changes.
 pub struct GitCommitRequest {
     pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Result of a git commit.
 pub struct GitCommitResource {
     pub commit: String,
     pub summary: String,
@@ -125,6 +134,7 @@ pub struct GitCommitResource {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to create a pull request.
 pub struct GitPullRequestCreateRequest {
     pub title: String,
     #[serde(default)]
@@ -136,11 +146,13 @@ pub struct GitPullRequestCreateRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// A created pull request.
 pub struct GitPullRequestResource {
     pub url: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Request to write a permission rule.
 pub struct PermissionRuleWriteRequest {
     #[serde(default)]
     pub action_key: Option<String>,
@@ -170,12 +182,14 @@ pub struct PermissionRuleWriteRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Request to revoke a permission rule.
 pub struct PermissionRuleRevokeRequest {
     #[serde(default)]
     pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for a session event stream.
 pub struct SessionEventStreamQuery {
     #[serde(default)]
     pub after_seq: Option<i64>,

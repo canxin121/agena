@@ -1,3 +1,5 @@
+//! Terminal capability overrides from configuration.
+
 use crate::terminal::TerminalEnvironment;
 
 pub fn boolean(

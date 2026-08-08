@@ -1,3 +1,5 @@
+//! Path-type argument support for tool inputs.
+
 use std::collections::BTreeSet;
 
 use quote::quote;

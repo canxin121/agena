@@ -8,12 +8,14 @@ fn is_false(value: &bool) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 #[serde(rename_all = "snake_case")]
+/// Stream a command output delta belongs to.
 pub enum CommandOutputStream {
     Stdout,
     Stderr,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Context identifying a command invocation within a session.
 pub struct CommandContext {
     pub session_id: i64,
     pub call_id: i64,
@@ -29,6 +31,7 @@ pub struct CommandContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when a shell command starts.
 pub struct CommandBeginEvent {
     #[serde(flatten)]
     pub context: CommandContext,
@@ -42,6 +45,7 @@ pub struct CommandBeginEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event carrying a chunk of command output.
 pub struct CommandOutputDeltaEvent {
     #[serde(flatten)]
     pub context: CommandContext,
@@ -56,6 +60,7 @@ pub struct CommandOutputDeltaEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Event emitted when a shell command finishes.
 pub struct CommandEndEvent {
     #[serde(flatten)]
     pub context: CommandContext,

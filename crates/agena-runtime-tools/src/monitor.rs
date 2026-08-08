@@ -51,6 +51,7 @@ const MAX_WAIT_MS: u64 = 60_000;
 const READER_LINE_BYTE_CAP: usize = 64 * 1024;
 
 #[derive(Debug, Error)]
+/// Error from the process monitor.
 pub enum MonitorError {
     #[error("background process '{0}' not found")]
     NotFound(String),
@@ -63,6 +64,7 @@ pub enum MonitorError {
 }
 
 #[derive(Debug, Clone)]
+/// Parameters for starting a monitored process.
 pub struct StartParams {
     pub command: String,
     pub description: String,
@@ -80,6 +82,7 @@ pub struct StartParams {
 }
 
 #[derive(Debug, Clone)]
+/// Parameters for reading process output.
 pub struct ReadParams {
     pub monitor_id: String,
     pub since_seq: u64,
@@ -179,6 +182,7 @@ impl MonitorState {
 }
 
 #[derive(Debug)]
+/// Registry of monitored processes.
 pub struct MonitorRegistry {
     handle: Option<Handle>,
     monitors: Mutex<HashMap<String, Arc<MonitorState>>>,

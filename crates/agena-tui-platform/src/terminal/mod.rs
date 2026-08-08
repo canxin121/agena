@@ -1,3 +1,5 @@
+//! Terminal queries (size, title, capabilities).
+
 use std::{
     io,
     io::IsTerminal,

@@ -1,3 +1,5 @@
+//! Runtime-side types generated for plugins.
+
 use quote::quote;
 use syn::{Ident, Result, Type};
 

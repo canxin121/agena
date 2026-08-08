@@ -1,3 +1,5 @@
+//! JSON Schema metadata generation for tool inputs.
+
 use std::collections::BTreeSet;
 
 use quote::quote;

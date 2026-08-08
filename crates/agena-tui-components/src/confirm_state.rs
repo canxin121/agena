@@ -1,3 +1,5 @@
+//! Confirm dialog state and reducer.
+
 #[derive(Debug, Clone)]
 pub struct ConfirmDialogState<TAction> {
     pub title: String,

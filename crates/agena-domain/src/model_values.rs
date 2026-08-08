@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Whether a model capability is supported.
 pub enum CapabilitySupport {
     Supported,
     Unsupported,
@@ -24,6 +25,7 @@ impl CapabilitySupport {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Input modality a model accepts (text, image, document, ...).
 pub enum ModelInputModality {
     Text,
     Image,
@@ -52,6 +54,7 @@ impl fmt::Display for ModelInputModality {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Lifecycle stage of a model (active, preview, beta, deprecated, ...).
 pub enum ModelLifecycle {
     Active,
     Preview,

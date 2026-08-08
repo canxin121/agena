@@ -1,3 +1,5 @@
+//! Dashboard selection state.
+
 use crate::selection::SelectionCursor;
 
 #[derive(Debug, Clone)]

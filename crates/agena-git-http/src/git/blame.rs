@@ -13,6 +13,7 @@ use super::{
 };
 
 #[derive(Debug, Deserialize)]
+/// Query for git blame.
 pub struct GitBlameQuery {
     pub directory: Option<String>,
     pub path: Option<String>,
@@ -20,6 +21,7 @@ pub struct GitBlameQuery {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// One blame line.
 pub struct GitBlameLine {
     pub line: usize,
     pub hash: String,
@@ -30,6 +32,7 @@ pub struct GitBlameLine {
 }
 
 #[derive(Debug, Serialize)]
+/// Response of a git blame query.
 pub struct GitBlameResponse {
     pub lines: Vec<GitBlameLine>,
 }

@@ -1,3 +1,20 @@
+//! # agena-tui-media
+//!
+//! Terminal media rendering for Agena.
+//!
+//! Renders images, markdown images, and LaTeX formulas for the terminal UI:
+//!
+//! - [`render_formula`] — render a LaTeX formula to a graphics artifact.
+//! - [`render_markdown_image`] — render a markdown image reference.
+//! - [`with_math_render_context`] / [`with_text_math_rendering`] — scoped
+//!   rendering contexts used by the transcript.
+//! - [`MathLayoutConfig`], [`MathRenderContext`], [`MathGraphicsConfig`] —
+//!   layout, graphics configuration, and per-render state.
+//!
+//! Rendering targets the kitty/iterm2 graphics protocols through
+//! [`agena_tui`] terminal graphics and falls back to unicode math when no
+//! graphics backend is available.
+
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, VecDeque, hash_map::DefaultHasher},

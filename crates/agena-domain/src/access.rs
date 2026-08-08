@@ -1,10 +1,12 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The kind of access being evaluated: read or write.
 pub enum AccessKind {
     Read,
     Write,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Selector for access kinds: matches read access, write access, or either.
 pub enum AccessSelector {
     Read,
     Write,

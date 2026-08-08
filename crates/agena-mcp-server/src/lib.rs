@@ -1,3 +1,24 @@
+//! # agena-mcp-server
+//!
+//! Model Context Protocol (MCP) server implementation for Agena.
+//!
+//! Exposes Agena capabilities (tools, resources, prompts) as an MCP server
+//! over stdio or other [`rmcp`]-backed transports. A [`McpServerBackend`]
+//! adapter provides the Agena-side implementation, so protocol mapping stays
+//! decoupled from the runtime.
+//!
+//! ## Entry points
+//!
+//! - [`serve_stdio`] — serve a backend over stdio with the full MCP surface
+//!   (tools, resources, prompts).
+//! - [`serve_tools_stdio`] — serve only tools over stdio.
+//! - [`text_result`] / [`text_error`] — build tool call results from plain
+//!   text.
+//!
+//! ## Errors
+//!
+//! Protocol and backend failures are reported through [`McpServerError`].
+
 use std::borrow::Cow;
 use std::sync::Arc;
 

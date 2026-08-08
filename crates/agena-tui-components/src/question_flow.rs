@@ -1,3 +1,5 @@
+//! Question flow state machine (multi-step prompts).
+
 use crate::selection::SelectionCursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

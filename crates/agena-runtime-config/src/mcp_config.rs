@@ -11,6 +11,7 @@ pub const MCP_PLUGIN_ID: &str = "agena.mcp";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// MCP server configuration.
 pub struct McpConfig {
     pub runtime: McpRuntimeConfig,
     pub servers: BTreeMap<String, McpServerConfig>,
@@ -18,6 +19,7 @@ pub struct McpConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Runtime settings for MCP clients.
 pub struct McpRuntimeConfig {
     pub token_store: McpTokenStoreConfig,
     pub reconnect: McpReconnectConfig,
@@ -25,6 +27,7 @@ pub struct McpRuntimeConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Token store settings for MCP OAuth.
 pub struct McpTokenStoreConfig {
     pub enabled: bool,
     /// The preferred durable credential backend. `keyring` keeps credentials
@@ -49,6 +52,7 @@ impl Default for McpTokenStoreConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
+/// Backend used to store MCP OAuth tokens.
 pub enum McpTokenStoreBackend {
     #[default]
     Keyring,
@@ -83,6 +87,7 @@ impl Default for McpReconnectConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "transport", rename_all = "snake_case", deny_unknown_fields)]
+/// Configuration of one MCP server.
 pub enum McpServerConfig {
     Stdio {
         process: McpStdioProcessConfig,
@@ -111,6 +116,7 @@ pub struct McpToolPolicyConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Process settings of a stdio MCP server.
 pub struct McpStdioProcessConfig {
     pub command: String,
     #[serde(default)]
@@ -123,6 +129,7 @@ pub struct McpStdioProcessConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// HTTP endpoint settings of an MCP server.
 pub struct McpHttpEndpointConfig {
     pub url: String,
     #[serde(default)]
@@ -131,6 +138,7 @@ pub struct McpHttpEndpointConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+/// HTTP authentication settings of an MCP server.
 pub enum McpHttpAuthConfig {
     Bearer {
         token: String,

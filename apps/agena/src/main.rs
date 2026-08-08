@@ -1,3 +1,19 @@
+//! # agena
+//!
+//! Unified command-line binary for the Agena agent runtime.
+//!
+//! The binary parses the shared [`agena_cli`] command surface and launches one
+//! of four modes:
+//!
+//! - **TUI** — the interactive terminal UI.
+//! - **RPC server** — the JSON-RPC app-server surface.
+//! - **HTTP server** — the REST/WebSocket/SSE API server.
+//! - **Command** — one-shot CLI commands (`exec`, `config`, `provider`,
+//!   `session`, and friends).
+//!
+//! All modes are built on [`agena_runtime`] and share the same application
+//! runtime, session store, and plugin host.
+
 #![allow(unused_imports)]
 
 mod error;

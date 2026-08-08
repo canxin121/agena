@@ -1,3 +1,5 @@
+//! Dialog wrapper hosting the text editor.
+
 use std::borrow::Cow;
 
 use ratatui::{Frame, layout::Rect};

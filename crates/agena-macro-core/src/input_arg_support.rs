@@ -1,3 +1,5 @@
+//! Core helpers for tool input arguments.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use syn::spanned::Spanned;

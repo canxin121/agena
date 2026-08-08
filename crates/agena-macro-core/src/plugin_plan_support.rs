@@ -1,3 +1,5 @@
+//! Planning support for plugin tool methods.
+
 use quote::quote;
 use syn::{Attribute, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Meta, Result, Type};
 

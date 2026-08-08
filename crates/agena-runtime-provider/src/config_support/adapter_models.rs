@@ -10,6 +10,7 @@ use agena_provider::{
 };
 
 #[derive(Debug, Clone)]
+/// Model probe result for one adapter.
 pub struct ProviderAdapterModelsResult {
     pub adapter_id: String,
     pub enabled: bool,
@@ -29,6 +30,7 @@ const DEFAULT_BEDROCK_BASE_URL: &str = "https://bedrock-runtime.us-east-1.amazon
 const DEFAULT_BEDROCK_REGION: &str = "us-east-1";
 
 #[derive(Debug, Clone)]
+/// Target of an adapter model probe.
 pub struct ProviderAdapterModelsTarget {
     pub provider_id: String,
     pub auth: ProviderAuthConfig,
@@ -36,6 +38,7 @@ pub struct ProviderAdapterModelsTarget {
 }
 
 #[derive(Debug, Clone)]
+/// Adapter model probes for a provider.
 pub struct ProviderAdapterModelsListing {
     pub provider_id: String,
     pub adapters: Vec<super::ProviderAdapterModelsResult>,

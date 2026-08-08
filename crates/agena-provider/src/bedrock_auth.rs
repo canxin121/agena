@@ -5,6 +5,7 @@ use std::fmt;
 use serde::Serialize;
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
+/// AWS SigV4 auth configuration for Bedrock.
 pub struct BedrockSigv4AuthConfig {
     pub base_url: String,
     pub region: String,

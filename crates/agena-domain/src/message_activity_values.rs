@@ -2,6 +2,7 @@ use crate::FileChangeKind;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Text content part.
 pub struct TextPart {
     pub text: String,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -9,6 +10,7 @@ pub struct TextPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Reasoning content part (summary, raw, or encrypted content).
 pub struct ReasoningPart {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub summary: Vec<String>,
@@ -37,6 +39,7 @@ impl ReasoningPart {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Record of a file change (create, edit, delete, rename).
 pub struct FileChangeRecord {
     pub path: String,
     pub kind: FileChangeKind,
@@ -45,6 +48,7 @@ pub struct FileChangeRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Web search result entry.
 pub struct WebSearchResult {
     pub title: String,
     pub url: String,
@@ -53,6 +57,7 @@ pub struct WebSearchResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Error content part with a user-facing problem.
 pub struct ErrorPart {
     pub problem: agena_failure::UserProblem,
 }

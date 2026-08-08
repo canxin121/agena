@@ -1,3 +1,20 @@
+//! # agena-tui-app
+//!
+//! Application layer of the Agena terminal UI.
+//!
+//! This crate turns the reusable widgets from [`agena_tui_components`] into a
+//! working interactive application: it owns session state, composer state,
+//! permission prompts, provider/model switching, settings, overlays, the plan
+//! viewer, and the transcript, and drives the runtime through the shared API
+//! command surface.
+//!
+//! ## Public surface
+//!
+//! - [`App`] — the main application state machine.
+//! - [`LaunchOptions`] — configuration for starting the TUI.
+//! - [`tui_config_from_preferences`] — translate persisted UI preferences
+//!   into a terminal style/theme configuration.
+
 #![allow(clippy::items_after_test_module)]
 
 use std::{

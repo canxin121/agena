@@ -1,3 +1,5 @@
+//! Editor preview dialog (rendered output).
+
 use std::borrow::Cow;
 
 use ratatui::{Frame, layout::Rect, text::Text, widgets::Borders};

@@ -632,7 +632,7 @@ ownership (origin session); visibility is available for fork-aware UIs.
 | `list_session_events` / `stream_session_events` (REST, event envelopes) | persisted history = ordered parts (no event concept remains); live updates = part-patch stream over the in-memory bus plus ephemeral runtime signals (retry/progress) that are never persisted; wire format changes from event envelopes to part patches |
 | `latest_event_seq` | `sessions.version` or `MAX(session_parts.seq)` |
 | `export_session_jsonl` | serialize session meta + ordered parts (markers carry provider_state; anchors from 13.3); one part per line |
-| `import_session_jsonl` | re-create session + parts + membership with fresh ids; remap `parent_part_id`/`run_id` chains; restore provider_state/anchors; drop subtask lineage (matches v1) |
+| `import_session_jsonl` | re-create session + parts + membership with fresh ids; remap `parent_part_id`/`run_id` chains; restore provider_state/anchors; drop ALL lineage — import always yields an independent root session (matches v1: create_session with parent None; subtask events filtered) |
 | `TranscriptSnapshot`/`TranscriptPatch` (turns) | marker-grouped parts (turns = run marker + its parts); UI renders markers as turn boundaries |
 | `ActivityId`/`TextSegmentId`/`MessageId` | dissolve into `part_id` (API uses part ids) |
 

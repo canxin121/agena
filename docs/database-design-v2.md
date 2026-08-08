@@ -765,3 +765,117 @@ persisted, never replayed, no causality chain. History = ordered parts.
 ---
 
 _End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._
+
+---
+
+## 15. Encapsulation architecture — memory + DB are one sealed facade
+
+Goal: external callers cannot tell memory from database. All state is managed
+internally; live updates and reads are excellent; intrusive direct-DB writes
+(the v1 audit findings) become impossible by construction.
+
+### 15.1 Layering
+
+```
+External callers (TUI / Web / CLI / API server / tests)
+        |  depend only on the facade trait + pure domain types
+        v
++------------------------------------------------------------+
+| SessionFacade (trait SessionStore, section 14)             |  <-- ONLY public entry
+|   read   : cache -> persistence                            |
+|   write  : validate -> txn -> cache -> notify              |
+|   live   : subscribe(SessionChange)                        |
+|------------------------------------------------------------|
+| internal: MemoryLayer      (per-session LRU cache,         |
+|                             streaming buffers, pending ops)|
+| internal: PersistenceEngine(SQLite repos, transactions,    |
+|                             leases, recovery, GC)          |
+| internal: NotificationBus  (in-process bus + cross-process |
+|                             stream + version/seq catch-up) |
++------------------------------------------------------------+
+       ^
+       | the only place that imports sea_orm / holds DatabaseConnection
+       v
+   SQLite file (parts, session_parts, sessions, ...)
+```
+
+### 15.2 The sealed DB boundary (eliminates the v1 audit findings)
+
+- `DatabaseConnection` and every raw SQL statement live ONLY inside the
+  persistence engine. No other crate imports `sea_orm` for the chat DB.
+- The facade is the ONLY write path for chat data. Everything an external
+  caller can do goes through `SessionStore` methods.
+- v1 leaks fixed by construction: the raw SQL in `agena-runtime-session`
+  (content nodes, turns, replies, leases, membership, session CRUD) becomes
+  facade/internal-engine code; the scheduler keeps its own repository
+  interface or moves off the chat DB; the app-server KV/cache DB stays a
+  separate sealed subsystem (out of scope).
+- Enforcement: crate dependency rules (only the engine crate may depend on
+  `sea_orm`/`sqlx` for chat data) + module privacy (the connection type is
+  not exported) + review checklist (any new `DatabaseConnection`/raw SQL
+  outside the engine is a violation).
+
+### 15.3 Memory layer (evolved from v1 `SessionCache`)
+
+v1 `SessionCache` (LRU + TTL + byte budget + max sessions + stats,
+`session_cache.rs`) is kept and extended:
+
+- Per-session LRU cache of `SessionView` (parts ordered by seq).
+- Streaming buffers: in-progress parts held in memory, flushed per the
+  throttle policy (13.9) with `revision` guards; UI sees deltas instantly.
+- Read hot path: cache hit -> zero DB; miss -> one membership JOIN -> insert.
+- Invalidation: same-process writes discard/update the entry after commit;
+  cross-process changes detected by `sessions.version` comparison on hit.
+
+### 15.4 Persistence engine (internal, swap-friendly)
+
+- Owns the connection and the repository implementations: parts, membership,
+  sessions, usage, idempotency, leases, sequences.
+- Transactions with the write-lock sentinel + busy retry (section 8.1).
+- Recovery: lease steal -> atomically abort stale run markers (7.2); GC.
+- Two backends behind one engine trait: `SqliteEngine` (production) and
+  `InMemoryEngine` (tests / small deployments) — the facade is composed with
+  either at runtime (v1 `MemoryStore` precedent, extended to all tables).
+
+### 15.5 Notification bus (the only live mechanism)
+
+- `SessionChange` is emitted after commit: same-process subscribers via the
+  in-memory bus; cross-process via the notification stream plus
+  `version`/`seq` catch-up for late joiners (14.4).
+- `SessionFacade::subscribe` hides the transport; callers see one API.
+
+### 15.6 Write path (commit-then-notify)
+
+```
+submit_user_message(session, parts):
+  1. acquire session lease (if not held)
+  2. transaction: run marker + content parts + membership edges + version++
+  3. commit
+  4. update memory cache
+  5. emit SessionChange
+  6. return RunId
+
+streaming append/update:
+  1. mutate in-memory part immediately (UI latency ~0)
+  2. persist throttled (13.9) with revision guard, inside lease ownership
+  3. notify on each flush
+```
+
+### 15.7 Relationship to the execution engine
+
+`SessionFacade` is the DATA layer. The runtime execution engine (model calls,
+tool loop, interaction answering) is a higher-level service that orchestrates
+the work and calls the facade for every read/write. External callers use the
+runtime services; the facade stays the only data/state surface. No layer
+outside the engine touches the DB.
+
+### 15.8 Performance posture
+
+- Reads: cache-first; live updates push, no polling.
+- Writes: memory-first latency, throttled persistence, revision guards.
+- Fork/rewind: membership operations through the facade (section 7.3).
+- Multi-instance: version/seq catch-up; single-writer lease per session.
+
+---
+
+_End of v2 design._ _Companion docs: `docs/database-design-audit.md` (v1 audit)._

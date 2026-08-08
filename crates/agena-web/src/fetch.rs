@@ -12,6 +12,7 @@ const INITIAL_RETRY_DELAY_MS: u64 = 250;
 const MAX_RETRY_DELAY_MS: u64 = 4_000;
 
 #[derive(Debug, Clone)]
+/// Options for fetching a page.
 pub struct FetchOptions {
     pub max_body_bytes: usize,
     pub timeout: Duration,

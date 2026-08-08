@@ -2,6 +2,7 @@ use sea_orm::entity::prelude::*;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "agena_permission_rules")]
+/// SeaORM entity for a stored permission rule.
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: i64,
@@ -21,6 +22,7 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// SeaORM relations of the permission rule entity.
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

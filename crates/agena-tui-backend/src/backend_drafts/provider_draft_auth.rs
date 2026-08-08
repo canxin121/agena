@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Kind of a draft provider authentication flow.
 pub enum ProviderDraftAuthKind {
     Unset,
     None,
@@ -11,6 +12,7 @@ pub enum ProviderDraftAuthKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Adapter rule of a draft provider configuration.
 pub struct ProviderDraftAdapterRule {
     pub adapter_id: &'static str,
     pub detail_key: &'static str,
@@ -315,6 +317,7 @@ impl ProviderDraftAuthKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Secret source kind of a draft provider.
 pub enum ProviderDraftSecretSourceKind {
     #[default]
     Unset,
@@ -344,6 +347,7 @@ impl ProviderDraftSecretSourceKind {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Draft OAuth tokens of a provider.
 pub struct ProviderOAuthTokensDraft {
     pub refresh_token: String,
     pub access_token: String,
@@ -351,6 +355,7 @@ pub struct ProviderOAuthTokensDraft {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Draft browser auth session of a provider.
 pub struct ProviderBrowserAuthSessionDraft {
     pub authorize_url: String,
     pub display_url: Option<String>,
@@ -367,6 +372,7 @@ impl ProviderBrowserAuthSessionDraft {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Draft device auth session of a provider.
 pub struct ProviderDeviceAuthSessionDraft {
     pub verification_url: String,
     pub display_url: Option<String>,
@@ -384,6 +390,7 @@ impl ProviderDeviceAuthSessionDraft {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Kind of interactive login in a draft auth flow.
 pub enum ProviderDraftInteractiveLoginKind {
     Browser,
     #[default]
@@ -408,6 +415,7 @@ impl ProviderDraftInteractiveLoginKind {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Draft credential for the OpenAI ChatGPT provider.
 pub struct OpenAiChatgptCredentialDraft {
     pub login_kind: ProviderDraftInteractiveLoginKind,
     pub redirect_uri: String,
@@ -427,6 +435,7 @@ impl OpenAiChatgptCredentialDraft {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Draft credential for the GitHub Copilot provider.
 pub struct GithubCopilotCredentialDraft {
     pub enterprise_domain: String,
     pub tokens: ProviderOAuthTokensDraft,
@@ -434,6 +443,7 @@ pub struct GithubCopilotCredentialDraft {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Draft credential for the GitLab provider.
 pub struct GitlabCredentialDraft {
     pub redirect_uri: String,
     pub callback_url: String,
@@ -442,6 +452,7 @@ pub struct GitlabCredentialDraft {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Bundle of draft credentials for a provider.
 pub struct ProviderCredentialDraftBundle {
     pub openai_chatgpt: OpenAiChatgptCredentialDraft,
     pub github_copilot: GithubCopilotCredentialDraft,
@@ -537,6 +548,7 @@ impl ProviderCredentialDraftBundle {
 }
 
 #[derive(Debug, Clone)]
+/// Message sent to the draft auth flow.
 pub enum ProviderDraftAuthMessage {
     OpenaiBrowserStarted,
     OpenaiDeviceStarted { user_code: String },
@@ -550,6 +562,7 @@ pub enum ProviderDraftAuthMessage {
 }
 
 #[derive(Debug, Clone)]
+/// Field of the draft auth form.
 pub enum ProviderDraftAuthField {
     RedirectUri,
     InstanceUrl,
@@ -557,6 +570,7 @@ pub enum ProviderDraftAuthField {
 }
 
 #[derive(Debug, Clone)]
+/// Error of the draft auth flow.
 pub enum ProviderDraftAuthError {
     UnsupportedInteractiveLogin,
     StartBrowserAuthFirst,
@@ -576,6 +590,7 @@ impl ProviderDraftAuthError {
 }
 
 #[derive(Debug, Clone)]
+/// Result of a draft auth action.
 pub struct ProviderDraftAuthActionResult {
     pub draft: ProviderConfigDraft,
     pub message: ProviderDraftAuthMessage,
@@ -583,6 +598,7 @@ pub struct ProviderDraftAuthActionResult {
 }
 
 #[derive(Debug, Clone)]
+/// Result of saving a provider studio draft.
 pub enum ProviderStudioSaveResult {
     ProviderDraftSaved {
         provider_id: String,
@@ -616,6 +632,7 @@ pub enum ProviderStudioSaveResult {
 }
 
 #[derive(Debug, Clone)]
+/// Field that failed to save in the provider studio.
 pub enum ProviderStudioSaveField {
     ProviderId,
     DefaultAdapter,
@@ -627,6 +644,7 @@ pub enum ProviderStudioSaveField {
 }
 
 #[derive(Debug, Clone)]
+/// Validation error when saving a provider studio draft.
 pub enum ProviderStudioSaveValidationError {
     FieldRequired(ProviderStudioSaveField),
     UnsupportedDefaultAdapter {
@@ -651,6 +669,7 @@ pub enum ProviderStudioSaveValidationError {
 }
 
 #[derive(Debug, Clone)]
+/// Error when saving a provider studio draft.
 pub enum ProviderStudioSaveError {
     Validation(ProviderStudioSaveValidationError),
     ExistingProviderSettingsMustBeObject,
@@ -738,6 +757,7 @@ mod failure_projection_tests {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Details of a provider draft authentication.
 pub struct ProviderDraftAuthDetails {
     pub base_url: String,
     pub instance_url: String,

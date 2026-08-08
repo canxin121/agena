@@ -18,6 +18,7 @@ use ratatui::{Frame, layout::Rect, style::Style};
 use crate::{i18n::I18n, sanitize_picker_text};
 
 #[derive(Debug, Clone)]
+/// An item in the choice picker.
 pub struct ChoicePickerItem {
     pub label: String,
     pub detail: String,
@@ -68,6 +69,7 @@ pub struct ChoicePresentationMeta {
 }
 
 #[derive(Debug, Clone)]
+/// A custom value entered in the choice picker.
 pub struct ChoiceCustomValue {
     pub raw: String,
 }
@@ -95,6 +97,7 @@ impl SearchPickerCustomValue<ChoicePresentationMeta> for ChoiceCustomValue {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Presentation style of the choice picker.
 pub enum ChoicePresentationStyle {
     Searchable,
     SearchableSelect,
@@ -154,6 +157,7 @@ pub fn new_presentation(
 }
 
 #[derive(Debug, Clone)]
+/// Action performed by the choice picker.
 pub enum ChoicePresentationAction {
     Accept,
     Input(KeyEvent),
@@ -161,6 +165,7 @@ pub enum ChoicePresentationAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Current selection of the choice picker.
 pub enum ChoiceSelection {
     Clear,
     Custom { raw: String },
@@ -168,6 +173,7 @@ pub enum ChoiceSelection {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by a choice picker action.
 pub enum ChoicePresentationEffect {
     Close,
     Commit(ChoiceSelection),

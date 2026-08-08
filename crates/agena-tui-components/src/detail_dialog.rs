@@ -13,6 +13,7 @@ use crate::{
     text_dialog::{TextDialogSpec, render_text_dialog},
 };
 
+/// Spec of the detail text dialog.
 pub struct DetailTextDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub footer: Option<Cow<'a, str>>,

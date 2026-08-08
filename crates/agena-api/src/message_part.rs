@@ -43,6 +43,7 @@ pub struct MessagePartResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a message part; pairs with [`agena_domain::PartKind`] and drives how the part is rendered.
 pub enum MessagePartKindResource {
     Text,
     Activity,
@@ -83,6 +84,7 @@ pub enum MessagePartDetailResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A plain text part of a message.
 pub struct MessageTextPartResource {
     pub text: String,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -90,6 +92,7 @@ pub struct MessageTextPartResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Model reasoning text attached to a message part.
 pub struct MessageReasoningPartResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub summary: Vec<String>,
@@ -116,17 +119,20 @@ impl MessageReasoningPartResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// A message part carrying [`MessageAttachment`]s.
 pub struct MessageAttachmentPartResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<MessageAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A message part that references skills used by the run.
 pub struct MessageSkillReferencePartResource {
     pub skills: Vec<MessageSkillReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A message part representing a failure.
 pub struct MessageErrorPartResource {
     pub problem: agena_failure::UserProblem,
 }
@@ -162,6 +168,7 @@ pub enum MessageRequestPartResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// A message part representing a tool operation with its invocation and result.
 pub struct OperationPartResource {
     pub call_id: i64,
     pub invocation: ToolInvocationResource,
@@ -223,6 +230,7 @@ impl OperationPartResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Invocation of a tool inside an [`OperationPartResource`].
 pub struct ToolInvocationResource {
     #[serde(
         default,
@@ -238,6 +246,7 @@ pub struct ToolInvocationResource {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Gateway (Tool API) function being invoked when a tool is a gateway function.
 pub enum ToolGatewayFunctionResource {
     #[serde(rename = "tools_list")]
     List,
@@ -285,6 +294,7 @@ impl From<StructuredObjectResource> for serde_json::Value {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A named field inside a structured operation output.
 pub struct StructuredFieldResource {
     pub name: String,
     pub value: StructuredValueResource,
@@ -292,6 +302,7 @@ pub struct StructuredFieldResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// A structured value inside an operation output.
 pub enum StructuredValueResource {
     Null,
     Boolean {
@@ -349,6 +360,7 @@ impl From<StructuredValueResource> for serde_json::Value {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// A file managed by a tool result (path plus optional metadata).
 pub struct ToolManagedOutputResource {
     pub path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -358,6 +370,7 @@ pub struct ToolManagedOutputResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Structured payload of a tool result.
 pub struct ToolOutputResource {
     #[serde(default, skip_serializing_if = "StructuredObjectResource::is_empty")]
     pub payload: StructuredObjectResource,
@@ -374,11 +387,13 @@ impl ToolOutputResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Error payload of a failed operation part.
 pub struct OperationErrorResource {
     pub failure: agena_failure::UserProblem,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Output of a tool result that is visible to the model.
 pub struct ModelVisibleOutputResource {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
@@ -396,6 +411,7 @@ impl ModelVisibleOutputResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Lifecycle state of a tool result.
 pub enum ToolResultStateResource {
     #[default]
     Pending,
@@ -410,6 +426,7 @@ pub enum ToolResultStateResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Human-facing display of a tool result.
 pub struct ToolResultDisplayResource {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
@@ -433,6 +450,7 @@ pub struct ToolPresentationSectionResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// Envelope combining state, structured payload, blocks, and model preview of a tool result.
 pub struct ToolResultEnvelopeResource {
     #[serde(default)]
     pub state: ToolResultStateResource,
@@ -476,6 +494,7 @@ impl ToolResultEnvelopeResource {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Human-provided replacement for a tool result.
 pub struct HumanToolResultResource {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub summary: String,
@@ -492,6 +511,7 @@ impl HumanToolResultResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Start/end time range of an operation.
 pub struct TimeRangeResource {
     pub start_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -500,6 +520,7 @@ pub struct TimeRangeResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// A rendered block inside an operation part (text, table, search results, artifacts, todos).
 pub enum OperationBlockResource {
     Text {
         text: String,
@@ -612,6 +633,7 @@ pub enum OperationBlockResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Column definition of a table block.
 pub struct TableColumnResource {
     pub key: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -619,6 +641,7 @@ pub struct TableColumnResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// One search result item in a search block.
 pub struct SearchResultItemResource {
     pub title: String,
     pub uri: String,
@@ -629,6 +652,7 @@ pub struct SearchResultItemResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Reference to an artifact produced by a tool.
 pub struct ArtifactRefResource {
     pub uri: String,
     pub mime: String,
@@ -641,6 +665,7 @@ pub struct ArtifactRefResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A file change performed by a tool (add/update/delete/move).
 pub struct FileChangeRecordResource {
     pub path: String,
     pub kind: FileChangeKindResource,
@@ -650,6 +675,7 @@ pub struct FileChangeRecordResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a file change.
 pub enum FileChangeKindResource {
     Added,
     Updated,
@@ -658,6 +684,7 @@ pub enum FileChangeKindResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A todo item in a todo block.
 pub struct TodoItemResource {
     pub content: String,
     pub status: TodoStatusResource,
@@ -666,6 +693,7 @@ pub struct TodoItemResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Status of a todo item.
 pub enum TodoStatusResource {
     Pending,
     InProgress,
@@ -675,6 +703,7 @@ pub enum TodoStatusResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Priority of a todo item.
 pub enum TodoPriorityResource {
     High,
     Medium,

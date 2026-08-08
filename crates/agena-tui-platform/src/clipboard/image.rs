@@ -10,6 +10,7 @@ use std::process::Command;
 use super::path::{convert_windows_path_to_wsl, is_probably_wsl};
 
 #[derive(Debug, Clone)]
+/// Error pasting an image from the clipboard.
 pub enum PasteImageError {
     ClipboardUnavailable(String),
     NoImage(String),
@@ -31,6 +32,7 @@ impl std::fmt::Display for PasteImageError {
 impl std::error::Error for PasteImageError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Encoded format of a pasted image.
 pub enum EncodedImageFormat {
     Png,
     Jpeg,
@@ -48,6 +50,7 @@ impl EncodedImageFormat {
 }
 
 #[derive(Debug, Clone)]
+/// Information about a pasted image.
 pub struct PastedImageInfo {
     pub width: u32,
     pub height: u32,

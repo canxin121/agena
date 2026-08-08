@@ -13,6 +13,7 @@ use crate::{RuntimeBackgroundTaskOrigin, RuntimeBackgroundTaskStart};
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("model catalog refresh failed: {message}")]
+/// Error refreshing the model catalog.
 pub struct ModelCatalogRefreshError {
     message: String,
 }

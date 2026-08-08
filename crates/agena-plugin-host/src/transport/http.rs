@@ -16,6 +16,7 @@ use crate::sdk::{
 };
 use crate::transport::{PluginTransport, ToolStreamHandle};
 
+/// Plugin transport over HTTP callbacks.
 pub struct HttpTransport {
     client: Client,
     url: Url,

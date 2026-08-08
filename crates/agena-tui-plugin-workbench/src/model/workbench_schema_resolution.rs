@@ -792,6 +792,7 @@ pub(crate) fn replace_last_index(path: &[PathSegment], new_index: usize) -> Conf
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Action info of an array item.
 pub struct ArrayItemActionInfo {
     pub can_insert_before: bool,
     pub can_insert_after: bool,
@@ -813,6 +814,7 @@ impl ArrayItemActionInfo {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Primary action of a config row.
 pub enum ConfigRowPrimaryAction {
     InsertAfter,
     Duplicate,

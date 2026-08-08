@@ -7,6 +7,7 @@ use agena_domain::{ComposerActivity, ComposerDocument};
 use super::{PermissionMode, PermissionRuleDraft, PermissionRuleSubjectKind};
 
 #[derive(Debug, Clone, Default, PartialEq)]
+/// Draft state of the composer.
 pub struct ComposerDraft {
     pub document: ComposerDocument,
 }

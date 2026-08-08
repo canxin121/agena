@@ -89,6 +89,7 @@ pub(crate) enum SessionRunTermination {
 }
 
 #[derive(Clone)]
+/// Processor executing session runs against providers and tools.
 pub struct SessionProcessor {
     provider_registry: Arc<ProviderRegistry>,
     context_governor: ContextGovernor,

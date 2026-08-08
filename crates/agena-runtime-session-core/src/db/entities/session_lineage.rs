@@ -25,6 +25,7 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// SeaORM relations of the session lineage entity.
 pub enum Relation {
     #[sea_orm(
         belongs_to = "session::Entity",

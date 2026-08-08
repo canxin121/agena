@@ -30,6 +30,7 @@ pub enum ExecutionControlError {
 }
 
 #[derive(Debug)]
+/// Handle to control one execution.
 pub struct ExecutionControl<T> {
     execution_id: ExecutionId,
     turn_id: agena_domain::TurnId,
@@ -151,6 +152,7 @@ struct LeaseHandle {
 }
 
 #[derive(Debug)]
+/// Registry of active executions.
 pub struct ExecutionRegistry<T> {
     inner: Mutex<HashMap<i64, Arc<ExecutionControl<T>>>>,
     lease: Option<LeaseConfig>,

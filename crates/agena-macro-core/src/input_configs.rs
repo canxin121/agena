@@ -9,6 +9,7 @@ use super::{
     PluginInputPathSpec, SchemaConstraintSource, SchemaRelationSource, ident_to_snake_case,
 };
 
+/// Configuration of one tool input variant.
 pub struct ToolInputVariantConfig {
     pub action: Option<LitStr>,
     pub validate: Option<Path>,
@@ -54,6 +55,7 @@ pub struct ToolInputVariantConfig {
     pub drop_keys: Vec<LitStr>,
 }
 
+/// Configuration of a tool input.
 pub struct ToolInputConfig {
     pub example: Option<Expr>,
     pub default: bool,

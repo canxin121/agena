@@ -15,6 +15,7 @@ use agena_domain::{
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("background activity control failed: {message}")]
+/// Error controlling a background activity.
 pub struct ActivityControlError {
     message: String,
 }

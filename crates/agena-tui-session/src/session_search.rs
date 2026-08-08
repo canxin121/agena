@@ -17,6 +17,7 @@ use agena_tui::{i18n::I18n, sanitize_picker_text};
 use crate::session_view::SessionViewMode;
 
 #[derive(Debug, Clone)]
+/// A session search result item.
 pub struct SessionSearchItem {
     pub session_id: i64,
     pub title: String,
@@ -60,6 +61,7 @@ pub enum SessionSearchEffect {
 }
 
 #[derive(Debug, Clone)]
+/// Presentation of session search.
 pub struct SessionSearchPresentation {
     /// The complete subtree catalog. Visual pagination is owned by the shared
     /// `SearchPicker`; remote modes append backend result batches.

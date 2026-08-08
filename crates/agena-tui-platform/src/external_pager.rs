@@ -5,6 +5,7 @@ use std::{env, io, process::Command};
 use tempfile::NamedTempFile;
 
 #[derive(Debug)]
+/// Error launching an external pager.
 pub enum ExternalPagerError {
     InvalidPagerCommand(String),
     Io(std::io::Error),

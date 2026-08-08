@@ -6,6 +6,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Graphics mode of the terminal.
 pub enum GraphicsMode {
     Auto,
     Native,

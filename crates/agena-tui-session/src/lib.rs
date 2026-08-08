@@ -33,6 +33,7 @@ pub struct SessionDraft {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Reply to a pending permission request.
 pub enum PermissionReply {
     Allow,
     AllowForSession,
@@ -41,12 +42,14 @@ pub enum PermissionReply {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Reply to a pending user input request.
 pub enum UserInputReply {
     Answers(Vec<String>),
     Cancel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Command sent to the session controller.
 pub enum SessionCommand {
     CreateSession,
     SubmitMessage { draft: SessionDraft },
@@ -59,6 +62,7 @@ pub enum SessionCommand {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A page of session items.
 pub struct SessionPage<T> {
     pub items: Vec<T>,
     pub next_cursor: Option<String>,
@@ -66,6 +70,7 @@ pub struct SessionPage<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Summary of a session.
 pub struct SessionSummary {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -74,6 +79,7 @@ pub struct SessionSummary {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A message in the session view.
 pub struct SessionMessage {
     pub id: i64,
     pub role: String,
@@ -81,6 +87,7 @@ pub struct SessionMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Event emitted by the session controller.
 pub enum SessionEvent {
     SessionsLoaded(SessionPage<SessionSummary>),
     SessionCreated(SessionSummary),
@@ -102,6 +109,7 @@ pub enum SessionEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Live event of a session.
 pub enum SessionLiveEvent {
     UserMessageAppended { message_id: i64 },
     MessagePartChanged { message_id: i64, part_id: i64 },
@@ -110,6 +118,7 @@ pub enum SessionLiveEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the session controller.
 pub enum SessionEffect {
     LoadSessions {
         cursor: Option<String>,
@@ -153,6 +162,7 @@ pub enum SessionEffect {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Controller bridging the session view to the runtime.
 pub struct SessionController {
     pub current_session_id: Option<i64>,
     pub active: bool,

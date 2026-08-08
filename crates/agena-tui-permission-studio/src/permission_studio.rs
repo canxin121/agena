@@ -8,6 +8,7 @@ use agena_tui::i18n::I18n;
 use agena_tui_components::{SectionedListFocus, SelectableListState};
 
 #[derive(Debug, Clone)]
+/// A navigation item of the permission studio.
 pub struct PermissionStudioNavItem {
     pub label: String,
     pub level: usize,
@@ -17,6 +18,7 @@ pub struct PermissionStudioNavItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Pane focus of the permission studio.
 pub enum PermissionStudioPaneFocus {
     Navigation,
     Content,
@@ -32,6 +34,7 @@ impl PermissionStudioPaneFocus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Section of the permission studio.
 pub enum PermissionStudioSectionId {
     RootPath,
     RootNetwork,
@@ -45,6 +48,7 @@ pub enum PermissionStudioSectionId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Page of the permission studio.
 pub enum PermissionStudioPage {
     PathDefaults,
     PathRules,

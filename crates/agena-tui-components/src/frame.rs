@@ -11,12 +11,14 @@ use ratatui::{
 use crate::layout::SurfaceMode;
 use crate::theme::{modal_border_style, modal_surface_style};
 
+/// Spec of a framed surface.
 pub struct FramedSurfaceSpec<'a> {
     pub title: Cow<'a, str>,
     pub target_width: u16,
     pub target_height: u16,
 }
 
+/// A framed surface widget.
 pub struct FramedSurface {
     pub outer: Rect,
     pub inner: Rect,

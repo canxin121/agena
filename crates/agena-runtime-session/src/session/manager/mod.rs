@@ -126,6 +126,7 @@ impl UserInputPart {
 }
 
 #[derive(Debug, Clone)]
+/// Request to run a subtask within a session.
 pub struct SessionSubtaskRequest {
     pub parent_session_id: i64,
     pub description: String,
@@ -142,6 +143,7 @@ pub struct SessionSubtaskRequest {
 }
 
 #[derive(Debug, Clone)]
+/// Response of a session subtask.
 pub struct SessionSubtaskResponse {
     pub session: Session,
     pub task_id: String,
@@ -158,6 +160,7 @@ pub struct SessionSubtaskResponse {
 }
 
 #[derive(Debug, Clone)]
+/// A chunk of subtask output.
 pub struct SessionSubtaskOutputChunk {
     pub cursor: i64,
     pub role: agena_domain::Role,
@@ -166,6 +169,7 @@ pub struct SessionSubtaskOutputChunk {
 }
 
 #[derive(Debug, Clone)]
+/// Output of a session subtask.
 pub struct SessionSubtaskOutput {
     pub session_id: i64,
     pub chunks: Vec<SessionSubtaskOutputChunk>,
@@ -440,6 +444,7 @@ impl SessionManagerState {
     }
 }
 
+/// Manager of sessions: creation, runs, replies, and lifecycle.
 pub struct SessionManager {
     store: Arc<SessionStore>,
     publisher: Arc<crate::event::EventPublisher>,

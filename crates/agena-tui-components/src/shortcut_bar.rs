@@ -10,6 +10,7 @@ use ratatui::{
 use crate::theme::{accent_color, muted_style};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// A shortcut hint shown in the shortcut bar.
 pub struct ShortcutHint<'a> {
     pub key: Cow<'a, str>,
     pub label: Cow<'a, str>,

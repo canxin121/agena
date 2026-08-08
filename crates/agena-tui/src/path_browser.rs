@@ -19,18 +19,21 @@ use agena_tui_components::{
 use ratatui::{Frame, layout::Rect};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Mode of the path browser.
 pub enum PathBrowserMode {
     AnyPath,
     DirectoryOnly,
 }
 
 #[derive(Debug, Clone)]
+/// Metadata of the path browser.
 pub struct PathBrowserMeta {
     pub i18n: I18n,
     pub mode: PathBrowserMode,
 }
 
 #[derive(Debug, Clone)]
+/// A custom value entered in the path browser.
 pub struct PathBrowserCustomValue {
     pub raw: String,
 }
@@ -55,6 +58,7 @@ impl SearchPickerCustomValue<PathBrowserMeta> for PathBrowserCustomValue {
 }
 
 #[derive(Debug, Clone)]
+/// An item in the path browser.
 pub struct PathBrowserItem {
     /// Stable App-owned path-action key; this is not a filesystem path.
     pub key: String,
@@ -124,6 +128,7 @@ pub fn new_presentation(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the path browser.
 pub enum PathBrowserEffect {
     KeepOpen,
     Refresh,

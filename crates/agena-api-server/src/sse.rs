@@ -19,6 +19,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{error::ServerError, state::AppState};
 
 #[derive(Debug, Deserialize, Default)]
+/// Query for an SSE event stream.
 pub struct StreamQuery {
     /// Resume from a previous `seq_global`. The server first replays the
     /// persisted store up to the high watermark and then attaches to the

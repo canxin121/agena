@@ -5,6 +5,7 @@
 //! type merely to start a runtime.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a runtime bootstrap error.
 pub enum RuntimeBootstrapErrorKind {
     Configuration,
     Database,
@@ -14,6 +15,7 @@ pub enum RuntimeBootstrapErrorKind {
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("runtime bootstrap {kind:?} error: {message}")]
+/// Error bootstrapping the runtime.
 pub struct RuntimeBootstrapError {
     pub kind: RuntimeBootstrapErrorKind,
     pub message: String,

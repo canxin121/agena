@@ -89,6 +89,7 @@ fn run_abort_problem(reason: RunAbortReason) -> Option<agena_failure::UserProble
 }
 
 #[derive(Debug, Clone)]
+/// Header of a projected message from the history store.
 pub struct ProjectedMessageHeader {
     pub id: i64,
     pub role: Role,

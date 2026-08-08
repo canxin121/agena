@@ -212,6 +212,7 @@ pub(super) const SETTINGS_FIELDS: [SettingsFieldSpec; 15] = [
 ];
 
 #[derive(Debug, Clone, Default)]
+/// Options for launching the TUI app.
 pub struct LaunchOptions {
     pub initial_session_id: Option<i64>,
     pub initial_session_search: Option<String>,
@@ -387,6 +388,7 @@ impl TerminalIntegrationState {
     }
 }
 
+/// The TUI application.
 pub struct App {
     pub(super) backend: Backend,
     pub(super) i18n: I18n,

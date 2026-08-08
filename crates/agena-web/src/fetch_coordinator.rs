@@ -12,6 +12,7 @@ use moka::future::Cache;
 use crate::FetchedPage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Configuration of the web fetch coordinator.
 pub struct WebFetchCoordinatorConfig {
     pub cache_ttl: Duration,
     pub cache_capacity: u64,

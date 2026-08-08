@@ -85,6 +85,7 @@ pub struct ThemePalette {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// Overrides of the theme.
 pub struct ThemeOverrides {
     pub muted: Option<Color>,
     pub accent: Option<Color>,

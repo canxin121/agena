@@ -177,12 +177,14 @@ pub const fn transcript_spinner_placeholder() -> &'static str {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Viewport of the transcript view.
 pub struct TranscriptViewport {
     pub top: usize,
     pub follow_tail: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Action performed on the transcript view.
 pub enum TranscriptAction {
     Reset,
     ScrollTo(usize),
@@ -195,12 +197,14 @@ pub enum TranscriptAction {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Effect produced by a transcript action.
 pub struct TranscriptViewportEffect {
     pub top: usize,
     pub follow_tail: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// The transcript view.
 pub struct TranscriptView {
     pub visible: Range<usize>,
     pub follow_tail: bool,

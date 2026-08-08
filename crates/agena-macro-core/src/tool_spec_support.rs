@@ -5,6 +5,7 @@ use syn::{Expr, LitStr, Path, Type};
 use crate::{PluginInputFieldMetadata, PluginInputNetworkSpec, PluginInputPathSpec};
 
 #[derive(Clone)]
+/// Configuration of a tool spec.
 pub struct ToolSpecConfig {
     pub tool: Option<LitStr>,
     pub before_help: Option<LitStr>,
@@ -118,41 +119,48 @@ pub fn empty_tool_spec_config() -> ToolSpecConfig {
 }
 
 #[derive(Clone)]
+/// Usize path constraint.
 pub struct PathUsizeConstraint {
     pub path: LitStr,
     pub value: usize,
 }
 
 #[derive(Clone)]
+/// Pair path constraint.
 pub struct PathPairConstraint {
     pub left: LitStr,
     pub right: LitStr,
 }
 
 #[derive(Clone)]
+/// Strings path constraint.
 pub struct PathStringsConstraint {
     pub path: LitStr,
     pub values: Vec<LitStr>,
 }
 
 #[derive(Clone)]
+/// Value path constraint.
 pub struct PathValueConstraint {
     pub path: LitStr,
     pub value: Expr,
 }
 
 #[derive(Clone)]
+/// Values path constraint.
 pub struct PathValuesConstraint {
     pub path: LitStr,
     pub values: Vec<Expr>,
 }
 
 #[derive(Clone)]
+/// String path constraint.
 pub struct PathStringConstraint {
     pub path: LitStr,
     pub value: LitStr,
 }
 
+/// Source of schema constraints.
 pub trait SchemaConstraintSource {
     fn non_empty(&self) -> &[LitStr];
     fn non_empty_if_present(&self) -> &[LitStr];
@@ -174,6 +182,7 @@ pub trait SchemaConstraintSource {
     }
 }
 
+/// Source of schema relations.
 pub trait SchemaRelationSource {
     fn exactly_one_of(&self) -> &[Vec<LitStr>];
     fn at_least_one_of(&self) -> &[Vec<LitStr>];

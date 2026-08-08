@@ -102,6 +102,7 @@ use self::cli_validation::*;
                   Run as a tools-only MCP server over stdio:\n    \
                   agena mcp-server --workspace ."
 )]
+/// Top-level CLI entry point.
 pub struct AgenaCli {
     #[arg(short = 'c', long = "set", global = true)]
     /// Raw `--set` expressions. Their schema-specific parsing belongs to the
@@ -116,6 +117,7 @@ pub struct AgenaCli {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Top-level CLI commands.
 pub enum AgenaCommand {
     RpcServer(RpcServerArgs),
     Server(ServerArgs),
@@ -165,12 +167,14 @@ pub enum LaunchMode {
 }
 
 #[derive(Debug, Clone)]
+/// Launch parameters for the TUI.
 pub struct TuiLaunchRequest {
     pub config_override_expressions: Vec<String>,
     pub args: TuiArgs,
 }
 
 #[derive(Debug, Clone)]
+/// Launch parameters for the JSON-RPC server.
 pub struct RpcServerRequest {
     pub config_override_expressions: Vec<String>,
     pub database_url: Option<String>,
@@ -179,6 +183,7 @@ pub struct RpcServerRequest {
 }
 
 #[derive(Debug, Clone)]
+/// Common server launch parameters.
 pub struct ServerLaunchRequest {
     pub config_override_expressions: Vec<String>,
     pub database_url: Option<String>,
@@ -230,30 +235,35 @@ impl AgenaCli {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Provider authentication command.
 pub struct AuthCommand {
     #[command(subcommand)]
     pub command: Option<AuthSubcommand>,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Configuration command.
 pub struct ConfigCommand {
     #[command(subcommand)]
     pub command: Option<ConfigSubcommand>,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Debugging command.
 pub struct DebugCommand {
     #[command(subcommand)]
     pub command: DebugSubcommand,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for diagnostics.
 pub struct DiagnosticsArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for cost reporting.
 pub struct CostArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
@@ -263,6 +273,7 @@ pub struct CostArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Usage reporting period.
 pub enum UsagePeriodArg {
     Today,
     Yesterday,
@@ -292,6 +303,7 @@ impl UsagePeriodArg {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for usage reporting.
 pub struct UsageArgs {
     /// Preset reporting window. Use --from/--to for an exact custom range.
     #[arg(long, default_value_t = UsagePeriodArg::Week, value_enum)]
@@ -322,6 +334,7 @@ pub struct UsageArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for the commit helper.
 pub struct CommitArgs {
     pub message: String,
     #[arg(long, default_value = "json")]
@@ -329,6 +342,7 @@ pub struct CommitArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for the pull-request helper.
 pub struct PrArgs {
     pub title: String,
     #[arg(long)]
@@ -342,12 +356,14 @@ pub struct PrArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Permissions management command.
 pub struct PermissionsArgs {
     #[command(subcommand)]
     pub command: Option<PermissionsSubcommand>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Permissions subcommands.
 pub enum PermissionsSubcommand {
     List(PermissionsListArgs),
     Create(PermissionsWriteArgs),
@@ -357,6 +373,7 @@ pub enum PermissionsSubcommand {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Permission scope argument.
 pub enum PermissionScopeArg {
     Session,
     Workspace,
@@ -364,6 +381,7 @@ pub enum PermissionScopeArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Permission mode argument.
 pub enum PermissionModeArg {
     Allow,
     Auto,
@@ -372,6 +390,7 @@ pub enum PermissionModeArg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Permission reply kind argument.
 pub enum PermissionReplyKindArg {
     AllowOnce,
     AllowAlways,
@@ -380,6 +399,7 @@ pub enum PermissionReplyKindArg {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for listing permissions.
 pub struct PermissionsListArgs {
     #[arg(long)]
     pub search: Option<String>,
@@ -388,6 +408,7 @@ pub struct PermissionsListArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for writing a permission rule.
 pub struct PermissionsWriteArgs {
     #[arg(long)]
     pub action_key: Option<String>,
@@ -418,6 +439,7 @@ pub struct PermissionsWriteArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for replacing a permission rule.
 pub struct PermissionsReplaceArgs {
     pub rule_id: i64,
     #[command(flatten)]
@@ -425,6 +447,7 @@ pub struct PermissionsReplaceArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for revoking a permission rule.
 pub struct PermissionsRevokeArgs {
     pub rule_id: i64,
     #[arg(long)]
@@ -434,6 +457,7 @@ pub struct PermissionsRevokeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for replying to a permission request.
 pub struct PermissionsReplyArgs {
     pub request_id: String,
     #[arg(long)]
@@ -451,18 +475,21 @@ pub struct PermissionsReplyArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Snapshot management command.
 pub struct SnapshotArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Git helper command.
 pub struct GitArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for the inspect command.
 pub struct InspectArgs {
     /// Machine-readable JSON. The inspect manifest is JSON-only; this flag is
     /// accepted explicitly so CI can use `agena inspect --json`.
@@ -478,24 +505,28 @@ pub struct InspectArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Provider management command.
 pub struct ProviderCommand {
     #[command(subcommand)]
     pub command: Option<ProviderSubcommand>,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Memory management command.
 pub struct MemoryCommand {
     #[command(subcommand)]
     pub command: Option<MemorySubcommand>,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Plugin management command.
 pub struct PluginCommand {
     #[command(subcommand)]
     pub command: PluginSubcommand,
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Plugin subcommands.
 pub enum PluginSubcommand {
     /// Print runtime status for configured plugins, including failed loads.
     Status(PluginStatusArgs),
@@ -522,12 +553,14 @@ pub enum PluginSubcommand {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for plugin status.
 pub struct PluginStatusArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for plugin inspection.
 pub struct PluginInspectArgs {
     pub plugin_id: String,
     #[arg(long, default_value = "json")]
@@ -535,6 +568,7 @@ pub struct PluginInspectArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for plugin logs.
 pub struct PluginLogsArgs {
     pub plugin_id: String,
     #[arg(long, default_value_t = 50)]
@@ -546,6 +580,7 @@ pub struct PluginLogsArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for plugin validation.
 pub struct PluginValidateArgs {
     /// Manifest file, plugin directory, configured plugin JSON, or agena config.
     pub path: PathBuf,
@@ -557,12 +592,14 @@ pub struct PluginValidateArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Output format for plugin logs.
 pub enum PluginLogOutputFormat {
     Text,
     Json,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for installing a plugin.
 pub struct PluginInstallArgs {
     /// Plugin id, optionally with `@<version>` suffix.
     pub spec: String,
@@ -590,6 +627,7 @@ pub struct PluginInstallArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for uninstalling a plugin.
 pub struct PluginUninstallArgs {
     pub plugin_id: String,
     /// Also uninstall any plugin that depends on this one.
@@ -598,6 +636,7 @@ pub struct PluginUninstallArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for syncing plugins.
 pub struct PluginSyncArgs {
     /// Registry index URL.
     pub registry: String,
@@ -606,6 +645,7 @@ pub struct PluginSyncArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for searching plugins.
 pub struct PluginSearchArgs {
     pub query: String,
     /// Registry index URL.
@@ -615,6 +655,7 @@ pub struct PluginSearchArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for upgrading plugins.
 pub struct PluginUpgradeArgs {
     /// Plugin id to upgrade. Pass `--all` to upgrade every installed plugin.
     pub plugin_id: Option<String>,
@@ -629,12 +670,14 @@ pub struct PluginUpgradeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Session management command.
 pub struct SessionsCommand {
     #[command(subcommand)]
     pub command: Option<SessionsSubcommand>,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for the RPC server.
 pub struct RpcServerArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -643,11 +686,13 @@ pub struct RpcServerArgs {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Transport of the RPC server.
 pub enum RpcServerTransport {
     Stdio,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for the HTTP server.
 pub struct ServerArgs {
     #[arg(skip)]
     pub overrides: Vec<String>,
@@ -685,6 +730,7 @@ pub struct ServerArgs {
 
 #[derive(Clone, Debug, ValueEnum)]
 #[value(rename_all = "kebab_case")]
+/// SameSite policy of the UI cookie.
 pub enum UiCookieSameSite {
     Auto,
     Strict,
@@ -700,18 +746,21 @@ pub enum UiCookieSameSite {
                   Configure an MCP client with command `agena`, arguments `mcp-server --workspace <path>`.",
     after_help = "EXAMPLE:\n  agena mcp-server --workspace ."
 )]
+/// Arguments for the MCP server.
 pub struct McpServerArgs {
     #[arg(long = "workspace", env = "AGENA_WORKSPACE_ROOT", value_name = "PATH")]
     pub workspace: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
+/// MCP management command.
 pub struct McpCommand {
     #[command(subcommand)]
     pub command: Option<McpSubcommand>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// MCP subcommands.
 pub enum McpSubcommand {
     /// Show live, redacted MCP connection health for every configured server.
     Status(McpStatusArgs),
@@ -737,12 +786,14 @@ pub enum McpSubcommand {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for MCP status.
 pub struct McpStatusArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for reading MCP config.
 pub struct McpGetArgs {
     pub server: String,
     #[arg(long, default_value = "json")]
@@ -750,6 +801,7 @@ pub struct McpGetArgs {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+/// Config layer of an MCP edit.
 pub enum McpConfigLayerArg {
     #[default]
     Global,
@@ -757,6 +809,7 @@ pub enum McpConfigLayerArg {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+/// HTTP auth of an MCP server.
 pub enum McpHttpAuthArg {
     #[default]
     None,
@@ -767,6 +820,7 @@ pub enum McpHttpAuthArg {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for adding an MCP server.
 pub struct McpAddArgs {
     pub server: String,
     /// HTTP endpoint. Supply exactly one of --url and --command.
@@ -819,6 +873,7 @@ pub struct McpAddArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for removing an MCP server.
 pub struct McpRemoveArgs {
     pub server: String,
     #[arg(long, value_enum, default_value_t = McpConfigLayerArg::Global)]
@@ -832,6 +887,7 @@ pub struct McpRemoveArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for toggling an MCP plugin.
 pub struct McpPluginToggleArgs {
     #[arg(long, value_enum, default_value_t = McpConfigLayerArg::Global)]
     pub layer: McpConfigLayerArg,
@@ -844,6 +900,7 @@ pub struct McpPluginToggleArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for reconnecting MCP servers.
 pub struct McpReconnectArgs {
     pub server: String,
     #[arg(long, default_value = "json")]
@@ -851,6 +908,7 @@ pub struct McpReconnectArgs {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+/// Credential store of an MCP server.
 pub enum McpCredentialStoreArg {
     #[default]
     Keyring,
@@ -858,6 +916,7 @@ pub enum McpCredentialStoreArg {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for MCP OAuth login.
 pub struct McpLoginArgs {
     pub server: String,
     /// Bearer token for non-interactive automation. Prefer --token-stdin so
@@ -888,6 +947,7 @@ pub struct McpLoginArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for MCP logout.
 pub struct McpLogoutArgs {
     pub server: String,
     /// Credential backend from which to remove the token.
@@ -911,22 +971,26 @@ pub struct McpLogoutArgs {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Auth subcommands.
 pub enum AuthSubcommand {
     List(AuthListArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Config subcommands.
 pub enum ConfigSubcommand {
     Resolve(ConfigResolveArgs),
     Validate,
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Debug subcommands.
 pub enum DebugSubcommand {
     Session(DebugSessionArgs),
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Provider subcommands.
 pub enum ProviderSubcommand {
     List(ProviderListArgs),
     Models(ProviderModelsArgs),
@@ -934,6 +998,7 @@ pub enum ProviderSubcommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Memory subcommands.
 pub enum MemorySubcommand {
     List(MemoryListArgs),
     Forget(MemoryForgetArgs),
@@ -941,6 +1006,7 @@ pub enum MemorySubcommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
+/// Sessions subcommands.
 pub enum SessionsSubcommand {
     List(SessionListArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
@@ -953,11 +1019,13 @@ pub enum SessionsSubcommand {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for session export.
 pub struct SessionExportArgs {
     pub session_id: i64,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for session import.
 pub struct SessionImportArgs {
     /// Optional path. Reads from stdin if omitted.
     #[arg(long)]
@@ -967,6 +1035,7 @@ pub struct SessionImportArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for the session tree.
 pub struct SessionTreeArgs {
     pub root_id: i64,
     /// Cap the rendered subtree at this depth relative to the root (root = 0).
@@ -980,12 +1049,14 @@ pub struct SessionTreeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for listing auth.
 pub struct AuthListArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for provider login.
 pub struct LoginArgs {
     pub provider_id: String,
     #[arg(long)]
@@ -1005,11 +1076,13 @@ pub struct LoginArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for provider logout.
 pub struct LogoutArgs {
     pub provider_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// View of a session listing.
 pub enum SessionListView {
     All,
     Roots,
@@ -1017,6 +1090,7 @@ pub enum SessionListView {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for listing sessions.
 pub struct SessionListArgs {
     #[arg(long, default_value_t = 20)]
     pub limit: u64,
@@ -1031,6 +1105,7 @@ pub struct SessionListArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for listing memory.
 pub struct MemoryListArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -1039,6 +1114,7 @@ pub struct MemoryListArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for forgetting memory.
 pub struct MemoryForgetArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -1046,6 +1122,7 @@ pub struct MemoryForgetArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for editing memory.
 pub struct MemoryEditArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -1053,6 +1130,7 @@ pub struct MemoryEditArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for resuming a session.
 pub struct ResumeArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
@@ -1062,12 +1140,14 @@ pub struct ResumeArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for shell completion.
 pub struct CompletionArgs {
     #[arg(value_enum)]
     pub shell: clap_complete::Shell,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for continuing a run.
 pub struct ContinueArgs {
     pub session_id: Option<i64>,
     #[arg(long)]
@@ -1083,6 +1163,7 @@ pub struct ContinueArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for the apply helper.
 pub struct ApplyArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -1092,6 +1173,7 @@ pub struct ApplyArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for debug session.
 pub struct DebugSessionArgs {
     pub session_id: i64,
     #[arg(long)]
@@ -1099,6 +1181,7 @@ pub struct DebugSessionArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for exec.
 pub struct ExecArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -1114,6 +1197,7 @@ pub struct ExecArgs {
 }
 
 #[derive(Debug, Clone, Args, Default)]
+/// Arguments for the TUI.
 pub struct TuiArgs {
     #[arg(long, env = "AGENA_DATABASE_URL")]
     pub database_url: Option<String>,
@@ -1134,6 +1218,7 @@ pub struct TuiArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for review.
 pub struct ReviewArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
@@ -1150,6 +1235,7 @@ pub struct ReviewArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for forking a session.
 pub struct ForkArgs {
     pub session_id: i64,
     /// Fork point: clones every event up to and including the last one tied
@@ -1163,18 +1249,21 @@ pub struct ForkArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for config resolution.
 pub struct ConfigResolveArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for listing providers.
 pub struct ProviderListArgs {
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for provider models.
 pub struct ProviderModelsArgs {
     pub provider_id: String,
     #[arg(long, default_value = "json")]
@@ -1182,6 +1271,7 @@ pub struct ProviderModelsArgs {
 }
 
 #[derive(Debug, Clone, Args)]
+/// Arguments for provider capabilities.
 pub struct ProviderCapabilitiesArgs {
     pub target: String,
     #[arg(long)]

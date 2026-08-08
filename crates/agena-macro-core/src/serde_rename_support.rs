@@ -7,6 +7,7 @@ use syn::{Attribute, Field, Ident, LitStr, Meta, Result, Token};
 use super::{expr_lit_str, ident_to_snake_case};
 
 #[derive(Clone, Copy)]
+/// Serde rename rule applied to a field.
 pub enum SerdeRenameRule {
     Lower,
     Upper,

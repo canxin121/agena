@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::{AgenaToolsConfig, ConfiguredModelDefinition};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Resolved configuration of one provider model.
 pub struct ResolvedProviderModelConfig {
     #[serde(skip_serializing_if = "is_true")]
     pub enabled: bool,

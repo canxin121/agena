@@ -3,11 +3,13 @@
 use crate::selection::{SelectionCursor, clamped_selected_index};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Focus of a sectioned list.
 pub enum SectionedListFocus {
     Navigation,
     Items,
 }
 
+/// A section of a sectioned list.
 pub trait SectionedListSection {
     type Item;
 
@@ -15,6 +17,7 @@ pub trait SectionedListSection {
 }
 
 #[derive(Debug, Clone)]
+/// State of a sectioned list.
 pub struct SectionedListState<TSection>
 where
     TSection: SectionedListSection,

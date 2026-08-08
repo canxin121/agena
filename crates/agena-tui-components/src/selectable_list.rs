@@ -10,6 +10,7 @@ use crate::selection::{
 };
 
 #[derive(Debug, Clone)]
+/// State of a selectable list.
 pub struct SelectableListState<T> {
     pub items: Vec<T>,
     pub selected: usize,

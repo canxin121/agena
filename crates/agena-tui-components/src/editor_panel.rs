@@ -11,11 +11,13 @@ use ratatui::{
 
 use crate::Editor;
 
+/// Spec of the editor panel.
 pub struct EditorPanelSpec<'a> {
     pub title: Option<Cow<'a, str>>,
     pub borders: Borders,
 }
 
+/// Render result of the editor panel.
 pub struct EditorPanelRenderResult {
     pub cursor: (u16, u16),
 }

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::CrawlError;
 
 #[derive(Debug, Clone)]
+/// Options for launching a local browser.
 pub struct LocalBrowserOptions {
     pub executable_path: Option<PathBuf>,
     pub startup_timeout: Duration,

@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::sdk::PluginKey;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+/// Resource quota configuration of a plugin.
 pub struct QuotaConfig {
     /// Sustained host-call rate. `0` means unlimited.
     #[serde(default)]
@@ -187,6 +188,7 @@ impl QuotaRegistry {
 }
 
 #[derive(Debug)]
+/// Guard holding a quota reservation.
 pub struct QuotaGuard<'a> {
     registry: &'a QuotaRegistry,
     plugin_id: PluginKey,
@@ -202,6 +204,7 @@ impl<'a> Drop for QuotaGuard<'a> {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the plugin quota system.
 pub enum QuotaError {
     #[error("plugin host call rate exceeded: rate={rate_per_sec}/s burst={burst}")]
     RateExceeded { rate_per_sec: u32, burst: u32 },

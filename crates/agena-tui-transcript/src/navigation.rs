@@ -1,6 +1,7 @@
 //! Transcript viewport navigation state.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Cursor over transcript blocks.
 pub struct TranscriptBlockCursor {
     pub key: TranscriptNodeKey,
     pub direction: TranscriptMoveDirection,
@@ -8,6 +9,7 @@ pub struct TranscriptBlockCursor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Selection mode of transcript blocks.
 pub enum TranscriptBlockSelectionMode {
     Entering,
     Leaving,
@@ -15,6 +17,7 @@ pub enum TranscriptBlockSelectionMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// Key identifying a transcript node.
 pub enum TranscriptNodeKey {
     Entry {
         entry_id: crate::TranscriptEntryId,
@@ -50,6 +53,7 @@ pub enum TranscriptNodeKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Activity section of the transcript.
 pub enum TranscriptActivitySection {
     Permissions,
     Input,
@@ -78,6 +82,7 @@ impl TranscriptNodeKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a transcript node.
 pub enum TranscriptNodeKind {
     Message,
     MarkdownParagraph,
@@ -123,6 +128,7 @@ pub fn transcript_node_kind_label(i18n: &I18n, kind: TranscriptNodeKind) -> Stri
 }
 
 #[derive(Debug, Clone)]
+/// A rendered node of the transcript.
 pub struct RenderedTranscriptNode {
     pub key: TranscriptNodeKey,
     pub kind: TranscriptNodeKind,
@@ -171,6 +177,7 @@ pub fn transcript_node_highlight_range(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Vertical navigation step of the transcript.
 pub enum TranscriptVerticalNavigationStep {
     SelectNode {
         node_index: usize,

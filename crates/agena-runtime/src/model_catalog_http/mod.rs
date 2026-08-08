@@ -25,6 +25,7 @@ use sources_enrichment::*;
 pub(crate) use sources_fetch::fetch_source_document;
 
 #[derive(Debug, Error)]
+/// Error from the model catalog HTTP source.
 pub enum ModelCatalogHttpError {
     #[error("model catalog source error: {0}")]
     Source(String),

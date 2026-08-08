@@ -16,6 +16,7 @@ const RAW_HASH_TO_ID_TABLE: TableDefinition<&str, &str> =
 static OPEN_DATABASES: LazyLock<Mutex<HashMap<PathBuf, Arc<Database>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+/// Store of crawl metadata.
 pub struct CrawlMetadataStore {
     db: Arc<Database>,
 }

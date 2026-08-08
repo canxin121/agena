@@ -9,6 +9,7 @@ use agena_domain::ToolInvocation;
 use async_trait::async_trait;
 
 #[derive(Debug, Clone)]
+/// Descriptor of a runtime tool.
 pub struct RuntimeToolDescriptor {
     pub name: String,
     pub summary: Option<String>,
@@ -19,6 +20,7 @@ pub struct RuntimeToolDescriptor {
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[error("runtime tool execution failed: {message}")]
+/// Error executing a runtime tool.
 pub struct RuntimeToolExecutionError {
     message: String,
 }
@@ -32,6 +34,7 @@ impl RuntimeToolExecutionError {
 }
 
 #[async_trait]
+/// Service executing tools in the runtime.
 pub trait RuntimeToolExecutionService: Send + Sync {
     fn available_runtime_tools(&self) -> Vec<RuntimeToolDescriptor>;
 

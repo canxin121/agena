@@ -7,6 +7,7 @@ use agena_plugin_host::PluginSignature;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Index of a marketplace registry.
 pub struct RegistryIndex {
     #[serde(default = "default_index_version")]
     pub version: u32,
@@ -19,6 +20,7 @@ fn default_index_version() -> u32 {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A plugin entry in the registry index.
 pub struct PluginRecord {
     pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -32,6 +34,7 @@ pub struct PluginRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A version of a marketplace plugin.
 pub struct PluginVersion {
     pub version: String,
     pub kind: PluginKind,
@@ -69,6 +72,7 @@ pub struct PluginVersion {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "format", rename_all = "snake_case")]
+/// How a plugin archive is fetched.
 pub enum ArchiveSpec {
     /// gzip tar archive. The named entrypoint inside the archive is what the
     /// final config's `command`/`path` field will point to.
@@ -88,6 +92,7 @@ fn default_platform() -> String {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a marketplace plugin.
 pub enum PluginKind {
     Cdylib,
     Stdio,

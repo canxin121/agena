@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 // ── user.prompt.submit ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the user prompt submit hook.
 pub struct UserPromptSubmitInput {
     pub session_id: i64,
     /// The raw text the user submitted.
@@ -10,6 +11,7 @@ pub struct UserPromptSubmitInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied to a submitted user prompt.
 pub struct UserPromptSubmitPatch {
     /// Replace the prompt with a different text.
     #[serde(default, skip_serializing_if = "Option::is_none")]

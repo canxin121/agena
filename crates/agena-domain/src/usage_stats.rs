@@ -4,6 +4,7 @@ use serde::Serialize;
 use crate::UsagePeriod;
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
+/// Total billable units for one unit kind.
 pub struct UsageBillableUnitTotal {
     pub kind: String,
     pub unit: String,
@@ -14,6 +15,7 @@ pub struct UsageBillableUnitTotal {
 }
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq)]
+/// Aggregate usage totals.
 pub struct UsageTotals {
     /// Number of provider requests, including requests issued by ordinary
     /// provider-backed tools. The field name is retained for API compatibility.
@@ -41,6 +43,7 @@ pub struct UsageTotals {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Per-day usage breakdown.
 pub struct UsageDailyBreakdown {
     pub date: String,
     #[serde(flatten)]
@@ -48,6 +51,7 @@ pub struct UsageDailyBreakdown {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Usage broken down by provider.
 pub struct ProviderUsageBreakdown {
     pub provider_id: String,
     #[serde(flatten)]
@@ -55,6 +59,7 @@ pub struct ProviderUsageBreakdown {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Usage broken down by model.
 pub struct ModelUsageBreakdown {
     pub provider_id: String,
     pub model_id: String,
@@ -63,6 +68,7 @@ pub struct ModelUsageBreakdown {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Usage broken down by session.
 pub struct SessionUsageBreakdown {
     pub session_id: i64,
     pub title: String,
@@ -74,6 +80,7 @@ pub struct SessionUsageBreakdown {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Full usage statistics: totals, daily, provider, model, and session breakdowns.
 pub struct UsageStats {
     pub generated_at: DateTime<Utc>,
     pub period: UsagePeriod,

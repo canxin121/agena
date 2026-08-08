@@ -23,6 +23,7 @@ use super::protocol::{
 };
 
 #[derive(Debug, Error)]
+/// Error from the JSON-RPC app server.
 pub enum AppServerError {
     #[error("invalid params: {0}")]
     InvalidParams(String),
@@ -37,6 +38,7 @@ pub enum AppServerError {
 }
 
 #[async_trait]
+/// Backend implementing JSON-RPC methods.
 pub trait AppServerBackend: Send + Sync + 'static {
     async fn create_session(
         &self,
@@ -62,6 +64,7 @@ pub trait AppServerBackend: Send + Sync + 'static {
 }
 
 #[derive(Clone)]
+/// Broadcaster of server notifications to subscribers.
 pub struct EventBroadcaster {
     sender: broadcast::Sender<AppServerNotification>,
 }
@@ -82,6 +85,7 @@ impl EventBroadcaster {
 }
 
 #[derive(Clone)]
+/// JSON-RPC application server.
 pub struct AppServer<B> {
     backend: Arc<B>,
     events: EventBroadcaster,

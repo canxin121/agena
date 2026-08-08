@@ -10,6 +10,7 @@ pub use agena_domain::ToolPresentationSection;
 // ── tool.execute.before ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the tool-before hook.
 pub struct ToolBeforeInput {
     pub tool: ToolKey,
     pub session_id: i64,
@@ -41,6 +42,7 @@ impl ToolBeforeInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied before a tool executes.
 pub struct ToolBeforePatch {
     /// Override the tool's argument JSON before execution.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -59,6 +61,7 @@ pub struct ToolBeforePatch {
 // ── tool.execute.after ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the tool-after hook.
 pub struct ToolAfterInput {
     pub tool: ToolKey,
     pub session_id: i64,
@@ -84,6 +87,7 @@ impl ToolAfterInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied after a tool executes.
 pub struct ToolAfterPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -148,6 +152,7 @@ impl ToolDefinitionInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied to a tool definition by a hook.
 pub struct ToolDefinitionPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
@@ -162,6 +167,7 @@ pub struct ToolDefinitionPatch {
 // ── tool.invoke (custom plugin tools) ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the tool invoke hook.
 pub struct ToolInvokeInput {
     pub tool_name: String,
     pub session_id: i64,
@@ -171,6 +177,7 @@ pub struct ToolInvokeInput {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Context of a tool invocation hook.
 pub struct ToolInvokeContext<'a> {
     pub tool_name: &'a str,
     pub session_id: i64,
@@ -190,6 +197,7 @@ impl ToolInvokeInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the tool permission paths hook.
 pub struct ToolPermissionPathsInput {
     pub tool_name: String,
     pub workspace_root: String,
@@ -197,6 +205,7 @@ pub struct ToolPermissionPathsInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the tool permission networks hook.
 pub struct ToolPermissionNetworksInput {
     pub tool_name: String,
     pub workspace_root: String,
@@ -204,6 +213,7 @@ pub struct ToolPermissionNetworksInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Output of a tool invocation hook.
 pub struct ToolInvokeOutput {
     pub title: String,
     pub summary: String,
@@ -260,6 +270,7 @@ impl ToolInvokeOutput {
     }
 }
 
+/// Conversion into a tool invocation output.
 pub trait IntoToolInvokeOutput {
     fn into_tool_invoke_output(self) -> crate::Result<ToolInvokeOutput>;
 }
@@ -406,6 +417,7 @@ impl ToolStreamEnd {
     }
 }
 
+/// Conversion into a tool stream end.
 pub trait IntoToolStreamEnd {
     fn into_tool_stream_end(self, stream_id: String) -> crate::Result<ToolStreamEnd>;
 }

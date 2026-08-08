@@ -20,6 +20,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+/// An item in the file attach picker.
 pub struct FileAttachItem {
     /// Stable application-owned action key; never a filesystem path.
     pub key: String,
@@ -46,11 +47,13 @@ impl SearchPickerItem for FileAttachItem {
 }
 
 #[derive(Debug, Clone)]
+/// Metadata of a file attach item.
 pub struct FileAttachMeta {
     pub i18n: I18n,
 }
 
 #[derive(Debug, Clone)]
+/// A custom value entered in the file attach picker.
 pub struct FileAttachCustomValue {
     pub raw: String,
 }
@@ -102,6 +105,7 @@ pub fn new_presentation(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the file attach picker.
 pub enum FileAttachEffect {
     KeepOpen,
     Close,

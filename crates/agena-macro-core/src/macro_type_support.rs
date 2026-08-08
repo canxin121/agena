@@ -6,6 +6,7 @@ use syn::{LitStr, PathArguments, Result, Type};
 use super::{PluginNetworkSemantic, PluginPathPermissionKind, PluginPickerKind};
 
 #[derive(Default)]
+/// Semantic shape of a macro input type.
 pub struct InputTypeSemanticShape {
     pub optional: bool,
     pub array: bool,

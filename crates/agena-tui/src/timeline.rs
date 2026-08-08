@@ -15,6 +15,7 @@ use ratatui::{Frame, layout::Rect, text::Text};
 use crate::i18n::I18n;
 
 #[derive(Debug, Clone)]
+/// An item in the timeline.
 pub struct TimelineItem {
     pub summary: String,
     pub detail_body: Text<'static>,
@@ -40,6 +41,7 @@ impl SearchPickerItem for TimelineItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Presentation state of the timeline.
 pub struct TimelinePresentation {
     /// Runtime query scope retained by the App overlay adapter.
     pub session_id: i64,

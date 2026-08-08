@@ -16,6 +16,7 @@ use crate::transport::{
     PluginTransport, cdylib::CdylibTransport, http::HttpTransport, stdio::StdioTransport,
 };
 
+/// Static plugin registration entry.
 pub struct StaticRegistration {
     pub builder: Box<dyn FnOnce() -> Arc<dyn PluginTransport> + Send + Sync>,
 }

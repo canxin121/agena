@@ -341,6 +341,7 @@ impl ModelCatalogRemoteSourceKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Tier of a remote model catalog source.
 pub enum ModelCatalogRemoteSourceTier {
     OfficialStructured,
     CuratedStructured,

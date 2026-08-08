@@ -3,6 +3,7 @@ use std::path::Path;
 use git2::{ErrorCode, Repository};
 
 #[derive(Debug, Clone)]
+/// Error opening a git repository with libgit2.
 pub enum Git2OpenError {
     NotARepository,
     Other(String),

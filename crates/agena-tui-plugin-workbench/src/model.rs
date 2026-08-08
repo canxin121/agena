@@ -96,6 +96,7 @@ pub mod api {
 pub const PLUGIN_WORKBENCH_LOG_LIMIT: usize = 80;
 
 #[derive(Debug, Clone)]
+/// An overlay of the plugin workbench.
 pub struct PluginWorkbenchOverlay {
     pub title: String,
     pub list: PluginWorkbenchListPresentation,
@@ -121,17 +122,20 @@ pub struct PluginWorkbenchOverlay {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// View of a plugin config.
 pub enum PluginConfigView {
     Effective,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Text display mode of a plugin.
 pub enum PluginTextDisplayMode {
     Detailed,
     Summary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Text display source of a plugin.
 pub enum PluginTextDisplaySource {
     ToolPolicy,
     PluginPolicy,
@@ -141,6 +145,7 @@ pub enum PluginTextDisplaySource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Focus of a plugin config.
 pub enum PluginConfigFocus {
     Structure,
     Editor,
@@ -148,6 +153,7 @@ pub enum PluginConfigFocus {
 }
 
 #[derive(Debug, Clone)]
+/// A plugin shown in the workbench.
 pub struct PluginWorkbenchPlugin {
     pub plugin_id: String,
     pub visible_tool: String,
@@ -181,6 +187,7 @@ pub struct PluginWorkbenchPlugin {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Status kind of a plugin config.
 pub enum PluginConfigStatusKind {
     Valid,
     Missing,
@@ -192,12 +199,14 @@ pub enum PluginConfigStatusKind {
 }
 
 #[derive(Debug, Clone)]
+/// Status of a plugin config.
 pub struct PluginConfigStatus {
     pub kind: PluginConfigStatusKind,
     pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// A path segment in a config path.
 pub enum PathSegment {
     Key(String),
     Index(usize),
@@ -206,12 +215,14 @@ pub enum PathSegment {
 pub type ConfigPath = Vec<PathSegment>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Severity of a config diagnostic.
 pub enum DiagnosticSeverity {
     Error,
     Warning,
 }
 
 #[derive(Debug, Clone)]
+/// A config diagnostic.
 pub struct ConfigDiagnostic {
     pub severity: DiagnosticSeverity,
     pub source: String,
@@ -221,6 +232,7 @@ pub struct ConfigDiagnostic {
 }
 
 #[derive(Debug, Clone)]
+/// A diff row of a config section.
 pub struct ConfigDiffRow {
     pub path: ConfigPath,
     pub before: String,
@@ -229,6 +241,7 @@ pub struct ConfigDiffRow {
 }
 
 #[derive(Debug, Clone)]
+/// View of a config section.
 pub struct ConfigSectionView {
     pub key: String,
     pub title: String,
@@ -238,6 +251,7 @@ pub struct ConfigSectionView {
 }
 
 #[derive(Debug, Clone)]
+/// Body of a config section view.
 pub enum ConfigSectionBody {
     Overview {
         cards: Vec<ConfigOverviewCard>,
@@ -250,6 +264,7 @@ pub enum ConfigSectionBody {
 }
 
 #[derive(Debug, Clone)]
+/// An overview card of a config group.
 pub struct ConfigOverviewCard {
     pub title: String,
     pub summary: String,
@@ -257,6 +272,7 @@ pub struct ConfigOverviewCard {
 }
 
 #[derive(Debug, Clone)]
+/// View of a config group.
 pub struct ConfigGroupView {
     pub title: String,
     pub layout: ConfigGroupLayout,
@@ -264,6 +280,7 @@ pub struct ConfigGroupView {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Layout of a config group.
 pub enum ConfigGroupLayout {
     Standard,
     Pair {
@@ -273,6 +290,7 @@ pub enum ConfigGroupLayout {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A cell of a config row.
 pub enum ConfigRowCell {
     Type,
     Value,
@@ -283,6 +301,7 @@ pub enum ConfigRowCell {
 }
 
 #[derive(Debug, Clone)]
+/// View of a config row.
 pub struct ConfigRowView {
     pub title: String,
     pub primary_path: ConfigPath,
@@ -300,6 +319,7 @@ pub struct ConfigRowView {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Type mode of a config row.
 pub enum ConfigRowTypeMode {
     Fixed,
     SelectType,
@@ -321,6 +341,7 @@ impl ConfigRowTypeMode {
 }
 
 #[derive(Debug, Clone)]
+/// Editor of a config row.
 pub enum ConfigRowEditor {
     Bool {
         path: ConfigPath,
@@ -346,6 +367,7 @@ pub enum ConfigRowEditor {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// State of a config row.
 pub enum ConfigRowState {
     Default,
     Override,
@@ -367,6 +389,7 @@ impl ConfigRowState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Action of the compact toolbar.
 pub enum CompactToolbarAction {
     Validate,
     ResetAll,
@@ -378,6 +401,7 @@ pub enum CompactToolbarAction {
 pub type PluginConfigEditOverlay = EditorDialogState<PluginConfigEditAction>;
 
 #[derive(Debug, Clone)]
+/// Drilldown overlay of a plugin config.
 pub struct PluginConfigDrilldownOverlay {
     pub plugin_id: String,
     pub path: ConfigPath,
@@ -388,12 +412,14 @@ pub struct PluginConfigDrilldownOverlay {
 }
 
 #[derive(Debug, Clone)]
+/// Action overlay of a plugin config.
 pub struct PluginConfigActionOverlay {
     pub presentation: crate::PluginConfigPickerPresentation,
     pub actions: BTreeMap<String, PluginConfigAction>,
 }
 
 #[derive(Debug, Clone)]
+/// A candidate action of a plugin config.
 pub struct PluginConfigActionCandidate {
     pub label: String,
     pub description: String,
@@ -401,6 +427,7 @@ pub struct PluginConfigActionCandidate {
 }
 
 #[derive(Debug, Clone)]
+/// Selection overlay of a plugin config.
 pub struct PluginConfigSelectionOverlay {
     pub presentation: crate::PluginConfigPickerPresentation,
     pub action: PluginConfigSelectionAction,
@@ -408,6 +435,7 @@ pub struct PluginConfigSelectionOverlay {
 }
 
 #[derive(Debug, Clone)]
+/// A candidate of a plugin config selection.
 pub struct PluginConfigSelectionCandidate {
     pub label: String,
     pub description: Option<String>,
@@ -416,6 +444,7 @@ pub struct PluginConfigSelectionCandidate {
 }
 
 #[derive(Debug, Clone)]
+/// Value of a plugin config selection.
 pub enum PluginConfigSelectionValue {
     Named(String),
     Branch(BranchChoice),
@@ -423,6 +452,7 @@ pub enum PluginConfigSelectionValue {
 }
 
 #[derive(Debug, Clone)]
+/// Action of a plugin config selection.
 pub enum PluginConfigSelectionAction {
     Type { plugin_id: String, path: ConfigPath },
     Branch { plugin_id: String, path: ConfigPath },
@@ -431,6 +461,7 @@ pub enum PluginConfigSelectionAction {
 }
 
 #[derive(Debug, Clone)]
+/// Action on a plugin config.
 pub enum PluginConfigAction {
     SelectType {
         plugin_id: String,
@@ -482,6 +513,7 @@ pub enum PluginConfigAction {
 }
 
 #[derive(Debug, Clone)]
+/// Edit action on a plugin config.
 pub enum PluginConfigEditAction {
     SetScalar {
         plugin_id: String,
@@ -508,6 +540,7 @@ pub enum PluginConfigEditAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Tool invocation action of the workbench.
 pub struct PluginToolInvocationAction {
     pub plugin_id: String,
     pub tool_name: String,
@@ -516,6 +549,7 @@ pub struct PluginToolInvocationAction {
 pub type PluginToolInvocationOverlay = EditorDialogState<PluginToolInvocationAction>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of a workbench tool invocation.
 pub struct PluginToolInvocationResult {
     pub plugin_id: String,
     pub tool_name: String,
@@ -524,6 +558,7 @@ pub struct PluginToolInvocationResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a scalar edit.
 pub enum ScalarEditKind {
     String,
     Number,
@@ -531,6 +566,7 @@ pub enum ScalarEditKind {
 }
 
 #[derive(Debug, Clone)]
+/// A branch choice of a config edit.
 pub struct BranchChoice {
     pub id: String,
     pub label: String,

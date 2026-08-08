@@ -5,6 +5,7 @@ use crossterm::event::KeyEvent;
 use crate::{Editor, InputDialogAction, input_dialog_action};
 
 #[derive(Debug, Clone)]
+/// State of the input dialog.
 pub struct InputDialogState<TAction> {
     pub title: String,
     pub prompt: String,
@@ -24,6 +25,7 @@ impl<TAction> InputDialogState<TAction> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Result of an input dialog key.
 pub enum InputDialogKeyResult<TAction> {
     Continue,
     Close,

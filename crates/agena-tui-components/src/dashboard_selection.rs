@@ -3,6 +3,7 @@
 use crate::selection::SelectionCursor;
 
 #[derive(Debug, Clone)]
+/// Selection state of the dashboard.
 pub struct DashboardSelectionState<TFocus>
 where
     TFocus: Copy + Eq,

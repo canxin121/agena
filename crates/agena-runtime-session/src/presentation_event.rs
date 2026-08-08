@@ -6,6 +6,7 @@
 
 use async_trait::async_trait;
 #[derive(Debug, Clone)]
+/// Kind of a runtime presentation event.
 pub enum RuntimePresentationEventKind {
     TranscriptPatch(Box<agena_domain::TranscriptPatch>),
     /// A background activity started, updated, or finished. Carries the
@@ -26,6 +27,7 @@ pub enum RuntimePresentationEventKind {
 }
 
 #[derive(Debug, Clone)]
+/// A presentation event delivered to live subscribers.
 pub struct RuntimePresentationEvent {
     pub meta: agena_domain::EventMeta,
     pub invalidates_ancestor_projection: bool,
@@ -33,12 +35,14 @@ pub struct RuntimePresentationEvent {
 }
 
 #[derive(Debug, Clone)]
+/// Item received on a live presentation subscription.
 pub enum RuntimeLivePresentationSubscriptionItem {
     Event(Box<RuntimePresentationEvent>),
     Lagged(u64),
 }
 
 #[async_trait]
+/// A live subscription to presentation events.
 pub trait RuntimeLivePresentationSubscription: Send {
     async fn recv(&mut self) -> Option<RuntimeLivePresentationSubscriptionItem>;
 }

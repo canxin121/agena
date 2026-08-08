@@ -42,6 +42,7 @@ pub struct SessionSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A bundle of rollout frames ready to share.
 pub struct ShareBundle {
     pub schema_version: u32,
     pub summary: SessionSummary,

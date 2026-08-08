@@ -41,6 +41,7 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the MCP server.
 pub enum McpServerError {
     #[error("invalid params: {0}")]
     InvalidParams(String),
@@ -55,6 +56,7 @@ pub enum McpServerError {
 }
 
 #[derive(Debug, Clone)]
+/// Server information advertised by the MCP server.
 pub struct ServerInfo {
     pub name: String,
     pub version: String,
@@ -74,6 +76,7 @@ impl Default for ServerInfo {
 }
 
 #[async_trait]
+/// Backend implementing MCP tool execution.
 pub trait McpServerBackend: Send + Sync + 'static {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError>;
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError>;

@@ -13,6 +13,7 @@ use agena_tui::i18n::I18n;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Action of the settings studio.
 pub enum SettingsAction {
     SelectField { path: String },
     EditField { path: String, value: String },
@@ -21,6 +22,7 @@ pub enum SettingsAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the settings studio.
 pub enum SettingsEffect {
     LoadSnapshot,
     SaveField { path: String, value: String },
@@ -28,6 +30,7 @@ pub enum SettingsEffect {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// State of the settings studio.
 pub struct SettingsState {
     pub selected_path: Option<String>,
     pub pending_value: Option<String>,
@@ -56,6 +59,7 @@ impl SettingsState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Section of the settings studio.
 pub enum SettingsStudioSectionId {
     ModelsProviders,
     Agents,
@@ -82,6 +86,7 @@ pub fn section_group_label(i18n: &I18n, section: SettingsStudioSectionId) -> Str
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A source row of the settings studio.
 pub struct SettingsStudioSourceRow {
     pub label: String,
     pub value: String,
@@ -97,6 +102,7 @@ impl SettingsStudioSourceRow {
 }
 
 #[derive(Debug, Clone)]
+/// An item of the settings studio.
 pub struct SettingsStudioItem<A> {
     pub label: String,
     pub value: String,
@@ -154,6 +160,7 @@ impl<A> SettingsStudioItem<A> {
 }
 
 #[derive(Debug, Clone)]
+/// A section of the settings studio.
 pub struct SettingsStudioSection<A> {
     pub id: SettingsStudioSectionId,
     pub label: String,
@@ -173,6 +180,7 @@ impl<A> SectionedListSection for SettingsStudioSection<A> {
 pub type SettingsStudioFocus = SectionedListFocus;
 
 #[derive(Debug, Clone)]
+/// Presentation of the settings studio.
 pub struct SettingsStudioPresentation<A> {
     state: SectionedListState<SettingsStudioSection<A>>,
 }
@@ -269,6 +277,7 @@ impl<A> SettingsStudioPresentation<A> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Effect produced by the settings studio.
 pub enum SettingsStudioEffect {
     KeepOpen,
     Close,

@@ -691,10 +691,12 @@ pub fn ensure_arg_permission_locator_has_semantic(
     Ok(())
 }
 
+/// Parsed arguments of an argument attribute.
 pub struct ArgAttrArgs {
     pub items: Vec<ArgAttrItem>,
 }
 
+/// One argument attribute item.
 pub struct ArgAttrItem {
     pub key: String,
     pub first_ident: Ident,

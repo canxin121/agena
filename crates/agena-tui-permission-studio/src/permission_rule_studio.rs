@@ -5,6 +5,7 @@ use agena_tui_components::SelectableListState;
 use crossterm::event::KeyEvent;
 
 #[derive(Debug, Clone)]
+/// An item of the permission rule studio.
 pub struct PermissionRuleStudioItem<A> {
     pub label: String,
     pub value: String,
@@ -13,6 +14,7 @@ pub struct PermissionRuleStudioItem<A> {
 }
 
 #[derive(Debug, Clone)]
+/// Presentation of the permission rule studio.
 pub struct PermissionRuleStudioPresentation<A> {
     pub title: String,
     pub footer: String,
@@ -35,6 +37,7 @@ impl<A> PermissionRuleStudioPresentation<A> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Effect produced by the permission rule studio.
 pub enum PermissionRuleStudioEffect {
     KeepOpen,
     Close,

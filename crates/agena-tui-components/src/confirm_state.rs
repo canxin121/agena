@@ -1,6 +1,7 @@
 //! Confirm dialog state and reducer.
 
 #[derive(Debug, Clone)]
+/// State of a confirm dialog.
 pub struct ConfirmDialogState<TAction> {
     pub title: String,
     pub body_lines: Vec<String>,

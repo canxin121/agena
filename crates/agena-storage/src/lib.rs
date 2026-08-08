@@ -672,6 +672,7 @@ pub enum UsageRepositoryError {
 }
 
 #[async_trait]
+/// Repository for usage records.
 pub trait UsageRepository: Send + Sync {
     async fn list(
         &self,
@@ -691,6 +692,7 @@ pub enum ProjectionLookupRepositoryError {
 }
 
 #[async_trait]
+/// Repository for projection lookup entries.
 pub trait ProjectionLookupRepository: Send + Sync {
     async fn session_id_for_message(
         &self,

@@ -8,6 +8,7 @@ use std::{
 };
 
 #[derive(Debug, thiserror::Error)]
+/// Error handling a runtime OAuth callback.
 pub enum RuntimeOAuthCallbackError {
     #[error("oauth callback configuration error: {0}")]
     Configuration(String),

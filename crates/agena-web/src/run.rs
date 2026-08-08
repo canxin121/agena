@@ -11,6 +11,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
+/// Options of a crawl run.
 pub struct CrawlRunOptions {
     pub max_pages: usize,
     pub max_depth: u32,
@@ -43,6 +44,7 @@ impl Default for CrawlRunOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Report of a crawl run.
 pub struct CrawlRunReport {
     pub start_url: String,
     pub engine: String,
@@ -60,6 +62,7 @@ pub struct CrawlRunReport {
     pub failures: Vec<agena_failure::UserProblem>,
 }
 
+/// Fetcher used by a crawl run.
 pub trait CrawlPageFetcher {
     fn fetch_page<'a>(
         &'a self,

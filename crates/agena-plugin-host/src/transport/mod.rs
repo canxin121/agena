@@ -17,6 +17,7 @@ use crate::error::TransportError;
 use crate::sdk::host_api::HostClient;
 use crate::sdk::{PluginError, ToolInvokeInput, ToolStreamChunk, ToolStreamEnd};
 
+/// Handle to a streaming tool execution.
 pub struct ToolStreamHandle {
     pub stream_id: String,
     pub chunks: tokio::sync::mpsc::Receiver<ToolStreamChunk>,
@@ -24,6 +25,7 @@ pub struct ToolStreamHandle {
 }
 
 #[async_trait]
+/// Transport used by the plugin host to talk to a plugin.
 pub trait PluginTransport: Send + Sync + 'static {
     async fn dispatch(
         &self,

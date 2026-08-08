@@ -12,6 +12,7 @@ use aws_sigv4::{
 };
 
 #[derive(Debug, thiserror::Error)]
+/// Error signing an Amazon Bedrock request.
 pub enum BedrockSigningError {
     #[error("signing parameters: {0}")]
     SigningParameters(String),

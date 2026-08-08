@@ -21,6 +21,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Height of a stacked dialog section.
 pub enum StackedDialogSectionHeight {
     Fixed(u16),
     AutoText {
@@ -37,12 +38,14 @@ pub enum StackedDialogSectionHeight {
     },
 }
 
+/// Spec of the stacked dialog.
 pub struct StackedDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub target_width: u16,
     pub sections: Vec<StackedDialogSection<'a>>,
 }
 
+/// A section of the stacked dialog.
 pub enum StackedDialogSection<'a> {
     Paragraph(ParagraphSection<'a>),
     TextPanel(TextPanelSection<'a>),
@@ -50,6 +53,7 @@ pub enum StackedDialogSection<'a> {
     EditorPanel(EditorSection<'a>),
 }
 
+/// A paragraph section of the stacked dialog.
 pub struct ParagraphSection<'a> {
     pub height: StackedDialogSectionHeight,
     pub title: Option<Cow<'a, str>>,
@@ -60,16 +64,19 @@ pub struct ParagraphSection<'a> {
     pub alignment: Option<Alignment>,
 }
 
+/// A text panel section of the stacked dialog.
 pub struct TextPanelSection<'a> {
     pub height: StackedDialogSectionHeight,
     pub spec: TextPanelSpec<'a>,
 }
 
+/// A list panel section of the stacked dialog.
 pub struct ListPanelSection<'a> {
     pub height: StackedDialogSectionHeight,
     pub spec: ListPanelSpec<'a>,
 }
 
+/// An editor section of the stacked dialog.
 pub struct EditorSection<'a> {
     pub height: StackedDialogSectionHeight,
     pub spec: EditorPanelSpec<'a>,
@@ -77,6 +84,7 @@ pub struct EditorSection<'a> {
     pub set_cursor: bool,
 }
 
+/// Render result of the stacked dialog.
 pub struct StackedDialogRenderResult {
     pub cursor: Option<(u16, u16)>,
 }

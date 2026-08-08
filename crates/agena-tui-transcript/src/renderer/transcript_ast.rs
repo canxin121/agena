@@ -35,6 +35,7 @@ mod parse;
 pub use parse::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A node of the markdown AST.
 pub enum MarkdownNode {
     Paragraph(Vec<MarkdownInline>),
     Heading {
@@ -94,24 +95,28 @@ pub enum MarkdownNode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A list item of the markdown AST.
 pub struct MarkdownListItem {
     pub checked: Option<bool>,
     pub blocks: Vec<MarkdownNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A description item of the markdown AST.
 pub struct MarkdownDescriptionItem {
     pub term: Vec<MarkdownInline>,
     pub details: Vec<MarkdownNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A table row of the markdown AST.
 pub struct MarkdownTableRow {
     pub header: bool,
     pub cells: Vec<Vec<MarkdownInline>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Alignment of a markdown element.
 pub enum MarkdownAlignment {
     None,
     Left,
@@ -120,6 +125,7 @@ pub enum MarkdownAlignment {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a markdown alert.
 pub enum MarkdownAlertKind {
     Note,
     Tip,
@@ -129,6 +135,7 @@ pub enum MarkdownAlertKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Inline markdown content.
 pub enum MarkdownInline {
     Text(String),
     Code(String),
@@ -168,6 +175,7 @@ pub enum MarkdownInline {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Dimensions of a markdown image.
 pub struct MarkdownImageDimensions {
     pub width_px: Option<u32>,
     pub height_px: Option<u32>,

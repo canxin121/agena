@@ -24,11 +24,13 @@ use agena_tui_components::{
 };
 
 #[derive(Debug, Clone)]
+/// Metadata of a slash command suggestion.
 pub struct SlashCommandSuggestionMeta {
     pub fingerprint: String,
 }
 
 #[derive(Debug, Clone)]
+/// A slash command suggestion item.
 pub struct SlashCommandSuggestionItem {
     /// Stable App-owned action-map key; it is not a provider/plugin object.
     pub key: String,
@@ -64,6 +66,7 @@ pub type SlashCommandSuggestionState = SearchPicker<
 >;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by a slash command suggestion.
 pub enum SlashCommandSuggestionEffect {
     KeepOpen,
     Dismiss,

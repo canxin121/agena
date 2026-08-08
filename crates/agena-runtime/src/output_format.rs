@@ -10,12 +10,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Output format used by CLI commands.
 pub enum OutputFormat {
     Json,
 }
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 #[error("unknown output format `{0}`")]
+/// Error parsing an output format.
 pub struct OutputFormatParseError(String);
 
 impl FromStr for OutputFormat {

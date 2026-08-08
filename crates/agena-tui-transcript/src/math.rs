@@ -7,6 +7,7 @@ use crate::{RenderedLine, TranscriptPointerSelection, push_multiline, push_wrapp
 use agena_tui_media::{MathLinePlacement, layout_config, render_formula, unicode_formula};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A semantic row of display math.
 pub struct DisplayMathSemanticRow {
     pub source: String,
     /// Relative vertical weight, not a terminal-row count. Native rendering
@@ -15,6 +16,7 @@ pub struct DisplayMathSemanticRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A segment of inline math.
 pub enum InlineMathSegment {
     Text(String),
     Math(String),

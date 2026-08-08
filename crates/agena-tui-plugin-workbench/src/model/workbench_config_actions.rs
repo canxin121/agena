@@ -109,6 +109,7 @@ pub fn config_actions_overlay_footer(primary_action: Option<ConfigRowPrimaryActi
 }
 
 #[derive(Debug, Default)]
+/// Outcome of resetting config paths.
 pub struct ResetPathsOutcome {
     pub changed: bool,
     pub blocked: Vec<String>,

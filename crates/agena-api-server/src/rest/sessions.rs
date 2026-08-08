@@ -385,6 +385,7 @@ pub async fn cancel_run(
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Body of a cancel-run request.
 pub struct CancelRunRequestBody {
     pub execution_id: agena_domain::ExecutionId,
 }
@@ -501,6 +502,7 @@ pub async fn export_session(
 }
 
 #[derive(Debug, Clone, Deserialize)]
+/// Body of a session import request.
 pub struct SessionImportRequestBody {
     pub jsonl: String,
 }

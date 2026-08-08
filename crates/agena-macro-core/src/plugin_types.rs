@@ -4,6 +4,7 @@ use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Expr, Ident, LitStr, Meta, Result, Token, Type};
 
 #[derive(Clone)]
+/// Plan of a plugin tool.
 pub struct PluginToolPlan {
     pub tool: LitStr,
     pub input_model: PluginGeneratedToolInput,
@@ -14,6 +15,7 @@ pub struct PluginToolPlan {
 }
 
 #[derive(Clone)]
+/// Invoke handler of a plugin tool.
 pub struct PluginToolInvokeHandler {
     pub method: Ident,
     pub output: PluginToolOutputPlan,
@@ -23,12 +25,14 @@ pub struct PluginToolInvokeHandler {
 }
 
 #[derive(Clone)]
+/// Output plan of a plugin tool.
 pub struct PluginToolOutputPlan {
     pub ty: Option<Type>,
     pub returns_result: bool,
 }
 
 #[derive(Clone)]
+/// Stream handler of a plugin tool.
 pub struct PluginToolStreamHandler {
     pub method: Ident,
     pub is_async: bool,
@@ -38,6 +42,7 @@ pub struct PluginToolStreamHandler {
 }
 
 #[derive(Clone)]
+/// Signature of a plugin tool stream handler.
 pub struct PluginToolStreamSignature {
     pub method: Ident,
     pub is_async: bool,
@@ -45,6 +50,7 @@ pub struct PluginToolStreamSignature {
 }
 
 #[derive(Clone, Default)]
+/// Permission handlers of a plugin tool.
 pub struct PluginToolPermissionHandlers {
     pub path_rules: Vec<PluginToolPathPermissionRule>,
     pub network_rules: Vec<PluginToolNetworkPermissionRule>,
@@ -61,6 +67,7 @@ impl PluginToolPermissionHandlers {
 }
 
 #[derive(Clone)]
+/// Path permission rule of a plugin tool.
 pub enum PluginToolPathPermissionRule {
     Read(Expr),
     Reads(Expr),
@@ -70,6 +77,7 @@ pub enum PluginToolPathPermissionRule {
 }
 
 #[derive(Clone)]
+/// Network permission rule of a plugin tool.
 pub enum PluginToolNetworkPermissionRule {
     Connect(Expr),
     Connects(Expr),
@@ -77,18 +85,21 @@ pub enum PluginToolNetworkPermissionRule {
 }
 
 #[derive(Clone, Copy)]
+/// Context argument of a plugin tool.
 pub struct PluginContextArg {
     pub first: bool,
     pub by_ref: bool,
 }
 
 #[derive(Clone)]
+/// Input of a plugin tool call.
 pub enum PluginCallInput {
     Wrapped { by_ref: bool },
     Fields(Vec<Ident>),
 }
 
 #[derive(Clone)]
+/// Generated input of a plugin tool.
 pub struct PluginGeneratedToolInput {
     pub input_ident: Option<Ident>,
     pub input_fields: Vec<PluginGeneratedInputField>,
@@ -98,6 +109,7 @@ pub struct PluginGeneratedToolInput {
 }
 
 #[derive(Clone)]
+/// A generated input field of a plugin tool.
 pub struct PluginGeneratedInputField {
     pub ident: Ident,
     pub wire_name: LitStr,
@@ -110,6 +122,7 @@ pub struct PluginGeneratedInputField {
 }
 
 #[derive(Clone)]
+/// Plan of a plugin command.
 pub struct PluginCommandPlan {
     pub id: LitStr,
     pub title: LitStr,
@@ -124,6 +137,7 @@ pub struct PluginCommandPlan {
 }
 
 #[derive(Clone)]
+/// Handler plan of a plugin command.
 pub enum PluginCommandHandlerPlan {
     Method {
         method: Ident,
@@ -139,6 +153,7 @@ pub enum PluginCommandHandlerPlan {
 }
 
 #[derive(Clone)]
+/// Input plan of a plugin command.
 pub enum PluginCommandInputPlan {
     None,
     Raw {
@@ -155,12 +170,14 @@ pub enum PluginCommandInputPlan {
 }
 
 #[derive(Clone)]
+/// Shape of a plugin command method.
 pub struct PluginCommandMethodShape {
     pub input: PluginCommandInputPlan,
     pub context: Option<PluginContextArg>,
 }
 
 #[derive(Clone, Default)]
+/// Config of a plugin tool command.
 pub struct PluginToolCommandConfig {
     pub id: Option<LitStr>,
     pub title: Option<LitStr>,
@@ -173,12 +190,14 @@ pub struct PluginToolCommandConfig {
     pub submit_output_as_prompt: bool,
 }
 
+/// Attributes of a plugin inherent method.
 pub struct PluginInherentMethodAttrs {
     pub tools: Vec<PluginToolPlan>,
     pub hooks: Vec<crate::plugin_hooks::PluginHookPlan>,
     pub commands: Vec<PluginCommandPlan>,
 }
 
+/// Attribute arguments of a plugin command.
 pub struct PluginCommandAttrArgs {
     pub slash: Option<LitStr>,
     pub metas: Vec<Meta>,
@@ -218,6 +237,7 @@ pub fn plugin_attr_has_explicit_args(attr: &Attribute) -> bool {
     }
 }
 
+/// Attribute configuration of a plugin tool.
 pub struct PluginToolAttrConfig {
     pub spec: crate::tool_spec_support::ToolSpecConfig,
     pub stream_method: Option<Ident>,
@@ -226,6 +246,7 @@ pub struct PluginToolAttrConfig {
     pub command: Option<PluginToolCommandConfig>,
 }
 
+/// Shape of a plugin tool method.
 pub struct PluginToolMethodShape {
     pub input_model: PluginGeneratedToolInput,
     pub context: Option<PluginContextArg>,
@@ -234,6 +255,7 @@ pub struct PluginToolMethodShape {
     pub stream_method: Option<Ident>,
 }
 
+/// Information about a plugin method.
 pub struct PluginMethodInfo {
     pub ident: Ident,
     pub is_async: bool,
@@ -242,6 +264,7 @@ pub struct PluginMethodInfo {
 }
 
 #[derive(Default)]
+/// Configuration of a plugin argument.
 pub struct PluginArgConfig {
     pub default: bool,
     pub default_expr: Option<Expr>,
@@ -301,12 +324,14 @@ pub struct PluginArgConfig {
 }
 
 #[derive(Clone, Copy)]
+/// Kind of a plugin path permission.
 pub enum PluginPathPermissionKind {
     Read,
     Write,
 }
 
 #[derive(Clone, Copy)]
+/// Network semantic of a plugin argument.
 pub enum PluginNetworkSemantic {
     Network,
     Url,
@@ -316,12 +341,14 @@ pub enum PluginNetworkSemantic {
 }
 
 #[derive(Clone, Copy)]
+/// Kind of a plugin input picker.
 pub enum PluginPickerKind {
     File,
     Dir,
 }
 
 #[derive(Clone)]
+/// Path specification of a plugin input.
 pub struct PluginInputPathSpec {
     pub jsonpath: LitStr,
     pub kind: PluginPathPermissionKind,
@@ -330,6 +357,7 @@ pub struct PluginInputPathSpec {
 }
 
 #[derive(Clone)]
+/// Network specification of a plugin input.
 pub struct PluginInputNetworkSpec {
     pub jsonpath: LitStr,
     pub fallback: Option<LitStr>,

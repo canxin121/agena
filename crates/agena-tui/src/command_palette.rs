@@ -17,6 +17,7 @@ use agena_tui_components::{
 use crate::{i18n::I18n, sanitize_picker_text};
 
 #[derive(Debug, Clone)]
+/// An item in the command palette.
 pub struct CommandPaletteItem {
     pub key: String,
     pub label: String,
@@ -83,6 +84,7 @@ pub fn new_presentation(
 }
 
 #[derive(Debug, Clone)]
+/// Action performed by the command palette.
 pub enum CommandPaletteAction {
     Accept,
     Input(KeyEvent),
@@ -90,6 +92,7 @@ pub enum CommandPaletteAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by a command palette action.
 pub enum CommandPaletteEffect {
     Close,
     Activate { key: String },

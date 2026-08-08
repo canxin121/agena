@@ -37,6 +37,7 @@ mod in_memory {
 
     use super::LspTransport;
 
+/// In-memory LSP transport for tests.
     pub struct InMemoryTransport {
         outbox: mpsc::UnboundedSender<Value>,
         inbox: Mutex<mpsc::UnboundedReceiver<InboundMessage>>,

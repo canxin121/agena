@@ -153,12 +153,14 @@ pub fn new_presentation(
 }
 
 #[derive(Debug, Clone)]
+/// Action of the session model chooser.
 pub enum SessionModelChooserAction {
     Input(KeyEvent),
     Paste(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the session model chooser reducer.
 pub enum SessionModelChooserReducerEffect {
     Close,
     KeepOpen,

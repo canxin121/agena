@@ -23,6 +23,7 @@ use crate::keymap::{KeyAction, KeyContext, resolve};
 use tui_markdown::from_str as markdown_to_text;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Decision of a permission prompt.
 pub enum PermissionPromptDecision {
     Allow,
     Deny,
@@ -117,12 +118,14 @@ pub fn choice_decision_label(i18n: &I18n, decision: PermissionPromptDecision) ->
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Return value of the permission prompt details view.
 pub enum PermissionPromptDetailsReturn {
     Action,
     Scope(PermissionPromptDecision),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Page of the permission prompt.
 pub enum PermissionPromptPage {
     Action,
     Scope(PermissionPromptDecision),
@@ -165,6 +168,7 @@ pub fn footer(i18n: &I18n, page: PermissionPromptPage) -> String {
 }
 
 #[derive(Debug, Clone)]
+/// Presentation state of a permission prompt.
 pub struct PermissionPromptPresentation {
     content: PermissionPromptContent,
     page: PermissionPromptPage,
@@ -241,6 +245,7 @@ impl PermissionPromptPresentation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Effect produced by a permission prompt.
 pub enum PermissionPromptEffect {
     KeepOpen,
     Close,

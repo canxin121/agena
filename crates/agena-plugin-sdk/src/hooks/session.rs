@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 // ── run lifecycle ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the pre-run hook.
 pub struct PreRunInput {
     pub session_id: i64,
     pub model: String,
@@ -10,6 +11,7 @@ pub struct PreRunInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the post-run hook.
 pub struct PostRunInput {
     pub session_id: i64,
     pub model: String,
@@ -21,6 +23,7 @@ pub struct PostRunInput {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Source that started a session.
 pub enum SessionStartSource {
     Startup,
     Resume,
@@ -28,6 +31,7 @@ pub enum SessionStartSource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the session start hook.
 pub struct SessionStartInput {
     pub session_id: i64,
     pub source: SessionStartSource,
@@ -51,6 +55,7 @@ pub struct SessionStartPatch {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Reason a session ended.
 pub enum SessionEndReason {
     Clear,
     Resume,

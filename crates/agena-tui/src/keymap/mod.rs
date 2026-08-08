@@ -68,6 +68,7 @@ pub(super) fn horizontal_pagination_action(key: KeyEvent) -> Option<KeyAction> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Context of a key binding.
 pub enum KeyContext {
     Global,
     Main,
@@ -108,6 +109,7 @@ pub enum KeyContext {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Action bound to a key.
 pub enum KeyAction {
     Interrupt,
     Help,

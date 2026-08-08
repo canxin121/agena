@@ -18,6 +18,7 @@ use agena_provider::CompletionUsage;
 // `EventKind` variants.
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// History event: a run started.
 pub struct RunStarted {
     pub execution_id: agena_domain::ExecutionId,
     pub run_id: RunId,
@@ -29,12 +30,14 @@ pub struct RunStarted {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// History event: a run completed.
 pub struct RunCompleted {
     pub run_id: RunId,
     pub finish_reason: FinishReason,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// History event: a run aborted.
 pub struct RunAborted {
     pub run_id: RunId,
     pub reason: RunAbortReason,
@@ -43,6 +46,7 @@ pub struct RunAborted {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// History event: a user message was appended.
 pub struct UserMessageAppended {
     pub execution_id: agena_domain::ExecutionId,
     pub message_id: MessageId,
@@ -64,6 +68,7 @@ pub struct UserMessageAppended {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// History event: an assistant message finished.
 pub struct AssistantMessageFinished {
     pub execution_id: agena_domain::ExecutionId,
     pub message_id: MessageId,
@@ -87,6 +92,7 @@ pub struct AssistantMessageFinished {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// History event: a tool call was issued.
 pub struct ToolCallIssued {
     pub message_id: MessageId,
     pub run_id: RunId,
@@ -97,6 +103,7 @@ pub struct ToolCallIssued {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// History event: a tool call completed.
 pub struct ToolCallCompleted {
     /// Assistant `MessageId` that owns the operation part for this tool call.
     /// Tool completion updates that part; it never creates a standalone tool

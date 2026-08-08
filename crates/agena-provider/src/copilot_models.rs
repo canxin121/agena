@@ -5,6 +5,7 @@ use serde::Deserialize;
 use agena_domain::{CapabilitySupport, ModelCapabilities};
 
 #[derive(Debug, Clone, Default, Deserialize)]
+/// GitHub Copilot-specific model extensions.
 pub struct CopilotModelExtension {
     #[serde(default)]
     model_picker_enabled: Option<bool>,

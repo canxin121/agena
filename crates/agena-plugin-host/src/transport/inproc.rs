@@ -11,6 +11,7 @@ use crate::sdk::host_api::{current_host_callback_context, run_in_host_callback_c
 use crate::sdk::{HostClient, Plugin, ToolInvokeInput};
 use crate::transport::{PluginTransport, ToolStreamHandle};
 
+/// In-process plugin transport.
 pub struct InProcessTransport<P: Plugin> {
     dispatcher: Arc<PluginDispatcher<P>>,
 }

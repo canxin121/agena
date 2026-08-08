@@ -1,4 +1,5 @@
 #[derive(Debug, Clone)]
+/// Draft provider configuration edited in the studio.
 pub struct ProviderConfigDraft {
     pub source_provider_id: Option<String>,
     pub provider_id: String,

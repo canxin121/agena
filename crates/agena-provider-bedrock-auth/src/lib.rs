@@ -10,6 +10,7 @@ use aws_credential_types::provider::ProvideCredentials;
 pub use aws_credential_types::Credentials as AwsCredentials;
 
 #[derive(Debug, thiserror::Error)]
+/// Error resolving Amazon Bedrock credentials.
 pub enum BedrockCredentialError {
     #[error("AWS credential provider chain is unavailable")]
     ProviderUnavailable,

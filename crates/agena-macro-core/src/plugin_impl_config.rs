@@ -6,6 +6,7 @@ use syn::{Expr, ExprLit, Ident, Lit, Meta, Result, Token, Type, parse_quote};
 
 use super::parse_expr_list;
 
+/// Configuration of a plugin impl.
 pub struct PluginImplConfig {
     pub namespace: Option<Expr>,
     pub name: Option<Expr>,

@@ -432,6 +432,7 @@ pub struct PluginStudioViewCatalogItem {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Status of a plugin UI tool invocation.
 pub enum PluginUiToolInvokeStatus {
     Completed,
     CapabilityUnavailable,
@@ -439,6 +440,7 @@ pub enum PluginUiToolInvokeStatus {
 }
 
 #[derive(Debug, Clone, Serialize)]
+/// Response of a plugin UI tool invocation.
 pub struct PluginUiToolInvokeResponse {
     pub plugin_id: PluginKey,
     pub tool: String,
@@ -593,6 +595,7 @@ fn merge_json(into: &mut serde_json::Value, from: serde_json::Value) {
 
 // ---------- host construction ----------
 
+/// Static registration of a bundled plugin.
 pub struct StaticPluginRegistration {
     pub key: PluginKey,
     registration: StaticRegistration,
@@ -629,6 +632,7 @@ pub struct HostNotification {
     pub actions: Vec<PluginNotifyAction>,
 }
 
+/// Configuration for building a plugin host.
 pub struct PluginHostBuildConfig {
     pub static_plugins: Vec<StaticPluginRegistration>,
     pub config: PluginsConfig,

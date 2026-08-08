@@ -96,6 +96,7 @@ pub async fn git_submodules(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a submodule add request.
 pub struct GitSubmoduleAddBody {
     pub url: Option<String>,
     pub path: Option<String>,
@@ -152,6 +153,7 @@ pub async fn git_submodule_add(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a submodule path request.
 pub struct GitSubmodulePathBody {
     pub path: Option<String>,
 }
@@ -188,6 +190,7 @@ pub async fn git_submodule_init(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a submodule update request.
 pub struct GitSubmoduleUpdateBody {
     pub path: Option<String>,
     #[serde(default)]

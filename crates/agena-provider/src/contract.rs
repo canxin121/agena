@@ -47,6 +47,7 @@ impl AgenaToolsConfig {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the provider catalog.
 pub enum ProviderCatalogError {
     #[error("provider catalog request is invalid: {0}")]
     InvalidRequest(String),
@@ -263,6 +264,7 @@ pub struct SapAiCoreServiceKey {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+/// Service URLs of the SAP AI Core gateway.
 pub struct SapAiCoreServiceUrls {
     #[serde(rename = "AI_API_URL")]
     pub ai_api_url: String,
@@ -399,6 +401,7 @@ impl std::fmt::Display for ModelCapabilityFeature {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+/// Body of a capability selection patch.
 pub struct CapabilitySelectionPatchBody<T> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported: Vec<T>,
@@ -415,12 +418,14 @@ impl<T> CapabilitySelectionPatchBody<T> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+/// Patch selecting supported or unsupported capabilities.
 pub enum CapabilitySelectionPatch<T> {
     Supported(Vec<T>),
     Patch(CapabilitySelectionPatchBody<T>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Patch of model capabilities (input modalities and features).
 pub struct ModelCapabilityPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<CapabilitySelectionPatch<agena_domain::ModelInputModality>>,
@@ -652,6 +657,7 @@ impl<T> CapabilitySelectionPatch<T> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+/// How a default mode is configured (inherit, clear, or explicit).
 pub enum ConfiguredModeDefault {
     #[default]
     Inherit,
@@ -695,6 +701,7 @@ fn serialize_mode_default<S: serde::Serializer>(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+/// Map of per-mode configuration values.
 pub struct ConfiguredModelModeMap<T> {
     #[serde(
         default,
@@ -737,6 +744,7 @@ impl<T> From<BTreeMap<String, T>> for ConfiguredModelModeMap<T> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// Configured speed mode of a model.
 pub struct ConfiguredModelSpeedMode {
     #[serde(skip)]
     pub is_default: Option<bool>,
@@ -757,6 +765,7 @@ pub struct ConfiguredModelSpeedMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
+/// Configured thinking mode of a model.
 pub struct ConfiguredModelThinkingMode {
     #[serde(skip)]
     pub is_default: Option<bool>,
@@ -788,6 +797,7 @@ pub struct ConfiguredModelThinkingMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Full configured definition of a provider model.
 pub struct ConfiguredModelDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<agena_domain::ModelLifecycle>,
@@ -2115,6 +2125,7 @@ pub enum StreamResumePolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a provider native tool.
 pub enum ProviderNativeToolKind {
     WebSearch,
     FileSearch,

@@ -11,6 +11,7 @@ use crate::extract::{extract_page_from_body, looks_like_html, truncate_utf8};
 use crate::{CrawlError, FetchedPage, canonicalize_url};
 
 #[derive(Debug, Clone)]
+/// Options for browser rendering.
 pub struct BrowserRenderOptions {
     pub enabled: bool,
     pub local_browser: LocalBrowserOptions,
@@ -34,6 +35,7 @@ impl Default for BrowserRenderOptions {
 }
 
 #[derive(Debug, Clone)]
+/// Options for spider-based fetching.
 pub struct SpiderFetchOptions {
     pub max_body_bytes: usize,
     pub timeout: Duration,

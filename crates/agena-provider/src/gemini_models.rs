@@ -4,12 +4,14 @@ use agena_domain::{ModelMetadata, ModelTokenLimits};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
+/// Response of the Gemini model list endpoint.
 pub struct GeminiModelListResponse {
     #[serde(default)]
     pub models: Vec<GeminiModel>,
 }
 
 #[derive(Debug, Deserialize)]
+/// A Gemini model descriptor.
 pub struct GeminiModel {
     pub name: String,
     #[serde(default, rename = "displayName")]

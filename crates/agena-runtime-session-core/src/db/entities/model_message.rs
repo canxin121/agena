@@ -7,6 +7,7 @@ use super::session;
 
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
 #[sea_orm(table_name = "agena_model_messages")]
+/// SeaORM entity for a stored model message.
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false)]
     pub message_id: i64,
@@ -30,6 +31,7 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// SeaORM relations of the model message entity.
 pub enum Relation {
     #[sea_orm(
         belongs_to = "session::Entity",

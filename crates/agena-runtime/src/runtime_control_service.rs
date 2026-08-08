@@ -17,6 +17,7 @@ use crate::{
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("runtime control failed: {message}")]
+/// Error from the runtime control service.
 pub struct RuntimeControlServiceError {
     message: String,
 }
@@ -45,6 +46,7 @@ impl RuntimeControlServiceError {
 }
 
 #[async_trait]
+/// Service for controlling the runtime.
 pub trait RuntimeControlService: Send + Sync {
     async fn reload(&self) -> Result<RuntimeReloadReport, RuntimeControlServiceError>;
 

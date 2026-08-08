@@ -30,6 +30,7 @@ use super::input_arg_parse_support::{
 };
 
 #[derive(Default)]
+/// Configuration of a tool input field argument.
 pub struct FieldArgConfig {
     pub default: bool,
     pub default_expr: Option<Expr>,
@@ -87,6 +88,7 @@ pub struct FieldArgConfig {
 }
 
 #[derive(Clone)]
+/// Metadata of a plugin input field.
 pub struct PluginInputFieldMetadata {
     pub path: LitStr,
     pub parse_path: LitStr,
@@ -127,6 +129,7 @@ pub struct PluginInputFieldMetadata {
 }
 
 #[derive(Clone)]
+/// Default-value specification of a plugin input field.
 pub struct PluginInputFieldDefaultSpec {
     pub schema_path: LitStr,
     pub parse_path: LitStr,
@@ -136,11 +139,13 @@ pub struct PluginInputFieldDefaultSpec {
 }
 
 #[derive(Clone)]
+/// Alias specification of a plugin input field.
 pub struct PluginInputFieldAliasSpec {
     pub path: LitStr,
     pub aliases: Vec<LitStr>,
 }
 
+/// Prepared field names of a plugin input field.
 pub struct PreparedInputFieldNames {
     pub schema_path: LitStr,
     pub parse_path: LitStr,

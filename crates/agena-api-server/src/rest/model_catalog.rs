@@ -8,6 +8,7 @@ use super::{AppState, AxumQuery, Deserialize, IntoResponse, Json, ServerError, S
 use agena_api::resource::ModelCatalogLookupRequest;
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for the model catalog listing.
 pub struct ModelCatalogListQuery {
     #[serde(default)]
     pub q: Option<String>,

@@ -5,6 +5,7 @@
 //! it deliberately has no session, API, or Runtime dependency.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Status of token usage in a session.
 pub enum TokenUsageStatus {
     PercentUsed(u64),
     UsedTokens(u64),

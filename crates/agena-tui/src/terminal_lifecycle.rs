@@ -42,6 +42,7 @@ pub static TERMINAL_MODES_ACTIVE: AtomicBool = AtomicBool::new(false);
 pub static TERMINAL_KEYBOARD_STACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Reason the TUI was suspended.
 pub enum SuspendReason {
     ExternalEditor,
     ExternalPager,
@@ -61,6 +62,7 @@ enum Phase {
 }
 
 #[derive(Debug)]
+/// Lifecycle state of the terminal.
 pub struct TerminalLifecycle {
     phase: Phase,
     raw: bool,

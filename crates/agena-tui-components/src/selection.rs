@@ -5,6 +5,7 @@ use crossterm::event::KeyEvent;
 use crate::{NavigationAction, navigation_action, structural_navigation_action};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// A selection cursor.
 pub struct SelectionCursor {
     pub selected: usize,
 }

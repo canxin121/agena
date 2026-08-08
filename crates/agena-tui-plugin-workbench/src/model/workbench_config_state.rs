@@ -671,6 +671,7 @@ pub(crate) fn drilldown_selected_row_cell_for_groups(
 }
 
 #[derive(Debug, Clone)]
+/// Context of the selected config row.
 pub struct SelectedConfigRowContext {
     pub plugin_id: String,
     pub row: ConfigRowView,

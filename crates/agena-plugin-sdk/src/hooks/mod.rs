@@ -29,6 +29,7 @@ pub use session::*;
 pub use shell::*;
 pub use tool::*;
 
+/// Conversion into a hook output type.
 pub trait IntoHookOutput<T> {
     fn into_hook_output(self) -> crate::Result<T>;
 }

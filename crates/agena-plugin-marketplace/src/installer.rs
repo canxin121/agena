@@ -687,6 +687,7 @@ fn validate_archive_entrypoint(entrypoint: &str, plugin_id: &str) -> Result<(), 
 }
 
 #[derive(Debug, Clone)]
+/// Request to install a marketplace plugin.
 pub struct InstallRequest {
     pub registry: RegistrySpec,
     pub plugin_id: String,
@@ -699,6 +700,7 @@ pub struct InstallRequest {
 }
 
 #[derive(Debug, Clone)]
+/// Outcome of installing a plugin.
 pub struct InstallOutcome {
     pub plugin_id: String,
     pub version: String,
@@ -709,6 +711,7 @@ pub struct InstallOutcome {
 }
 
 #[derive(Debug, Clone)]
+/// Outcome of uninstalling a plugin.
 pub struct UninstallOutcome {
     pub plugin_id: String,
     pub version: String,
@@ -716,6 +719,7 @@ pub struct UninstallOutcome {
 }
 
 #[derive(Debug, Clone)]
+/// Outcome of upgrading a plugin.
 pub struct UpgradeOutcome {
     pub plugin_id: String,
     pub previous_version: String,
@@ -725,6 +729,7 @@ pub struct UpgradeOutcome {
 }
 
 #[derive(Debug, Clone)]
+/// An installed plugin with a newer version available.
 pub struct OutdatedRecord {
     pub plugin_id: String,
     pub installed_version: String,

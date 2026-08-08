@@ -61,6 +61,7 @@ impl ProviderTranscript {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Display)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[display("{}", self.kind_tag())]
+/// A fragment of a session transcript.
 pub enum TranscriptFragment {
     System {
         text: String,
@@ -213,6 +214,7 @@ impl TranscriptContent {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// A block of a session transcript.
 pub enum TranscriptBlock {
     Text {
         text: String,
@@ -260,6 +262,7 @@ impl TranscriptBlock {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A tool call in a transcript.
 pub struct TranscriptToolCall {
     pub call_id: ToolCallId,
     pub name: SmolStr,
@@ -276,6 +279,7 @@ impl TranscriptToolCall {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Output of a transcript tool call.
 pub enum TranscriptToolOutput {
     Text { text: String },
     Error { message: String },

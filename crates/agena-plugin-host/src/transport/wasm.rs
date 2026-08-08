@@ -31,6 +31,7 @@ use crate::transport::PluginTransport;
 
 const ERROR_FLAG: u64 = 1 << 31;
 
+/// Plugin transport over a WASM module.
 pub struct WasmTransport {
     inner: Mutex<WasmInner>,
 }

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs, path::PathBuf, time::SystemTime};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A path stamp tracked by the file watcher.
 pub struct WatchPathStamp {
     pub exists: bool,
     pub modified: Option<SystemTime>,

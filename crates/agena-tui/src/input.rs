@@ -3,6 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A key chord (modifiers plus key).
 pub struct KeyChord {
     pub code: KeyCode,
     pub modifiers: KeyModifiers,
@@ -19,6 +20,7 @@ impl KeyChord {
 }
 
 #[derive(Debug, Clone)]
+/// Key bindings of the composer.
 pub struct ComposerKeyBindings {
     pub submit: Vec<KeyChord>,
     pub queue: Vec<KeyChord>,
@@ -133,6 +135,7 @@ impl ComposerKeyBindings {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Action bound to a composer key.
 pub enum ComposerAction {
     Submit,
     Queue,

@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use crate::RuntimeBackgroundTask;
 
 #[derive(Debug, Clone)]
+/// Snapshot of the runtime status.
 pub struct RuntimeStatusSnapshot {
     pub generation: u64,
     pub loaded_at: DateTime<Utc>,
@@ -43,6 +44,7 @@ pub struct RuntimeStatusSnapshot {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
+/// Status of MCP servers in the runtime.
 pub struct RuntimeMcpStatus {
     pub servers: Vec<RuntimeMcpServerStatus>,
 }
@@ -86,12 +88,14 @@ pub struct RuntimeMcpOAuthHealth {
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
+/// MCP credential migration status.
 pub struct RuntimeMcpCredentialMigration {
     pub state: String,
     pub recommendation: String,
 }
 
 #[derive(Debug, Clone, Default)]
+/// Status of LSP servers in the runtime.
 pub struct RuntimeLspStatus {
     pub diagnostics_count: usize,
     pub files_with_diagnostics: usize,
@@ -99,6 +103,7 @@ pub struct RuntimeLspStatus {
 }
 
 #[derive(Debug, Clone)]
+/// Status of one LSP server.
 pub struct RuntimeLspServerStatus {
     pub name: String,
     pub command: String,
@@ -107,12 +112,14 @@ pub struct RuntimeLspServerStatus {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Status of skills in the runtime.
 pub struct RuntimeSkillsStatus {
     pub skills: Vec<RuntimeSkillStatus>,
     pub commands: Vec<RuntimeSkillStatus>,
 }
 
 #[derive(Debug, Clone)]
+/// Status of one skill.
 pub struct RuntimeSkillStatus {
     pub name: String,
     pub description: String,

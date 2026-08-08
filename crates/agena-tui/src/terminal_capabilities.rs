@@ -6,6 +6,7 @@
 //! supplies it to TUI feature code.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Support level of a terminal capability.
 pub enum Support {
     Supported,
     Forced,
@@ -37,6 +38,7 @@ impl Support {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Source of a capability claim.
 pub enum CapabilitySource {
     UserOverride,
     Environment,
@@ -60,6 +62,7 @@ impl CapabilitySource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Evidence for a capability claim.
 pub struct CapabilityEvidence {
     /// Endpoint support is intentionally distinct from complete transport-path
     /// and local-provider availability.
@@ -70,6 +73,7 @@ pub struct CapabilityEvidence {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Path used to probe a capability.
 pub enum CapabilityPath {
     Clear,
     UserForced,
@@ -78,6 +82,7 @@ pub enum CapabilityPath {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Readiness of a terminal provider.
 pub enum ProviderReadiness {
     NotRequired,
     Ready,
@@ -196,6 +201,7 @@ impl CapabilityEvidence {
 pub type Capability = CapabilityEvidence;
 
 #[derive(Debug, Clone)]
+/// Detected capabilities of the terminal.
 pub struct TerminalCapabilities {
     pub alternate_screen: Capability,
     pub bracketed_paste: Capability,

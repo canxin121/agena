@@ -11,6 +11,7 @@
 use crate::ComposerDraft;
 
 #[derive(Debug, Default)]
+/// Queue of pending composer messages.
 pub struct ComposerQueue {
     draft: Option<ComposerDraft>,
 }

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a runtime background task.
 pub enum RuntimeBackgroundTaskKind {
     ModelCatalogRefresh,
     RuntimeReload,
@@ -27,6 +28,7 @@ impl RuntimeBackgroundTaskKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Origin of a runtime background task.
 pub enum RuntimeBackgroundTaskOrigin {
     System,
     User,
@@ -34,6 +36,7 @@ pub enum RuntimeBackgroundTaskOrigin {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Status of a runtime background task.
 pub enum RuntimeBackgroundTaskStatus {
     Running,
     Succeeded,
@@ -42,6 +45,7 @@ pub enum RuntimeBackgroundTaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A runtime background task.
 pub struct RuntimeBackgroundTask {
     pub id: String,
     pub kind: RuntimeBackgroundTaskKind,
@@ -66,12 +70,14 @@ impl RuntimeBackgroundTask {
 }
 
 #[derive(Debug, Clone)]
+/// Start of a runtime background task.
 pub struct RuntimeBackgroundTaskStart {
     pub started: bool,
     pub task: RuntimeBackgroundTask,
 }
 
 #[derive(Debug, Clone)]
+/// Outcome of a runtime background task.
 pub enum RuntimeBackgroundTaskOutcome {
     Succeeded { message: Option<String> },
     Cancelled { message: Option<String> },
@@ -92,6 +98,7 @@ impl RuntimeBackgroundTaskOutcome {
 }
 
 #[derive(Debug, thiserror::Error)]
+/// Error controlling a background task.
 pub enum RuntimeBackgroundTaskControlError {
     #[error("runtime is shutting down")]
     Shutdown,

@@ -20,6 +20,7 @@ use agena_tui_components::{
 };
 
 #[derive(Debug, Clone)]
+/// A prompt history search result.
 pub struct PromptHistorySearchResult {
     pub history_index: usize,
     pub text: String,
@@ -55,6 +56,7 @@ pub type PromptHistorySearchState =
     SearchPicker<PromptHistorySearchResult, SearchPickerNoCustom, (), Editor>;
 
 #[derive(Debug, PartialEq, Eq)]
+/// Effect produced by the prompt history picker.
 pub enum PromptHistoryPickerEffect {
     KeepOpen,
     Close,

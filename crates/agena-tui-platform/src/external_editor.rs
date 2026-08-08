@@ -9,6 +9,7 @@ use std::{
 use tempfile::NamedTempFile;
 
 #[derive(Debug)]
+/// Error launching an external editor.
 pub enum ExternalEditorError {
     MissingEditor,
     InvalidEditorCommand(String),

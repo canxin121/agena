@@ -23,12 +23,14 @@ const MAX_MEMORY_SEARCH_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Configuration of the memory plugin.
 pub struct MemoryConfig {
     pub retrieval: MemoryRetrievalConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
+/// Retrieval configuration of the memory plugin.
 pub struct MemoryRetrievalConfig {
     pub enabled: bool,
     pub limit: u32,
@@ -91,6 +93,7 @@ fn default_memory_config() -> MemoryConfig {
     }
 }
 
+/// The bundled memory plugin.
 pub struct MemoryPlugin {
     config: OnceLock<MemoryConfig>,
     workspace_root: OnceLock<PathBuf>,

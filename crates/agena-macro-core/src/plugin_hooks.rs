@@ -14,6 +14,7 @@ use super::{
 };
 
 #[derive(Clone)]
+/// Plan of a plugin hook.
 pub struct PluginHookPlan {
     pub method: Ident,
     pub hook: PluginHookKind,
@@ -23,6 +24,7 @@ pub struct PluginHookPlan {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
+/// Kind of a plugin hook.
 pub enum PluginHookKind {
     Init,
     Shutdown,

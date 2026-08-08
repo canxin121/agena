@@ -72,6 +72,7 @@ const MAX_EXPLICIT_FALLBACK_CHARS: usize = 512;
 const DEFAULT_DARK_BACKGROUND: TerminalRgb = TerminalRgb::new(24, 24, 27);
 
 #[derive(Debug, Clone, Copy)]
+/// Layout configuration for math rendering.
 pub struct MathLayoutConfig {
     pub native_graphics: bool,
     pub cell_width: u16,
@@ -99,6 +100,7 @@ thread_local! {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Context of a math render.
 pub struct MathRenderContext {
     layout: MathLayoutConfig,
     workspace: Option<Arc<PathBuf>>,
@@ -131,6 +133,7 @@ pub fn with_math_render_context<T>(context: &MathRenderContext, render: impl FnO
 }
 
 #[derive(Clone, Debug)]
+/// Graphics configuration for math rendering.
 pub struct MathGraphicsConfig {
     picker: Picker,
     layout: MathLayoutConfig,
@@ -272,6 +275,7 @@ pub fn with_text_math_rendering<T>(render: impl FnOnce() -> T) -> T {
 }
 
 #[derive(Debug)]
+/// A math rendering artifact.
 pub struct MathArtifact {
     pub id: u64,
     pub image: DynamicImage,
@@ -283,6 +287,7 @@ pub struct MathArtifact {
 }
 
 #[derive(Debug, Clone)]
+/// Placement of a math line.
 pub struct MathLinePlacement {
     pub column: u16,
     pub artifact: Arc<MathArtifact>,
@@ -290,6 +295,7 @@ pub struct MathLinePlacement {
 }
 
 #[derive(Debug, Clone)]
+/// Placement of math within a transcript.
 pub struct TranscriptMathPlacement {
     pub line: usize,
     pub column: u16,

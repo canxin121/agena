@@ -1,6 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A pending request for user input.
 pub struct UserInputRequest {
     pub request_id: String,
     pub session_id: Option<i64>,
@@ -29,6 +30,7 @@ pub struct UserInputRequest {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a pending interactive request.
 pub enum PendingInteractiveRequestKind {
     Permission,
     UserInput,
@@ -36,6 +38,7 @@ pub enum PendingInteractiveRequestKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// A pending interactive request: permission or user input.
 pub enum PendingInteractiveRequest {
     Permission {
         #[serde(flatten)]

@@ -675,6 +675,7 @@ impl<T> ConfiguredModelModeMapResource<T> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(tag = "kind", content = "mode", rename_all = "snake_case")]
+/// How a default mode is configured (inherit, clear, or explicit).
 pub enum ConfiguredModeDefaultResource {
     #[default]
     Inherit,
@@ -683,6 +684,7 @@ pub enum ConfiguredModeDefaultResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Configured thinking mode of a model.
 pub struct ConfiguredModelThinkingModeResource {
     /// `None` means the catalog did not explicitly set a default marker.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "default")]
@@ -716,6 +718,7 @@ pub struct ConfiguredModelThinkingModeResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Configured thinking strategy of a model.
 pub enum ConfiguredThinkingStrategyResource {
     Disabled,
     Effort,
@@ -725,6 +728,7 @@ pub enum ConfiguredThinkingStrategyResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Configured speed mode of a model.
 pub struct ConfiguredModelSpeedModeResource {
     /// `None` means the catalog did not explicitly set a default marker.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "default")]
@@ -746,6 +750,7 @@ pub struct ConfiguredModelSpeedModeResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
+/// Patch selecting supported or unsupported capabilities.
 pub enum CapabilitySelectionPatchResource<T> {
     Supported(Vec<T>),
     Patch(CapabilitySelectionPatchBodyResource<T>),
@@ -762,6 +767,7 @@ impl<T> CapabilitySelectionPatchResource<T> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
+/// Body of a capability selection patch.
 pub struct CapabilitySelectionPatchBodyResource<T> {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub supported: Vec<T>,
@@ -776,6 +782,7 @@ impl<T> CapabilitySelectionPatchBodyResource<T> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Patch of model capabilities (input modalities and features).
 pub struct ModelCapabilityPatchResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<CapabilitySelectionPatchResource<ModelInputModalityResource>>,
@@ -797,6 +804,7 @@ impl ModelCapabilityPatchResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Input modality of a model.
 pub enum ModelInputModalityResource {
     Text,
     Image,
@@ -808,6 +816,7 @@ pub enum ModelInputModalityResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Feature capability of a model.
 pub enum ModelCapabilityFeatureResource {
     ToolCalling,
     Streaming,
@@ -895,6 +904,7 @@ impl ModelPricing {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Pricing tier of a model.
 pub struct ModelPricingTier {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier_type: Option<String>,
@@ -1285,6 +1295,7 @@ mod model_ref_contract_tests {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Role of a message.
 pub enum MessageRole {
     User,
     Assistant,
@@ -1389,6 +1400,7 @@ mod message_status_contract_tests {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// How message parts are loaded in a listing.
 pub enum PartLoadMode {
     None,
     #[default]
@@ -1585,6 +1597,7 @@ pub struct ApprovalModelSelectionResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Path permission configuration of a session.
 pub struct PathPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<PathAccessModesResource>,
@@ -1602,6 +1615,7 @@ impl PathPermissionConfigResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Read/write access modes for a path scope.
 pub struct PathAccessModesResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read: Option<PermissionMode>,
@@ -1620,6 +1634,7 @@ pub enum PathAccessRuleResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Network permission configuration of a session.
 pub struct NetworkPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub internet: Option<PermissionMode>,
@@ -1642,6 +1657,7 @@ impl NetworkPermissionConfigResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
+/// Tool permission configuration of a session.
 pub struct ToolPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<PermissionMode>,
@@ -1659,6 +1675,7 @@ impl ToolPermissionConfigResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
+/// Tool permission rules: a single mode or an ordered name-to-mode map.
 pub enum ToolPermissionRulesResource {
     Mode(PermissionMode),
     Ordered(BTreeMap<String, PermissionMode>),

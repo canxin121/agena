@@ -5,6 +5,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crate::terminal::TerminalContext;
 
 #[derive(Debug, Clone)]
+/// Error copying text to the clipboard.
 pub struct ClipboardTextError(pub String);
 
 impl std::fmt::Display for ClipboardTextError {
@@ -16,6 +17,7 @@ impl std::fmt::Display for ClipboardTextError {
 impl std::error::Error for ClipboardTextError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Method used to copy text to the clipboard.
 pub enum ClipboardCopyMethod {
     Native,
     Osc52,

@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::{GeminiContent, GeminiPart, GeminiThinkingConfig};
 
 #[derive(Debug, Serialize)]
+/// A Gemini generate-content request.
 pub struct GeminiGenerateRequest {
     #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<GeminiInstruction>,

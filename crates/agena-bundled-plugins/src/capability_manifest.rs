@@ -8,6 +8,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// Counts of bundled plugin capabilities.
 pub struct CapabilityCounts {
     pub plugins: usize,
     pub tools: usize,
@@ -22,6 +23,7 @@ pub struct CapabilityCounts {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Manifest of bundled plugin capabilities.
 pub struct BundledCapabilityManifest {
     pub schema_version: u32,
     pub snapshot_date: &'static str,
@@ -31,6 +33,7 @@ pub struct BundledCapabilityManifest {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Capability of a bundled plugin.
 pub struct BundledPluginCapability {
     pub id: String,
     pub version: String,
@@ -42,6 +45,7 @@ pub struct BundledPluginCapability {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
+/// Tool capability of a bundled plugin.
 pub struct BundledToolCapability {
     pub canonical_name: String,
     /// True only for the fixed agena.tools discovery protocol handlers. The
@@ -59,6 +63,7 @@ pub struct BundledToolCapability {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+/// Skill capability of a bundled plugin.
 pub struct BundledSkillCapability {
     pub name: String,
     pub description: String,

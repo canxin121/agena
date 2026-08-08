@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub mod provider_model_helpers;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Field of a provider model configuration.
 pub enum ProviderModelConfigField {
     ModelId,
     Enabled,
@@ -27,6 +28,7 @@ pub enum ProviderModelConfigField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A provider studio field.
 pub struct ProviderField {
     pub key: String,
     pub label: String,
@@ -35,6 +37,7 @@ pub struct ProviderField {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A draft provider configuration.
 pub struct ProviderDraft {
     pub provider_id: String,
     pub display_name: String,
@@ -42,6 +45,7 @@ pub struct ProviderDraft {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Action of the provider studio.
 pub enum ProviderStudioAction {
     SelectProvider(String),
     EditField { key: String, value: String },
@@ -52,6 +56,7 @@ pub enum ProviderStudioAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the provider studio.
 pub enum ProviderStudioEffect {
     LoadProviders,
     SaveProvider(ProviderDraft),
@@ -61,6 +66,7 @@ pub enum ProviderStudioEffect {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// State of the provider studio.
 pub struct ProviderStudioState {
     pub selected_provider_id: Option<String>,
     pub draft: Option<ProviderDraft>,

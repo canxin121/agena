@@ -630,6 +630,7 @@ impl UserInputPresentation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Effect produced by the user input flow.
 pub enum UserInputEffect {
     KeepOpen,
     Close,

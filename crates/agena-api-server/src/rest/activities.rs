@@ -10,6 +10,7 @@ use super::{
 };
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for listing activities over REST.
 pub struct ListActivitiesQuery {
     /// Comma-separated kind filters (`shell`, `task`, `runtime`, `browser`).
     #[serde(default)]
@@ -67,6 +68,7 @@ pub async fn get_activity(
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for reading activity logs over REST.
 pub struct ActivityLogsQuery {
     /// Cursor: lines with `seq > since_seq` are returned.
     #[serde(default)]

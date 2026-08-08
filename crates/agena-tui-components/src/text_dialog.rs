@@ -34,6 +34,7 @@ pub(crate) struct TextDialogSpec<'a> {
     pub footer_style: Style,
 }
 
+/// A line of the text dialog.
 pub struct TextDialogLine<'a> {
     pub text: Cow<'a, str>,
     pub style: Style,
@@ -55,6 +56,7 @@ impl<'a> TextDialogLine<'a> {
     }
 }
 
+/// Spec of a line text dialog.
 pub struct LineTextDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub lines: &'a [TextDialogLine<'a>],

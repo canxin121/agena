@@ -52,6 +52,7 @@ impl SearchPickerInputMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Search mode of the search picker.
 pub enum SearchPickerSearchMode {
     None,
     LocalRanked,
@@ -59,18 +60,21 @@ pub enum SearchPickerSearchMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Selection mode of the search picker.
 pub enum SearchPickerSelectionMode {
     Single,
     Multiple,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Focus of the search picker.
 pub enum SearchPickerFocus {
     Input,
     Results,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Preview mode of the search picker.
 pub enum SearchPickerPreviewMode {
     Hidden,
     Responsive {
@@ -81,6 +85,7 @@ pub enum SearchPickerPreviewMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Phase of the search picker.
 pub enum SearchPickerPhase {
     Idle,
     Searching { keep_results: bool },
@@ -105,6 +110,7 @@ impl SearchPickerPhase {
 }
 
 #[derive(Debug, Clone)]
+/// Configuration of the search picker.
 pub struct SearchPickerConfig {
     pub input_mode: SearchPickerInputMode,
     pub search_mode: SearchPickerSearchMode,
@@ -137,6 +143,7 @@ impl SearchPickerConfig {
     }
 }
 
+/// Input type of the search picker.
 pub trait SearchPickerInput: Clone {
     fn text(&self) -> &str;
     fn set_text(&mut self, text: String);
@@ -144,6 +151,7 @@ pub trait SearchPickerInput: Clone {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Result of search picker input.
 pub enum SearchPickerInputResult {
     Close,
     Navigated,
@@ -151,6 +159,7 @@ pub enum SearchPickerInputResult {
 }
 
 #[derive(Debug, Clone)]
+/// Clear action of the search picker.
 pub struct SearchPickerClearAction {
     pub label: String,
     pub detail: String,
@@ -158,8 +167,10 @@ pub struct SearchPickerClearAction {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Marker type for a search picker without custom values.
 pub struct SearchPickerNoCustom;
 
+/// Item type of the search picker.
 pub trait SearchPickerItem: Clone {
     /// A stable key used to preserve the selection across filtering and reloads.
     fn search_picker_key(&self) -> Cow<'_, str>;
@@ -207,6 +218,7 @@ pub trait SearchPickerItem: Clone {
     }
 }
 
+/// Custom value type of the search picker.
 pub trait SearchPickerCustomValue<TContext>: Clone {
     fn search_picker_from_input(input: &str, context: &TContext) -> Option<Self>;
     fn search_picker_label(&self, context: &TContext) -> Cow<'_, str>;
@@ -259,6 +271,7 @@ impl SearchPickerItem for PathBuf {
 }
 
 #[derive(Debug, Clone)]
+/// Selection of the search picker.
 pub enum SearchPickerSelection<TItem, TCustom> {
     Clear(SearchPickerClearAction),
     Custom(TCustom),
@@ -281,6 +294,7 @@ struct SearchMatch {
 }
 
 #[derive(Debug, Clone)]
+/// The search picker widget.
 pub struct SearchPicker<TItem, TCustom, TMeta, TInput> {
     pub title: String,
     pub prompt: String,

@@ -25,6 +25,7 @@ use crate::session::history::{
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", content = "payload", rename_all = "snake_case")]
+/// Kind of a runtime event.
 pub enum EventKind {
     // --- runtime / UI projection ---
     ExecutionStarted(ExecutionStartedEvent),
@@ -71,6 +72,7 @@ pub enum EventKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Payload of a plugin event.
 pub struct PluginEventPayload {
     pub plugin_id: PluginKey,
     pub kind_label: String,

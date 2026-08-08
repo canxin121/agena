@@ -91,6 +91,7 @@ pub use providers::*;
 pub use model_catalog::*;
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Compatibility query for the session event list.
 pub struct SessionEventListCompatQuery {
     #[serde(default)]
     pub cursor: Option<String>,
@@ -101,6 +102,7 @@ pub struct SessionEventListCompatQuery {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for HTTP usage statistics.
 pub struct UsageStatsHttpQuery {
     #[serde(default)]
     pub period: Option<UsagePeriod>,
@@ -125,6 +127,7 @@ pub struct UsageStatsHttpQuery {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Body of a session fork request.
 pub struct SessionForkRequestBody {
     /// Fork point. `None` clones the entire history; otherwise clones
     /// every event up to and including the last one tied to this message id.

@@ -62,6 +62,7 @@ const REALTIME_ADAPTER_KIND: &str = "openai_realtime";
 
 #[derive(Clone)]
 #[doc(hidden)]
+/// Transport for OpenAI-compatible providers.
 pub struct OpenAiTransport {
     id: String,
     client: reqwest::Client,
@@ -80,16 +81,19 @@ pub struct OpenAiTransport {
 }
 
 #[derive(Clone)]
+/// Adapter for the OpenAI Responses API.
 pub struct OpenAiResponsesAdapter {
     transport: OpenAiTransport,
 }
 
 #[derive(Clone)]
+/// Adapter for the OpenAI Chat Completions API.
 pub struct OpenAiChatCompletionsAdapter {
     transport: OpenAiTransport,
 }
 
 #[derive(Clone)]
+/// Adapter for the OpenAI Realtime API.
 pub struct OpenAiRealtimeAdapter {
     transport: OpenAiTransport,
     realtime_ws_url: Option<String>,
@@ -109,6 +113,7 @@ struct OpenAiTransportOptions {
 }
 
 #[derive(Clone)]
+/// Options of the OpenAI Responses adapter.
 pub struct OpenAiResponsesAdapterOptions {
     pub backend: OpenAiResponsesBackend,
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
@@ -138,6 +143,7 @@ impl Default for OpenAiResponsesAdapterOptions {
 }
 
 #[derive(Clone)]
+/// Options of the OpenAI Chat Completions adapter.
 pub struct OpenAiChatCompletionsAdapterOptions {
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
     pub profile: OpenAiProfile,
@@ -165,6 +171,7 @@ impl Default for OpenAiChatCompletionsAdapterOptions {
 }
 
 #[derive(Clone)]
+/// Options of the OpenAI Realtime adapter.
 pub struct OpenAiRealtimeAdapterOptions {
     pub auth_data: Option<Arc<Mutex<AuthData>>>,
     pub models_url: Option<String>,

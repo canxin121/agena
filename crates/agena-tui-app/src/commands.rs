@@ -1,4 +1,5 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Identifier of a TUI command.
 pub enum CommandId {
     Help,
     Commands,
@@ -43,6 +44,7 @@ pub enum CommandId {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Specification of a TUI command.
 pub struct CommandSpec {
     pub id: CommandId,
     pub name: &'static str,
@@ -84,6 +86,7 @@ impl CommandSpec {
 }
 
 #[derive(Debug, Clone)]
+/// A parsed TUI command.
 pub struct ParsedCommand {
     pub spec: &'static CommandSpec,
     pub args: String,

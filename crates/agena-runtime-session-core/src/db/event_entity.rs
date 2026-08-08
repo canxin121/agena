@@ -30,6 +30,7 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// SeaORM relations of the event entity.
 pub enum Relation {
     #[sea_orm(
         belongs_to = "session::Entity",

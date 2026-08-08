@@ -15,6 +15,7 @@ use agena_tui::terminal_color::TerminalColorDetection;
 use agena_tui::terminal_overrides as overrides;
 
 #[derive(Debug, Clone)]
+/// Context of the terminal.
 pub struct TerminalContext {
     pub identity: TerminalIdentity,
     pub capabilities: TerminalCapabilities,

@@ -9,6 +9,7 @@ use crate::{
     StackedDialogSectionHeight, StackedDialogSpec, SurfaceMode, render_stacked_dialog,
 };
 
+/// Spec of the decision dialog.
 pub struct DecisionDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub body: &'a Text<'a>,

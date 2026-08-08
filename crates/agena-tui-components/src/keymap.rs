@@ -7,6 +7,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Navigation action bound to keys.
 pub enum NavigationAction {
     Up,
     Down,
@@ -58,6 +59,7 @@ pub fn search_navigation_action(key: KeyEvent) -> Option<NavigationAction> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Action of the input dialog.
 pub enum InputDialogAction {
     Close,
     Submit,

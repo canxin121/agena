@@ -17,6 +17,7 @@ pub async fn get_plugin_ui_catalog(
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+/// Query for plugin tool registry changes.
 pub struct PluginToolRegistryChangesQuery {
     #[serde(default)]
     pub after_generation: Option<u64>,

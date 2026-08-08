@@ -381,6 +381,7 @@ pub struct ProviderHostedImageGenerationOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Patch overlay for hosted URL context of a provider.
 pub struct ProviderHostedUrlContextOverlay {
     #[merge(strategy = option_override)]
     pub max_urls: Option<u32>,
@@ -390,6 +391,7 @@ pub struct ProviderHostedUrlContextOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Patch overlay for hosted tools of a provider.
 pub struct ProviderHostedToolsOverlay {
     #[merge(strategy = option_struct_merge)]
     pub web_search: Option<ProviderHostedWebSearchOverlay>,
@@ -405,6 +407,7 @@ pub struct ProviderHostedToolsOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Patch overlay referencing a native tool harness.
 pub struct ProviderNativeToolHarnessRefOverlay {
     #[merge(strategy = option_override)]
     pub kind: Option<ProviderNativeToolHarnessKind>,
@@ -414,6 +417,7 @@ pub struct ProviderNativeToolHarnessRefOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Patch overlay binding native tool harnesses.
 pub struct ProviderNativeToolHarnessBindingsOverlay {
     #[merge(strategy = option_struct_merge)]
     pub computer: Option<ProviderNativeToolHarnessRefOverlay>,
@@ -425,6 +429,7 @@ pub struct ProviderNativeToolHarnessBindingsOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Patch overlay for a native tool connector.
 pub struct ProviderNativeToolConnectorOverlay {
     #[merge(strategy = option_override)]
     pub server: Option<String>,
@@ -436,6 +441,7 @@ pub struct ProviderNativeToolConnectorOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Patch overlay for provider native tools.
 pub struct ProviderNativeToolsOverlay {
     #[merge(strategy = option_struct_merge)]
     pub routes: Option<ProviderNativeToolRoutesOverlay>,
@@ -449,6 +455,7 @@ pub struct ProviderNativeToolsOverlay {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, DeriveMerge)]
 #[serde(default, deny_unknown_fields)]
+/// Full patch overlay applied on top of a provider config.
 pub struct ProviderOverlay {
     #[merge(strategy = option_override)]
     pub enabled: Option<bool>,

@@ -3,6 +3,7 @@
 use std::io;
 
 #[derive(Debug, thiserror::Error)]
+/// Error from the plugin marketplace.
 pub enum MarketplaceError {
     #[error("io error: {0}")]
     Io(#[from] io::Error),

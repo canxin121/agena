@@ -18,6 +18,7 @@ pub const ABI_VERSION: u32 = 1;
 #[derive(StableAbi)]
 #[sabi(kind(Prefix(prefix_ref = AgenaPluginCdylib_Ref)))]
 #[sabi(missing_field(panic))]
+/// Stable-ABI struct exported by a cdylib plugin.
 pub struct AgenaPluginCdylib {
     pub abi_version: u32,
     pub dispatch: extern "C" fn(method: RString, params: RString) -> RResult<RString, RString>,

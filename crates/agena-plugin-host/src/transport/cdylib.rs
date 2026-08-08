@@ -11,6 +11,7 @@ use crate::sdk::PluginError;
 use crate::sdk::cdylib_abi::AgenaPluginCdylib_Ref;
 use crate::transport::PluginTransport;
 
+/// Plugin transport over a cdylib ABI.
 pub struct CdylibTransport {
     module: AgenaPluginCdylib_Ref,
 }

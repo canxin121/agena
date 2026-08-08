@@ -14,6 +14,7 @@ use oauth2::{
 use crate::RuntimeAuthenticationError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a draft authentication flow.
 pub enum RuntimeDraftAuthKind {
     OpenaiChatgpt,
     GithubCopilot,
@@ -21,6 +22,7 @@ pub enum RuntimeDraftAuthKind {
 }
 
 #[derive(Debug, Clone)]
+/// Browser start details of a draft auth flow.
 pub struct RuntimeDraftAuthBrowserStart {
     pub authorize_url: String,
     pub state: String,
@@ -28,6 +30,7 @@ pub struct RuntimeDraftAuthBrowserStart {
 }
 
 #[derive(Debug, Clone)]
+/// Device start details of a draft auth flow.
 pub struct RuntimeDraftAuthDeviceStart {
     pub verification_url: String,
     pub user_code: String,
@@ -36,6 +39,7 @@ pub struct RuntimeDraftAuthDeviceStart {
 }
 
 #[derive(Debug, Clone)]
+/// Token of a draft authentication flow.
 pub struct RuntimeDraftAuthToken {
     pub refresh_token: String,
     pub access_token: String,
@@ -44,6 +48,7 @@ pub struct RuntimeDraftAuthToken {
 }
 
 #[async_trait]
+/// Service for draft provider authentication.
 pub trait RuntimeDraftAuthenticationService: Send + Sync {
     fn start_draft_auth_browser(
         &self,

@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+/// Error from the web crawl subsystem.
 pub enum CrawlError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),

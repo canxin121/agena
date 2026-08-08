@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::layout::wrapped_text_height;
 
+/// Spec of a header row.
 pub struct HeaderRowSpec<'a> {
     pub left: Cow<'a, str>,
     pub right: Option<Cow<'a, str>>,
@@ -22,6 +23,7 @@ pub struct HeaderRowSpec<'a> {
     pub right_style: Style,
 }
 
+/// Spec of wrapped text.
 pub struct WrappedTextSpec<'a> {
     pub text: Cow<'a, str>,
     pub style: Style,

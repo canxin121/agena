@@ -8,12 +8,14 @@ use unicode_width::UnicodeWidthStr;
 use crate::Editor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Size of a vertical section.
 pub enum VerticalSectionSize {
     Fixed(u16),
     Flexible(u16),
 }
 
 #[derive(Clone, Copy)]
+/// Mode of a surface.
 pub enum SurfaceMode {
     Overlay,
     Route,

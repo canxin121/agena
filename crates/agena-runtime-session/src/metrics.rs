@@ -34,6 +34,7 @@ pub fn session_finished() {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// Snapshot of runtime metrics.
 pub struct RuntimeMetricsSnapshot {
     pub provider_calls_total: u64,
     pub provider_calls_error: u64,

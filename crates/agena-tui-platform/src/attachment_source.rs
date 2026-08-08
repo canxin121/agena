@@ -19,6 +19,7 @@ const MAX_IMAGE_DIMENSION: u32 = 32_768;
 const MAX_IMAGE_PIXELS: u64 = 100_000_000;
 
 #[derive(Debug)]
+/// An attachment acquired from a source.
 pub struct AcquiredAttachment {
     pub path: PathBuf,
     pub temporary: bool,
@@ -26,11 +27,13 @@ pub struct AcquiredAttachment {
 }
 
 #[derive(Debug)]
+/// Result of acquiring an attachment.
 pub struct AttachmentAcquisition {
     pub items: Vec<AcquiredAttachment>,
     pub cleanup_root: Option<PathBuf>,
 }
 
+/// Source of terminal attachments.
 pub trait AttachmentSource {
     fn label(&self) -> &'static str;
     fn available(&self, context: &TerminalContext) -> bool;
@@ -39,6 +42,7 @@ pub trait AttachmentSource {
 }
 
 #[derive(Debug, Default)]
+/// Clipboard image attachment source.
 pub struct ClipboardImageSource;
 
 impl AttachmentSource for ClipboardImageSource {
@@ -74,6 +78,7 @@ impl AttachmentSource for ClipboardImageSource {
 }
 
 #[derive(Debug, Default)]
+/// Kitty clipboard image attachment source.
 pub struct KittyClipboardImageSource;
 
 impl KittyClipboardImageSource {
@@ -171,6 +176,7 @@ pub fn acquire_clipboard_image(
 }
 
 #[derive(Debug, Default)]
+/// iTerm2 upload attachment source.
 pub struct Iterm2UploadSource;
 
 impl Iterm2UploadSource {
@@ -207,6 +213,7 @@ impl AttachmentSource for Iterm2UploadSource {
 }
 
 #[derive(Debug)]
+/// Kitty upload attachment source.
 pub struct KittyUploadSource {
     local_sources: Vec<String>,
 }

@@ -48,6 +48,7 @@ pub fn render_entry_export(
 }
 
 #[derive(Debug, Clone)]
+/// A rendered message block.
 pub struct RenderedMessageBlock {
     pub lines: Vec<RenderedLine>,
     pub nodes: Vec<RenderedTranscriptNode>,
@@ -848,6 +849,7 @@ fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> M
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A rendered markdown block.
 pub struct MarkdownBlock {
     pub kind: TranscriptNodeKind,
     pub source: String,

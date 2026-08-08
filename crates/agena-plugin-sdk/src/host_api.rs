@@ -807,11 +807,13 @@ pub struct HostGetSessionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response with session information from the host.
 pub struct HostGetSessionResponse {
     pub session: HostSession,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to rename a session.
 pub struct HostRenameSessionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
@@ -819,11 +821,13 @@ pub struct HostRenameSessionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of a session rename.
 pub struct HostRenameSessionResponse {
     pub session: HostSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Request to set the model of a session.
 pub struct HostSetSessionModelRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
@@ -832,6 +836,7 @@ pub struct HostSetSessionModelRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of setting the session model.
 pub struct HostSetSessionModelResponse {
     pub session: HostSession,
     pub provider_id: String,
@@ -844,6 +849,7 @@ pub struct HostSetSessionModelResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Operation performed by an image execution.
 pub enum HostImageOperation {
     Generate,
     Edit,
@@ -851,6 +857,7 @@ pub enum HostImageOperation {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+/// Input of an image execution.
 pub enum HostImageInput {
     /// Workspace-relative or absolute local path. The host resolves it using
     /// the callback-scoped tool executor and requires an existing read grant.
@@ -862,6 +869,7 @@ pub enum HostImageInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+/// Request to execute an image operation.
 pub struct HostImageExecuteRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
@@ -880,6 +888,7 @@ pub struct HostImageExecuteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Response of an image execution.
 pub struct HostImageExecuteResponse {
     pub operation: HostImageOperation,
     pub provider_id: String,
@@ -893,6 +902,7 @@ pub struct HostImageExecuteResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request to enter a workspace snapshot.
 pub struct HostEnterSnapshotRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -901,6 +911,7 @@ pub struct HostEnterSnapshotRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to exit the active workspace snapshot.
 pub struct HostExitSnapshotRequest {
     pub action: String,
     #[serde(default)]
@@ -910,6 +921,7 @@ pub struct HostExitSnapshotRequest {
 // ---------------- monitor ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to start a process monitor.
 pub struct MonitorStartRequest {
     pub command: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -931,6 +943,7 @@ pub struct MonitorStartRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Handle of a started process monitor.
 pub struct MonitorHandle {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -960,6 +973,7 @@ pub struct MonitorHandle {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Event emitted by a process monitor.
 pub struct MonitorEvent {
     pub seq: u64,
     pub stream: String,
@@ -968,6 +982,7 @@ pub struct MonitorEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to read monitor output.
 pub struct MonitorReadRequest {
     pub id: String,
     #[serde(default)]
@@ -981,6 +996,7 @@ pub struct MonitorReadRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response with monitor output.
 pub struct MonitorReadResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub monitor_id: Option<String>,
@@ -1006,6 +1022,7 @@ pub struct MonitorReadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to stop a monitor.
 pub struct MonitorStopRequest {
     pub id: String,
     #[serde(default)]
@@ -1015,16 +1032,19 @@ pub struct MonitorStopRequest {
 // ---------------- tool registry ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to register a tool in the host tool registry.
 pub struct HostToolRegisterRequest {
     pub tool: ToolDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to update a registered tool.
 pub struct HostToolUpdateRequest {
     pub tool: ToolDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to remove a registered tool.
 pub struct HostToolRemoveRequest {
     pub name: String,
     #[serde(default)]
@@ -1032,6 +1052,7 @@ pub struct HostToolRemoveRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of a tool registry mutation.
 pub struct HostToolMutationResponse {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1044,6 +1065,7 @@ pub struct HostToolMutationResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Kind of a tool registry change.
 pub enum ToolRegistryChangeKind {
     Registered,
     Updated,
@@ -1051,6 +1073,7 @@ pub enum ToolRegistryChangeKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Event emitted when the tool registry changes.
 pub struct ToolRegistryChangedEvent {
     pub kind: ToolRegistryChangeKind,
     pub generation: u64,
@@ -1062,6 +1085,7 @@ pub struct ToolRegistryChangedEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of a tool registered in the host registry.
 pub struct HostRegisteredToolDescriptor {
     pub plugin: PluginKey,
     pub tool_key: ToolKey,
@@ -1069,6 +1093,7 @@ pub struct HostRegisteredToolDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response listing registered tools.
 pub struct HostRegisteredToolListResponse {
     pub generation: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1081,6 +1106,7 @@ pub struct HostRegisteredToolListResponse {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Scope of a plugin storage record.
 pub enum HostStorageScope {
     Session,
     Workspace,
@@ -1090,6 +1116,7 @@ pub enum HostStorageScope {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Visibility of a plugin storage record.
 pub enum HostStorageVisibility {
     #[default]
     Private,
@@ -1097,6 +1124,7 @@ pub enum HostStorageVisibility {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to get a storage record.
 pub struct HostStorageGetRequest {
     #[serde(default)]
     pub scope: HostStorageScope,
@@ -1107,12 +1135,14 @@ pub struct HostStorageGetRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response with a storage record.
 pub struct HostStorageGetResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to set a storage record.
 pub struct HostStorageSetRequest {
     #[serde(default)]
     pub scope: HostStorageScope,
@@ -1124,6 +1154,7 @@ pub struct HostStorageSetRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to delete a storage record.
 pub struct HostStorageDeleteRequest {
     #[serde(default)]
     pub scope: HostStorageScope,
@@ -1134,6 +1165,7 @@ pub struct HostStorageDeleteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request to list storage records.
 pub struct HostStorageListRequest {
     #[serde(default)]
     pub scope: HostStorageScope,
@@ -1146,12 +1178,14 @@ pub struct HostStorageListRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing storage records.
 pub struct HostStorageListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub records: Vec<HostStorageRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A plugin storage record.
 pub struct HostStorageRecord {
     pub namespace: String,
     pub key: String,
@@ -1160,28 +1194,33 @@ pub struct HostStorageRecord {
 // ---------------- plugin secrets ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to get a plugin secret.
 pub struct HostSecretGetRequest {
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response with a plugin secret.
 pub struct HostSecretGetResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to set a plugin secret.
 pub struct HostSecretSetRequest {
     pub name: String,
     pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to delete a plugin secret.
 pub struct HostSecretDeleteRequest {
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing plugin secret names.
 pub struct HostSecretListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
@@ -1190,6 +1229,7 @@ pub struct HostSecretListResponse {
 // ---------------- plugin status ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Status of a plugin as seen by the host.
 pub struct HostPluginStatus {
     pub plugin_id: PluginKey,
     pub kind: String,
@@ -1207,6 +1247,7 @@ pub struct HostPluginStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing plugin statuses.
 pub struct HostPluginStatusListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<HostPluginStatus>,
@@ -1229,17 +1270,20 @@ pub struct HostPluginDescriptor {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing plugins.
 pub struct HostPluginListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<HostPluginDescriptor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request for the status of one plugin.
 pub struct HostPluginStatusGetRequest {
     pub plugin_id: PluginKey,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response with the status of one plugin.
 pub struct HostPluginStatusGetResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<HostPluginStatus>,
@@ -1248,12 +1292,14 @@ pub struct HostPluginStatusGetResponse {
 // ---------------- lsp ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing LSP servers.
 pub struct HostLspListServersResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub servers: Vec<HostLspServer>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of an LSP server.
 pub struct HostLspServer {
     pub name: String,
     pub command: String,
@@ -1264,18 +1310,21 @@ pub struct HostLspServer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Request listing LSP diagnostics.
 pub struct HostLspListDiagnosticsRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing LSP diagnostics.
 pub struct HostLspListDiagnosticsResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<HostLspDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// An LSP diagnostic.
 pub struct HostLspDiagnostic {
     pub uri: String,
     pub severity: String,
@@ -1293,12 +1342,14 @@ pub struct HostLspDiagnostic {
 // ---------------- snapshot / scheduler ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing snapshots.
 pub struct HostSnapshotListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub snapshots: Vec<HostSnapshotSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of a snapshot.
 pub struct HostSnapshotSummary {
     pub session_id: i64,
     pub path: String,
@@ -1308,12 +1359,14 @@ pub struct HostSnapshotSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing scheduler jobs.
 pub struct HostSchedulerListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub jobs: Vec<HostSchedulerJob>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of a scheduler job.
 pub struct HostSchedulerJob {
     pub id: String,
     pub kind: String,
@@ -1332,6 +1385,7 @@ pub struct HostSchedulerJob {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Request to create a scheduler job.
 pub enum HostSchedulerCreateRequest {
     Cron {
         expression: String,
@@ -1350,16 +1404,19 @@ pub enum HostSchedulerCreateRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Response of creating a scheduler job.
 pub struct HostSchedulerCreateResponse {
     pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to delete a scheduler job.
 pub struct HostSchedulerDeleteRequest {
     pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response of deleting a scheduler job.
 pub struct HostSchedulerDeleteResponse {
     pub removed: bool,
 }
@@ -1367,12 +1424,14 @@ pub struct HostSchedulerDeleteResponse {
 // ---------------- hooks ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing host hook registrations.
 pub struct HostHookListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HostHookRegistration>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A host hook registration of a plugin.
 pub struct HostHookRegistration {
     pub plugin_id: PluginKey,
     pub trust_level: String,
@@ -1389,6 +1448,7 @@ pub struct HostHookRegistration {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of a registered hook.
 pub struct HostHookDescriptor {
     pub name: String,
     #[serde(default)]
@@ -1405,6 +1465,7 @@ pub struct HostHookDescriptor {
 // ---------------- mcp ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing MCP servers.
 pub struct HostMcpListServersResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub servers: Vec<String>,
@@ -1412,6 +1473,7 @@ pub struct HostMcpListServersResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Specification of an MCP server managed by the host.
 pub enum HostMcpServerSpec {
     Stdio {
         command: String,
@@ -1432,17 +1494,20 @@ pub enum HostMcpServerSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to add an MCP server.
 pub struct HostMcpAddServerRequest {
     pub name: String,
     pub spec: HostMcpServerSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to remove an MCP server.
 pub struct HostMcpRemoveServerRequest {
     pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response of removing an MCP server.
 pub struct HostMcpRemoveServerResponse {
     pub removed: bool,
 }
@@ -1450,21 +1515,25 @@ pub struct HostMcpRemoveServerResponse {
 // ---------------- UI: declarative display contribution / theme ----------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to contribute a display block.
 pub struct HostDisplayContributeRequest {
     pub contribution: PluginDisplayContribution,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to remove a display block.
 pub struct HostDisplayRemoveRequest {
     pub contribution_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response of removing a display block.
 pub struct HostDisplayRemoveResponse {
     pub removed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response of a config reload.
 pub struct HostConfigReloadResponse {
     pub previous_generation: u64,
     pub generation: u64,
@@ -1472,6 +1541,7 @@ pub struct HostConfigReloadResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// A theme palette contributed by a plugin.
 pub struct HostThemePalette {
     pub id: String,
     pub plugin_id: PluginKey,
@@ -1480,6 +1550,7 @@ pub struct HostThemePalette {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to register a theme palette.
 pub struct HostThemeRegisterRequest {
     pub id: String,
     pub display_name: String,
@@ -1487,16 +1558,19 @@ pub struct HostThemeRegisterRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Request to remove a theme palette.
 pub struct HostThemeRemoveRequest {
     pub id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response of removing a theme palette.
 pub struct HostThemeRemoveResponse {
     pub removed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Response listing theme palettes.
 pub struct HostThemeListResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub themes: Vec<HostThemePalette>,

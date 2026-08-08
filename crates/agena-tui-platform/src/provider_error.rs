@@ -1,6 +1,7 @@
 use std::{fmt, io};
 
 #[derive(Debug)]
+/// Error from the TUI platform provider.
 pub enum ProviderError {
     Cancelled,
     PermissionDenied(String),

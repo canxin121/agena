@@ -6,6 +6,7 @@ use agena_domain::{BackgroundActivity, BackgroundActivityLogRead};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// A background activity (process, task) with its log state.
 pub struct BackgroundActivityResource {
     pub id: String,
     pub kind: String,
@@ -66,6 +67,7 @@ impl From<&BackgroundActivity> for BackgroundActivityResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// One line of a background activity log.
 pub struct BackgroundActivityLogLineResource {
     pub seq: u64,
     pub stream: String,
@@ -75,6 +77,7 @@ pub struct BackgroundActivityLogLineResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// A page of background activity log lines.
 pub struct BackgroundActivityLogResource {
     pub activity_id: String,
     pub status: String,

@@ -1,6 +1,7 @@
 use super::*;
 
 #[derive(Debug, Clone)]
+/// View state of the search picker.
 pub enum SearchPickerViewState<'a, TItem> {
     Loading { message: &'a str },
     Empty { message: &'a str },
@@ -8,6 +9,7 @@ pub enum SearchPickerViewState<'a, TItem> {
     Selected(&'a TItem),
 }
 
+/// Spec of the search picker dialog.
 pub struct SearchPickerDialogSpec<'a> {
     loading_message: Cow<'a, str>,
     results_title: Cow<'a, str>,

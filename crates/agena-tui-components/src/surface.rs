@@ -20,6 +20,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A header-body-footer layout.
 pub struct HeaderBodyFooterLayout {
     pub header: Rect,
     pub body: Rect,
@@ -27,12 +28,14 @@ pub struct HeaderBodyFooterLayout {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A composer surface layout.
 pub struct ComposerSurfaceLayout {
     pub outer: Rect,
     pub inner: Rect,
     pub editor: Rect,
 }
 
+/// Spec of a header-body-footer text surface.
 pub struct HeaderBodyFooterTextSurfaceSpec<'a> {
     pub title: std::borrow::Cow<'a, str>,
     pub subtitle: Option<std::borrow::Cow<'a, str>>,
@@ -46,6 +49,7 @@ pub struct HeaderBodyFooterTextSurfaceSpec<'a> {
     pub right_style: Style,
 }
 
+/// Spec of a composer editor surface.
 pub struct ComposerEditorSurfaceSpec<'a> {
     pub editor_lines: Text<'a>,
     pub placeholder: Option<Line<'a>>,

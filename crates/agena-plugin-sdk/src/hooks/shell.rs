@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the shell env hook.
 pub struct ShellEnvInput {
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -13,6 +14,7 @@ pub struct ShellEnvInput {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied to the shell environment by a hook.
 pub struct ShellEnvPatch {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub set: BTreeMap<String, String>,

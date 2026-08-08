@@ -35,6 +35,7 @@ pub struct GitBranchDetails {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response listing git branches.
 pub struct GitBranchesResponse {
     pub all: Vec<String>,
     pub current: String,
@@ -49,6 +50,7 @@ pub struct GitBranchesResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Query for git branches.
 pub struct GitBranchesQuery {
     pub directory: Option<String>,
     pub page: Option<usize>,
@@ -311,6 +313,7 @@ pub async fn git_branches(Query(q): Query<GitBranchesQuery>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a branch creation request.
 pub struct CreateBranchBody {
     pub name: Option<String>,
     #[serde(rename = "startPoint")]
@@ -352,6 +355,7 @@ pub async fn git_create_branch(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a branch deletion request.
 pub struct DeleteBranchBody {
     pub branch: Option<String>,
     #[serde(default)]
@@ -385,6 +389,7 @@ pub async fn git_delete_branch(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a branch rename request.
 pub struct RenameBranchBody {
     pub from: Option<String>,
     pub to: Option<String>,
@@ -454,6 +459,7 @@ pub async fn git_rename_branch(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a remote branch deletion request.
 pub struct DeleteRemoteBranchBody {
     pub name: Option<String>,
     pub remote: Option<String>,
@@ -513,6 +519,7 @@ pub async fn git_delete_remote_branch(
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of a checkout request.
 pub struct CheckoutBody {
     pub branch: Option<String>,
 }
@@ -575,6 +582,7 @@ async fn git_check_ref_format(dir: &Path, full_ref: &str, allow_onelevel: bool) 
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Information about a git tag.
 pub struct GitTagInfo {
     pub name: String,
     pub object: String,
@@ -586,6 +594,7 @@ pub struct GitTagInfo {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Response listing git tags.
 pub struct GitTagsListResponse {
     pub tags: Vec<GitTagInfo>,
 }
@@ -645,6 +654,7 @@ pub async fn git_tags_list(Query(q): Query<DirectoryQuery>) -> Response {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a tag creation request.
 pub struct GitTagCreateBody {
     pub name: Option<String>,
     pub r#ref: Option<String>,
@@ -720,6 +730,7 @@ pub async fn git_tags_create(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a tag deletion request.
 pub struct GitTagDeleteBody {
     pub name: Option<String>,
 }
@@ -755,6 +766,7 @@ pub async fn git_tags_delete(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a remote tag deletion request.
 pub struct GitTagDeleteRemoteBody {
     pub remote: Option<String>,
     pub name: Option<String>,
@@ -829,6 +841,7 @@ pub async fn git_tags_delete_remote(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a detached checkout request.
 pub struct GitCheckoutDetachedBody {
     pub r#ref: Option<String>,
 }
@@ -864,6 +877,7 @@ pub async fn git_checkout_detached(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+/// Body of a create-branch-from request.
 pub struct GitCreateBranchFromBody {
     pub name: Option<String>,
     pub start_point: Option<String>,

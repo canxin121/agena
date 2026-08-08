@@ -321,12 +321,14 @@ pub fn flush_markdown_chunk(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A fenced code block in markdown.
 pub struct MarkdownFence {
     pub marker: char,
     pub len: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Alignment of a markdown table column.
 pub enum TableColumnAlignment {
     Left,
     Center,
@@ -780,6 +782,7 @@ pub fn pad_table_cell(text: &str, width: usize, alignment: TableColumnAlignment)
 }
 
 #[derive(Debug, Clone)]
+/// A styled grapheme for rendering.
 pub struct StyledGrapheme {
     pub text: String,
     pub style: Style,

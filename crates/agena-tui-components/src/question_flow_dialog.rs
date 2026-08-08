@@ -10,6 +10,7 @@ use crate::{
     TextPanelSection, TextPanelSpec, render_stacked_dialog,
 };
 
+/// Custom input spec of the question flow dialog.
 pub struct QuestionFlowCustomInputSpec<'a> {
     pub title: Cow<'a, str>,
     pub input: &'a Editor,
@@ -26,6 +27,7 @@ impl<'a> QuestionFlowCustomInputSpec<'a> {
     }
 }
 
+/// Mode of the question flow dialog.
 pub enum QuestionFlowDialogMode<'a> {
     Empty {
         detail_title: Cow<'a, str>,
@@ -97,6 +99,7 @@ impl<'a> QuestionFlowDialogMode<'a> {
     }
 }
 
+/// Spec of the question flow dialog.
 pub struct QuestionFlowDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub target_width: u16,

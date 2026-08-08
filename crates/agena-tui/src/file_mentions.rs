@@ -25,11 +25,13 @@ use agena_tui_components::{
 };
 
 #[derive(Debug, Clone)]
+/// Metadata of a file mention suggestion.
 pub struct FileMentionSuggestionMeta {
     pub fingerprint: String,
 }
 
 #[derive(Debug, Clone)]
+/// A file mention suggestion item.
 pub struct FileMentionSuggestionItem {
     /// Stable App-owned path-map key; it is not a filesystem path itself.
     pub key: String,
@@ -87,6 +89,7 @@ pub fn new_state(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by a file mention suggestion.
 pub enum FileMentionSuggestionEffect {
     KeepOpen,
     Dismiss,

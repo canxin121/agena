@@ -49,6 +49,7 @@ struct SpawnSpec {
     cwd: Option<PathBuf>,
 }
 
+/// Plugin transport over a stdio subprocess.
 pub struct StdioTransport {
     inner: Arc<Inner>,
 }

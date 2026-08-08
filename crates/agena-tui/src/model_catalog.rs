@@ -38,6 +38,7 @@ impl ModelCatalogDetail {
 }
 
 #[derive(Debug, Clone)]
+/// Presentation state of the model catalog.
 pub struct ModelCatalogPresentation {
     pub title: String,
     pub footer: String,
@@ -138,6 +139,7 @@ impl ModelCatalogPresentation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the model catalog.
 pub enum ModelCatalogEffect {
     KeepOpen,
     Close,

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use text_splitter::MarkdownSplitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A fetched web page.
 pub struct FetchedPage {
     pub url: String,
     pub canonical_url: String,
@@ -23,6 +24,7 @@ pub struct FetchedPage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A document stored by the crawl store.
 pub struct StoredDocument {
     pub id: String,
     pub url: String,
@@ -53,6 +55,7 @@ pub struct StoredDocument {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Summary of a crawled document.
 pub struct CrawlDocumentSummary {
     pub id: String,
     pub url: String,
@@ -63,6 +66,7 @@ pub struct CrawlDocumentSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A search hit over crawled documents.
 pub struct CrawlSearchHit {
     pub id: String,
     pub url: String,

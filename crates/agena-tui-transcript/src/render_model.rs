@@ -61,6 +61,7 @@ pub enum TranscriptContentId {
 }
 
 #[derive(Debug, Clone)]
+/// A part of a transcript entry.
 pub struct TranscriptEntryPart<'a> {
     pub id: TranscriptContentId,
     pub status: PartExecutionStatusResource,
@@ -68,6 +69,7 @@ pub struct TranscriptEntryPart<'a> {
 }
 
 #[derive(Debug, Clone)]
+/// Content of a transcript part.
 pub enum TranscriptPartContent<'a> {
     UserDocument(TranscriptUserDocument),
     Text(MessageTextPartResource),
@@ -75,6 +77,7 @@ pub enum TranscriptPartContent<'a> {
 }
 
 #[derive(Debug, Clone)]
+/// Content of a transcript activity.
 pub enum TranscriptActivityContent<'a> {
     Canonical(&'a ActivityPayload),
     /// Projected interstitial reply body text. The snapshot projection turns
@@ -94,6 +97,7 @@ pub enum TranscriptActivityContent<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Lifecycle of an assistant reply in the transcript.
 pub enum TranscriptAssistantReplyLifecycle {
     Running,
     Completed,
@@ -107,6 +111,7 @@ pub enum TranscriptAssistantReplyLifecycle {
 }
 
 #[derive(Debug, Clone)]
+/// A user document in the transcript.
 pub struct TranscriptUserDocument {
     pub nodes: Vec<TranscriptUserDocumentNode>,
 }
@@ -124,6 +129,7 @@ impl TranscriptUserDocument {
 }
 
 #[derive(Debug, Clone)]
+/// A node of a transcript user document.
 pub enum TranscriptUserDocumentNode {
     Text {
         id: Option<TextSegmentId>,
@@ -137,6 +143,7 @@ pub enum TranscriptUserDocumentNode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Style of a user activity in the transcript.
 pub enum TranscriptUserActivityStyle {
     Resource,
     Skill,
@@ -145,6 +152,7 @@ pub enum TranscriptUserActivityStyle {
 }
 
 #[derive(Debug, Clone)]
+/// Presentation of a transcript activity.
 pub struct TranscriptActivityPresentation {
     pub title: String,
     pub summary: String,
@@ -182,6 +190,7 @@ impl From<MessagePartDetailResource> for TranscriptPartContent<'static> {
 }
 
 #[derive(Debug, Clone)]
+/// A transcript entry.
 pub struct TranscriptEntry<'a> {
     pub id: TranscriptEntryId,
     /// Message role when this entry is a Turn/Response. Session-owned
@@ -223,12 +232,14 @@ impl<'a> From<&'a MessageResource> for TranscriptEntry<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Preview of a tool output.
 pub struct ToolOutputPreview {
     pub text: String,
     pub omitted_lines: usize,
 }
 
 #[derive(Debug, Clone)]
+/// A fully rendered transcript.
 pub struct RenderedTranscript {
     pub width: u16,
     pub palette: ThemePalette,
@@ -241,6 +252,7 @@ pub struct RenderedTranscript {
 }
 
 #[derive(Debug, Clone)]
+/// A rendered line of the transcript.
 pub struct RenderedLine {
     pub text: String,
     /// Clipboard-facing text for this rendered row. This deliberately omits
@@ -353,6 +365,7 @@ impl RenderedLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// A copyable segment of rendered text.
 pub struct RenderedCopySegment {
     pub display_column: usize,
     pub text: String,
@@ -360,17 +373,20 @@ pub struct RenderedCopySegment {
 }
 
 #[derive(Debug, Clone, Copy)]
+/// Default detail settings of the transcript.
 pub struct TranscriptDetailDefaults {
     pub activity_expanded: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Direction of a transcript move.
 pub enum TranscriptMoveDirection {
     Up,
     Down,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+/// Cache of transcript layout.
 pub struct LayoutCache {
     pub transcript_body: Rect,
     pub transcript_scrollbar: Rect,
@@ -380,6 +396,7 @@ pub struct LayoutCache {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Scrollbar drag state of the transcript.
 pub struct TranscriptScrollbarDrag {
     pub grab_offset: usize,
 }

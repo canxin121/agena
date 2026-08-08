@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Descriptor of a provider contributed by a plugin.
 pub struct ProviderDescriptor {
     pub id: String,
     pub display_name: String,
@@ -14,6 +15,7 @@ pub struct ProviderDescriptor {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Protocol kind of a contributed provider.
 pub enum ProviderKind {
     #[default]
     Custom,
@@ -22,11 +24,13 @@ pub enum ProviderKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of the provider list hook.
 pub struct ProviderListInput {
     pub current: Vec<ProviderDescriptor>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Patch applied to the provider list by a hook.
 pub struct ProviderListPatch {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub add: Vec<ProviderDescriptor>,

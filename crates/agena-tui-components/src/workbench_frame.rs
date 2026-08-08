@@ -54,6 +54,7 @@ impl<'a> WorkbenchFrameSpec<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Frame of a workbench.
 pub struct WorkbenchFrame {
     pub outer: Rect,
     pub body: Rect,

@@ -16,6 +16,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Helper for the Kitty graphics protocol.
 pub struct KittyHelper {
     pub path: PathBuf,
     pub version: Option<String>,

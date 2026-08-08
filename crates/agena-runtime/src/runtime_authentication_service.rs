@@ -64,6 +64,7 @@ pub trait RuntimeAuthenticationService: Send + Sync {
 
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{message}")]
+/// Error from the runtime authentication service.
 pub struct RuntimeAuthenticationError {
     pub kind: RuntimeAuthenticationErrorKind,
     pub message: String,
@@ -91,6 +92,7 @@ impl RuntimeAuthenticationError {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of a runtime authentication error.
 pub enum RuntimeAuthenticationErrorKind {
     BadRequest,
     NotFound,
@@ -98,6 +100,7 @@ pub enum RuntimeAuthenticationErrorKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Type of stored runtime credential.
 pub enum RuntimeAuthCredentialType {
     Api,
     Oauth,
@@ -105,6 +108,7 @@ pub enum RuntimeAuthCredentialType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Issuer of a runtime credential.
 pub enum RuntimeAuthCredentialIssuer {
     OpenaiChatgpt,
     GithubCopilot,
@@ -114,6 +118,7 @@ pub enum RuntimeAuthCredentialIssuer {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Kind of runtime login flow.
 pub enum RuntimeAuthLoginKind {
     OpenaiChatgpt,
     GithubCopilot,
@@ -121,6 +126,7 @@ pub enum RuntimeAuthLoginKind {
 }
 
 #[derive(Debug, Clone)]
+/// Authentication state of a runtime provider.
 pub struct RuntimeAuthProvider {
     pub provider_id: String,
     pub credential_present: bool,
@@ -141,6 +147,7 @@ pub struct RuntimeAuthProvider {
 }
 
 #[derive(Debug, Clone)]
+/// Browser start details of a runtime login flow.
 pub struct RuntimeAuthBrowserStart {
     pub instance_url: Option<String>,
     pub authorize_url: String,
@@ -149,6 +156,7 @@ pub struct RuntimeAuthBrowserStart {
 }
 
 #[derive(Debug, Clone)]
+/// Device start details of a runtime login flow.
 pub struct RuntimeAuthDeviceStart {
     pub verification_url: String,
     pub user_code: String,

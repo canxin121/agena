@@ -21,6 +21,7 @@ use agena_tui_components::{
 use agena_tui::{i18n::I18n, sanitize_picker_text};
 
 #[derive(Debug, Clone)]
+/// A navigation item of a session.
 pub struct SessionNavigationItem {
     pub key: String,
     pub label: String,
@@ -63,6 +64,7 @@ impl SearchPickerItem for SessionNavigationItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Navigation mode of a session.
 pub enum SessionNavigationMode {
     Open,
     Rewind,
@@ -79,6 +81,7 @@ pub struct SessionLineageNode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Lineage relation of a session.
 pub enum SessionLineageRelation {
     Ancestor,
     Current,
@@ -98,6 +101,7 @@ impl SessionLineageRelation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A lineage item of a session.
 pub struct SessionLineageItem {
     pub session_id: i64,
     pub relation: SessionLineageRelation,
@@ -106,6 +110,7 @@ pub struct SessionLineageItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Summary of session lineage.
 pub struct SessionLineageSummary {
     pub root_session_id: i64,
     pub depth: usize,
@@ -267,6 +272,7 @@ pub fn new_presentation(
 }
 
 #[derive(Debug, Clone)]
+/// Action of session navigation.
 pub enum SessionNavigationAction {
     Accept,
     Input(KeyEvent),
@@ -274,6 +280,7 @@ pub enum SessionNavigationAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect of session navigation.
 pub enum SessionNavigationEffect {
     Close,
     Open { key: String },

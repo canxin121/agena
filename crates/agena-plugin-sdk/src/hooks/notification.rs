@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Input of a notification hook.
 pub struct NotificationInput {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

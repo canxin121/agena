@@ -13,6 +13,7 @@ use crate::{
 };
 
 #[derive(Clone)]
+/// Shape specification of a nested input.
 pub struct NestedInputShapeSpec {
     pub inner_ty: Type,
     pub optional: bool,
@@ -20,6 +21,7 @@ pub struct NestedInputShapeSpec {
 }
 
 #[derive(Clone)]
+/// A field of a nested input shape.
 pub struct NestedInputShapeField {
     pub spec: NestedInputShapeSpec,
     pub normalize_path: LitStr,

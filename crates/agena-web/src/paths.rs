@@ -38,6 +38,7 @@ pub fn workspace_key(workspace_root: &Path) -> String {
 }
 
 #[derive(Clone)]
+/// Directory layout of the crawl store.
 pub struct CrawlDir {
     path: PathBuf,
 }

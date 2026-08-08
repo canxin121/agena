@@ -4,6 +4,7 @@ use super::workspace;
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "agena_sessions")]
+/// SeaORM entity for a stored session.
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = true)]
     pub id: i64,
@@ -29,6 +30,7 @@ pub struct Model {
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+/// SeaORM relations of the session entity.
 pub enum Relation {
     #[sea_orm(
         belongs_to = "workspace::Entity",

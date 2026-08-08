@@ -36,6 +36,7 @@ pub enum ModelCatalogServiceError {
 }
 
 #[derive(Clone)]
+/// Service managing the model catalog.
 pub struct ModelCatalogService {
     store: Arc<dyn ModelCatalogRepository>,
     cache_max_age_secs: u64,

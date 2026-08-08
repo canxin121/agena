@@ -21,6 +21,7 @@ const FALLBACK_LOCALE: LanguageIdentifier = langid!("en-US");
 pub type FluentArgs = HashMap<Cow<'static, str>, FluentValue<'static>>;
 
 #[derive(Debug, Clone)]
+/// Internationalization helper.
 pub struct I18n {
     locale: LanguageIdentifier,
 }

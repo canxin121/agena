@@ -4,6 +4,7 @@ use super::*;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Type of stored provider credential.
 pub enum AuthCredentialType {
     Api,
     Oauth,
@@ -11,6 +12,7 @@ pub enum AuthCredentialType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Authentication state of a provider.
 pub struct AuthProviderResource {
     pub provider_id: String,
     pub configured: bool,
@@ -42,6 +44,7 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of one provider adapter.
 pub struct ProviderAdapterSummaryResource {
     pub adapter_id: String,
     pub enabled: bool,
@@ -49,6 +52,7 @@ pub struct ProviderAdapterSummaryResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Default adapter and model of a provider.
 pub struct ProviderDefaultsResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adapter: Option<String>,
@@ -56,6 +60,7 @@ pub struct ProviderDefaultsResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Summary of a provider: defaults plus its adapters.
 pub struct ProviderSummaryResource {
     pub provider_id: String,
     pub defaults: ProviderDefaultsResource,
@@ -64,6 +69,7 @@ pub struct ProviderSummaryResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Models of a provider.
 pub struct ProviderModelsResponse {
     pub provider_id: String,
     pub models: Vec<ProviderModelResource>,
@@ -122,6 +128,7 @@ const fn default_true() -> bool {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Whether a model capability is supported.
 pub enum CapabilitySupportResource {
     Supported,
     Unsupported,
@@ -130,6 +137,7 @@ pub enum CapabilitySupportResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Capabilities of a provider model (input modalities and features).
 pub struct ProviderModelCapabilitiesResource {
     #[serde(default = "capability_supported")]
     pub text_input: CapabilitySupportResource,
@@ -178,6 +186,7 @@ impl Default for ProviderModelCapabilitiesResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Metadata of a provider model (lifecycle, context window, pricing).
 pub struct ProviderModelMetadataResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle: Option<ModelLifecycle>,
@@ -244,6 +253,7 @@ impl ProviderModelMetadataResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Per-model request overrides (headers and body patch).
 pub struct ProviderModelRequestOverrideResource {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
@@ -259,6 +269,7 @@ impl ProviderModelRequestOverrideResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
+/// How thinking is requested from a model.
 pub enum ThinkingRequestResource {
     Budget {
         budget_tokens: u32,
@@ -277,6 +288,7 @@ pub enum ThinkingRequestResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Reasoning effort level of a model.
 pub enum ReasoningEffortResource {
     Minimal,
     Low,
@@ -288,12 +300,14 @@ pub enum ReasoningEffortResource {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// How model thinking is displayed.
 pub enum ThinkingDisplayResource {
     Summarized,
     Omitted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A thinking mode offered by a model.
 pub struct ProviderModelThinkingModeResource {
     #[serde(
         default,
@@ -318,6 +332,7 @@ pub struct ProviderModelThinkingModeResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// A speed mode offered by a model.
 pub struct ProviderModelSpeedModeResource {
     #[serde(
         default,

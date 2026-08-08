@@ -7,6 +7,7 @@
 const GOOGLE_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 #[derive(Debug, thiserror::Error)]
+/// Error resolving Google Application Default Credentials.
 pub enum GoogleAdcError {
     #[error("initializing Google ADC provider: {0}")]
     Provider(String),

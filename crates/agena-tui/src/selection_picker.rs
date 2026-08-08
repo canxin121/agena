@@ -16,6 +16,7 @@ use agena_tui_components::{
 use crate::{i18n::I18n, sanitize_picker_text};
 
 #[derive(Debug, Clone)]
+/// An item in the selection picker.
 pub struct SelectionPickerItem {
     pub key: String,
     pub label: String,
@@ -106,6 +107,7 @@ pub fn new_presentation(
 }
 
 #[derive(Debug, Clone)]
+/// Action of the selection picker.
 pub enum SelectionPickerAction {
     Accept,
     Input(KeyEvent),
@@ -113,6 +115,7 @@ pub enum SelectionPickerAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the selection picker.
 pub enum SelectionPickerEffect {
     Close,
     Activate { key: String },

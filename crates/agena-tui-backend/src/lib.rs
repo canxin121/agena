@@ -96,6 +96,7 @@ pub struct LiveEvent {
 }
 
 #[derive(Clone)]
+/// TUI backend bridging the app to the runtime API.
 pub struct Backend {
     application: Application,
     workspace_root: PathBuf,

@@ -3,6 +3,7 @@
 use crate::SelectableListState;
 
 #[derive(Debug, Clone)]
+/// State of a list workbench.
 pub struct ListWorkbenchState<TItem, TEditor> {
     pub title: String,
     pub footer: String,

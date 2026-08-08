@@ -30,6 +30,7 @@ impl PathRequest {
     }
 }
 
+/// Conversion into a permission path request.
 pub trait IntoPermissionPath {
     fn into_permission_path(self) -> crate::Result<Option<String>>;
 }
@@ -104,6 +105,7 @@ where
     }
 }
 
+/// Conversion into multiple permission path requests.
 pub trait IntoPermissionPaths {
     fn into_permission_paths(self) -> crate::Result<Vec<String>>;
 }
@@ -186,6 +188,7 @@ where
     Ok(output)
 }
 
+/// Conversion into path access requests.
 pub trait IntoPathRequests {
     fn into_path_requests(self) -> crate::Result<Vec<PathRequest>>;
 }
@@ -259,6 +262,7 @@ impl NetworkRequest {
     }
 }
 
+/// Conversion into a single permission target.
 pub trait IntoPermissionTarget {
     fn into_permission_target(self) -> crate::Result<Option<String>>;
 }
@@ -315,6 +319,7 @@ where
     }
 }
 
+/// Conversion into multiple permission targets.
 pub trait IntoPermissionTargets {
     fn into_permission_targets(self) -> crate::Result<Vec<String>>;
 }
@@ -397,6 +402,7 @@ where
     Ok(output)
 }
 
+/// Conversion into network access requests.
 pub trait IntoNetworkRequests {
     fn into_network_requests(self) -> crate::Result<Vec<NetworkRequest>>;
 }

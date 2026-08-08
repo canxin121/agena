@@ -7,12 +7,14 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Retention policy of the crawl store.
 pub struct CrawlStoreRetention {
     pub max_documents: usize,
     pub max_total_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Report of a crawl store prune.
 pub struct CrawlStorePruneReport {
     pub removed_document_count: usize,
     pub removed_bytes: u64,
@@ -21,6 +23,7 @@ pub struct CrawlStorePruneReport {
 }
 
 #[derive(Clone)]
+/// On-disk store for crawled documents.
 pub struct CrawlStore {
     dir: CrawlDir,
 }

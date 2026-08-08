@@ -16,6 +16,7 @@ use super::{
 };
 
 #[derive(Clone, Default)]
+/// Filters of a plugin hook.
 pub struct PluginHookFilters {
     pub tools: Vec<LitStr>,
     pub commands: Vec<LitStr>,
@@ -24,6 +25,7 @@ pub struct PluginHookFilters {
 }
 
 #[derive(Clone)]
+/// Plugin filter of a plugin hook.
 pub struct PluginHookPluginFilter {
     pub value: LitStr,
     pub namespace: LitStr,
@@ -31,6 +33,7 @@ pub struct PluginHookPluginFilter {
 }
 
 #[derive(Clone)]
+/// Attribute configuration of a plugin hook.
 pub struct PluginHookAttrConfig {
     pub hook: PluginHookKind,
     pub priority: i32,
@@ -317,12 +320,14 @@ pub fn validate_plugin_hook_filters(
     Ok(())
 }
 
+/// Expected input of a plugin hook.
 pub enum PluginHookExpectedInput {
     None,
     Single(&'static str),
     Init,
 }
 
+/// Expected output of a plugin hook.
 pub enum PluginHookExpectedOutput {
     Unit,
     Init,

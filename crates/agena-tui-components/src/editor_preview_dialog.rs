@@ -10,6 +10,7 @@ use crate::{
     render_stacked_dialog,
 };
 
+/// Help spec of the editor preview dialog.
 pub struct EditorPreviewHelpSpec<'a> {
     pub body: &'a Text<'a>,
     pub height_bounds: (u16, u16),
@@ -33,6 +34,7 @@ impl<'a> EditorPreviewHelpSpec<'a> {
     }
 }
 
+/// Spec of the editor preview dialog.
 pub struct EditorPreviewDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub target_width: u16,

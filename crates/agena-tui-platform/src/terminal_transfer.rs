@@ -5,6 +5,7 @@ use std::path::Path;
 use crate::{iterm2, kitty, provider_error::ProviderError, terminal::TerminalContext};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Provider used for terminal downloads.
 pub enum DownloadProvider {
     Iterm2,
     Kitty,

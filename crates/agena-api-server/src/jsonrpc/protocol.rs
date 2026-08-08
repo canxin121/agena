@@ -6,6 +6,7 @@ pub const JSONRPC_VERSION: &str = "2.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
+/// Identifier of a JSON-RPC request.
 pub enum RequestId {
     Number(i64),
     String(String),
@@ -18,6 +19,7 @@ impl From<i64> for RequestId {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A JSON-RPC request.
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
     pub id: RequestId,
@@ -27,6 +29,7 @@ pub struct JsonRpcRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A JSON-RPC notification.
 pub struct JsonRpcNotification {
     pub jsonrpc: String,
     pub method: String,
@@ -35,6 +38,7 @@ pub struct JsonRpcNotification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A JSON-RPC error object.
 pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
@@ -43,6 +47,7 @@ pub struct JsonRpcError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// A JSON-RPC response.
 pub struct JsonRpcResponse {
     pub jsonrpc: String,
     pub id: RequestId,
@@ -53,6 +58,7 @@ pub struct JsonRpcResponse {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// A message received by the JSON-RPC server.
 pub enum InboundMessage {
     Request(JsonRpcRequest),
     Notification(JsonRpcNotification),
@@ -84,6 +90,7 @@ pub mod method {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Params of the create-session method.
 pub struct CreateSessionParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -92,12 +99,14 @@ pub struct CreateSessionParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of the create-session method.
 pub struct CreateSessionResult {
     pub session_id: i64,
     pub title: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Params of the submit-message method.
 pub struct SubmitMessageParams {
     pub session_id: i64,
     pub prompt: String,
@@ -110,6 +119,7 @@ pub struct SubmitMessageParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of the submit-message method.
 pub struct SubmitMessageResult {
     pub session_id: i64,
     pub status: String,
@@ -118,6 +128,7 @@ pub struct SubmitMessageResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Params of the permission-reply method.
 pub struct PermissionReplyParams {
     pub session_id: i64,
     pub request_id: String,
@@ -130,6 +141,7 @@ pub struct PermissionReplyParams {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Decision of a permission reply.
 pub enum PermissionDecision {
     Allow,
     Deny,
@@ -137,6 +149,7 @@ pub enum PermissionDecision {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+/// Scope remembered for a permission decision.
 pub enum PermissionRememberScope {
     Session,
     Workspace,
@@ -144,12 +157,14 @@ pub enum PermissionRememberScope {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of the permission-reply method.
 pub struct PermissionReplyResult {
     pub session_id: i64,
     pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Params of the list-sessions method.
 pub struct ListSessionsParams {
     #[serde(default)]
     pub offset: u64,
@@ -158,6 +173,7 @@ pub struct ListSessionsParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One session in a session listing.
 pub struct SessionListItem {
     pub session_id: i64,
     pub title: String,
@@ -166,16 +182,19 @@ pub struct SessionListItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of the list-sessions method.
 pub struct ListSessionsResult {
     pub sessions: Vec<SessionListItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Params of the read-messages method.
 pub struct ReadMessagesParams {
     pub session_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// One message in a message listing.
 pub struct MessageItem {
     pub message_id: i64,
     pub role: String,
@@ -185,17 +204,20 @@ pub struct MessageItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of the read-messages method.
 pub struct ReadMessagesResult {
     pub messages: Vec<MessageItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Params of the cancel-run method.
 pub struct CancelRunParams {
     pub session_id: i64,
     pub execution_id: agena_domain::ExecutionId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of the cancel-run method.
 pub struct CancelRunResult {
     pub session_id: i64,
     pub result: agena_domain::CancellationResult,
@@ -203,6 +225,7 @@ pub struct CancelRunResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+/// Server-initiated notification sent to clients.
 pub enum AppServerNotification {
     MessageDelta {
         session_id: i64,

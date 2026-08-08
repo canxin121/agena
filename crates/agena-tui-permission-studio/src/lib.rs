@@ -29,6 +29,7 @@ pub use permission_studio::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Target of a permission studio mode.
 pub enum PermissionStudioModeTarget {
     PathWorkspaceRead,
     PathWorkspaceWrite,
@@ -47,6 +48,7 @@ pub enum PermissionStudioModeTarget {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Action of the permission studio.
 pub enum PermissionStudioAction {
     SelectPage(PermissionStudioPage),
     EditRule { rule_id: String },
@@ -56,6 +58,7 @@ pub enum PermissionStudioAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the permission studio.
 pub enum PermissionStudioEffect {
     LoadRules,
     SaveRule { rule_id: String, value: String },

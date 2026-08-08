@@ -24,6 +24,7 @@ const BAIDU_BASE: &str = "https://www.baidu.com/s";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Search engine used for web search.
 pub enum WebSearchEngine {
     #[default]
     Bing,
@@ -70,6 +71,7 @@ impl FromStr for WebSearchEngine {
 }
 
 #[derive(Debug, Clone)]
+/// Options of a web search.
 pub struct WebSearchOptions {
     pub engine: WebSearchEngine,
     pub limit: usize,
@@ -89,6 +91,7 @@ impl Default for WebSearchOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Result of a web search.
 pub struct WebSearchResult {
     pub title: String,
     pub url: String,

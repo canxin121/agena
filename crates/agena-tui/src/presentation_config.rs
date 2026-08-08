@@ -8,6 +8,7 @@ use agena_tui_components::{ColorScheme, TerminalRgb, ThemePalette};
 use crate::{input::ComposerKeyBindings, terminal_graphics::GraphicsMode};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Preferred color scheme.
 pub enum ColorSchemePreference {
     #[default]
     Auto,
@@ -16,6 +17,7 @@ pub enum ColorSchemePreference {
 }
 
 #[derive(Debug, Clone)]
+/// Configuration of the TUI.
 pub struct TuiConfig {
     pub keybindings: ComposerKeyBindings,
     pub double_esc_window_ms: u64,
@@ -47,12 +49,14 @@ pub enum TerminalIntegrationMode {
 }
 
 #[derive(Debug, Clone, Default)]
+/// Status line configuration.
 pub struct TuiStatusLineConfig {
     pub command: Option<String>,
     pub refresh_interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Default)]
+/// Transcript configuration.
 pub struct TuiTranscriptConfig {
     pub activity_default_expanded: bool,
 }

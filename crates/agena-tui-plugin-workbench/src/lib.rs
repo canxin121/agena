@@ -23,12 +23,14 @@ use serde_json::Value as JsonValue;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Mode of the plugin workbench.
 pub enum PluginWorkbenchMode {
     List,
     Detail,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Detail tab of the plugin workbench.
 pub enum PluginDetailTab {
     Config,
     Tools,
@@ -39,6 +41,7 @@ pub enum PluginDetailTab {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Transport filter of the plugin workbench.
 pub enum PluginTransportFilter {
     All,
     Static,
@@ -91,6 +94,7 @@ impl PluginTransportFilter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Config filter of the plugin workbench.
 pub enum PluginConfigFilter {
     All,
     Valid,
@@ -128,6 +132,7 @@ impl PluginConfigFilter {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Value of a plugin config filter.
 pub enum PluginConfigFilterValue {
     Valid,
     Missing,
@@ -138,6 +143,7 @@ pub enum PluginConfigFilterValue {
 }
 
 #[derive(Debug, Clone)]
+/// A list item of the plugin workbench.
 pub struct PluginWorkbenchListItem {
     pub key: String,
     pub search_text: Vec<String>,
@@ -146,6 +152,7 @@ pub struct PluginWorkbenchListItem {
 }
 
 #[derive(Debug, Clone)]
+/// Presentation of the plugin workbench list.
 pub struct PluginWorkbenchListPresentation {
     pub query: Editor,
     pub transport_filter: PluginTransportFilter,
@@ -224,6 +231,7 @@ pub fn new_plugin_config_picker(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Action of the plugin config picker.
 pub enum PluginConfigPickerAction {
     Close,
     MoveUp,
@@ -235,6 +243,7 @@ pub enum PluginConfigPickerAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+/// Effect produced by the plugin config picker.
 pub enum PluginConfigPickerEffect {
     Close,
     Activate { key: String },
@@ -390,6 +399,7 @@ impl PluginWorkbenchListPresentation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Effect produced by the plugin workbench list.
 pub enum PluginWorkbenchListEffect {
     KeepOpen,
     Refresh,
@@ -434,6 +444,7 @@ pub struct PluginWorkbenchSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Action of the plugin workbench.
 pub enum PluginWorkbenchAction {
     SelectPlugin(String),
     MoveSelection(isize),
@@ -446,6 +457,7 @@ pub enum PluginWorkbenchAction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Effect produced by the plugin workbench.
 pub enum PluginWorkbenchEffect {
     LoadPlugins,
     SaveConfig { plugin_id: String, value: JsonValue },
@@ -454,6 +466,7 @@ pub enum PluginWorkbenchEffect {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
+/// State of the plugin workbench.
 pub struct PluginWorkbenchState {
     pub snapshot: PluginWorkbenchSnapshot,
     pub selected_path: Vec<String>,
@@ -586,6 +599,7 @@ impl PluginWorkbenchNavigation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Navigation effect of the plugin workbench.
 pub enum PluginWorkbenchNavigationEffect {
     KeepOpen,
     Close,

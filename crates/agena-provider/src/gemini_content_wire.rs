@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Content of a Gemini request or response.
 pub struct GeminiContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
@@ -11,6 +12,7 @@ pub struct GeminiContent {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+/// A part inside Gemini content.
 pub struct GeminiPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -90,6 +92,7 @@ impl GeminiPart {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+/// A function call part of a Gemini response.
 pub struct GeminiFunctionCall {
     #[serde(default)]
     pub id: Option<String>,
@@ -99,6 +102,7 @@ pub struct GeminiFunctionCall {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// A function response part of a Gemini request.
 pub struct GeminiFunctionResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -108,6 +112,7 @@ pub struct GeminiFunctionResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Inline binary data part of Gemini content.
 pub struct GeminiInlineData {
     #[serde(rename = "mimeType")]
     pub mime_type: String,

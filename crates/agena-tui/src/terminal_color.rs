@@ -50,6 +50,7 @@ impl TerminalColorSource {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Detected color support of the terminal.
 pub struct TerminalColorDetection {
     pub background: Option<TerminalRgb>,
     pub source: TerminalColorSource,

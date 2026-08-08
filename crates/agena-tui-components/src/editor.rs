@@ -17,6 +17,7 @@ use crate::search_picker::SearchPickerInput;
 
 const WORD_SEPARATORS: &str = "`~!@#$%^&*()-=+[{]}\\|;:'\",.<>/?";
 #[derive(Debug, Clone, Default)]
+/// A text editor widget.
 pub struct Editor {
     text: String,
     cursor: usize,
@@ -26,6 +27,7 @@ pub struct Editor {
 }
 
 #[derive(Debug, Clone)]
+/// View of the text editor.
 pub struct EditorView {
     pub lines: Vec<Line<'static>>,
     pub cursor_x: u16,

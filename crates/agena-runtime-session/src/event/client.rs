@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::message::{MessageMetadata, MessagePart};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Event emitted when a message part is checkpointed.
 pub struct MessagePartCheckpointedEvent {
     pub session_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]

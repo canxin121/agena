@@ -3,12 +3,14 @@
 use crate::selection::SelectionCursor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Screen of the question flow.
 pub enum QuestionFlowScreen {
     Question,
     Review,
 }
 
 #[derive(Debug, Clone)]
+/// State of the question flow.
 pub struct QuestionFlowState {
     question: SelectionCursor,
     option: SelectionCursor,

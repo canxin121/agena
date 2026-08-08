@@ -13,12 +13,14 @@ use ratatui::{
 
 use crate::theme;
 
+/// Resolves the height of a list panel.
 pub trait ListPanelHeightResolver {
     fn resolve_placeholder_height(&self) -> u16;
     fn resolve_items_height(&self, panel: &ListPanelSpec<'_>) -> u16;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Bounded height of a list panel.
 pub struct BoundedListPanelHeight {
     pub lines_per_item: u16,
     pub min_body_height: u16,
@@ -26,6 +28,7 @@ pub struct BoundedListPanelHeight {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Measured height of a list panel.
 pub struct MeasuredListPanelHeight {
     pub min_body_height: u16,
     pub max_body_height: u16,
@@ -68,6 +71,7 @@ impl ListPanelHeightResolver for MeasuredListPanelHeight {
 }
 
 #[derive(Clone)]
+/// Spec of a list panel.
 pub struct ListPanelSpec<'a> {
     pub title: Option<Cow<'a, str>>,
     pub items: &'a [ListItem<'a>],
@@ -77,6 +81,7 @@ pub struct ListPanelSpec<'a> {
 }
 
 #[derive(Clone)]
+/// Spec of a text panel.
 pub struct TextPanelSpec<'a> {
     pub title: Option<Cow<'a, str>>,
     pub body: &'a Text<'a>,
@@ -86,6 +91,7 @@ pub struct TextPanelSpec<'a> {
 }
 
 #[derive(Clone)]
+/// Spec of a two-line list item.
 pub struct TwoLineListItemSpec<'a> {
     pub label: Cow<'a, str>,
     pub value: Option<Cow<'a, str>>,
@@ -97,6 +103,7 @@ pub struct TwoLineListItemSpec<'a> {
 }
 
 #[derive(Clone)]
+/// State of a list panel.
 pub enum ListPanelState<'a, H> {
     Loading {
         title: Option<Cow<'a, str>>,

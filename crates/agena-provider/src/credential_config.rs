@@ -7,12 +7,14 @@ use serde::Serialize;
 use crate::{AuthData, CredentialIssuer, ProviderProtocolPathsConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// Inline credential authentication configuration.
 pub struct ProviderInlineCredentialAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<AuthData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// HTTP credential authentication configuration.
 pub struct ProviderHttpCredentialAuthConfig {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -20,6 +22,7 @@ pub struct ProviderHttpCredentialAuthConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// SAP AI Core credential authentication configuration.
 pub struct ProviderSapAiCoreCredentialAuthConfig {
     pub base_url: String,
     #[serde(default, skip_serializing_if = "is_default")]
@@ -28,6 +31,7 @@ pub struct ProviderSapAiCoreCredentialAuthConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+/// GitLab credential authentication configuration.
 pub struct ProviderGitlabCredentialAuthConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<AuthData>,
@@ -43,6 +47,7 @@ pub struct ProviderGitlabCredentialAuthConfig {
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "issuer", rename_all = "snake_case")]
+/// Credential-based authentication configuration of a provider.
 pub enum ProviderCredentialAuthConfig {
     OpenaiChatgpt {
         #[serde(flatten)]

@@ -6,6 +6,7 @@ use crossterm::event::{BackgroundColorQuery, TerminalResponse};
 use crate::terminal_color::{TerminalColorDetection, TerminalColorSource};
 
 #[derive(Debug)]
+/// State of a terminal protocol transaction.
 pub enum ProtocolTransactionState {
     /// Distinct CPR barrier sent after every synchronous startup probe. Its
     /// arrival proves that earlier query replies can no longer be in flight.
@@ -20,6 +21,7 @@ pub enum ProtocolTransactionState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Progress of a terminal protocol transaction.
 pub enum ProtocolProgress {
     Pending,
     Complete(Option<TerminalColorDetection>),

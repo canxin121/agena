@@ -13,6 +13,7 @@ use crate::error::MarketplaceError;
 use crate::manifest::{PluginKind, PluginVersion};
 
 #[derive(Debug, Clone)]
+/// Cache of marketplace plugin state.
 pub struct MarketplaceCache {
     root: PathBuf,
 }
@@ -138,12 +139,14 @@ pub fn write_secure_file(path: &Path, contents: &[u8]) -> Result<(), Marketplace
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Installed plugin records.
 pub struct InstalledRecords {
     #[serde(default)]
     pub records: BTreeMap<String, InstalledRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// One installed plugin record.
 pub struct InstalledRecord {
     pub plugin_id: String,
     pub version: String,

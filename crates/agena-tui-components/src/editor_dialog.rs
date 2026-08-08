@@ -9,6 +9,7 @@ use crate::{
     input_dialog::{InputDialogSpec, render_input_dialog},
 };
 
+/// Spec of the editor dialog.
 pub struct EditorDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub prompt: Cow<'a, str>,

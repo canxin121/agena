@@ -25,6 +25,7 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Height of a dashboard text panel.
 pub enum DashboardTextPanelHeight {
     Fixed(u16),
     AutoBody {
@@ -46,6 +47,7 @@ impl DashboardTextPanelHeight {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Height of a dashboard list panel.
 pub enum DashboardListPanelHeight {
     Fixed(u16),
     AutoBody {
@@ -94,6 +96,7 @@ impl ListPanelHeightResolver for DashboardListPanelHeight {
     }
 }
 
+/// Spec of the dashboard lead panel.
 pub struct DashboardLeadPanelSpec<'a> {
     pub width: u16,
     pub min_right_width: u16,
@@ -110,6 +113,7 @@ impl<'a> DashboardLeadPanelSpec<'a> {
     }
 }
 
+/// Spec of split panels on the dashboard.
 pub struct DashboardSplitPanelsSpec<'a> {
     pub left_min_width: u16,
     pub right_min_width: u16,
@@ -133,6 +137,7 @@ impl<'a> DashboardSplitPanelsSpec<'a> {
     }
 }
 
+/// A text section of the dashboard.
 pub struct DashboardTextSection<'a> {
     pub title: Option<Cow<'a, str>>,
     pub body: Text<'a>,
@@ -153,6 +158,7 @@ impl<'a> DashboardTextSection<'a> {
     }
 }
 
+/// Spec of the dashboard workbench.
 pub struct DashboardWorkbenchSpec<'a> {
     pub title: Cow<'a, str>,
     pub footer: Cow<'a, str>,
@@ -184,6 +190,7 @@ impl<'a> DashboardWorkbenchSpec<'a> {
 
 pub type DashboardListPanelState<'a> = ListPanelState<'a, DashboardListPanelHeight>;
 
+/// Spec of the dashboard detail overlay.
 pub struct DashboardDetailOverlaySpec<'a> {
     pub dialog: DetailTextDialogSpec<'a>,
     pub lines: Vec<DetailTextLine<'a>>,
@@ -195,6 +202,7 @@ impl<'a> DashboardDetailOverlaySpec<'a> {
     }
 }
 
+/// Spec of the dashboard workbench overlay.
 pub struct DashboardWorkbenchOverlaySpec<'a> {
     pub detail: Option<DashboardDetailOverlaySpec<'a>>,
     pub editor: Option<WorkbenchOverlayDialogSpec<'a>>,

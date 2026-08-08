@@ -659,6 +659,7 @@ fn explicit_latex_fallback(source: &str) -> Vec<String> {
     vec![format!("⟦LaTeX: {preview}⟧")]
 }
 
+/// Renderer for math graphics.
 pub struct MathGraphicsRenderer {
     picker: Picker,
     protocols: HashMap<(u64, u16, u16), SlicedProtocol>,

@@ -8,12 +8,14 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+/// A document rendered in the detail text view.
 pub struct DetailDocument<'a> {
     pub text: Text<'a>,
     pub plain: String,
 }
 
 #[derive(Clone, Debug)]
+/// A line of detail text.
 pub enum DetailTextLine<'a> {
     Plain {
         text: Cow<'a, str>,
@@ -51,6 +53,7 @@ impl<'a> DetailTextLine<'a> {
 }
 
 #[derive(Clone, Debug)]
+/// Spec of the detail text view.
 pub struct DetailTextSpec<'a> {
     pub label_width: usize,
     pub separator: Cow<'a, str>,

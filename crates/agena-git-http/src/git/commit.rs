@@ -42,6 +42,7 @@ pub struct GitCommitBody {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+/// Result of a git commit.
 pub struct GitCommitResult {
     pub success: bool,
     pub commit: String,

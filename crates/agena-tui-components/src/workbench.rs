@@ -24,6 +24,7 @@ use crate::{
 };
 
 #[derive(Clone)]
+/// A text section of the workbench.
 pub struct WorkbenchTextSection<'a> {
     pub title: Cow<'a, str>,
     pub body: Text<'a>,
@@ -83,15 +84,18 @@ struct TwoPaneWorkbenchSpec<'a> {
     pub right_sections: Vec<WorkbenchTextSection<'a>>,
 }
 
+/// Spec of a workbench overlay dialog.
 pub struct WorkbenchOverlayDialogSpec<'a> {
     pub(crate) dialog: EditorDialogSpec<'a>,
     pub(crate) input: &'a Editor,
 }
 
+/// Source of workbench overlays.
 pub trait WorkbenchOverlaySource {
     fn to_workbench_overlay_dialog_spec<'a>(&'a self) -> WorkbenchOverlayDialogSpec<'a>;
 }
 
+/// Spec of the list workbench dialog.
 pub struct ListWorkbenchDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub summary: Option<Cow<'a, str>>,
@@ -245,6 +249,7 @@ struct SectionedWorkbenchSpec<'a> {
     pub detail_panel: WorkbenchTextSection<'a>,
 }
 
+/// Spec of the sectioned workbench dialog.
 pub struct SectionedWorkbenchDialogSpec<'a> {
     pub title: Cow<'a, str>,
     pub summary: Option<Cow<'a, str>>,

@@ -1295,6 +1295,7 @@ pub(crate) fn activity_payload(
                 kind: "hook".to_owned(),
                 summary: hook.summary.clone(),
                 detail: hook.detail.clone(),
+                occurred_at_ms: None,
             }))
         }
         PartContent::Activity(crate::message::RuntimeActivity::Notice(notice)) => {
@@ -1302,6 +1303,7 @@ pub(crate) fn activity_payload(
                 kind: notice.kind.clone(),
                 summary: notice.summary.clone(),
                 detail: notice.detail.clone(),
+                occurred_at_ms: None,
             }))
         }
     }
@@ -1526,6 +1528,7 @@ where
             "compaction of execution {} ({} tokens)",
             payload.execution_id, payload.activity.after_tokens
         )),
+        occurred_at_ms: None,
     });
     // v10 unified content node mirror for maintenance activities.
     db.execute(Statement::from_sql_and_values(

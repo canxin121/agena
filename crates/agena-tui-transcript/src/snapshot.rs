@@ -322,13 +322,23 @@ fn inject_session_activities_into_reply_parts<'a>(
         .enumerate()
         .map(|(index, node)| match node {
             ContentNode::Activity { activity } => activity.lifecycle.started_at_ms,
-            ContentNode::Text { .. } => nodes[index + 1..]
-                .iter()
-                .find_map(|next| match next {
-                    ContentNode::Activity { activity } => Some(activity.lifecycle.started_at_ms),
-                    ContentNode::Text { .. } => None,
-                })
-                .unwrap_or(trailing_text_time),
+            ContentNode::Text { segment } => {
+                if segment.started_at_ms > 0 {
+                    segment.started_at_ms
+                } else {
+                    // Synthetic/legacy segments carry no time: approximate
+                    // with the next Activity anchor (or the trailing time).
+                    nodes[index + 1..]
+                        .iter()
+                        .find_map(|next| match next {
+                            ContentNode::Activity { activity } => {
+                                Some(activity.lifecycle.started_at_ms)
+                            }
+                            ContentNode::Text { .. } => None,
+                        })
+                        .unwrap_or(trailing_text_time)
+                }
+            }
         })
         .collect::<Vec<_>>();
     let mut inserts = mid_activities
@@ -627,7 +637,11 @@ pub(crate) fn activity_presentation(
         ),
         ActivityPayload::Notice(notice) => (
             "notice".to_owned(),
-            "Notice".to_owned(),
+            if notice.kind == "hook" {
+                "Hook".to_owned()
+            } else {
+                "Notice".to_owned()
+            },
             notice.summary.clone(),
             None,
         ),
@@ -1255,6 +1269,7 @@ mod tests {
                     kind: "session_notice".to_owned(),
                     summary: "Session notice".to_owned(),
                     detail: Some("Background state changed".to_owned()),
+                    occurred_at_ms: None,
                 }),
                 provenance: ActivityProvenance::default(),
             }],
@@ -1308,6 +1323,7 @@ mod tests {
                 kind: "hook".to_owned(),
                 summary: format!("hook@{started_at_ms}"),
                 detail: None,
+                occurred_at_ms: Some(started_at_ms),
             }),
             provenance: ActivityProvenance::default(),
         }
@@ -1554,6 +1570,83 @@ mod tests {
         );
         assert!(position(&TranscriptContentId::Activity(m2)) < position(&text_ids[1]));
         assert!(position(&text_ids[1]) < position(&TranscriptContentId::Activity(m3)));
+    }
+
+    #[test]
+    fn timed_text_nodes_place_mid_reply_activities_exactly() {
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let tool_activity = agena_domain::ActivityId::new();
+        let m1 = agena_domain::ActivityId::new();
+        let m2 = agena_domain::ActivityId::new();
+        let m3 = agena_domain::ActivityId::new();
+        // Text nodes carry their real first-appearance time, so a hook fired
+        // after the opening text (150) but before the tool call (200) lands
+        // between them instead of being approximated to the tool anchor.
+        let document = ContentDocument::new(vec![
+            ContentNode::text_at_time(agena_domain::TextSegmentId::new(), "opening", 0, 1, 150),
+            ContentNode::activity(ActivityNode {
+                id: tool_activity,
+                owner: ActivityOwner::AssistantReply { reply_id },
+                actor: ActivityActor::Tool,
+                state: ActivityState::Completed,
+                position: ContentPosition { index: 1 },
+                revision_seq: 1,
+                lifecycle: ActivityLifecycle {
+                    started_at_ms: 200,
+                    finished_at_ms: Some(200),
+                },
+                payload: ActivityPayload::Operation(OperationActivity {
+                    call_id: ToolCallId::new("call-timed-placement"),
+                    invocation: ToolInvocation {
+                        tool_api_call: None,
+                        name: "fs.read".to_owned(),
+                        plugin_name: None,
+                        input: StructuredObject::try_from(serde_json::json!({
+                            "file_path": "a"
+                        }))
+                        .expect("structured timed-placement input"),
+                    },
+                    title: "Read a".to_owned(),
+                    summary: String::new(),
+                    data: serde_json::json!({}),
+                    markdown: String::new(),
+                    authorization: Default::default(),
+                    error: None,
+                }),
+                provenance: ActivityProvenance::default(),
+            }),
+            ContentNode::text_at_time(agena_domain::TextSegmentId::new(), "closing", 2, 1, 400),
+        ]);
+        let text_ids = document
+            .nodes()
+            .iter()
+            .filter_map(|node| match node {
+                ContentNode::Text { segment } => Some(TranscriptContentId::Text(segment.id)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let m1_node = session_notice_activity(m1, 175);
+        let m2_node = session_notice_activity(m2, 250);
+        let m3_node = session_notice_activity(m3, 450);
+        let parts = assistant_reply_document_parts(
+            &document,
+            MessageStatus::Completed,
+            &[&m1_node, &m2_node, &m3_node],
+            100,
+            Some(500),
+        );
+        let ids = parts.iter().map(|part| part.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                text_ids[0],
+                TranscriptContentId::Activity(m1),
+                TranscriptContentId::Activity(tool_activity),
+                TranscriptContentId::Activity(m2),
+                text_ids[1],
+                TranscriptContentId::Activity(m3),
+            ]
+        );
     }
 
     #[test]
@@ -2477,6 +2570,7 @@ mod tests {
                 kind: "hook".to_owned(),
                 summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
                 detail: Some("Continue: next plan step".to_owned()),
+                occurred_at_ms: None,
             }),
             provenance: ActivityProvenance::default(),
         })]);
@@ -2512,7 +2606,7 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(collapsed_text.contains("Notice"), "{collapsed_text}");
+                assert!(collapsed_text.contains("Hook"), "{collapsed_text}");
         assert!(
             collapsed_text.contains("agent.stop hook blocked stop: workflow plan autorun"),
             "{collapsed_text}"

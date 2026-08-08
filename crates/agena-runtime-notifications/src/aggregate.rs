@@ -178,6 +178,7 @@ mod tests {
             kind: "warn".into(),
             summary: "hi".into(),
             detail: None,
+            occurred_at_ms: None,
         });
         assert!(from_activity_payload(&payload, NotificationScope::Global, 1).is_some());
     }

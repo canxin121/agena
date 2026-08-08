@@ -39,8 +39,29 @@ impl ContentNode {
                 text: text.into(),
                 position: ContentPosition { index: position },
                 revision_seq,
+                started_at_ms: 0,
             },
         }
+    }
+
+    /// Construct a text node carrying the wall-clock time (ms since the Unix
+    /// epoch) at which the segment first appeared. The content-node row
+    /// already stores this; carrying it on the domain value lets the
+    /// transcript place mid-reply session activities exactly instead of
+    /// approximating against the next Activity anchor. Synthetic values use
+    /// `text_at` (started_at_ms = 0, meaning unknown).
+    pub fn text_at_time(
+        id: TextSegmentId,
+        text: impl Into<String>,
+        position: u32,
+        revision_seq: i64,
+        started_at_ms: i64,
+    ) -> Self {
+        let mut node = Self::text_at(id, text, position, revision_seq);
+        if let Self::Text { segment } = &mut node {
+            segment.started_at_ms = started_at_ms;
+        }
+        node
     }
 
     pub fn activity(activity: ActivityNode) -> Self {
@@ -94,6 +115,13 @@ pub struct TextSegment {
     pub text: String,
     pub position: ContentPosition,
     pub revision_seq: i64,
+    /// Wall-clock time the segment first appeared (ms since the Unix epoch).
+    /// The content-node row already stores this; carrying it on the domain
+    /// value lets the transcript place mid-reply activities exactly. Synthetic
+    /// values default to 0 (unknown), and projections fall back to the next
+    /// Activity anchor for those.
+    #[serde(default)]
+    pub started_at_ms: i64,
 }
 
 /// An ordered document. Vector order is semantic and is preserved all the way
@@ -614,6 +642,11 @@ pub struct NoticeActivity {
     /// Optional human-facing detail rendered when expanded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Wall-clock time the notice was recorded (ms since the Unix epoch),
+    /// carried for presentation so a hook row can show when it actually
+    /// fired. Older records omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurred_at_ms: Option<i64>,
 }
 
 /// One body of assistant reply text that is not the opening paragraph — a

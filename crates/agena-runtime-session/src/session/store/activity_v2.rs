@@ -116,6 +116,7 @@ pub(crate) async fn upsert_session_notice_node(
         "kind": kind,
         "summary": summary,
         "detail": detail,
+        "occurred_at_ms": occurred_at_ms,
     });
     db.execute(Statement::from_sql_and_values(
         backend,

@@ -69,11 +69,13 @@ async fn transcript_documents_batch(
                     let position = u32::try_from(position).map_err(|_| {
                         AppError::Internal(format!("invalid transcript text position {position}"))
                     })?;
-                    agena_domain::ContentNode::text_at(
+                    agena_domain::ContentNode::text_at_time(
                         uuid_value(node_id.clone(), agena_domain::TextSegmentId)?,
                         row.try_get::<String>("", "text")?,
                         position,
                         row.try_get("", "revision_seq")?,
+                        row.try_get::<Option<i64>>("", "started_at_ms")?
+                            .unwrap_or(0),
                     )
                 }
                 "activity" => {
@@ -453,6 +455,7 @@ fn project_runtime_presentation_event(
                     kind: "provider_retry".to_owned(),
                     summary: title,
                     detail: Some(update.message.clone()),
+                    occurred_at_ms: Some(update.ts_ms),
                 }),
                 state: agena_domain::ActivityState::InProgress,
                 position: agena_domain::ContentPosition { index: 0 },

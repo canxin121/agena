@@ -3,9 +3,9 @@ use super::super::{
     I18n, Local, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
-    TranscriptNodeKind, UnicodeWidthStr, concise_text, format_timestamp, push_activity_headline,
-    push_expanded_markdown, push_expanded_tool_text, push_label_value, push_markdown_document,
-    push_section_heading, push_wrapped_line, render_entry_detailed,
+    TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
+    push_activity_headline, push_expanded_markdown, push_expanded_tool_text, push_label_value,
+    push_markdown_document, push_section_heading, push_wrapped_line, render_entry_detailed,
     render_expanded_tool_text_block, strip_terminal_ansi_sequences, style_for_role,
     tool_output_copy_text, transcript_message_parts, transcript_part_content,
     transcript_spinner_placeholder, trim_empty_line_edges, truncate_display_width,
@@ -1248,6 +1248,7 @@ pub(crate) fn render_part_node(
                     kind: "hook".to_owned(),
                     summary: hook.summary.clone(),
                     detail: hook.detail.clone(),
+                    occurred_at_ms: None,
                 }),
                 None,
                 out,
@@ -1506,6 +1507,15 @@ fn render_activity_canonical(
     let expanded = expansions.get(&key).copied().unwrap_or(default_expanded);
     let (_, canonical_title, summary, error) = activity_presentation(payload);
     let title = title_override.unwrap_or(canonical_title.as_str());
+    // A notice row carries the wall-clock time it was recorded so the hook
+    // timeline reads at a glance instead of by position alone.
+    let headline_summary = match payload {
+        agena_domain::ActivityPayload::Notice(notice) => notice
+            .occurred_at_ms
+            .map(|ms| format!("{} · {}", summary, format_occurred_time(ms)))
+            .unwrap_or_else(|| summary.clone()),
+        _ => summary.clone(),
+    };
     let error_text = error.as_ref().map(|e| e.user.fallback.clone());
     let error_equivalence_text = error.as_ref().map(|error| error.user.fallback.as_str());
     let details =
@@ -1517,7 +1527,7 @@ fn render_activity_canonical(
         expanded,
         toggleable,
         title,
-        summary.as_str(),
+        headline_summary.as_str(),
         width,
     );
     let headline_end = out.len();

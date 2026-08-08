@@ -48,6 +48,13 @@ pub(crate) fn format_timestamp(timestamp: DateTime<chrono::Utc>) -> String {
         .to_string()
 }
 
+/// Compact wall-clock time for one transcript event row, e.g. `14:32:05`.
+pub(crate) fn format_occurred_time(occurred_at_ms: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(occurred_at_ms)
+        .map(|time| DateTime::<Local>::from(time).format("%H:%M:%S").to_string())
+        .unwrap_or_default()
+}
+
 pub fn style_for_role(role: MessageRole) -> Style {
     match role {
         agena_api::resource::MessageRole::User => {
@@ -131,7 +138,7 @@ pub fn render_entry_detailed(
                 let hidden_when_collapsed = activities
                     .iter()
                     .enumerate()
-                    .map(|(index, part)| {
+                    .map(|(_, part)| {
                         if is_always_visible_activity(part) {
                             return false;
                         }
@@ -660,6 +667,7 @@ mod tests {
             kind: "hook".to_owned(),
             summary: "mid-reply hook fired".to_owned(),
             detail: None,
+            occurred_at_ms: Some(1_700_000_000_000),
         });
         parts.push(TranscriptFixture::canonical_activity(
             200,
@@ -702,8 +710,15 @@ mod tests {
             .join("\n");
         // The nine tool calls fold as one block to five visible ones (the
         // oldest four are hidden); the notice stays visible in place.
-        assert!(text.contains("mid-reply hook fired"), "{text}");
+        assert!(text.contains("Hook · mid-reply hook fired"), "{text}");
         assert!(text.contains("4 older activity blocks collapsed"), "{text}");
+        let notice_line = rendered
+            .lines
+            .iter()
+            .find(|line| line.text.contains("mid-reply hook fired"))
+            .map(|line| line.text.as_str())
+            .expect("notice line");
+        assert!(notice_line.contains(':'), "{notice_line}");
         assert!(!text.contains("Read file 1"), "{text}");
         assert!(text.contains("Read file 4"), "{text}");
         assert_eq!(

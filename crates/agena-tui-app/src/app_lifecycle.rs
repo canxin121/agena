@@ -113,6 +113,7 @@ impl App {
             pending_refresh: None,
             pending_ui_action: None,
             current_lineage: None,
+            side_sessions: HashMap::new(),
             next_usage_request_id: 0,
             active_subscription: None,
             queue: ComposerQueue::new(),
@@ -471,11 +472,11 @@ fn tui_plugin_color(color: Option<&agena_plugin_sdk::PluginTuiColor>) -> Option<
 use crate::Result;
 use crate::{
     App, BTreeMap, BTreeSet, Backend, Color, ComposerQueue, DRAFT_PERSIST_INTERVAL_MS, DraftSlot,
-    DraftStore, Duration, Editor, Event, HashSet, I18n, Instant, LaunchOptions, LayoutCache,
-    PromptHistory, REFRESH_INTERVAL_MS, REFRESH_STALL_TIMEOUT_MS, Route, RunActivityTracker,
-    RunOptionsState, SessionComposerState, SessionListLoadState, TerminalIntegrationState,
-    TerminalRuntime, TranscriptDetailDefaults, TranscriptState, UI_TICK_MS,
-    default_draft_store_path, default_prompt_history_path, interval,
+    DraftStore, Duration, Editor, Event, HashMap, HashSet, I18n, Instant, LaunchOptions,
+    LayoutCache, PromptHistory, REFRESH_INTERVAL_MS, REFRESH_STALL_TIMEOUT_MS, Route,
+    RunActivityTracker, RunOptionsState, SessionComposerState, SessionListLoadState,
+    TerminalIntegrationState, TerminalRuntime, TranscriptDetailDefaults, TranscriptState,
+    UI_TICK_MS, default_draft_store_path, default_prompt_history_path, interval,
     provider_studio_auth_poll_interval, ui_text, unbounded_channel,
 };
 use agena_tui::main_focus::Focus;

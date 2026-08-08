@@ -556,6 +556,11 @@ impl App {
             }
             parts.push(text.trim().to_string());
         }
+        if self.current_session_is_side() {
+            parts.push(ui_text::t(&self.i18n, "transcript-footer-side-active"));
+        } else if self.current_session_is_side_parent() {
+            parts.push(ui_text::t(&self.i18n, "transcript-footer-side-return"));
+        }
 
         parts.join("  |  ")
     }

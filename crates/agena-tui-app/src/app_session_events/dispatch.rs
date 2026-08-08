@@ -148,6 +148,12 @@ impl App {
                 self.handle_turn_cancelled(session_id, result)
             }
             AppMessage::StatusLineUpdated { output } => self.handle_status_line_updated(output),
+            AppMessage::SideSessionOpened {
+                session_id,
+                parent_id,
+            } => {
+                self.handle_side_session_opened(session_id, parent_id);
+            }
         }
     }
 
@@ -155,6 +161,45 @@ impl App {
         if let Some(status_line) = self.status_line.as_mut() {
             status_line.apply_refresh(output);
         }
+    }
+
+    pub(crate) fn handle_side_session_opened(&mut self, session_id: i64, parent_id: i64) {
+        self.side_sessions.insert(session_id, parent_id);
+    }
+
+    /// Returns the side session to close when switching to `target_session_id`
+    /// (codex's `side_thread_to_discard_after_switch` rule). Switching into
+    /// the side itself or staying put keeps it; switching anywhere else —
+    /// including back to its parent — closes it.
+    pub(crate) fn side_session_to_discard_after_switch(
+        &self,
+        target_session_id: i64,
+    ) -> Option<i64> {
+        let active_session_id = self.transcript.session_id?;
+        let (&side_session_id, &parent_session_id) = self.side_sessions.iter().next()?;
+        if target_session_id == side_session_id || target_session_id == active_session_id {
+            return None;
+        }
+        (active_session_id == side_session_id || active_session_id == parent_session_id)
+            .then_some(side_session_id)
+    }
+
+    /// True when the current transcript is an open side conversation.
+    pub(crate) fn current_session_is_side(&self) -> bool {
+        self.transcript
+            .session_id
+            .is_some_and(|session_id| self.side_sessions.contains_key(&session_id))
+    }
+
+    /// True when the current transcript is the parent of an open side
+    /// conversation (a hint to return into it from the main thread).
+    pub(crate) fn current_session_is_side_parent(&self) -> bool {
+        let Some(session_id) = self.transcript.session_id else {
+            return false;
+        };
+        self.side_sessions
+            .values()
+            .any(|parent_session_id| *parent_session_id == session_id)
     }
 
     pub(crate) fn handle_sessions_loaded(

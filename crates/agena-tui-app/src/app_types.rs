@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -453,6 +453,12 @@ pub struct App {
     pub(super) pending_refresh: Option<(i64, bool)>,
     pub(super) pending_ui_action: Option<UiAction>,
     pub(super) current_lineage: Option<CurrentLineageState>,
+    /// Open side conversations: side session id -> the parent session it was
+    /// forked from. A side conversation is an ephemeral fork started by
+    /// `/side <question>`; the user is switched into it to chat while the
+    /// parent run keeps going. The entry is dropped when navigation leaves
+    /// the side conversation (unless toggling straight back to its parent).
+    pub(super) side_sessions: HashMap<i64, i64>,
     /// Monotonic id for usage dashboard loads. Keeping it on the app prevents
     /// a late response from an older, closed dashboard matching a newly
     /// opened dashboard that is also on its first request.
@@ -667,6 +673,11 @@ pub(super) enum AppMessage {
     },
     StatusLineUpdated {
         output: Option<String>,
+    },
+    /// A `/side` fork was created and the user was switched into it.
+    SideSessionOpened {
+        session_id: i64,
+        parent_id: i64,
     },
 }
 

@@ -66,7 +66,7 @@ impl App {
             CommandId::Usage => self.open_usage_dashboard(),
             CommandId::Activities => self.open_activities_panel(),
             CommandId::Plan => self.open_plan_viewer(),
-            CommandId::Btw => self.handle_btw_command(args),
+            CommandId::Side => self.handle_side_command(args),
         }
     }
 
@@ -120,33 +120,48 @@ impl App {
         }
     }
 
-    /// `/btw <question>` forks a child session and submits the question
-    /// there without touching the parent transcript. The parent run keeps
-    /// running (or stays idle) untouched; the user can switch to the new
-    /// session via the sessions pane to read the answer.
-    pub(crate) fn handle_btw_command(&mut self, args: &str) {
+    /// `/side <question>` forks the current session (full history clone) and
+    /// submits the question in the fork. The user is switched into the fork
+    /// to chat while the parent run keeps going untouched — a codex-style
+    /// ephemeral side conversation. `/btw` and `/aside` are aliases.
+    pub(crate) fn handle_side_command(&mut self, args: &str) {
         let question = args.trim();
         if question.is_empty() {
             self.flash_warning(self.i18n.text_args(
                 "flash-command-usage",
-                &agena_tui::fl_args!("usage" => "/btw <question>"),
+                &agena_tui::fl_args!("usage" => "/side <question>"),
             ));
             return;
         }
-        let parent_id = self
+        let Some(parent_id) = self
             .transcript
             .session_id
-            .or_else(|| self.sessions.current_selected_id());
-        let title = format!("btw: {}", derive_session_title(&self.i18n, question));
+            .or_else(|| self.sessions.current_selected_id())
+        else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-side-requires-session"));
+            return;
+        };
+        if !self.side_sessions.is_empty() {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-side-already-open"));
+            return;
+        }
+        let title = format!("side: {}", derive_session_title(&self.i18n, question));
         let prompt = question.to_string();
         let backend = self.backend.clone();
         let tx = self.tx.clone();
         let options = self.run_options.to_request();
         tokio::spawn(async move {
-            let create = backend.create_session(title, parent_id).await;
-            match create {
-                Ok(session) => {
-                    let session_id = session.id;
+            let forked = backend.fork_session(parent_id, Some(title)).await;
+            match forked {
+                Ok(state) => {
+                    let session_id = state.session.id;
+                    // Register the side conversation before the submit result
+                    // routes the UI into the fork, so the open_session switch
+                    // keeps the side marker (same-channel ordering).
+                    let _ = tx.send(AppMessage::SideSessionOpened {
+                        session_id,
+                        parent_id,
+                    });
                     let document =
                         agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                             text: prompt,
@@ -155,9 +170,8 @@ impl App {
                         .submit_document_with_options(session_id, document, options)
                         .await
                         .map_err(crate::UiFailure::internal);
-                    // Reuse the existing run-submitted message — the
-                    // handler will route the new session into the UI if
-                    // appropriate, otherwise just refresh the list.
+                    // Reuse the existing run-submitted message — the handler
+                    // switches the UI into the fork when the result lands.
                     let _ = tx.send(AppMessage::SessionMessageSubmitted {
                         session_id,
                         pending_message_id: 0,
@@ -174,7 +188,7 @@ impl App {
                 }
             }
         });
-        self.flash_info(ui_text::t(&self.i18n, "flash-btw-spawned"));
+        self.flash_info(ui_text::t(&self.i18n, "flash-side-spawned"));
     }
 
     pub(crate) fn handle_review_command(&mut self, args: &str) {

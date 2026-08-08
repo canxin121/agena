@@ -40,7 +40,7 @@ pub enum CommandId {
     Usage,
     Activities,
     Plan,
-    Btw,
+    Side,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -367,11 +367,11 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary_key: "command-plan-summary",
     },
     CommandSpec {
-        id: CommandId::Btw,
-        name: "btw",
-        aliases: &["aside", "side"],
+        id: CommandId::Side,
+        name: "side",
+        aliases: &["btw", "aside"],
         arguments: "<question>",
-        summary_key: "command-btw-summary",
+        summary_key: "command-side-summary",
     },
 ];
 
@@ -558,5 +558,36 @@ mod tests {
         assert!(find_command("memory").is_none());
         assert!(find_command("mem").is_none());
         assert!(find_command("snapshot").is_none());
+    }
+
+    #[test]
+    fn side_is_the_canonical_name_with_btw_and_aside_as_aliases() {
+        assert_eq!(
+            find_command("side").map(|spec| spec.id),
+            Some(CommandId::Side)
+        );
+        assert_eq!(
+            find_command("btw").map(|spec| spec.id),
+            Some(CommandId::Side)
+        );
+        assert_eq!(
+            find_command("aside").map(|spec| spec.id),
+            Some(CommandId::Side)
+        );
+        let spec = find_command("side").expect("side command");
+        assert_eq!(spec.name, "side");
+        assert_eq!(spec.summary_key, "command-side-summary");
+        assert!(spec.requires_arguments());
+    }
+
+    #[test]
+    fn side_command_parses_its_question_argument() {
+        let command = parse_command("/side what is the current status?").expect("side command");
+        assert_eq!(command.spec.id, CommandId::Side);
+        assert_eq!(command.args, "what is the current status?");
+
+        let alias = parse_command("/btw explain the recent diff").expect("btw alias");
+        assert_eq!(alias.spec.id, CommandId::Side);
+        assert_eq!(alias.args, "explain the recent diff");
     }
 }

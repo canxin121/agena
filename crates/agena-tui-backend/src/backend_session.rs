@@ -613,6 +613,32 @@ impl Backend {
         .context("failed to rewind session to turn")
     }
 
+    /// Clone a session's full history into a new child session — a real
+    /// fork, unlike `create_session`, which starts an empty child. Used by
+    /// the `/side` command to start a side conversation that inherits the
+    /// parent's context while the parent run keeps going untouched.
+    pub async fn fork_session(
+        &self,
+        session_id: i64,
+        title: Option<String>,
+    ) -> Result<SessionExecutionResource> {
+        match dispatch::dispatch_command(
+            &self.application,
+            ApiCommand::ForkSession(ForkSessionParams {
+                session_id,
+                at_message_id: None,
+                title,
+            }),
+        )
+        .await
+        .map_err(api_error)?
+        {
+            CommandResult::Execution(state) => Ok(state),
+            other => Err(anyhow!("unexpected command result: {:?}", other)),
+        }
+        .context("failed to fork session")
+    }
+
     /// Durable, idempotent acknowledgement that an interactive user-input
     /// request has been shown to the user. The session manager persists the
     /// presentation, so a never-presented request still auto-popups after a
@@ -626,12 +652,10 @@ impl Backend {
     ) -> Result<SessionExecutionResource> {
         match dispatch::dispatch_command(
             &self.application,
-            ApiCommand::MarkInteractiveRequestPresented(
-                MarkInteractiveRequestPresentedParams {
-                    session_id,
-                    request_id,
-                },
-            ),
+            ApiCommand::MarkInteractiveRequestPresented(MarkInteractiveRequestPresentedParams {
+                session_id,
+                request_id,
+            }),
         )
         .await
         .map_err(api_error)?
@@ -646,12 +670,11 @@ impl Backend {
 use crate::Result;
 use crate::{
     ActivityId, ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams,
-    EventFilter, GetOperationDetailParams, GetSessionParams, HashSet, ListSessionsParams,
-    LiveEvent, OperationDetailResource, Path, PathBuf, PermissionReply, PermissionReplyKind,
-    MarkInteractiveRequestPresentedParams, PermissionScope, Query, QueryResult,
-    ReplyPermissionParams, ReplyUserInputParams,
-    RewindSessionParams, RunOptions, Scope, SessionExecutionResource, SessionPermissionStudioState,
-    SessionRefresh, SessionResource, SubmitMessageParams, UpdateSessionSelectionParams,
-    UserInputReply, api_error, build_file_index, direct_path_candidate, dispatch,
-    file_search_score, mpsc,
+    EventFilter, ForkSessionParams, GetOperationDetailParams, GetSessionParams, HashSet,
+    ListSessionsParams, LiveEvent, MarkInteractiveRequestPresentedParams, OperationDetailResource,
+    Path, PathBuf, PermissionReply, PermissionReplyKind, PermissionScope, Query, QueryResult,
+    ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, RunOptions, Scope,
+    SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
+    SubmitMessageParams, UpdateSessionSelectionParams, UserInputReply, api_error, build_file_index,
+    direct_path_candidate, dispatch, file_search_score, mpsc,
 };

@@ -21,9 +21,9 @@ use std::{
 use agena_api::{
     commands::{
         Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
-        CreateSessionParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
-        ReplyPermissionParams,
-        ReplyUserInputParams, RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
+        CreateSessionParams, ForkSessionParams, MarkInteractiveRequestPresentedParams,
+        ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
+        RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
         UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,

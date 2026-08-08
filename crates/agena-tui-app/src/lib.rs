@@ -19,7 +19,7 @@
 
 use std::{
     cmp::{max, min},
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env, fs,
     ops::Range,
     path::{Path, PathBuf},

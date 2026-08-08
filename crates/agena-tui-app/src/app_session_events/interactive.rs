@@ -1,5 +1,12 @@
 impl App {
     pub(crate) fn open_session(&mut self, session_id: i64, title: String) {
+        // Opening any other session while a side conversation is active
+        // discards the ephemeral side (codex's
+        // `side_thread_to_discard_after_switch` rule). Switching into the side
+        // itself, or staying put, keeps it.
+        if let Some(side_session_id) = self.side_session_to_discard_after_switch(session_id) {
+            self.side_sessions.remove(&side_session_id);
+        }
         self.sync_current_draft_slot();
         self.clear_composer_state();
         self.current_lineage = None;

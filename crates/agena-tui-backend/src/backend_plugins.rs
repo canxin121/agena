@@ -154,6 +154,30 @@ impl Backend {
         self.application.plugin_runtime().display_contributions()
     }
 
+    /// Re-publish the plan progress display contribution for `session_id`.
+    ///
+    /// The composer's bottom-right plan chip is backed by an in-memory
+    /// display contribution that starts empty after a process restart or a
+    /// runtime reload. Invoking `agena.plan.get` re-syncs the contribution
+    /// from durable storage (the planning plugin re-publishes on every plan
+    /// read) without mutating the plan. Returns `true` when the session has
+    /// an active plan, so the caller can back off for sessions without one.
+    pub async fn refresh_plan_display(&self, session_id: i64) -> Result<bool> {
+        let response = self
+            .invoke_plugin_ui_tool(
+                "agena.plan",
+                "get",
+                serde_json::json!({ "view": "summary" }),
+                Some(session_id),
+            )
+            .await?;
+        Ok(response
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.get("plan"))
+            .is_some_and(|plan| !plan.is_null()))
+    }
+
     /// Plugin notifications emitted through the unified `host.notify` entry
     /// (Phase 6). Bounded recent queue; the TUI dedupes/consumes each intent.
     pub fn plugin_host_notifications(&self) -> Vec<agena_plugin_host::HostNotification> {

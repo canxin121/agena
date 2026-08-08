@@ -88,9 +88,16 @@ impl PluginHost {
                 .map_err(|_| HostError::Config("plugin index registry lock poisoned".into()))?
                 .insert(plugin_key.clone(), idx);
             // Hot-reload: if a previous host had this id with a byte-identical
-            // configured plugin, reuse the transport (no respawn).
+            // configured plugin, reuse the transport (no respawn) — except for
+            // in-proc Static plugins. A static plugin instance binds its host
+            // (ScopedHostClient -> HostHandle) during `meta/init`; reusing the
+            // transport after a reload keeps that binding pointing at the
+            // detached previous handle, so every display/theme/notification
+            // write silently misses the live host. Static plugins are cheap to
+            // rebuild and re-init against the current handle.
             if let Some(previous_plugin) = previous_plugins.get(&id)
                 && previous_plugin == &configured_plugin
+                && !matches!(&configured_plugin.package, PluginPackage::Static { .. })
                 && let Some(reused) = previous_loaded.get(&plugin_key).cloned()
             {
                 tracing::info!(
@@ -226,6 +233,6 @@ impl PluginHost {
 }
 use super::{
     Arc, ConfiguredPlugin, HashMap, HostError, HostHandle, LoadedPlugin, NoopHostClient,
-    PluginHost, PluginHostBuildConfig, PluginKey, PluginLogStore, PluginToolRegistry, RwLock,
-    StaticRegistration, hook_registration_for_plugin, load_entry,
+    PluginHost, PluginHostBuildConfig, PluginKey, PluginLogStore, PluginPackage,
+    PluginToolRegistry, RwLock, StaticRegistration, hook_registration_for_plugin, load_entry,
 };

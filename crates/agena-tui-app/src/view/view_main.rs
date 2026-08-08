@@ -697,7 +697,7 @@ impl App {
 
     /// Text for the composer's bottom-right chip: plan progress contributed
     /// by the planning plugin as a declarative display contribution.
-    fn composer_plan_progress_part(&self) -> Option<String> {
+    pub(crate) fn composer_plan_progress_part(&self) -> Option<String> {
         let session_id = self.transcript.session_id?;
         let expected_id = format!("plan:{session_id}");
         self.backend

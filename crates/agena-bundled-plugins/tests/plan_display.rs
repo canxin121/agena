@@ -7,7 +7,7 @@
 //! tool path, and asserts the contribution lands in
 //! `PluginHost::display_contributions()` keyed by the callback-context session.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use agena_plugin_host::registry::RegisteredTool;
@@ -118,6 +118,23 @@ fn build_host(
     tmp: &tempfile::TempDir,
     host_client: Arc<dyn HostClient>,
 ) -> Arc<PluginHost> {
+    build_host_with_previous(runtime, tmp, host_client, None, HashMap::new())
+}
+
+/// Like [`build_host`] but allows simulating a runtime reload / process
+/// restart by building a successor host from a previous one. The successor
+/// shares the same host client (durable storage) but gets a fresh in-memory
+/// display contribution map. `previous_plugins` mirrors what
+/// `RuntimeSnapshot::build_inner` derives from the previous `PluginsConfig`
+/// (`PluginHostBuildConfig::previous_plugins`) so the hot-reload transport
+/// reuse path is exercised when the config is byte-identical.
+fn build_host_with_previous(
+    runtime: &tokio::runtime::Runtime,
+    tmp: &tempfile::TempDir,
+    host_client: Arc<dyn HostClient>,
+    previous: Option<Arc<PluginHost>>,
+    previous_plugins: HashMap<String, ConfiguredPlugin>,
+) -> Arc<PluginHost> {
     let mut list = BTreeMap::new();
     list.insert("agena.plan".to_string(), ConfiguredPlugin::static_default());
     runtime
@@ -134,8 +151,8 @@ fn build_host(
             agena_version: "test".to_string(),
             callback_base_url: None,
             host_client: Some(host_client),
-            previous: None,
-            previous_plugins: Default::default(),
+            previous,
+            previous_plugins,
         }))
         .unwrap()
 }
@@ -178,6 +195,122 @@ fn plan_set_registers_status_line_contribution() {
             panic!("expected plan:42 status-line contribution, got: {contributions:#?}")
         });
 
+    match &plan_contribution.contribution.content {
+        PluginDisplayContent::Text { text } => {
+            assert_eq!(text.trim(), "▶ 0/2 ↻");
+        }
+        other => panic!("expected Text content, got {other:?}"),
+    }
+}
+
+/// A hot-reload (`Runtime::reload_with_cause` with byte-identical config)
+/// builds a successor host whose `previous_plugins` match the current config,
+/// so the host's transport-reuse path is taken. In-proc `Static` plugins must
+/// NOT be reused: a static plugin instance binds its host during `meta/init`,
+/// and reusing the transport keeps every display write on the detached
+/// previous handle. The successor must recreate the plan plugin against its
+/// own handle, so `plan.set` through the SECOND host lands `plan:{session}` on
+/// the SECOND host's contribution map (this failed before the static-reuse
+/// guard: the plugin wrote to the first host instead).
+#[test]
+fn hot_reload_recreates_static_plan_plugin_against_successor_host() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let shared_client = Arc::new(FakeHostClient::default());
+
+    // First host: create a plan so durable storage holds it.
+    let first = build_host(
+        &runtime,
+        &tmp,
+        Arc::clone(&shared_client) as Arc<dyn HostClient>,
+    );
+    let set: RegisteredTool = first.lookup_tool("agena.plan.set").unwrap();
+    first
+        .invoke_tool_cancellable(
+            &set,
+            ToolInvokeInput {
+                tool_name: "set".to_string(),
+                session_id: 42,
+                call_id: 7,
+                workspace_root: tmp.path().to_string_lossy().to_string(),
+                input: serde_json::json!({
+                    "objective": "Build a widget",
+                    "steps": [
+                        { "title": "Design the widget" },
+                        { "title": "Implement the widget" },
+                    ],
+                }),
+            },
+            None,
+        )
+        .expect("agena.plan.set must succeed");
+    assert!(
+        first
+            .display_contributions()
+            .iter()
+            .any(|c| c.contribution.id == "plan:42"),
+        "precondition: plan:42 must exist on the first host"
+    );
+
+    // Hot-reload: byte-identical config + the previous host, exactly how
+    // RuntimeSnapshot::build_inner derives previous_plugins.
+    let mut list = BTreeMap::new();
+    list.insert("agena.plan".to_string(), ConfiguredPlugin::static_default());
+    let previous_config = PluginsConfig {
+        list,
+        ..Default::default()
+    };
+    let second = build_host_with_previous(
+        &runtime,
+        &tmp,
+        Arc::clone(&shared_client) as Arc<dyn HostClient>,
+        Some(Arc::clone(&first)),
+        PluginHostBuildConfig::previous_plugins(&previous_config),
+    );
+    assert!(
+        !second
+            .display_contributions()
+            .iter()
+            .any(|c| c.contribution.id == "plan:42"),
+        "precondition: a rebuilt host starts without the in-memory plan contribution"
+    );
+
+    // Update the plan through the SECOND host. With the reuse bug the plugin
+    // would still write to the FIRST host's map and this lookup would fail.
+    let set2: RegisteredTool = second.lookup_tool("agena.plan.set").unwrap();
+    second
+        .invoke_tool_cancellable(
+            &set2,
+            ToolInvokeInput {
+                tool_name: "set".to_string(),
+                session_id: 42,
+                call_id: 9,
+                workspace_root: tmp.path().to_string_lossy().to_string(),
+                input: serde_json::json!({
+                    "objective": "Rebuild the widget",
+                    "steps": [
+                        { "title": "Design the rebuild" },
+                        { "title": "Implement the rebuild" },
+                    ],
+                }),
+            },
+            None,
+        )
+        .expect("agena.plan.set on the successor host must succeed");
+
+    let contributions = second.display_contributions();
+    let plan_contribution = contributions
+        .iter()
+        .find(|c| {
+            c.plugin_id.to_string() == "agena.plan"
+                && c.contribution.id == "plan:42"
+                && c.contribution.kind == ContributionKind::StatusLineText
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "plan.set on the successor host must register plan:42 on the LIVE host (not the detached previous one), got: {contributions:#?}"
+            )
+        });
     match &plan_contribution.contribution.content {
         PluginDisplayContent::Text { text } => {
             assert_eq!(text.trim(), "▶ 0/2 ↻");
@@ -371,6 +504,104 @@ fn plan_contribution_survives_real_tool_executor_route() {
         .unwrap_or_else(|| {
             panic!(
                 "expected plan:42 status-line contribution after real executor route, got: {contributions:#?}"
+            )
+        });
+    match &plan_contribution.contribution.content {
+        PluginDisplayContent::Text { text } => {
+            assert_eq!(text.trim(), "▶ 0/2 ↻");
+        }
+        other => panic!("expected Text content, got {other:?}"),
+    }
+}
+
+/// A plan persisted in durable storage must not silently lose its composer
+/// chip when the in-memory display contribution map starts empty — exactly
+/// what happens after a process restart or a runtime reload, where a fresh
+/// `PluginHost` is built with the same session storage. Reading the plan
+/// (`agena.plan.get`, which the TUI also calls to heal the chip) re-publishes
+/// the `plan:{session}` contribution.
+#[test]
+fn plan_get_restores_status_line_contribution_after_host_rebuild() {
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let shared_client = Arc::new(FakeHostClient::default());
+
+    // First host: create a plan. The contribution lands in memory.
+    let first = build_host(
+        &runtime,
+        &tmp,
+        Arc::clone(&shared_client) as Arc<dyn HostClient>,
+    );
+    let registered: RegisteredTool = first.lookup_tool("agena.plan.set").unwrap();
+    first
+        .invoke_tool_cancellable(
+            &registered,
+            ToolInvokeInput {
+                tool_name: "set".to_string(),
+                session_id: 42,
+                call_id: 7,
+                workspace_root: tmp.path().to_string_lossy().to_string(),
+                input: serde_json::json!({
+                    "objective": "Build a widget",
+                    "steps": [{ "title": "Design the widget" }, { "title": "Implement the widget" }],
+                }),
+            },
+            None,
+        )
+        .expect("agena.plan.set must succeed");
+    assert!(
+        first
+            .display_contributions()
+            .iter()
+            .any(|c| c.contribution.id == "plan:42"),
+        "plan:42 contribution must be present right after creation"
+    );
+
+    // Simulate restart / reload: a successor host shares the same storage
+    // (the fake host client) but starts with an empty contribution map.
+    let second = build_host_with_previous(
+        &runtime,
+        &tmp,
+        Arc::clone(&shared_client) as Arc<dyn HostClient>,
+        Some(Arc::clone(&first)),
+        HashMap::new(),
+    );
+    assert!(
+        !second
+            .display_contributions()
+            .iter()
+            .any(|c| c.contribution.id == "plan:42"),
+        "precondition: a rebuilt host starts without the in-memory plan contribution"
+    );
+
+    // Reading the plan through the normal tool path (what the TUI does to
+    // heal the chip) must restore the contribution from durable storage.
+    let get: RegisteredTool = second.lookup_tool("agena.plan.get").unwrap();
+    second
+        .invoke_tool_cancellable(
+            &get,
+            ToolInvokeInput {
+                tool_name: "get".to_string(),
+                session_id: 42,
+                call_id: 8,
+                workspace_root: tmp.path().to_string_lossy().to_string(),
+                input: serde_json::json!({ "view": "summary" }),
+            },
+            None,
+        )
+        .expect("agena.plan.get must succeed");
+
+    let contributions = second.display_contributions();
+    let plan_contribution = contributions
+        .iter()
+        .find(|c| {
+            c.plugin_id.to_string() == "agena.plan"
+                && c.contribution.id == "plan:42"
+                && c.contribution.kind == ContributionKind::StatusLineText
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "plan.get must restore the plan:42 contribution on a rebuilt host, got: {contributions:#?}"
             )
         });
     match &plan_contribution.contribution.content {

@@ -1,8 +1,12 @@
 //! Application adapter for the plan viewer route.
 
+use std::time::{Duration, Instant};
+
 use crossterm::event::KeyCode;
 
-use super::{App, AppMessage, KeyEvent, PlanViewerData, PlanViewerState, Route};
+use super::{
+    App, AppMessage, KeyEvent, PlanDisplayRefreshState, PlanViewerData, PlanViewerState, Route,
+};
 use crate::ui_text;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use agena_tui::main_focus::Focus;
@@ -220,5 +224,163 @@ impl App {
 
     fn plan_viewer_page_size(&self) -> u16 {
         self.layout.overlay_area.height.saturating_sub(2).max(1)
+    }
+
+    /// Periodically re-request the plan display contribution for the attached
+    /// session while the composer's bottom-right chip is missing.
+    ///
+    /// The chip is backed by an in-memory display contribution that starts
+    /// empty after a process restart or runtime reload, so an existing plan
+    /// can silently lose its progress indicator until the next plan mutation
+    /// or agent stop. A read-only `agena.plan.get` re-publishes it from
+    /// durable storage, healing the chip without waiting for the next run.
+    pub(crate) fn heal_plan_display_refresh(&mut self) {
+        let Some(session_id) = self.transcript.session_id else {
+            self.plan_display_refresh = None;
+            return;
+        };
+        if self.composer_plan_progress_part().is_some() {
+            // The chip is already visible; stop polling for it.
+            self.plan_display_refresh = None;
+            return;
+        }
+        if plan_display_refresh_due(session_id, self.plan_display_refresh, Instant::now()) {
+            self.request_plan_display_refresh(session_id);
+        }
+    }
+
+    /// Fire a read-only plan display refresh for `session_id` and record the
+    /// cooldown state so the periodic heal does not re-request every tick.
+    pub(crate) fn request_plan_display_refresh(&mut self, session_id: i64) {
+        self.plan_display_refresh = Some(PlanDisplayRefreshState {
+            session_id,
+            requested_at: Instant::now(),
+            result: None,
+        });
+        let backend = self.backend.clone();
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = backend.refresh_plan_display(session_id).await;
+            let _ = tx.send(AppMessage::PlanDisplayRefreshed {
+                session_id,
+                result: result.map_err(crate::UiFailure::internal),
+            });
+        });
+    }
+
+    /// Record the outcome of a plan display refresh so the periodic heal
+    /// backs off for sessions that have no plan.
+    pub(crate) fn handle_plan_display_refreshed(
+        &mut self,
+        session_id: i64,
+        result: super::UiResult<bool>,
+    ) {
+        if let Some(state) = self.plan_display_refresh.as_mut()
+            && state.session_id == session_id
+        {
+            state.result = result.ok();
+        }
+    }
+}
+
+/// Pure decision for the periodic plan-chip heal: returns `true` when a
+/// read-only `agena.plan.get` refresh should be fired for `session_id` given
+/// the last refresh state. Sessions known to have no plan back off far longer
+/// than sessions whose plan chip is missing for another reason.
+fn plan_display_refresh_due(
+    session_id: i64,
+    state: Option<PlanDisplayRefreshState>,
+    now: Instant,
+) -> bool {
+    let Some(state) = state else {
+        return true;
+    };
+    if state.session_id != session_id {
+        return true;
+    }
+    let interval = match state.result {
+        Some(true) | None => Duration::from_millis(crate::PLAN_DISPLAY_REFRESH_RETRY_MS),
+        Some(false) => Duration::from_millis(crate::PLAN_DISPLAY_REFRESH_NO_PLAN_BACKOFF_MS),
+    };
+    now.saturating_duration_since(state.requested_at) >= interval
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plan_display_refresh_fires_when_no_state_exists() {
+        let now = Instant::now();
+        assert!(plan_display_refresh_due(7, None, now));
+    }
+
+    #[test]
+    fn plan_display_refresh_fires_after_switching_sessions() {
+        let now = Instant::now();
+        let state = Some(PlanDisplayRefreshState {
+            session_id: 6,
+            requested_at: now,
+            result: Some(false),
+        });
+        assert!(
+            plan_display_refresh_due(7, state, now),
+            "a different attached session must refresh immediately"
+        );
+    }
+
+    #[test]
+    fn plan_display_refresh_backs_off_within_the_retry_window() {
+        let now = Instant::now();
+        let state = Some(PlanDisplayRefreshState {
+            session_id: 7,
+            requested_at: now,
+            result: None,
+        });
+        assert!(
+            !plan_display_refresh_due(7, state, now),
+            "an in-flight refresh must not re-fire immediately"
+        );
+    }
+
+    #[test]
+    fn plan_display_refresh_retries_after_the_retry_window() {
+        let requested_at = Instant::now();
+        let later = requested_at
+            .checked_add(Duration::from_millis(
+                crate::PLAN_DISPLAY_REFRESH_RETRY_MS + 1,
+            ))
+            .expect("clock must not overflow");
+        let state = Some(PlanDisplayRefreshState {
+            session_id: 7,
+            requested_at,
+            result: None,
+        });
+        assert!(plan_display_refresh_due(7, state, later));
+    }
+
+    #[test]
+    fn plan_display_refresh_known_no_plan_backs_off_longer() {
+        let requested_at = Instant::now();
+        let retry_later = requested_at
+            .checked_add(Duration::from_millis(
+                crate::PLAN_DISPLAY_REFRESH_RETRY_MS + 1,
+            ))
+            .expect("clock must not overflow");
+        let state = Some(PlanDisplayRefreshState {
+            session_id: 7,
+            requested_at,
+            result: Some(false),
+        });
+        assert!(
+            !plan_display_refresh_due(7, state, retry_later),
+            "a session known to have no plan must not re-poll at the short retry interval"
+        );
+        let backoff_later = requested_at
+            .checked_add(Duration::from_millis(
+                crate::PLAN_DISPLAY_REFRESH_NO_PLAN_BACKOFF_MS + 1,
+            ))
+            .expect("clock must not overflow");
+        assert!(plan_display_refresh_due(7, state, backoff_later));
     }
 }

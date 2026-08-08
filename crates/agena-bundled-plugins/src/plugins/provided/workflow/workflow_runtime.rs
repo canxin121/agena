@@ -158,6 +158,10 @@ impl WorkflowPlugin {
     ) -> SdkResult<ToolInvokeOutput> {
         let view = input.view;
         let Some(plan) = self.load_active_plan().await? else {
+            // No active plan for this session: clear any stale display
+            // contribution so the composer chip never keeps showing a plan
+            // that no longer exists.
+            let _ = self.sync_plan_display(None).await;
             let payload = serde_json::json!({
                 "plan": serde_json::Value::Null,
                 "view": view,
@@ -173,6 +177,18 @@ impl WorkflowPlugin {
                 Vec::new(),
             ));
         };
+        // Re-publish the plan display contribution from durable storage. The
+        // contribution is held in memory on the plugin host and starts empty
+        // after a process restart or runtime reload; any read of the plan
+        // restores the composer's bottom-right progress chip without mutating
+        // the plan. Cosmetic only: a failure here must not fail the read.
+        if let Err(error) = self.sync_plan_display(Some(&plan)).await {
+            tracing::warn!(
+                target: "agena::workflow",
+                plan = %plan.title,
+                "plan display sync failed during plan.get: {error}"
+            );
+        }
         let payload = Self::plan_get_payload(&plan, view);
         Ok(ToolInvokeOutput::from_parts(
             "plan",

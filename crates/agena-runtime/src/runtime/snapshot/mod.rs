@@ -69,7 +69,10 @@ impl RuntimeSnapshot {
 
     /// Hot-reload variant that lets the new snapshot reuse plugin transports
     /// from the previous snapshot when the corresponding `plugins.list.<id>`
-    /// entry is byte-identical.
+    /// entry is byte-identical. In-proc `Static` plugins are the exception:
+    /// their instance binds the host handle during `meta/init`, so they are
+    /// always recreated against the new handle instead of reused, keeping
+    /// display contributions (plan chip, terminal activity) on the live host.
     pub(crate) async fn build_with_previous(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,

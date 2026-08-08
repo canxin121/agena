@@ -15,6 +15,11 @@ impl App {
         self.session_controller.sequence = None;
         self.focus = Focus::Transcript;
         self.transcript.reset(session_id, title);
+        // Re-publish the plan display contribution for the opened session so
+        // the composer's bottom-right chip appears immediately even when the
+        // in-memory contribution was lost (process restart, runtime reload, or
+        // a plan created while another session was visible).
+        self.request_plan_display_refresh(session_id);
         // A refresh requested for the previous session must not be re-issued
         // against the newly opened one.
         self.pending_refresh = None;
@@ -232,9 +237,9 @@ impl App {
 }
 use crate::{
     App, AppMessage, DraftSlot, LiveEvent, ModelRef, Overlay, PendingInteractiveKind,
-    SessionExecutionResource, execution_update_is_stale_with_terminal, pending_interactive_request_id,
-    pending_interactive_request_matches_kind, permission_overlay_matches_pending_request,
-    user_input_overlay_matches_pending_request,
+    SessionExecutionResource, execution_update_is_stale_with_terminal,
+    pending_interactive_request_id, pending_interactive_request_matches_kind,
+    permission_overlay_matches_pending_request, user_input_overlay_matches_pending_request,
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;

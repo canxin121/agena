@@ -71,6 +71,14 @@ pub(super) const REFRESH_INTERVAL_MS: u64 = 250;
 /// at a stale snapshot with stuck \"working\" indicators.
 pub(super) const REFRESH_STALL_TIMEOUT_MS: u64 = 30_000;
 pub(super) const DRAFT_PERSIST_INTERVAL_MS: u64 = 250;
+/// Retry cadence for healing the composer's bottom-right plan chip after a
+/// runtime reload or process restart, when the in-memory display contribution
+/// starts empty. Only fires while a session is attached and the chip is
+/// missing; sessions known to have no plan back off much longer.
+pub(super) const PLAN_DISPLAY_REFRESH_RETRY_MS: u64 = 2_000;
+/// Backoff used when the last plan read reported no active plan, so sessions
+/// without a plan do not trigger a plan lookup on every retry window.
+pub(super) const PLAN_DISPLAY_REFRESH_NO_PLAN_BACKOFF_MS: u64 = 30_000;
 pub(super) const MAX_FILE_MENTION_SUGGESTIONS: usize = 100;
 pub(super) const MAX_PROMPT_HISTORY_ENTRIES: usize = 200;
 pub(super) const AWS_REGION_CHOICES: &[&str] = &[
@@ -389,6 +397,17 @@ impl TerminalIntegrationState {
 }
 
 /// The TUI application.
+/// Cooldown state for healing the composer's bottom-right plan chip after a
+/// restart or runtime reload. `result` is `None` while a refresh is in flight
+/// or after a failed lookup, `Some(true)` when the session has an active
+/// plan, and `Some(false)` when the last read found none.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PlanDisplayRefreshState {
+    pub(super) session_id: i64,
+    pub(super) requested_at: Instant,
+    pub(super) result: Option<bool>,
+}
+
 pub struct App {
     pub(super) backend: Backend,
     pub(super) i18n: I18n,
@@ -500,6 +519,12 @@ pub struct App {
     /// Most recent active background-activity count for the footer pill,
     /// refreshed on a slow cadence while the main route is visible.
     pub(super) background_activity_summary: Option<(usize, Instant)>,
+    /// Cooldown state for healing the composer's bottom-right plan chip.
+    /// The chip is backed by an in-memory display contribution that starts
+    /// empty after a process restart or runtime reload; the TUI re-requests
+    /// it (read-only `agena.plan.get`) on session open and periodically while
+    /// the chip is missing.
+    pub(super) plan_display_refresh: Option<PlanDisplayRefreshState>,
 }
 
 impl Drop for App {
@@ -542,6 +567,10 @@ pub(super) enum AppMessage {
     },
     PlanAutorunToggled {
         request_id: u64,
+        result: UiResult<bool>,
+    },
+    PlanDisplayRefreshed {
+        session_id: i64,
         result: UiResult<bool>,
     },
     UsageStatsLoaded {

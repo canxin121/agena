@@ -107,9 +107,16 @@ pub fn render_entry_detailed(
                     .iter()
                     .filter(|part| is_activity_node(part))
                     .collect::<Vec<_>>();
-                let collapsed_prefix_len = activities
-                    .len()
-                    .saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT);
+                // Session notices stay visible inside a collapsed run: only
+                // the surrounding activity blocks count toward the fold, so a
+                // mid-reply hook notice never splits one run into several
+                // fold blocks and never gets hidden itself.
+                let foldable_count = activities
+                    .iter()
+                    .filter(|part| !is_always_visible_activity(part))
+                    .count();
+                let collapsed_prefix_len =
+                    foldable_count.saturating_sub(COLLAPSED_ACTIVITY_VISIBLE_COUNT);
                 let key = TranscriptNodeKey::ActivitySummary {
                     entry_id: message.id,
                     first_content_id: activities[0].id,
@@ -118,10 +125,14 @@ pub fn render_entry_detailed(
                 // An Activity the user can currently see as expanded is
                 // pinned within the run. Appending newer Activities may fold
                 // untouched older siblings, but it must never hide that node.
+                let mut foldable_index = 0_usize;
                 let hidden_when_collapsed = activities
                     .iter()
                     .enumerate()
                     .map(|(index, part)| {
+                        if is_always_visible_activity(part) {
+                            return false;
+                        }
                         let activity_key = TranscriptNodeKey::Activity {
                             entry_id: message.id,
                             content_id: part.id,
@@ -130,7 +141,9 @@ pub fn render_entry_detailed(
                             .get(&activity_key)
                             .copied()
                             .unwrap_or(defaults.activity_expanded);
-                        index < collapsed_prefix_len && !activity_expanded
+                        let hidden = foldable_index < collapsed_prefix_len && !activity_expanded;
+                        foldable_index += 1;
+                        hidden
                     })
                     .collect::<Vec<_>>();
                 let hidden_count = hidden_when_collapsed
@@ -625,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn session_notice_activity_never_folds_into_a_tool_activity_run() {
+    fn session_notice_stays_visible_within_single_folded_tool_run() {
         let now = Utc::now();
         let mut parts = (0..7)
             .map(|index| {
@@ -639,7 +652,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         // A session Notice injected mid-reply (hook run, background notice)
-        // must stay visible and split the tool calls into separate runs.
+        // must stay visible without splitting the surrounding tool calls
+        // into several fold blocks.
         let notice_payload = agena_domain::ActivityPayload::Notice(agena_domain::NoticeActivity {
             kind: "hook".to_owned(),
             summary: "mid-reply hook fired".to_owned(),
@@ -684,12 +698,21 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
             .join("\n");
-        // The seven leading tool calls fold to five visible blocks plus a
-        // summary; the notice stays visible and the trailing tool calls form
-        // their own run instead of being hidden behind the same fold.
+        // The nine tool calls fold as one block to five visible ones (the
+        // oldest four are hidden); the notice stays visible in place.
         assert!(text.contains("mid-reply hook fired"), "{text}");
-        assert!(text.contains("2 older activity blocks collapsed"), "{text}");
+        assert!(text.contains("4 older activity blocks collapsed"), "{text}");
         assert!(!text.contains("Read file 1"), "{text}");
+        assert!(text.contains("Read file 4"), "{text}");
+        assert_eq!(
+            rendered
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.key, TranscriptNodeKey::ActivitySummary { .. }))
+                .count(),
+            1,
+            "the tool calls must fold as a single block"
+        );
         assert!(
             rendered.nodes.iter().any(|node| node.key
                 == TranscriptNodeKey::Activity {

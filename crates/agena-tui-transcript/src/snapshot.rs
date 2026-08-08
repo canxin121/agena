@@ -1556,6 +1556,74 @@ mod tests {
     }
 
     #[test]
+    fn session_12_shape_notice_lands_between_last_tool_and_continuation() {
+        // Mirrors the autorun-continuation reply observed in session 12: the
+        // final tool call (started 200) is followed by the continuation text,
+        // and the agent.stop hook notice (started 250) fired after the tool
+        // finished but before the reply was finalized at 400. The notice must
+        // land between the tool block and the continuation text instead of
+        // below the whole reply.
+        let reply_id = agena_domain::AssistantReplyId::new();
+        let tool_activity = agena_domain::ActivityId::new();
+        let notice = agena_domain::ActivityId::new();
+        let document = ContentDocument::new(vec![
+            ContentNode::activity(ActivityNode {
+                id: tool_activity,
+                owner: ActivityOwner::AssistantReply { reply_id },
+                actor: ActivityActor::Tool,
+                state: ActivityState::Completed,
+                position: ContentPosition { index: 0 },
+                revision_seq: 1,
+                lifecycle: ActivityLifecycle {
+                    started_at_ms: 200,
+                    finished_at_ms: Some(200),
+                },
+                payload: ActivityPayload::Operation(OperationActivity {
+                    call_id: ToolCallId::new("call-continuation"),
+                    invocation: ToolInvocation {
+                        tool_api_call: None,
+                        name: "fs.read".to_owned(),
+                        plugin_name: None,
+                        input: StructuredObject::try_from(serde_json::json!({
+                            "file_path": "a"
+                        }))
+                        .expect("structured continuation input"),
+                    },
+                    title: "Read a".to_owned(),
+                    summary: String::new(),
+                    data: serde_json::json!({}),
+                    markdown: String::new(),
+                    authorization: Default::default(),
+                    error: None,
+                }),
+                provenance: ActivityProvenance::default(),
+            }),
+            ContentNode::text("continue with the next plan step"),
+        ]);
+        let continuation_id = match &document.nodes()[1] {
+            ContentNode::Text { segment } => segment.id,
+            _ => unreachable!("continuation is a text node"),
+        };
+        let notice_node = session_notice_activity(notice, 250);
+        let parts = assistant_reply_document_parts(
+            &document,
+            MessageStatus::Completed,
+            &[&notice_node],
+            100,
+            Some(400),
+        );
+        let ids = parts.iter().map(|part| part.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            vec![
+                TranscriptContentId::Activity(tool_activity),
+                TranscriptContentId::Activity(notice),
+                TranscriptContentId::Text(continuation_id),
+            ]
+        );
+    }
+
+    #[test]
     fn canonical_tools_list_activity_expands_text_without_structured_output() {
         let response_id = agena_domain::AssistantReplyId::new();
         let activity_id = agena_domain::ActivityId::new();

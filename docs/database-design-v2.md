@@ -218,10 +218,11 @@ CREATE TABLE sessions (
     subtask_started_at_ms INTEGER,
     subtask_finished_at_ms INTEGER,
     subtask_failure_json  JSON,
-        config_json           JSON,                   -- session CONFIG, not state: permission ceiling,
+            config_json           JSON,                   -- session CONFIG, not state: permission ceiling,
                                                   -- capability denials, workspace root override,
-                                                  -- execution selection/access defaults, compaction
-                                                  -- policy; state is derived from parts (17.3)
+                                                  -- execution selection/access defaults; state is
+                                                  -- derived from parts (17.3); compaction policy
+                                                  -- comes from global settings (D5), not stored
     created_at_ms         INTEGER NOT NULL,
     updated_at_ms         INTEGER NOT NULL
 );
@@ -559,7 +560,7 @@ session mutation.
 | D2 | in-flight streaming parts at fork time | share by reference (child sees them complete) |
 | D3 | migration policy | fresh DB + optional one-shot migration tool |
 | D4 | per-session ordering | part timestamps: `ORDER BY created_at_ms, part_id` (no seq; id breaks same-ms ties) |
-| D5 | `config_json` scope | execution config only; workflow state derived from parts |
+| D5 | `config_json` scope | execution config only (permission ceiling, capability denials, workspace root override, selection/access defaults); workflow state derived from parts; compaction policy from global settings, not stored per session |
 | D6 | run demotion | `runs` table dropped; run = `kind='run'` marker part (decided) |
 
 ## 12. Performance notes
@@ -1313,7 +1314,7 @@ Payload breadth, not missing kinds:
 
 | v1 field | home |
 |----------|------|
-| `consecutive_compaction_failures` / `auto_compaction_disabled` / `remote_compaction_disabled_models` | `sessions.config_json` (compaction policy, mutable) |
+| `consecutive_compaction_failures` / `auto_compaction_disabled` / `remote_compaction_disabled_models` | **not stored per session** (D5): policy knobs read from agena global settings; backoff counter transient, in-memory only |
 | `model_context_window_tokens` | derived from model catalog at prompt build (not persisted) |
 | execution `selection` / `access` (model choice, execution access) | run marker content (per run) + `config_json` (session defaults) |
 | exclusive-reply matching (turn_id/reply_id) | marker-based matching (run marker part_id is the turn identity) |

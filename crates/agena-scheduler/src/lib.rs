@@ -1,7 +1,10 @@
 //! `agena-scheduler` — persistent cron + one-shot job scheduler.
 //!
-//! The Agena runtime uses [`SqliteJobStore`] for restart-safe durability;
-//! [`InMemoryJobStore`] remains available for tests and embedded callers.
+//! The scheduler owns a dedicated SQLite database (separate from the chat
+//! database) whose schema lives in [`schema`]; [`SqliteJobStore`] provides
+//! restart-safe durability against it. [`InMemoryJobStore`] remains available
+//! for tests and embedded callers (and as a fallback when no scheduler
+//! database is configured).
 //!
 //! At runtime, [`Scheduler`] spawns a tokio task that wakes up every
 //! `tick_interval` and fires any job whose `next_fire_at` has passed.
@@ -15,6 +18,7 @@
 
 pub mod error;
 pub mod job;
+pub mod schema;
 pub mod scheduler;
 pub mod store;
 

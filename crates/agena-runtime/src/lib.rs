@@ -376,6 +376,8 @@ pub(crate) use agena_bundled_plugins::tool::{new_web_plugin, web_plugin_id};
 pub(crate) use agena_runtime_session::{UsageStatRecord, summarize_usage_records};
 pub(crate) use tracing_config::{
     RuntimeDatabaseCompositionError, apply_runtime_tracing_filter, connect_runtime_database,
+    connect_scheduler_database, is_in_memory_database, resolve_runtime_database_url,
+    resolve_scheduler_database_url,
 };
 pub use tracing_config::{RuntimeTracingConfiguration, runtime_env_filter};
 pub(crate) use watch::{capture_watch_path_stamps, diff_watch_path_stamps};

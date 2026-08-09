@@ -2,17 +2,13 @@
 //!
 //! Nine chat-data tables (`parts`, `session_parts`, `sessions`,
 //! `execution_leases`, `sequences`, `workspaces`, `permission_rules`,
-//! `usage`, `idempotency`) plus the unchanged infrastructure tables
-//! (`model_catalog_*`, `scheduler_*`). There is no event log, no projection
-//! watermark: parts are the only chat-content entity and session state is
-//! derived from parts + leases.
+//! `usage`, `idempotency`) plus the unchanged model-catalog infrastructure
+//! tables. There is no event log, no projection watermark: parts are the only
+//! chat-content entity and session state is derived from parts + leases.
 //!
-//! `agena_scheduler_jobs` mirrors the hot scheduling fields of `ScheduledJob`
-//! (`retry_at_ms`, `paused`, `completed`) as columns alongside
-//! `next_fire_at_ms` so the scheduler's due scan can filter in SQL instead of
-//! decoding every job JSON every tick. `delivery_key` / `claimed_at_ms` are the
-//! cross-process claim lock. `job_json` remains the source of truth for the
-//! full in-memory state; the columns are derived copies written together.
+//! The scheduler used to live here too; it now owns a dedicated SQLite
+//! database and schema (`agena-scheduler::schema`), so this database has no
+//! scheduler tables.
 
 use std::path::{Path, PathBuf};
 
@@ -180,8 +176,6 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_idempotency (session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, idempotency_key TEXT NOT NULL, run_id INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, PRIMARY KEY (session_id, idempotency_key))",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_state (id INTEGER PRIMARY KEY, fetched_at_unix_ms INTEGER NULL, source TEXT NULL, last_error TEXT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)",
 ];
 
 const INDEXES: &[&str] = &[
@@ -208,10 +202,6 @@ const INDEXES: &[&str] = &[
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_agena_model_catalog_kind_model ON agena_model_catalog_entries(kind, model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_model_id ON agena_model_catalog_entries(model_id)",
     "CREATE INDEX IF NOT EXISTS idx_agena_model_catalog_kind ON agena_model_catalog_entries(kind)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_next_fire ON agena_scheduler_jobs(next_fire_at_ms, id)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_history_finished ON agena_scheduler_history(finished_at_ms DESC, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_history_job_finished ON agena_scheduler_history(job_id, finished_at_ms DESC, id DESC)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_scheduler_jobs_delivery ON agena_scheduler_jobs(delivery_key) WHERE delivery_key IS NOT NULL",
 ];
 
 #[cfg(test)]
@@ -304,8 +294,6 @@ mod tests {
                 "agena_idempotency",
                 "agena_model_catalog_entries",
                 "agena_model_catalog_state",
-                "agena_scheduler_jobs",
-                "agena_scheduler_history",
             ]
             .map(str::to_owned),
         );

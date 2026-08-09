@@ -81,9 +81,9 @@ The session runtime holds the same `sea_orm::DatabaseConnection` that the `Sea*`
 
 Additionally `agena-runtime-session-core/src/db/entities/*` (model_message, model_message_part, model_projection_state, permission_rule, session_lineage, session, workspace) form a second SeaORM entity layer over the same tables owned by `agena-storage-sqlite` — they duplicate table knowledge and bypass the repository boundary.
 
-### 3.2 `agena-scheduler` — raw SQL on scheduler tables
+### 3.2 `agena-scheduler` — raw SQL on its own dedicated database
 
-`crates/agena-scheduler/src/store.rs` executes raw `sea_orm::Statement` SQL on `agena_scheduler_jobs` / `agena_scheduler_history` (upsert :88, delete :212, select :230/:247, update :278/:318/:358, history insert :392, prune :404, select :417/:422). Tables are declared in the shared schema (`schema.rs:168-169`), and the store receives the same runtime `DatabaseConnection` (`scheduler.rs:342-349`, composed at `runtime/snapshot/builders.rs:490`), but there is no storage trait for scheduler jobs — raw SQL is the only path.
+`crates/agena-scheduler/src/store.rs` executes raw `sea_orm::Statement` SQL on `agena_scheduler_jobs` / `agena_scheduler_history` (upsert, delete, select, update, history insert/prune). Since the audit this component no longer shares the chat database: the scheduler owns a dedicated SQLite database (`~/.agena/scheduler.db` by default, overridable via `AGENA_SCHEDULER_DATABASE_URL`/`AGENA_SCHEDULER_DATABASE_PATH`) whose schema and `PRAGMA user_version` live in `crates/agena-scheduler/src/schema.rs`. The runtime opens it beside the chat database (`tracing_config.rs::connect_scheduler_database`), threads the connection to the scheduler (`runtime/snapshot/builders.rs::build_scheduler`), and degrades to the in-memory store when no scheduler database is configured (e.g. in-memory chat databases in tests). There is still no storage trait for scheduler jobs — raw SQL is the only path — but it is now isolated to a database the chat stack never touches.
 
 ### 3.3 `apps/agena` HTTP server — a completely separate sqlx database
 
@@ -105,13 +105,13 @@ Default path differs from the storage layer (`~/.config/agena/agena.db` / `$AGEN
 ## 4. Summary of bypass risk
 
 1. Runtime session write path bypasses the unified API on the majority of tables: content nodes, turns, replies, executions, leases, session membership, and session-row mutations have no storage trait — they are raw SQL in `agena-runtime-session`/`agena-runtime-session-core`. Model messages/parts/projection watermark have a trait but also raw SQL paths, so two writers exist for the same rows.
-2. Scheduler queue is raw SQL with no trait.
+2. Scheduler queue is raw SQL with no trait, but it now runs against a dedicated scheduler database, so it is no longer an invasive interface on the chat database.
 3. The app server is a second, unversioned database with the same file name; a path misconfiguration creates split-brain on one file.
 4. Schema versioning guards only the storage file: the server DB and any raw-SQL writer are invisible to `CURRENT_SCHEMA_VERSION`.
 
 ## 5. Recommended follow-ups (not implemented in this audit)
 
 - Promote the runtime-session raw-SQL write paths (content nodes, turns, replies, executions, leases, membership, session CRUD) into `agena-storage` traits with `agena-storage-sqlite` adapters, or at minimum route them through the existing `ModelMessage*`/`Session*` adapters.
-- Add a storage trait for scheduler jobs, or move the scheduler onto the unified connection layer with repository adapters.
+- The scheduler now owns a dedicated database (`agena-scheduler::schema`), which resolves the original "scheduler in the shared DB" concern. A storage trait for scheduler jobs remains optional; the remaining exposed surface is the app-server split-brain risk above.
 - Align the app-server DB: either keep `server_kv`/attachment cache on the unified storage API + schema versioning, or guard against both pools resolving to the same file (reject/resolve the conflict at bootstrap).
 - Consider one schema owner + incremental migrations instead of version-mismatch hard errors, so the server DB can share versioning.

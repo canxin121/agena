@@ -19,6 +19,10 @@ pub(crate) struct RuntimeCompositionConfig {
     pub(crate) database_connection: Option<Arc<DatabaseConnection>>,
     pub(crate) database_url: Option<String>,
     pub(crate) database_path: Option<PathBuf>,
+    /// Optional injected scheduler database connection (reuse across reloads).
+    pub(crate) scheduler_database_connection: Option<Arc<DatabaseConnection>>,
+    pub(crate) scheduler_database_url: Option<String>,
+    pub(crate) scheduler_database_path: Option<PathBuf>,
     pub(crate) initialize_schema: bool,
     pub(crate) tracing_reload_handle: Option<TracingFilterReloadHandle>,
 }

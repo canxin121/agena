@@ -57,6 +57,9 @@ impl AgenaRuntime {
             database_connection,
             database_url,
             database_path,
+            scheduler_database_connection,
+            scheduler_database_url,
+            scheduler_database_path,
             initialize_schema,
             tracing_reload_handle,
             bootstrap_preflight,
@@ -79,6 +82,8 @@ impl AgenaRuntime {
                 ));
             }
         };
+        let chat_database_url = database_url.clone();
+        let chat_database_path = database_path.clone();
         let database =
             agena_runtime::connect_runtime_database(agena_runtime::DatabaseCompositionInputs {
                 database_connection,
@@ -89,6 +94,37 @@ impl AgenaRuntime {
             })
             .await
             .map_err(runtime_database_error)?;
+
+        // The scheduler owns a dedicated database, separate from the chat
+        // database. When the caller (or the scheduler env vars) configure one
+        // explicitly it is used as-is. Otherwise, when the chat database is
+        // in-memory (tests, ephemeral deployments), the scheduler degrades to
+        // its in-memory store instead of creating an unexpected file; a
+        // file-backed chat database uses the conventional scheduler default.
+        let scheduler_database = {
+            let explicitly_configured = scheduler_database_url.is_some()
+                || scheduler_database_path.is_some()
+                || std::env::var("AGENA_SCHEDULER_DATABASE_URL").is_ok()
+                || std::env::var("AGENA_SCHEDULER_DATABASE_PATH").is_ok();
+            let chat_url = agena_runtime::resolve_runtime_database_url(
+                chat_database_url,
+                chat_database_path,
+            )
+            .map_err(agena_runtime::RuntimeDatabaseCompositionError::from)
+            .map_err(runtime_database_error)?;
+            if !explicitly_configured && agena_runtime::is_in_memory_database(&chat_url) {
+                None
+            } else {
+                agena_runtime::connect_scheduler_database(
+                    scheduler_database_connection,
+                    scheduler_database_url,
+                    scheduler_database_path,
+                    tracing,
+                )
+                .await
+                .map_err(runtime_database_error)?
+            }
+        };
 
         // Unified background-activity registry: sources push in, the publisher
         // task drains events onto the runtime bus, and the same registry backs
@@ -112,7 +148,10 @@ impl AgenaRuntime {
                 &loader,
                 &load_request,
                 workspace_root.as_path(),
-                database.clone(),
+                super::SnapshotDatabases {
+                    chat: database.clone(),
+                    scheduler: scheduler_database.clone(),
+                },
                 None,
                 monitor_service.clone(),
             )
@@ -125,6 +164,7 @@ impl AgenaRuntime {
                 load_request,
                 workspace_root,
                 database,
+                scheduler_database,
                 RuntimeControlState::new(initial_snapshot.clone(), tracing_reload_handle),
             )),
             activities: Arc::new(crate::activity::ActivityRuntimeState::new(
@@ -1645,7 +1685,10 @@ impl AgenaRuntime {
                 &self.inner.loader,
                 &self.inner.load_request,
                 self.inner.workspace_root.as_path(),
-                self.inner.database.clone(),
+                super::SnapshotDatabases {
+                    chat: self.inner.database.clone(),
+                    scheduler: self.inner.scheduler_database.clone(),
+                },
                 previous.session_manager(),
                 Arc::clone(&previous),
                 self.activities.monitor.clone(),

@@ -80,6 +80,10 @@ async fn session_runtime_with_workspace(
         config_override_expressions: request.config_override_expressions.clone(),
         database_url: request.database_url.clone(),
         database_path: request.database_path.clone(),
+        // Scheduler database follows its conventional location (override via
+        // AGENA_SCHEDULER_DATABASE_URL/PATH).
+        scheduler_database_url: None,
+        scheduler_database_path: None,
         initialize_schema: true,
         tracing_reload_handle: None,
     })

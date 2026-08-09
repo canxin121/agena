@@ -343,13 +343,21 @@ pub fn build_in_memory(sink: Arc<dyn JobSink>, tick: Duration) -> Arc<Scheduler>
     Scheduler::new(store, sink, tick)
 }
 
-/// Runtime constructor backed by the shared Agena SQLite connection.
+/// Runtime constructor backed by the dedicated scheduler SQLite connection.
+/// When no scheduler database is available the scheduler degrades to the
+/// in-memory store: scheduling still works, but jobs are not durable across
+/// process restarts.
 pub fn build_persistent(
-    database: sea_orm::DatabaseConnection,
+    database: Option<std::sync::Arc<sea_orm::DatabaseConnection>>,
     sink: Arc<dyn JobSink>,
     tick: Duration,
 ) -> Arc<Scheduler> {
-    let store = Arc::new(crate::store::SqliteJobStore::new(database)) as Arc<dyn JobStore>;
+    let store: Arc<dyn JobStore> = match database {
+        Some(database) => Arc::new(crate::store::SqliteJobStore::new(
+            database.as_ref().clone(),
+        )),
+        None => Arc::new(crate::store::InMemoryJobStore::new()),
+    };
     Scheduler::new(store, sink, tick)
 }
 

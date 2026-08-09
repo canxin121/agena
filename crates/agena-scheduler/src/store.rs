@@ -11,8 +11,8 @@ use crate::job::{ScheduledJob, SchedulerHistoryEntry};
 
 /// The global audit ledger is deliberately bounded independently from the
 /// 50-record working history embedded in every retained job.  This protects
-/// the shared SQLite database from unbounded scheduler growth while retaining
-/// a useful cross-job, post-deletion diagnostic/export window.
+/// the dedicated scheduler database from unbounded scheduler growth while
+/// retaining a useful cross-job, post-deletion diagnostic/export window.
 pub const MAX_RETAINED_HISTORY_ENTRIES: usize = 1_000;
 
 #[async_trait::async_trait]
@@ -72,8 +72,8 @@ pub struct InMemoryJobStore {
     history: Arc<RwLock<VecDeque<SchedulerHistoryEntry>>>,
 }
 
-/// Durable scheduler store backed by the shared Agena SQLite database. The
-/// schema is created by `agena-storage-sqlite::initialize_schema`.
+/// Durable scheduler store backed by the dedicated scheduler SQLite database.
+/// The schema is created by `crate::schema::initialize_schema`.
 #[derive(Clone)]
 pub struct SqliteJobStore {
     db: DatabaseConnection,
@@ -564,27 +564,24 @@ fn history_from_iter<'a>(
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, Utc};
-    use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};
+    use sea_orm::Database;
 
     use super::*;
+    use crate::schema::initialize_schema;
 
-    #[tokio::test]
-    async fn sqlite_store_survives_store_reconstruction() {
+    async fn scheduler_database() -> DatabaseConnection {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler history table");
+        initialize_schema(&db)
+            .await
+            .expect("initialize scheduler schema");
+        db
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_survives_store_reconstruction() {
+        let db = scheduler_database().await;
 
         let first = SqliteJobStore::new(db.clone());
         let job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "verify");
@@ -612,21 +609,7 @@ mod tests {
 
     #[tokio::test]
     async fn scheduler_wide_history_survives_job_deletion_and_store_reconstruction() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler history table");
+        let db = scheduler_database().await;
 
         let store = SqliteJobStore::new(db.clone());
         let job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "audit me");
@@ -696,15 +679,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_claim_is_exclusive_across_connections() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table with delivery key");
+        let db = scheduler_database().await;
 
         let store_a = SqliteJobStore::new(db.clone());
         let store_b = SqliteJobStore::new(db);
@@ -725,15 +700,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_finish_clears_delivery_and_requeues() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table with delivery key");
+        let db = scheduler_database().await;
 
         let store = SqliteJobStore::new(db);
         let mut job = ScheduledJob::new_once(Utc::now() + Duration::minutes(5), "finish");
@@ -762,21 +729,7 @@ mod tests {
 
     #[tokio::test]
     async fn sqlite_list_due_filters_in_sql_mirroring_due() {
-        let db = Database::connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler table");
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)".to_string(),
-        ))
-        .await
-        .expect("create scheduler history table");
+        let db = scheduler_database().await;
 
         let store = SqliteJobStore::new(db);
         let now = Utc::now();

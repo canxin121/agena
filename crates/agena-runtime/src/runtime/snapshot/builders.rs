@@ -14,7 +14,6 @@ type ToolCompositionInputs<'a> = agena_runtime::ToolCompositionInputs<
     &'a Path,
     agena_plugin_host::ToolPresentationConfig,
     Option<Arc<SessionManager>>,
-    Arc<DatabaseConnection>,
 >;
 
 pub(super) fn build_or_reconfigure_session_manager(
@@ -30,6 +29,7 @@ pub(super) fn build_or_reconfigure_session_manager(
         config: build_config,
         mcp_manager,
         monitor_registry,
+        scheduler_database,
     } = inputs;
     let permission_inspector = mcp_manager.map(|manager| {
         Arc::new(McpRiskPermissionInspector { manager })
@@ -58,8 +58,8 @@ pub(super) fn build_or_reconfigure_session_manager(
                 workspace_root,
                 tool_presentation: build_config.tool_presentation.clone(),
                 session_manager: Some(Arc::clone(&manager)),
-                database: Arc::clone(db),
                 monitor_registry: monitor_registry.clone(),
+                scheduler_database: scheduler_database.clone(),
             },
             permission_inspector,
         );
@@ -74,8 +74,8 @@ pub(super) fn build_or_reconfigure_session_manager(
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
             session_manager: None,
-            database: Arc::clone(db),
             monitor_registry: monitor_registry.clone(),
+            scheduler_database: scheduler_database.clone(),
         },
         permission_inspector.clone(),
     );
@@ -92,8 +92,8 @@ pub(super) fn build_or_reconfigure_session_manager(
             workspace_root,
             tool_presentation: build_config.tool_presentation.clone(),
             session_manager: Some(Arc::clone(&manager)),
-            database: Arc::clone(db),
             monitor_registry: monitor_registry.clone(),
+            scheduler_database,
         },
         permission_inspector,
     );
@@ -194,8 +194,8 @@ pub(super) fn build_tool_executor(
         workspace_root,
         tool_presentation,
         session_manager,
-        database,
         monitor_registry,
+        scheduler_database,
     } = inputs;
     let principal = build_execution_principal(crate::authorization::PermissionConfig::default());
     let snapshot_registry = crate::tool::snapshot_registry_for_executor();
@@ -214,7 +214,7 @@ pub(super) fn build_tool_executor(
     }
 
     let scheduler = session_manager
-        .map(|session_manager| build_scheduler(session_manager, database.as_ref().clone()));
+        .map(|session_manager| build_scheduler(session_manager, scheduler_database));
     let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         principal,
@@ -256,9 +256,12 @@ pub(super) fn build_execution_principal(
 }
 
 /// Build a process-wide cron scheduler backed by the active SessionManager.
+///
+/// The scheduler persists to its own dedicated database; when no scheduler
+/// database is configured the scheduler degrades to its in-memory store.
 pub(super) fn build_scheduler(
     session_manager: Arc<SessionManager>,
-    database: DatabaseConnection,
+    scheduler_database: Option<Arc<DatabaseConnection>>,
 ) -> Arc<agena_scheduler::Scheduler> {
     fn scheduler_skip(message: &'static str) -> agena_failure::Failure {
         agena_failure::Failure::new(
@@ -451,7 +454,7 @@ pub(super) fn build_scheduler(
     }
 
     agena_runtime::compose_scheduler(
-        database,
+        scheduler_database,
         Arc::new(SessionSink {
             session_manager: Arc::downgrade(&session_manager),
         }),

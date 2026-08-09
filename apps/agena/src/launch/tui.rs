@@ -160,6 +160,8 @@ pub async fn run_embedded(args: TuiLaunchArgs) -> Result<(), AgenaProcessError> 
         workspace_root: Some(workspace_root.clone()),
         database_url: args.database_url,
         database_path: args.database_path,
+        scheduler_database_url: None,
+        scheduler_database_path: None,
         initialize_schema: true,
         tracing_reload_handle: None,
         config_override_expressions: args.config_override_expressions.clone(),

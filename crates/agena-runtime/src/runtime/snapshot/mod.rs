@@ -39,6 +39,15 @@ pub(super) type RuntimeServices = agena_runtime::RuntimeServiceBundle<
 
 type SnapshotState = agena_runtime::RuntimeSnapshotState<Arc<ResolvedConfig>, RuntimeServices>;
 
+/// Connections handed to snapshot composition. The chat database backs
+/// session and model-catalog storage; the scheduler database backs the cron
+/// scheduler (`None` degrades the scheduler to its in-memory store).
+#[derive(Clone, Default)]
+pub(crate) struct SnapshotDatabases {
+    pub(crate) chat: Option<Arc<DatabaseConnection>>,
+    pub(crate) scheduler: Option<Arc<DatabaseConnection>>,
+}
+
 pub(crate) struct RuntimeSnapshot {
     state: SnapshotState,
     resolution_meta: ConfigResolutionMeta,
@@ -50,7 +59,7 @@ impl RuntimeSnapshot {
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
         workspace_root: &Path,
-        database: Option<Arc<DatabaseConnection>>,
+        databases: SnapshotDatabases,
         existing_session_manager: Option<Arc<SessionManager>>,
         monitor_registry: Option<Arc<dyn crate::MonitorService>>,
     ) -> Result<Self, AppError> {
@@ -59,7 +68,7 @@ impl RuntimeSnapshot {
             loader,
             load_request,
             workspace_root,
-            database,
+            databases,
             existing_session_manager,
             None,
             monitor_registry,
@@ -78,7 +87,7 @@ impl RuntimeSnapshot {
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
         workspace_root: &Path,
-        database: Option<Arc<DatabaseConnection>>,
+        databases: SnapshotDatabases,
         existing_session_manager: Option<Arc<SessionManager>>,
         previous: Arc<RuntimeSnapshot>,
         monitor_registry: Option<Arc<dyn crate::MonitorService>>,
@@ -88,7 +97,7 @@ impl RuntimeSnapshot {
             loader,
             load_request,
             workspace_root,
-            database,
+            databases,
             existing_session_manager,
             Some(previous),
             monitor_registry,
@@ -101,11 +110,15 @@ impl RuntimeSnapshot {
         loader: &ConfigLoader<ProcessEnvironment>,
         load_request: &LoadConfigRequest,
         workspace_root: &Path,
-        database: Option<Arc<DatabaseConnection>>,
+        databases: SnapshotDatabases,
         existing_session_manager: Option<Arc<SessionManager>>,
         previous: Option<Arc<RuntimeSnapshot>>,
         monitor_registry: Option<Arc<dyn crate::MonitorService>>,
     ) -> Result<Self, AppError> {
+        let SnapshotDatabases {
+            chat: database,
+            scheduler: scheduler_database,
+        } = databases;
         let mut resolution = loader.load(load_request)?;
         // Bundled implementations are a composition concern: the pure
         // config crate cannot depend on concrete plugin factories. Inject the
@@ -207,6 +220,7 @@ impl RuntimeSnapshot {
                 config: &session_build_config,
                 mcp_manager: mcp_manager.clone(),
                 monitor_registry: monitor_registry.clone(),
+                scheduler_database: scheduler_database.clone(),
             })
         });
         // v2 has no persisted event store to resume (14.3): interrupted-run

@@ -7,16 +7,16 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 6 adds scheduler hot-state columns. It replaces the v1 event-log and
-/// projection model with nine chat tables — `agena_parts`,
-/// `agena_session_parts`, `agena_sessions`, `agena_execution_leases`,
-/// `agena_sequences`, `agena_workspaces`, `agena_permission_rules`,
-/// `agena_usage`, `agena_idempotency` — plus the model-catalog and scheduler
-/// infrastructure tables. Parts are the only chat-content entity; runs are
-/// `kind='run'` marker parts; session state is derived from parts + leases;
-/// there is no event log, no projection watermark, and no runtime-state JSON.
-/// v1 databases are NOT migrated: they are discarded (decision D3), so a
-/// database at any version other than 0 or 6 is rejected outright.
+/// Version 7 removes the scheduler tables. This schema owns the nine chat
+/// tables — `agena_parts`, `agena_session_parts`, `agena_sessions`,
+/// `agena_execution_leases`, `agena_sequences`, `agena_workspaces`,
+/// `agena_permission_rules`, `agena_usage`, `agena_idempotency` — plus the
+/// model-catalog infrastructure tables. Parts are the only chat-content
+/// entity; runs are `kind='run'` marker parts; session state is derived from
+/// parts + leases; there is no event log, no projection watermark, and no
+/// runtime-state JSON. v1 databases are NOT migrated: they are discarded
+/// (decision D3), so a database at any version other than 0 or 7 is rejected
+/// outright.
 ///
 /// Version history:
 /// - 5: the v2 "everything is a part" schema (design
@@ -24,7 +24,11 @@
 /// - 6: `agena_scheduler_jobs` gains `retry_at_ms`, `paused`, `completed`
 ///   columns so the scheduler due scan filters in SQL (no full-table JSON
 ///   decode every tick).
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+/// - 7: scheduler tables move out of this database entirely. The scheduler
+///   now owns a dedicated SQLite database with its own schema and version
+///   (`agena-scheduler::schema`), so this database no longer holds
+///   `agena_scheduler_jobs` / `agena_scheduler_history`.
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 #[cfg(test)]
 mod tests {

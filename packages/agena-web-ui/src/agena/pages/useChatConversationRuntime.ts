@@ -2,7 +2,7 @@ import { userErrorMessage } from '@/lib/api'
 import type { Ref } from 'vue'
 
 import {
-  getSessionState,
+  fetchSessionExecution,
   streamSessionChanges,
   type SessionChange,
   type SessionChangeStreamHandle,
@@ -22,7 +22,7 @@ export type ChatConversationRuntimeInput = {
 
 export type ChatConversationRuntimeDeps = {
   applySessionChange: typeof applySessionChange
-  getSessionState: typeof getSessionState
+  fetchSessionExecution: typeof fetchSessionExecution
   streamSessionChanges: typeof streamSessionChanges
 }
 
@@ -169,7 +169,7 @@ export function useChatConversationRuntime(
     refreshInFlight = true
 
     try {
-      const state = await deps.getSessionState(sessionId)
+      const state = await deps.fetchSessionExecution(sessionId)
       if (input.selectedSessionId.value !== sessionId) return
 
       input.sessionState.value = state

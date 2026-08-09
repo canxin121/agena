@@ -4,7 +4,6 @@ import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import type {
   AuthProvider,
-  DomainEventRecord,
   ConfigSettingsReadResponse,
   ModelCatalogEntry,
   PermissionRuleResource,
@@ -48,7 +47,6 @@ export type RuntimeSectionLoadActionsInput = {
   selectedSessionId: Ref<number | null>
   selectedWorkspaceId: Ref<number | null>
   sessionExecution: Ref<SessionExecutionResource | null>
-  sessionTimeline: Ref<DomainEventRecord[]>
   sessions: Ref<SessionResource[]>
   stopPluginLogPolling: () => void
   workspaces: Ref<WorkspaceResource[]>
@@ -109,7 +107,6 @@ export function useRuntimeSectionLoadActions(
       return
     }
     input.sessionExecution.value = null
-    input.sessionTimeline.value = []
   }
 
   async function loadSettingsSection() {
@@ -133,7 +130,6 @@ export function useRuntimeSectionLoadActions(
     } else {
       input.selectedSessionId.value = null
       input.sessionExecution.value = null
-      input.sessionTimeline.value = []
     }
   }
 

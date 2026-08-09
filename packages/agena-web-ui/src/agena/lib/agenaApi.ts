@@ -208,7 +208,6 @@ export type PluginUiThemePalette = {
   colors: Record<string, string>
 }
 
-
 export type PluginStudioCommand = {
   plugin_id: string
   id: string
@@ -1192,50 +1191,6 @@ export function formatSessionExecutionModelLabel(
     : `${resolvedProviderId}/${resolvedModelId}`
 }
 
-export type DomainEventRecord = {
-  id?: string | null
-  seq_global: number
-  seq_session?: number | null
-  session_id?: number | null
-  workspace_id?: number | null
-  created_at: string
-  causation_id?: string | null
-  correlation_id?: string | null
-  envelope_schema?: number
-  kind: string
-  payload: Record<string, unknown>
-}
-
-export type EventNotification =
-  | {
-      kind: 'event'
-      data: {
-        subscription: string
-        event: DomainEventRecord
-      }
-    }
-  | {
-      kind: 'lagged'
-      data: {
-        subscription: string
-        skipped: number
-      }
-    }
-  | {
-      kind: 'resumed'
-      data: {
-        subscription: string
-        up_to_seq_global: number
-      }
-    }
-  | {
-      kind: 'subscription_closed'
-      data: {
-        subscription: string
-        reason: string
-      }
-    }
-
 export type NotificationStreamHandle = {
   close: () => void
 }
@@ -2158,7 +2113,7 @@ export async function deleteSession(input: { sessionId: number; version?: number
   })
 }
 
-export async function getSessionState(sessionId: number): Promise<SessionExecutionResource> {
+export async function fetchSessionExecution(sessionId: number): Promise<SessionExecutionResource> {
   return await apiJson<SessionExecutionResource>(`/api/v1/sessions/${sessionId}/state`)
 }
 
@@ -2203,53 +2158,6 @@ export async function importSessionJsonl(jsonl: string): Promise<SessionExecutio
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ jsonl }),
   })
-}
-
-export async function listSessionTimeline(
-  sessionId: number,
-  options?: {
-    afterSeq?: number
-    limit?: number
-  },
-): Promise<DomainEventRecord[]> {
-  const params = new URLSearchParams()
-  if (options?.afterSeq !== undefined) params.set('after_seq', String(options.afterSeq))
-  if (options?.limit !== undefined) params.set('limit', String(options.limit))
-  const query = params.toString()
-  const response = await apiJson<PaginatedResponse<DomainEventRecord>>(
-    `/api/v1/sessions/${sessionId}/events${query ? `?${query}` : ''}`,
-  )
-  return response.items ?? []
-}
-
-export async function listGlobalEvents(options?: {
-  sinceSeqGlobal?: number
-  limit?: number
-  scopeKind?: 'global' | 'workspace' | 'session'
-  workspaceId?: number
-  sessionId?: number
-  kinds?: string[]
-}): Promise<DomainEventRecord[]> {
-  const params = new URLSearchParams()
-  if (options?.sinceSeqGlobal !== undefined) params.set('since_seq_global', String(options.sinceSeqGlobal))
-  if (options?.limit !== undefined) params.set('limit', String(options.limit))
-  if (options?.scopeKind && options.scopeKind !== 'global') {
-    params.set('scope_kind', options.scopeKind)
-  }
-  if (options?.workspaceId !== undefined) params.set('workspace_id', String(options.workspaceId))
-  if (options?.sessionId !== undefined) params.set('session_id', String(options.sessionId))
-  if (options?.kinds?.length) {
-    params.set(
-      'kinds',
-      options.kinds
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .join(','),
-    )
-  }
-  const query = params.toString()
-  const response = await apiJson<PaginatedResponse<DomainEventRecord>>(`/api/v1/events${query ? `?${query}` : ''}`)
-  return response.items ?? []
 }
 
 export type SessionChangeStreamHandle = {
@@ -2384,14 +2292,46 @@ export function streamSessionChanges(
   return { close }
 }
 
-export function streamNotifications(options: {
-  sinceSeqGlobal?: number | null
-  scopeKind?: 'global' | 'workspace' | 'session'
-  workspaceId?: number | null
-  sessionId?: number | null
-  kinds?: string[]
+/**
+ * One frame of the v2 live-change stream (`/api/v1/changes/stream`). Part
+ * patches arrive as `session_changed`; ephemeral non-session values arrive as
+ * `runtime_signal`. There is no global event sequence — late joiners re-read
+ * current state (`fetchRuntimeStatus` / `listPluginToolRegistryChanges`).
+ */
+type LiveChangeNotification =
+  | {
+      kind: 'runtime_signal'
+      data: {
+        subscription: string
+        signal: {
+          kind: string
+          session_id?: number | null
+          payload: unknown
+        }
+      }
+    }
+  | {
+      kind: 'session_changed'
+      data: { subscription: string; change: unknown }
+    }
+  | {
+      kind: 'lagged'
+      data: { subscription: string; skipped: number }
+    }
+  | {
+      kind: 'subscription_closed'
+      data: { subscription: string; reason: string }
+    }
+
+/**
+ * Subscribe to the global live-change stream and report plugin tool registry
+ * changes as v2 `runtime_signal` frames. Replaces the retired v1
+ * `/api/v1/events/stream` subscription (database-design-v2.md 14.1/14.4).
+ */
+export function streamPluginToolRegistryChanges(options: {
   reconnectDelayMs?: number
-  onNotification: (notification: EventNotification) => void
+  onEvent: (event: ToolRegistryChangedEvent) => void
+  onLagged?: (skipped: number) => void
   onError?: (error: Error) => void
   onOpen?: () => void
 }): NotificationStreamHandle {
@@ -2399,7 +2339,6 @@ export function streamNotifications(options: {
   const decoder = new TextDecoder()
   let closed = false
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let sinceSeqGlobal = Math.max(0, Math.trunc(options.sinceSeqGlobal ?? 0))
   const reconnectDelayMs = Math.max(100, Math.trunc(options.reconnectDelayMs ?? 1000))
 
   const scheduleReconnect = (delayMs: number) => {
@@ -2422,28 +2361,37 @@ export function streamNotifications(options: {
   const handleEventBlock = (block: string) => {
     const parsed = parseSseEventBlock(block)
     if (!parsed.data) return
-
     if (parsed.event !== 'notification') return
 
-    const notification = JSON.parse(parsed.data) as EventNotification
-    if (notification.kind === 'event') {
-      const seq = Number(notification.data.event.seq_global)
-      if (Number.isFinite(seq)) {
-        sinceSeqGlobal = Math.max(sinceSeqGlobal, seq)
-      }
-    }
-    if (notification.kind === 'subscription_closed') {
-      options.onNotification(notification)
-      close()
+    let notification: LiveChangeNotification
+    try {
+      notification = JSON.parse(parsed.data) as LiveChangeNotification
+    } catch {
+      options.onError?.(new Error('Live change stream delivered an unparseable frame.'))
       return
     }
-    options.onNotification(notification)
+    if (!notification || typeof notification !== 'object' || typeof notification.kind !== 'string') return
+
+    if (notification.kind === 'runtime_signal') {
+      const signal = notification.data.signal
+      if (signal?.kind === 'tool_registry_changed') {
+        options.onEvent(signal.payload as ToolRegistryChangedEvent)
+      }
+      return
+    }
+    if (notification.kind === 'lagged') {
+      options.onLagged?.(notification.data.skipped)
+      return
+    }
+    if (notification.kind === 'subscription_closed') {
+      close()
+    }
   }
 
   const readResponseStream = async (response: Response) => {
     const reader = response.body?.getReader()
     if (!reader) {
-      throw new Error('Notification stream response body is unavailable')
+      throw new Error('Live change stream response body is unavailable')
     }
 
     let buffer = ''
@@ -2476,26 +2424,8 @@ export function streamNotifications(options: {
 
     try {
       const authHeaders = buildActiveUiAuthHeaders()
-      const url = new URL(apiUrl('/api/v1/events/stream'))
-      url.searchParams.set('scope_kind', options.scopeKind ?? 'global')
-      if (sinceSeqGlobal > 0) {
-        url.searchParams.set('since_seq_global', String(sinceSeqGlobal))
-      }
-      if (options.workspaceId !== null && options.workspaceId !== undefined) {
-        url.searchParams.set('workspace_id', String(Math.trunc(options.workspaceId)))
-      }
-      if (options.sessionId !== null && options.sessionId !== undefined) {
-        url.searchParams.set('session_id', String(Math.trunc(options.sessionId)))
-      }
-      if (options.kinds?.length) {
-        url.searchParams.set(
-          'kinds',
-          options.kinds
-            .map((value) => String(value || '').trim())
-            .filter(Boolean)
-            .join(','),
-        )
-      }
+      const url = new URL(apiUrl('/api/v1/changes/stream'))
+      url.searchParams.set('scope_kind', 'global')
 
       const response = await fetch(url.toString(), {
         method: 'GET',
@@ -2527,33 +2457,6 @@ export function streamNotifications(options: {
   void connect()
 
   return { close }
-}
-
-export function streamPluginToolRegistryChanges(options: {
-  sinceSeqGlobal?: number | null
-  reconnectDelayMs?: number
-  onEvent: (event: ToolRegistryChangedEvent) => void
-  onLagged?: (skipped: number) => void
-  onError?: (error: Error) => void
-  onOpen?: () => void
-}): NotificationStreamHandle {
-  return streamNotifications({
-    sinceSeqGlobal: options.sinceSeqGlobal,
-    scopeKind: 'global',
-    kinds: ['plugin_tool_registry_changed'],
-    reconnectDelayMs: options.reconnectDelayMs,
-    onNotification: (notification) => {
-      if (notification.kind === 'lagged') {
-        options.onLagged?.(notification.data.skipped)
-        return
-      }
-      if (notification.kind !== 'event') return
-      if (notification.data.event.kind !== 'plugin_tool_registry_changed') return
-      options.onEvent(notification.data.event.payload as unknown as ToolRegistryChangedEvent)
-    },
-    onError: options.onError,
-    onOpen: options.onOpen,
-  })
 }
 
 export async function forkSession(input: {

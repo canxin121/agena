@@ -4,7 +4,7 @@ import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import {
   fetchRuntimeStatus,
-  getSessionState,
+  fetchSessionExecution,
   getSessionTree,
   listPluginToolRegistryChanges,
   listProviders,
@@ -63,7 +63,7 @@ export type ChatSessionLifecycleInput = {
 export type ChatSessionLifecycleDeps = {
   applySessionChange: typeof applySessionChange
   fetchRuntimeStatus: typeof fetchRuntimeStatus
-  getSessionState: typeof getSessionState
+  fetchSessionExecution: typeof fetchSessionExecution
   getSessionTree: typeof getSessionTree
   listPluginToolRegistryChanges: typeof listPluginToolRegistryChanges
   listProviders: typeof listProviders
@@ -78,7 +78,7 @@ export type ChatSessionLifecycleDeps = {
 const defaultDeps: ChatSessionLifecycleDeps = {
   applySessionChange,
   fetchRuntimeStatus,
-  getSessionState,
+  fetchSessionExecution,
   getSessionTree,
   listPluginToolRegistryChanges,
   listProviders,
@@ -127,7 +127,7 @@ export function useChatSessionLifecycle(
     },
     {
       applySessionChange: deps.applySessionChange,
-      getSessionState: deps.getSessionState,
+      fetchSessionExecution: deps.fetchSessionExecution,
       streamSessionChanges: deps.streamSessionChanges,
     },
     {

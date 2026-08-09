@@ -4,7 +4,6 @@ import type {
   AuthProvider,
   AuthBrowserStartResponse,
   AuthDeviceStartResponse,
-  DomainEventRecord,
   ConfigSettingsReadResponse,
   MarketplaceInstalledPluginResource,
   MarketplaceOutdatedPluginResource,
@@ -44,8 +43,6 @@ export function useRuntimePageStore() {
   const selectedWorkspaceId = ref<number | null>(null)
   const selectedSessionId = ref<number | null>(null)
   const sessionExecution = ref<SessionExecutionResource | null>(null)
-  const sessionTimeline = ref<DomainEventRecord[]>([])
-  const globalEvents = ref<DomainEventRecord[]>([])
   const selectedPluginId = ref('')
   const selectedPlugin = ref<PluginInspect | null>(null)
   const pluginLogs = ref<PluginLogEntry[]>([])
@@ -124,7 +121,6 @@ export function useRuntimePageStore() {
     deviceAuthStartState,
     drafts,
     editingPermissionRuleId,
-    globalEvents,
     interactiveRequestInFlight,
     loading,
     lspQuery,
@@ -165,7 +161,6 @@ export function useRuntimePageStore() {
     selectedWorkspaceId,
     sessionExecution,
     sessions,
-    sessionTimeline,
     workflowLoading,
     workspaces,
   }

@@ -116,7 +116,6 @@ export function usePluginToolRegistryRuntimeSync(
     if (typeof ReadableStream === 'undefined' || typeof TextDecoder === 'undefined') return
 
     streamHandle = deps.streamPluginToolRegistryChanges({
-      sinceSeqGlobal: null,
       onEvent: handleRegistryEvent,
       onLagged: () => {
         void reconcileLagged()

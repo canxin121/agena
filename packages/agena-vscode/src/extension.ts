@@ -31,14 +31,14 @@ class AgenaClient {
     if (this.child) {
       return;
     }
-    this.child = cp.spawn(command, ['app-server', '--transport', 'stdio'], { cwd });
+    this.child = cp.spawn(command, ['rpc-server', '--transport', 'stdio'], { cwd });
     const reader = readline.createInterface({ input: this.child.stdout });
     reader.on('line', line => this.handleLine(line));
     this.child.stderr.on('data', chunk => console.debug(`agena: ${chunk}`));
     this.child.on('exit', () => {
       this.child = undefined;
       for (const pending of this.pending.values()) {
-        pending.reject(new Error('Agena app-server exited'));
+        pending.reject(new Error('Agena rpc-server exited'));
       }
       this.pending.clear();
     });
@@ -83,7 +83,7 @@ class AgenaClient {
 
   private request(method: string, params: unknown): Promise<unknown> {
     if (!this.child) {
-      return Promise.reject(new Error('Agena app-server is not running'));
+      return Promise.reject(new Error('Agena rpc-server is not running'));
     }
     const id = this.nextId++;
     const payload = JSON.stringify({ jsonrpc: '2.0', id, method, params });
@@ -105,7 +105,7 @@ class AgenaClient {
     try {
       message = JSON.parse(line) as typeof message;
     } catch (diagnostic) {
-      console.error('Agena app-server returned an invalid JSON-RPC message', diagnostic);
+      console.error('Agena rpc-server returned an invalid JSON-RPC message', diagnostic);
       return;
     }
     if (typeof message.id !== 'number') {
@@ -147,7 +147,7 @@ export function activate(context: vscode.ExtensionContext): void {
     const command = vscode.workspace.getConfiguration('agena').get<string>('command') ?? 'agena';
     const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     client.start(command, cwd);
-    vscode.window.showInformationMessage('Agena app-server started');
+    vscode.window.showInformationMessage('Agena rpc-server started');
   }));
   context.subscriptions.push(vscode.commands.registerCommand('agena.prompt', async () => {
     const prompt = await vscode.window.showInputBox({ prompt: 'Prompt Agena' });

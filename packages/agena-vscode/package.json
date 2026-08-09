@@ -1,7 +1,7 @@
 {
   "name": "agena-vscode",
   "displayName": "Agena",
-  "description": "Minimal Agena IDE bridge using the app-server JSON-RPC protocol.",
+  "description": "Minimal Agena IDE bridge using the rpc-server JSON-RPC protocol.",
   "version": "0.1.0",
   "publisher": "agena",
   "engines": {
@@ -19,7 +19,7 @@
     "commands": [
       {
         "command": "agena.start",
-        "title": "Agena: Start App Server"
+        "title": "Agena: Start RPC Server"
       },
       {
         "command": "agena.prompt",
@@ -32,7 +32,7 @@
         "agena.command": {
           "type": "string",
           "default": "agena",
-          "description": "Agena CLI executable used to start the app-server."
+          "description": "Agena CLI executable used to start the rpc-server."
         }
       }
     }

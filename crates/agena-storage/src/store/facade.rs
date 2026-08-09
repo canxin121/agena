@@ -1572,8 +1572,8 @@ fn append_buffered_text_delta(content: &mut Value, delta: &str) -> Result<(), St
 mod tests {
     use super::*;
     use crate::store::{
-        InMemoryEngine, NewSession, PartRole, PartState, SessionChange, SessionListQuery,
-        SessionState,
+        InMemoryEngine, InteractionAnswerOutcome, LeaseState, NewSession, PartRole, PartState,
+        ReconcileOutcome, SessionChange, SessionListQuery, SessionState,
     };
     use agena_domain::SessionRelationKind;
     use std::sync::atomic::AtomicI64;
@@ -1594,9 +1594,10 @@ mod tests {
         }
     }
 
-    /// A ready root session with a fresh lease held by `owner-a`.
-    async fn ready_session(
-        facade: &SessionFacade<InMemoryEngine>,
+    /// A ready root session with a fresh lease held by `owner-a`. Generic over
+    /// the engine so tests can drive `SessionFacade<CountingEngine>` too.
+    async fn ready_session<E: PersistenceEngine>(
+        facade: &SessionFacade<E>,
         workspace_id: i64,
         title: &str,
     ) -> i64 {
@@ -2849,6 +2850,461 @@ mod tests {
         assert_eq!(
             facade.session_state(session_id).await.expect("state").state,
             SessionState::Interrupted
+        );
+    }
+
+    /// A `PersistenceEngine` test double wrapping `InMemoryEngine` that counts
+    /// every `load_session` call, so a test can prove the facade write path no
+    /// longer forces an engine reload (R1: `apply_committed` seeds the memory
+    /// cache). All other methods are mechanical forwards.
+    struct CountingEngine {
+        inner: InMemoryEngine,
+        load_session_calls: AtomicU64,
+    }
+
+    impl CountingEngine {
+        fn new() -> Self {
+            Self {
+                inner: InMemoryEngine::default(),
+                load_session_calls: AtomicU64::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PersistenceEngine for CountingEngine {
+        async fn create_session(
+            &self,
+            new_session: NewSession,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner.create_session(new_session).await
+        }
+
+        async fn session_meta(&self, session_id: i64) -> Result<SessionMeta, StoreError> {
+            self.inner.session_meta(session_id).await
+        }
+
+        async fn load_session(&self, session_id: i64) -> Result<SessionView, StoreError> {
+            self.load_session_calls.fetch_add(1, Ordering::SeqCst);
+            self.inner.load_session(session_id).await
+        }
+
+        async fn newest_member_cursor(
+            &self,
+            session_id: i64,
+        ) -> Result<Option<(i64, i64)>, StoreError> {
+            self.inner.newest_member_cursor(session_id).await
+        }
+
+        async fn rename_session(
+            &self,
+            session_id: i64,
+            title: String,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner.rename_session(session_id, title).await
+        }
+
+        async fn set_provider_anchors(
+            &self,
+            session_id: i64,
+            anchors: Option<Value>,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner.set_provider_anchors(session_id, anchors).await
+        }
+
+        async fn set_config_json(
+            &self,
+            session_id: i64,
+            config: Option<Value>,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner.set_config_json(session_id, config).await
+        }
+
+        async fn find_subagent_by_task_id(
+            &self,
+            parent_session_id: i64,
+            task_id: &str,
+        ) -> Result<Option<SessionMeta>, StoreError> {
+            self.inner
+                .find_subagent_by_task_id(parent_session_id, task_id)
+                .await
+        }
+
+        async fn create_subagent_session(
+            &self,
+            parent_session_id: i64,
+            task_id: String,
+            title: String,
+            now_ms: i64,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner
+                .create_subagent_session(parent_session_id, task_id, title, now_ms)
+                .await
+        }
+
+        async fn update_subtask_state(
+            &self,
+            session_id: i64,
+            status: Option<String>,
+            started_at_ms: Option<i64>,
+            finished_at_ms: Option<i64>,
+            failure: Option<Value>,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner
+                .update_subtask_state(session_id, status, started_at_ms, finished_at_ms, failure)
+                .await
+        }
+
+        async fn list_session_summaries(
+            &self,
+            query: SessionListQuery,
+        ) -> Result<Vec<SessionSummary>, StoreError> {
+            self.inner.list_session_summaries(query).await
+        }
+
+        async fn get_session_summary(
+            &self,
+            session_id: i64,
+        ) -> Result<Option<SessionSummary>, StoreError> {
+            self.inner.get_session_summary(session_id).await
+        }
+
+        async fn session_counts_by_workspace(
+            &self,
+            workspace_ids: &[i64],
+        ) -> Result<HashMap<i64, i64>, StoreError> {
+            self.inner.session_counts_by_workspace(workspace_ids).await
+        }
+
+        async fn list_session_tree(
+            &self,
+            root_id: i64,
+        ) -> Result<Vec<SessionSummary>, StoreError> {
+            self.inner.list_session_tree(root_id).await
+        }
+
+        async fn delete_session(&self, session_id: i64) -> Result<(), StoreError> {
+            self.inner.delete_session(session_id).await
+        }
+
+        async fn try_acquire_lease(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            now_ms: i64,
+        ) -> Result<LeaseAcquire, StoreError> {
+            self.inner
+                .try_acquire_lease(session_id, owner_id, now_ms)
+                .await
+        }
+
+        async fn heartbeat_lease(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            now_ms: i64,
+        ) -> Result<bool, StoreError> {
+            self.inner
+                .heartbeat_lease(session_id, owner_id, now_ms)
+                .await
+        }
+
+        async fn release_lease(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+        ) -> Result<bool, StoreError> {
+            self.inner.release_lease(session_id, owner_id).await
+        }
+
+        async fn current_lease(
+            &self,
+            session_id: i64,
+        ) -> Result<Option<LeaseState>, StoreError> {
+            self.inner.current_lease(session_id).await
+        }
+
+        async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError> {
+            self.inner.reap_stale_leases(stale_before_ms).await
+        }
+
+        async fn submit_user_message(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            parts: Vec<NewPart>,
+            idempotency_key: Option<String>,
+            now_ms: i64,
+        ) -> Result<SubmitOutcome, StoreError> {
+            self.inner
+                .submit_user_message(session_id, owner_id, parts, idempotency_key, now_ms)
+                .await
+        }
+
+        async fn append_parts(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            run_id: i64,
+            parts: Vec<NewPart>,
+            now_ms: i64,
+        ) -> Result<Vec<Part>, StoreError> {
+            self.inner
+                .append_parts(session_id, owner_id, run_id, parts, now_ms)
+                .await
+        }
+
+        async fn update_part(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            part_id: i64,
+            delta: PartDelta,
+            now_ms: i64,
+        ) -> Result<Part, StoreError> {
+            self.inner
+                .update_part(session_id, owner_id, part_id, delta, now_ms)
+                .await
+        }
+
+        async fn complete_run(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            run_id: i64,
+            outcome: RunOutcome,
+            now_ms: i64,
+        ) -> Result<Part, StoreError> {
+            self.inner
+                .complete_run(session_id, owner_id, run_id, outcome, now_ms)
+                .await
+        }
+
+        async fn start_run(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            run_kind: &str,
+            content: Value,
+            idempotency_key: Option<String>,
+            now_ms: i64,
+        ) -> Result<SubmitOutcome, StoreError> {
+            self.inner
+                .start_run(
+                    session_id,
+                    owner_id,
+                    run_kind,
+                    content,
+                    idempotency_key,
+                    now_ms,
+                )
+                .await
+        }
+
+        async fn cancel_run(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            run_id: i64,
+            now_ms: i64,
+        ) -> Result<Vec<Part>, StoreError> {
+            self.inner
+                .cancel_run(session_id, owner_id, run_id, now_ms)
+                .await
+        }
+
+        async fn answer_interaction(
+            &self,
+            session_id: i64,
+            owner_id: &str,
+            interaction_part_id: i64,
+            reply: NewPart,
+            now_ms: i64,
+        ) -> Result<InteractionAnswerOutcome, StoreError> {
+            self.inner
+                .answer_interaction(session_id, owner_id, interaction_part_id, reply, now_ms)
+                .await
+        }
+
+        async fn fork_session(
+            &self,
+            session_id: i64,
+            at_part_id: i64,
+            title: String,
+            rewind: bool,
+            now_ms: i64,
+        ) -> Result<SessionMeta, StoreError> {
+            self.inner
+                .fork_session(session_id, at_part_id, title, rewind, now_ms)
+                .await
+        }
+
+        async fn reconcile(
+            &self,
+            session_id: i64,
+            now_ms: i64,
+        ) -> Result<ReconcileOutcome, StoreError> {
+            self.inner.reconcile(session_id, now_ms).await
+        }
+
+        async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
+            self.inner.maintenance(now_ms).await
+        }
+
+        async fn record_usage(&self, record: UsageRecord) -> Result<(), StoreError> {
+            self.inner.record_usage(record).await
+        }
+
+        async fn usage_stats(&self, query: UsageQuery) -> Result<UsageStats, StoreError> {
+            self.inner.usage_stats(query).await
+        }
+
+        async fn export_session_jsonl(&self, session_id: i64) -> Result<String, StoreError> {
+            self.inner.export_session_jsonl(session_id).await
+        }
+
+        async fn import_session_jsonl(
+            &self,
+            workspace_id: i64,
+            bundle: &str,
+            now_ms: i64,
+        ) -> Result<i64, StoreError> {
+            self.inner
+                .import_session_jsonl(workspace_id, bundle, now_ms)
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn writes_seed_cache_without_engine_reload() {
+        let clock = Clock::new(1_000_000);
+        let engine = CountingEngine::new();
+        let facade = SessionFacade::with_clock(
+            engine,
+            "owner-a",
+            MemoryLayer::new(16),
+            NotificationBus::new(),
+            {
+                let clock = clock.clone();
+                move || clock.get()
+            },
+        );
+        let session_id = ready_session(&facade, 1, "t").await;
+
+        // Warm the cache: the first `load` must hit the engine exactly once.
+        // This is also the positive control that the counter is live.
+        facade.load(session_id).await.expect("warm load");
+        assert_eq!(
+            facade.engine().load_session_calls.load(Ordering::SeqCst),
+            1,
+            "first load of an unwritten session goes to the engine"
+        );
+        facade.engine().load_session_calls.store(0, Ordering::SeqCst);
+
+        // a. submit_user_message: apply_committed seeds the cache with the
+        //    committed marker + parts, so the next load is a hit.
+        let outcome = facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "hello"}),
+                )],
+                None,
+            )
+            .await
+            .expect("submit");
+        let run_id = outcome.run_id;
+        let view = facade.load(session_id).await.expect("load after submit");
+        assert_eq!(view.parts.len(), 2, "marker + user part");
+        assert_eq!(
+            facade.engine().load_session_calls.load(Ordering::SeqCst),
+            0,
+            "submit must not force an engine reload"
+        );
+
+        // b. append_parts: committed parts merged into the cached view.
+        let appended = facade
+            .append_parts(
+                session_id,
+                "owner-a",
+                run_id,
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::Assistant,
+                    json!({"text": "reply"}),
+                )],
+            )
+            .await
+            .expect("append");
+        let part_id = appended[0].part_id;
+        facade.load(session_id).await.expect("load after append");
+        assert_eq!(
+            facade.engine().load_session_calls.load(Ordering::SeqCst),
+            0,
+            "append must not force an engine reload"
+        );
+
+        // c. update_part with a plain (non-streaming) content replacement.
+        facade
+            .update_part(
+                session_id,
+                "owner-a",
+                part_id,
+                PartDelta {
+                    content: Some(json!({"text": "edited"})),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("update part");
+        let view = facade.load(session_id).await.expect("load after update");
+        assert_eq!(
+            view.parts
+                .iter()
+                .find(|part| part.part_id == part_id)
+                .expect("updated part present")
+                .content["text"],
+            "edited"
+        );
+        assert_eq!(
+            facade.engine().load_session_calls.load(Ordering::SeqCst),
+            0,
+            "plain update must not force an engine reload"
+        );
+
+        // d. complete_run: the terminal marker is merged in place.
+        facade
+            .complete_run(
+                session_id,
+                "owner-a",
+                run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+            )
+            .await
+            .expect("complete run");
+        facade.load(session_id).await.expect("load after complete");
+        assert_eq!(
+            facade.engine().load_session_calls.load(Ordering::SeqCst),
+            0,
+            "complete_run must not force an engine reload"
+        );
+
+        // e. Negative control: a fresh, never-loaded session triggers exactly
+        //    one engine load, proving the counter is not permanently zero.
+        let fresh_id = ready_session(&facade, 1, "fresh").await;
+        facade.load(fresh_id).await.expect("fresh session load");
+        assert_eq!(
+            facade.engine().load_session_calls.load(Ordering::SeqCst),
+            1,
+            "a cache-miss read of a fresh session hits the engine once"
         );
     }
 }

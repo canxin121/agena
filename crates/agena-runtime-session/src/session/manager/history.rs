@@ -24,15 +24,15 @@ impl SessionManager {
         // message's final member part so the fork includes the entire message,
         // not only its marker. A literal part id that is not a message marker
         // remains a valid precise cutoff for internal callers.
+        let messages = crate::session::store::messages_from_parts(source.parts())?;
         let at_part_id = match request.at_message_id {
-            Some(part_id) => source
-                .messages
+            Some(part_id) => messages
                 .iter()
                 .find(|message| message.id == part_id)
                 .map(message_inclusive_cutoff)
                 .unwrap_or(part_id),
-            None => source
-                .last_conversation_message()
+            None => messages
+                .last()
                 .map(message_inclusive_cutoff)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
@@ -147,9 +147,9 @@ impl SessionManager {
             });
         }
         let message_id = user_message_id_for_turn(&source, request.turn_id)?;
+        let messages = crate::session::store::messages_from_parts(source.parts())?;
         if !is_completed_user_rewind_target(
-            source
-                .messages
+            messages
                 .iter()
                 .find(|message| message.id == message_id)
                 .ok_or_else(|| {
@@ -235,8 +235,8 @@ fn user_message_id_for_turn(
     session: &Session,
     turn_id: agena_domain::TurnId,
 ) -> Result<i64, AppError> {
-    let reply_index = session
-        .messages
+    let messages = crate::session::store::messages_from_parts(session.parts())?;
+    let reply_index = messages
         .iter()
         .position(|message| message.metadata.conversation_turn_id == Some(turn_id))
         .ok_or_else(|| {
@@ -245,7 +245,7 @@ fn user_message_id_for_turn(
                 session.id
             ))
         })?;
-    session.messages[..reply_index]
+    messages[..reply_index]
         .iter()
         .rev()
         .find(|message| message.role == Role::User)
@@ -269,7 +269,8 @@ fn transcript_snapshot_from_session(
     let seq_session = session.version;
     let mut turns = Vec::new();
     let mut sequence = 0i64;
-    for (index, message) in session.messages.iter().enumerate() {
+    let messages = crate::session::store::messages_from_parts(session.parts())?;
+    for (index, message) in messages.iter().enumerate() {
         if message.role != Role::User {
             continue;
         }
@@ -318,11 +319,12 @@ fn assistant_reply_snapshot(
     session: &Session,
     user_index: usize,
 ) -> Result<agena_domain::AssistantReplySnapshot, AppError> {
-    let user = &session.messages[user_index];
+    let messages = crate::session::store::messages_from_parts(session.parts())?;
+    let user = &messages[user_index];
     let turn_id = user.metadata.conversation_turn_id.unwrap_or_else(|| {
         // Reloaded user markers do not persist the UUID pair; recover the
         // canonical turn id from the first following non-user run marker.
-        session.messages[user_index + 1..]
+        messages[user_index + 1..]
             .iter()
             .find(|message| message.role != Role::User)
             .and_then(|message| message.metadata.conversation_turn_id)
@@ -348,8 +350,10 @@ fn assistant_reply_snapshot(
 /// non-user message until the next user message. Reloaded user markers do not
 /// persist the conversation UUID pair, so adjacency is the reliable grouping.
 fn canonical_turn_span(session: &Session, user_index: usize) -> std::ops::Range<usize> {
+    let messages =
+        crate::session::store::messages_from_parts(session.parts()).unwrap_or_else(|_| Vec::new());
     let mut end = user_index + 1;
-    while end < session.messages.len() && session.messages[end].role != Role::User {
+    while end < messages.len() && messages[end].role != Role::User {
         end += 1;
     }
     user_index..end
@@ -377,7 +381,8 @@ fn assistant_reply_fields(
     let mut created_at_ms = i64::MAX;
     let mut finished_at_ms: Option<i64> = None;
     let mut failure: Option<agena_failure::UserProblem> = None;
-    for message in &session.messages[turn_span.clone()] {
+    let messages = crate::session::store::messages_from_parts(session.parts())?;
+    for message in &messages[turn_span.clone()] {
         if message.role == Role::User {
             continue;
         }
@@ -724,6 +729,57 @@ fn activity_payload_from_part(
     Ok(Some(payload))
 }
 
+/// Recover every interactive request currently awaiting a reply in `session`,
+/// from the parts projection (v2 equivalent of the removed
+/// `Session::pending_interactive_requests`): unanswered permissions recorded on
+/// in-flight `tool_call` parts, plus unanswered user-input `interaction` parts.
+/// Requests are de-duplicated by `(kind, request_id)` as the v1 projection did.
+fn pending_interactive_requests_from_session(
+    session: &Session,
+) -> Vec<agena_domain::PendingInteractiveRequest> {
+    let mut seen = std::collections::HashSet::new();
+    let mut requests = Vec::new();
+    // Pending permissions live on the in-flight tool-call part's operation
+    // authorization record (`operation.authorization.awaiting()`).
+    for part in session.parts() {
+        if part.kind != "tool_call" || !part.state.is_in_flight() {
+            continue;
+        }
+        let Some(operation) = super::replies::operation_from_part(part) else {
+            continue;
+        };
+        for permission in operation.authorization.awaiting() {
+            let request =
+                agena_domain::PendingInteractiveRequest::from(permission.request.clone());
+            if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
+                requests.push(request);
+            }
+        }
+    }
+    // Pending user-input requests are in-flight `interaction` parts (kind
+    // `!= "permission"`); the full request payload rides under content
+    // `request`.
+    for part in session.pending_interactions() {
+        if part.content.get("kind").and_then(serde_json::Value::as_str) == Some("permission") {
+            continue;
+        }
+        let Some(request) = part
+            .content
+            .get("request")
+            .and_then(|value| {
+                serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
+            })
+        else {
+            continue;
+        };
+        let request = agena_domain::PendingInteractiveRequest::from(request);
+        if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
+            requests.push(request);
+        }
+    }
+    requests
+}
+
 #[async_trait::async_trait]
 impl agena_runtime::SessionQueryService for SessionManager {
     async fn list_session_summaries(
@@ -743,6 +799,9 @@ impl agena_runtime::SessionQueryService for SessionManager {
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let workflow_state = session.workflow_state();
+        let message_count = crate::session::store::messages_from_parts(session.parts())
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?
+            .len();
         Ok(agena_runtime::SessionPresentation {
             id: session.id,
             parent_id: session.parent_id,
@@ -751,7 +810,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
             version: session.version,
             created_at: session.created_at,
             updated_at: session.updated_at,
-            message_count: session.messages.len(),
+            message_count,
             workflow_state,
         })
     }
@@ -915,7 +974,9 @@ impl agena_runtime::SessionQueryService for SessionManager {
         let session = SessionManager::get_session(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        Ok(crate::session::cost::summarize(&session.messages))
+        let messages = crate::session::store::messages_from_parts(session.parts())
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
+        Ok(crate::session::cost::summarize(&messages))
     }
 
     async fn usage_stats(
@@ -979,8 +1040,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
                 let session_id = pending_session.id;
                 let parent_session_id = pending_session.parent_id;
                 let task_id = pending_session.task_id.clone();
-                pending_session
-                    .pending_interactive_requests()
+                pending_interactive_requests_from_session(&pending_session)
                     .into_iter()
                     .map(
                         move |request| agena_domain::PendingInteractiveRequestContext {

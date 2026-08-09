@@ -1,15 +1,16 @@
 use super::{
-    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, ExecutionStatus,
-    MessageCheckpoint, MessageMetadata, MessageSource, PartContent, Role, SessionExecutionRequest,
-    SessionManager, SessionSubtaskRequest, SessionSubtaskResponse, SessionUserMessageRequest,
-    StableRunContext, UserInputPart, build_message, mpsc,
+    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, PartContent,
+    SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
+    SessionUserMessageRequest, StableRunContext, UserInputPart, mpsc,
 };
+use crate::session::store::{messages_from_parts, new_part_from_content};
 use crate::session::Session;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
 use agena_runtime_contracts::message::{SkillReference, SkillReferencePart};
+use agena_storage::store::{PartRole, PartState};
 use std::path::Path;
 
 /// Resolve requested Skill names/aliases into immutable Skill references
@@ -125,9 +126,8 @@ impl SessionManager {
             .require_subtask_session(parent_session_id, task_id)
             .await?;
         let limit = limit.clamp(1, 500) as usize;
-        let mut messages = child
-            .messages
-            .iter()
+        let mut messages = messages_from_parts(child.parts())?
+            .into_iter()
             .filter(|message| message.id > after_cursor)
             .filter_map(|message| {
                 let text = message.visible_text_lossy();
@@ -213,7 +213,6 @@ impl SessionManager {
                     }
                     if !replaced {
                         request.parts.push(UserInputPart {
-                            activity_id: None,
                             content: PartContent::text(updated.prompt),
                         });
                     }
@@ -234,46 +233,33 @@ impl SessionManager {
         self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
-        let ids = self.store.reserve_message_ids(request.parts.len()).await?;
-        let user_model_turn_id = ids.message_id;
         let input_parts = request.parts;
-        let activity_ids = input_parts
+        // The user's message is persisted as a `user_send` run: one run
+        // marker plus one `text` content part per submitted payload (the same
+        // shape `drain_steer_input` writes). v2 parts carry no activity
+        // identity, so the v1 `bind_activity` step is dropped here.
+        let user_parts = input_parts
             .iter()
-            .map(|part| part.activity_id)
-            .collect::<Vec<_>>();
-        let mut user_message = build_message(
-            ids,
-            Role::User,
-            ExecutionStatus::Completed,
-            input_parts.into_iter().map(|part| part.content).collect(),
-            MessageMetadata {
-                source: MessageSource::User,
-                idempotency_key: request.idempotency_key.clone(),
-                model_turn_id: Some(user_model_turn_id),
-                conversation_turn_id: Some(control.turn_id()),
-                conversation_reply_id: Some(control.reply_id()),
-                parent_message_id: session
-                    .last_conversation_message()
-                    .map(|message| message.id),
-                generated_by_call_id: None,
-                externally_initiated_tool: false,
-                model_provider_id: options.model.provider_id.to_string(),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: options.model.model_id.to_string(),
-                model_thinking_mode: options.thinking_mode.clone(),
-                model_speed_mode: options.speed_mode.clone(),
-            },
-        )?;
-        for (part, activity_id) in user_message.parts.iter_mut().zip(activity_ids) {
-            if let Some(activity_id) = activity_id {
-                part.bind_activity(activity_id);
-            }
-        }
-        session.messages.push(user_message.clone());
-        let checkpoint = MessageCheckpoint::all(&user_message);
-        session = self
-            .persist_session_changes(session, vec![checkpoint], None, state.clone())
+            .map(|part| {
+                new_part_from_content(
+                    "text",
+                    PartRole::User,
+                    &part.content,
+                    PartState::Completed,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let outcome = self
+            .store
+            .submit_user_message(
+                session.id,
+                user_parts,
+                request.idempotency_key.clone(),
+            )
             .await?;
+        let mut projected = session.parts().to_vec();
+        projected.extend(outcome.parts);
+        session.install_projected_parts(projected);
 
         // Record the user.prompt.submit hook runs observed during this
         // submission (plus any unattributed runs claimed by this session)
@@ -295,7 +281,7 @@ impl SessionManager {
                 &options,
                 StableRunContext {
                     base_run_source: ExecutionSource::User,
-                    active_model_turn_id: Some(user_message.id),
+                    active_model_turn_id: Some(outcome.run_id),
                     state,
                     control,
                     steer_rx,
@@ -569,7 +555,12 @@ impl SessionManager {
                 .unwrap_or_else(|| state.tool_executor.workspace_root().to_path_buf()),
         );
         let started_at_ms = chrono::Utc::now().timestamp_millis();
-        let baseline_message_id = child.messages.iter().map(|message| message.id).max();
+        let baseline_message_id = child
+            .parts()
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .map(|part| part.part_id)
+            .max();
         let baseline_usage = child.aggregate_usage();
         let usage_budget = super::SubtaskUsageBudget::new(
             baseline_usage.clone(),
@@ -714,7 +705,22 @@ impl SessionManager {
             parent_session_id: parent.id,
             status,
             resumed,
-            final_text: session.last_assistant_text_after(baseline_message_id),
+            // Assistant text produced after the subtask's baseline: the
+            // aggregate holds only parts created since the baseline marker, so
+            // the last assistant text is the child's freshest reply.
+            final_text: session
+                .parts()
+                .iter()
+                .rev()
+                .filter(|part| part.part_id > baseline_message_id.unwrap_or(0))
+                .find_map(|part| {
+                    part.content
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .or_else(|| part.summary.clone())
+                })
+                .filter(|text| !text.trim().is_empty()),
             failure,
             usage,
             model_provider_id: Some(options.model.provider_id.to_string()),

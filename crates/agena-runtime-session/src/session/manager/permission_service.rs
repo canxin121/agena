@@ -11,9 +11,11 @@ use agena_domain::ApprovalModelSelection;
 use agena_permission::DenialBudget;
 
 use super::{
-    AppError, ModelRef, Role, Session, SessionManager, SessionManagerState, SessionRunOptions,
+    AppError, ModelRef, Session, SessionManager, SessionManagerState, SessionRunOptions,
 };
 use crate::session::prompt_window;
+use crate::session::store::messages_from_parts;
+use agena_domain::Role;
 
 /// Versioned per-session snapshot of persisted permission rules, grouped by
 /// action key. Loaded once with a single query; invalidated on writes.
@@ -270,20 +272,21 @@ impl SessionManager {
             })
             .unwrap_or(agena_permission::AUTO_APPROVAL_TRANSCRIPT_FALLBACK_CHARS);
         let transcript = session.map(|session| {
+            // v2: the transcript is the parts projection (the store is the
+            // single durable source; message count doubles as the cache key).
+            let messages = messages_from_parts(session.parts()).unwrap_or_default();
             let cached = state
                 .auto_projection
                 .lock()
                 .ok()
                 .and_then(|cache| cache.get(&session_id).cloned());
             match cached {
-                Some((len, text)) if len == session.messages.len() => text,
+                Some((len, text)) if len == messages.len() => text,
                 _ => {
-                    let text = prompt_window::project_transcript(
-                        &session.messages,
-                        transcript_budget_chars,
-                    );
+                    let text =
+                        prompt_window::project_transcript(&messages, transcript_budget_chars);
                     if let Ok(mut cache) = state.auto_projection.lock() {
-                        cache.insert(session_id, (session.messages.len(), text.clone()));
+                        cache.insert(session_id, (messages.len(), text.clone()));
                     }
                     text
                 }

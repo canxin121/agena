@@ -1,11 +1,12 @@
 use super::{
-    AppError, ExecutionStatus, Message, MessageCheckpoint, MessageMetadata, MessageSource,
-    PartContent, Role, SessionCreateRequest, SessionListRequest, SessionManager, SessionRunOptions,
-    SessionSummary, build_message,
+    AppError, Message, PartContent, SessionCreateRequest, SessionListRequest, SessionManager,
+    SessionRunOptions, SessionSummary,
 };
+use crate::session::store::{messages_from_parts, new_part_from_content};
 use crate::session::Session;
 use crate::session::prompt_window;
 use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
+use agena_storage::store::{PartRole, PartState};
 use std::collections::HashMap;
 
 impl SessionManager {
@@ -180,63 +181,22 @@ impl SessionManager {
             }
         };
 
-        let mut injected_messages = Vec::new();
+        let mut injected_new_parts = Vec::new();
         if let Some(additional_context) = patch.additional_context {
-            let ids = self.store.reserve_message_ids(1).await?;
-            let system_message = build_message(
-                ids,
-                Role::System,
-                ExecutionStatus::Completed,
-                vec![PartContent::text(additional_context)],
-                MessageMetadata {
-                    source: MessageSource::System,
-                    idempotency_key: None,
-                    model_turn_id: None,
-                    conversation_turn_id: None,
-                    conversation_reply_id: None,
-                    parent_message_id: session
-                        .last_conversation_message()
-                        .map(|message| message.id),
-                    generated_by_call_id: None,
-                    externally_initiated_tool: false,
-                    model_provider_id: String::new(),
-                    model_adapter_id: None,
-                    model_id: String::new(),
-                    model_thinking_mode: None,
-                    model_speed_mode: None,
-                },
-            )?;
-            session.messages.push(system_message.clone());
-            injected_messages.push(system_message);
+            injected_new_parts.push(new_part_from_content(
+                "text",
+                PartRole::System,
+                &PartContent::text(additional_context),
+                PartState::Completed,
+            )?);
         }
         if let Some(initial_user_message) = patch.initial_user_message {
-            let ids = self.store.reserve_message_ids(1).await?;
-            let initial_turn_id = ids.message_id;
-            let user_message = build_message(
-                ids,
-                Role::User,
-                ExecutionStatus::Completed,
-                vec![PartContent::text(initial_user_message)],
-                MessageMetadata {
-                    source: MessageSource::System,
-                    idempotency_key: None,
-                    model_turn_id: Some(initial_turn_id),
-                    conversation_turn_id: None,
-                    conversation_reply_id: None,
-                    parent_message_id: session
-                        .last_conversation_message()
-                        .map(|message| message.id),
-                    generated_by_call_id: None,
-                    externally_initiated_tool: false,
-                    model_provider_id: String::new(),
-                    model_adapter_id: None,
-                    model_id: String::new(),
-                    model_thinking_mode: None,
-                    model_speed_mode: None,
-                },
-            )?;
-            session.messages.push(user_message.clone());
-            injected_messages.push(user_message);
+            injected_new_parts.push(new_part_from_content(
+                "text",
+                PartRole::User,
+                &PartContent::text(initial_user_message),
+                PartState::Completed,
+            )?);
         }
 
         // Record the session.start hook runs observed during creation (plus
@@ -252,16 +212,22 @@ impl SessionManager {
                 .await?;
         }
 
-        if injected_messages.is_empty() {
+        if injected_new_parts.is_empty() {
             return Ok(session);
         }
 
-        let checkpoints = injected_messages
-            .iter()
-            .map(MessageCheckpoint::all)
-            .collect();
-        self.persist_session_changes(session, checkpoints, None, state)
-            .await
+        // Persist the injected context/user parts as one `user_send` run and
+        // merge the committed rows into the projection (the same write path
+        // `drain_steer_input` uses). The parts carry their own role so the
+        // reloaded projection preserves the System/User distinction.
+        let outcome = self
+            .store
+            .submit_user_message(session.id, injected_new_parts, None)
+            .await?;
+        let mut projected = session.parts().to_vec();
+        projected.extend(outcome.parts);
+        session.install_projected_parts(projected);
+        Ok(session)
     }
 
     pub async fn get_session(&self, session_id: i64) -> Result<Session, AppError> {
@@ -591,7 +557,8 @@ impl SessionManager {
         // is retained for callers that historically fetched headers only; the
         // aggregate always carries full parts.
         let _ = include_full_parts;
-        Ok(self.store.load_session(session_id).await?.messages)
+        let session = self.store.load_session(session_id).await?;
+        messages_from_parts(session.parts())
     }
 
     /// Returns whether a persisted user message already owns an external
@@ -605,11 +572,8 @@ impl SessionManager {
         if key.trim().is_empty() {
             return Ok(false);
         }
-        Ok(self
-            .store
-            .load_session(session_id)
-            .await?
-            .messages
+        let session = self.store.load_session(session_id).await?;
+        Ok(messages_from_parts(session.parts())?
             .into_iter()
             .any(|message| {
                 message.role == agena_domain::Role::User

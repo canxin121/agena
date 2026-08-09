@@ -1,25 +1,32 @@
 use super::{
     AggregatedPermissionOutcome, AggregatedPermissionRequest, AppError, Arc, ExecutionControl,
-    ExecutionStatus, InteractiveRequestPart, MessageCheckpoint, MessageMetadata, MessageSource,
     OperationPart, PartContent, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
-    ProviderPromptAnchor, RequestPart, ResolvedPendingTool, SessionManager, SessionManagerState,
+    ProviderPromptAnchor, ResolvedPendingTool, SessionManager, SessionManagerState,
     SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination,
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
-    append_resolved_message_part, ask_user_title, assistant_message_for_part, build_message,
-    build_request_part, completed_lifecycle, execution_control_to_app_error,
-    is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
-    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
-    push_unique_permission_action, resolve_pending_tool, responses_api_request_metadata,
-    run_abort_reason, should_execute_pending_tools_concurrently, terminal_operation_title,
-    tool_name, update_resolved_tool_message,
+    ask_user_title, assistant_message_id, completed_lifecycle, execution_control_to_app_error,
+    is_authorization_phase_title, message_provider_state_from_provider_metadata,
+    operation_authorization, operation_blocks_from_tool_output,
+    operation_permission_approved_actions, pending_operation_for_resolved,
+    pending_tool_part_not_found_error, permission_action_key, push_unique_permission_action,
+    resolve_pending_tool, responses_api_request_metadata, run_abort_reason,
+    should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
+    update_resolved_tool_message,
 };
+use crate::message::{InteractiveRequestPart, RequestPart};
 use crate::session::Session;
+use crate::session::processor::assistant_message_from_run_parts;
 use crate::session::prompt_window;
+use crate::session::store::{
+    messages_from_parts, new_part_from_content, part_content_from_value, part_content_to_value,
+    run_marker_content,
+};
 use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind, Role, RunAbortReason,
 };
+use agena_storage::store::{Part, PartRole, PartState};
 use tracing::Instrument;
 
 use super::super::StableRunContext;
@@ -251,9 +258,8 @@ impl SessionManager {
         // This flag becomes true only at command entry, after the entire
         // pending tool batch reaches a barrier, or after new steer input.
         let mut model_requested = true;
-        let mut observed_user_message_id = session
-            .messages
-            .iter()
+        let mut observed_user_message_id = messages_from_parts(session.parts())?
+            .into_iter()
             .rev()
             .find(|message| message.role == Role::User)
             .map(|message| message.id);
@@ -268,16 +274,16 @@ impl SessionManager {
                 .drain_steer_input(session, &mut steer_rx, &current_options, state.clone())
                 .await?;
 
-            let latest_user = session
-                .messages
-                .iter()
+            let latest_user = messages_from_parts(session.parts())?
+                .into_iter()
                 .rev()
                 .find(|message| message.role == Role::User);
-            if latest_user.map(|message| message.id) != observed_user_message_id {
+            if latest_user.as_ref().map(|message| message.id) != observed_user_message_id {
                 active_model_turn_id = latest_user
+                    .as_ref()
                     .and_then(|message| message.metadata.model_turn_id)
-                    .or_else(|| latest_user.map(|message| message.id));
-                observed_user_message_id = latest_user.map(|message| message.id);
+                    .or_else(|| latest_user.as_ref().map(|message| message.id));
+                observed_user_message_id = latest_user.as_ref().map(|message| message.id);
                 model_requested = true;
             }
 
@@ -317,7 +323,7 @@ impl SessionManager {
             }
 
             if let Some(hit) = crate::session::doom_loop::detect(
-                session.messages.as_slice(),
+                messages_from_parts(session.parts())?.as_slice(),
                 agena_domain::DoomLoopPolicy::default(),
             ) {
                 if doom_loop_recoveries < MAX_DOOM_LOOP_RECOVERIES {
@@ -393,9 +399,8 @@ impl SessionManager {
             }
 
             if !model_requested && !force_model_retry {
-                let last_assistant_text = session
-                    .messages
-                    .iter()
+                let last_assistant_text = messages_from_parts(session.parts())?
+                    .into_iter()
                     .rev()
                     // Only real assistant-authored messages count as the last
                     // assistant text: hook-only System-originated assistant
@@ -522,8 +527,9 @@ impl SessionManager {
                 .await
                 .map_err(execution_control_to_app_error)?;
 
-            let last_message_id = session
-                .last_conversation_message()
+            let last_message_id = messages_from_parts(session.parts())?
+                .into_iter()
+                .next_back()
                 .map(|message| message.id);
             let already_auto_compacted_at_boundary = session
                 .runtime
@@ -566,7 +572,7 @@ impl SessionManager {
                 "{}/{}",
                 current_options.model.provider_id, current_options.model.model_id
             );
-            let message_count = session.messages.len();
+            let message_count = messages_from_parts(session.parts())?.len();
             let pre_run_input = agena_plugin_host::PreRunInput {
                 session_id,
                 model: model.clone(),
@@ -623,9 +629,8 @@ impl SessionManager {
                         }
                     }
                     if active_model_turn_id.is_none() {
-                        active_model_turn_id = session
-                            .messages
-                            .iter()
+                        active_model_turn_id = messages_from_parts(session.parts())?
+                            .into_iter()
                             .rev()
                             .find(|message| message.role == Role::Assistant)
                             .and_then(|message| message.metadata.model_turn_id);
@@ -635,7 +640,7 @@ impl SessionManager {
                         session_id: session.id,
                         model,
                         status: format!("{:?}", session.workflow_state()),
-                        message_count: session.messages.len(),
+                        message_count: messages_from_parts(session.parts())?.len(),
                     };
                     state
                         .tool_executor
@@ -793,37 +798,29 @@ impl SessionManager {
     async fn inject_continuation_message(
         &self,
         mut session: Session,
-        options: &SessionRunOptions,
+        _options: &SessionRunOptions,
         text: String,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let ids = self.store.reserve_message_ids(1).await?;
-        let follow_up_turn_id = ids.message_id;
-        let user_message = build_message(
-            ids,
-            Role::User,
-            ExecutionStatus::Completed,
-            vec![PartContent::text(text)],
-            MessageMetadata {
-                source: MessageSource::System,
-                idempotency_key: None,
-                model_turn_id: Some(follow_up_turn_id),
-                conversation_turn_id: None,
-                conversation_reply_id: None,
-                parent_message_id: session.last_conversation_message().map(|m| m.id),
-                generated_by_call_id: None,
-                externally_initiated_tool: false,
-                model_provider_id: options.model.provider_id.to_string(),
-                model_adapter_id: options.model.adapter_id.as_ref().map(ToString::to_string),
-                model_id: options.model.model_id.to_string(),
-                model_thinking_mode: options.thinking_mode.clone(),
-                model_speed_mode: options.speed_mode.clone(),
-            },
-        )?;
-        session.messages.push(user_message.clone());
-        let checkpoint = MessageCheckpoint::all(&user_message);
-        self.persist_session_changes(session, vec![checkpoint], None, state)
-            .await
+        // v2 (design 4.1): a system-originated continuation is a User run
+        // (marker + text part) submitted through the facade, exactly like a
+        // steer input. v1 carried no idempotency key, so none is used here.
+        let new_parts = vec![new_part_from_content(
+            "text",
+            PartRole::User,
+            &PartContent::text(text),
+            PartState::Completed,
+        )?];
+        let outcome = self
+            .store
+            .submit_user_message(session.id, new_parts, None)
+            .await?;
+        if outcome.created {
+            let mut projected = session.parts().to_vec();
+            projected.extend(outcome.parts);
+            session.install_projected_parts(projected);
+        }
+        Ok(session)
     }
 
     /// Record one System-originated Assistant message with a `Hook` part per
@@ -841,45 +838,64 @@ impl SessionManager {
         &self,
         mut session: Session,
         runs: Vec<agena_plugin_host::HookRunRecord>,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let ids = self.store.reserve_message_ids(runs.len()).await?;
-        let parts = runs
+        // v2 (design 4.1): start an assistant-side run marker (`run_kind`
+        // `execution`) and append one `hook` part per observed run through the
+        // facade, then extend the projection with the marker + created parts.
+        let run_marker_content_value = run_marker_content("execution", None, None, None, None);
+        let run_id = self
+            .store
+            .start_run(session.id, "execution", run_marker_content_value.clone())
+            .await?;
+        let new_parts = runs
             .iter()
             .map(|run| {
-                PartContent::hook(crate::message::HookPart {
-                    hook: run.hook.clone(),
-                    plugin_id: Some(run.plugin_id.clone()),
-                    summary: run.summary.clone(),
-                    detail: run.detail.clone(),
-                })
+                new_part_from_content(
+                    "hook",
+                    PartRole::Assistant,
+                    &PartContent::hook(crate::message::HookPart {
+                        hook: run.hook.clone(),
+                        plugin_id: Some(run.plugin_id.clone()),
+                        summary: run.summary.clone(),
+                        detail: run.detail.clone(),
+                    }),
+                    PartState::Completed,
+                )
             })
-            .collect();
-        let message = build_message(
-            ids,
-            Role::Assistant,
-            ExecutionStatus::Completed,
-            parts,
-            MessageMetadata {
-                source: MessageSource::System,
-                idempotency_key: None,
-                model_turn_id: None,
-                conversation_turn_id: None,
-                conversation_reply_id: None,
-                parent_message_id: session.last_conversation_message().map(|m| m.id),
-                generated_by_call_id: None,
-                externally_initiated_tool: false,
-                model_provider_id: String::new(),
-                model_adapter_id: None,
-                model_id: String::new(),
-                model_thinking_mode: None,
-                model_speed_mode: None,
-            },
-        )?;
-        session.messages.push(message.clone());
-        let checkpoint = MessageCheckpoint::all(&message);
-        self.persist_session_changes(session, vec![checkpoint], None, state)
-            .await
+            .collect::<Result<Vec<_>, _>>()?;
+        let created = self
+            .store
+            .append_parts(session.id, run_id, new_parts)
+            .await?;
+        // `start_run` returns only the marker id; rebuild the marker in the
+        // projection exactly as the engine created it (facade `start_run`
+        // maps `run_kind == "execution"` to the Runtime role, pending state).
+        let now_ms = Utc::now().timestamp_millis();
+        let marker = Part {
+            part_id: run_id,
+            kind: "run".to_owned(),
+            role: PartRole::Runtime,
+            state: PartState::Pending,
+            content: run_marker_content_value,
+            summary: None,
+            visibility: agena_storage::store::PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: session.id,
+            revision: 1,
+            started_at_ms: now_ms,
+            finished_at_ms: None,
+            created_at_ms: now_ms,
+            updated_at_ms: now_ms,
+            provider_state: None,
+        };
+        let mut projected = session.parts().to_vec();
+        projected.push(marker);
+        projected.extend(created);
+        session.install_projected_parts(projected);
+        Ok(session)
     }
 
     pub(in crate::session::manager) async fn run_model_turn(
@@ -994,9 +1010,9 @@ impl SessionManager {
             );
 
             // The assistant message's durable id is the run marker's part id
-            // (started below); only the placeholder part allocator is used.
-            let processor_ids = self.store.reserve_processor_ids().await?;
-            let _message_id = processor_ids.message_id;
+            // (started below). v2 has no placeholder part allocator: the
+            // processor appends parts with placeholder ids of its own, which
+            // the adapter remaps to engine ids on append.
             let run_id = agena_domain::RunId::new();
             let turn_started_at_unix_ms = Utc::now().timestamp_millis();
             let mut completion = super::super::completion_request(
@@ -1048,16 +1064,20 @@ impl SessionManager {
                 reply_id,
                 session_id: session.id,
                 model_turn_id,
-                completion_parent_message_id: session
-                    .last_conversation_message()
+                completion_parent_message_id: messages_from_parts(session.parts())?
+                    .into_iter()
+                    .next_back()
                     .map(|message| message.id),
                 model: options.model.clone(),
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
                 completion,
                 next_message_id: marker_run_id,
-                part_ids: processor_ids.part_ids,
+                part_ids: Default::default(),
                 next_call_id: session.next_call_id(),
+                // R2: the processor persists this turn's parts itself through
+                // the facade-backed store — the only durable write source.
+                store: self.store.clone(),
                 cancel: Some(control.cancel.clone()),
             };
 
@@ -1089,16 +1109,22 @@ impl SessionManager {
                             .await?;
                     }
                     let termination = result.termination;
-                    let assistant_message = result
-                        .state
-                        .into_iter()
-                        .find(|message| message.id == result.assistant_message_id)
-                        .ok_or_else(|| {
-                            AppError::Internal(format!(
-                                "assistant message not found after processor run: {}",
-                                result.assistant_message_id
-                            ))
-                        })?;
+                    // R2: the processor persisted this turn entirely through
+                    // parts. Rebuild the in-memory v1 projection from the
+                    // persisted run (marker + child parts) for the legacy
+                    // prompt/digest/anchor path. Nothing here re-persists the
+                    // turn — parts are the only durable write source.
+                    let assistant_message = assistant_message_from_run_parts(
+                        result.assistant_message_id,
+                        result.message_state,
+                        &result.run_marker,
+                        &result.parts,
+                        result
+                            .provider_metadata
+                            .as_ref()
+                            .and_then(message_provider_state_from_provider_metadata),
+                        result.usage.clone(),
+                    )?;
                     let transcript_digest = {
                         let mut transcript_messages =
                             prompt_window::active_prompt_messages_for_model(
@@ -1177,44 +1203,23 @@ impl SessionManager {
                     drop(request_tool_api_functions);
                     drop(prepared);
 
-                    session.messages.push(assistant_message.clone());
-                    // Tool Operations already publish their authoritative
-                    // invocation/result checkpoints from the processor. Text
-                    // and reasoning stream live updates ephemerally, so only
-                    // those parts need a final durable snapshot here.
-                    let final_part_ids = assistant_message
-                        .parts
-                        .iter()
-                        .filter(|part| {
-                            !matches!(
-                                part.content.as_ref(),
-                                Some(PartContent::Activity(
-                                    crate::message::RuntimeActivity::Operation(_)
-                                ))
-                            )
-                        })
-                        .map(|part| part.id)
-                        .collect::<Vec<_>>();
-                    let checkpoints = (!final_part_ids.is_empty())
-                        .then(|| MessageCheckpoint::parts(assistant_message.id, final_part_ids));
-                    // The v2 write path (design 14.2): the persist appends the
-                    // streamed parts under the run marker started above,
-                    // pushes checkpointed deltas, and — only when every part
-                    // under the marker is terminal — completes or cancels the
-                    // run (`complete_run`/`cancel_run`). There is no event log
-                    // to append: RunStarted/RunCompleted/RunAborted are gone.
-                    let persisted_session = self
-                        .persist_session_changes(
-                            session,
-                            checkpoints.into_iter().collect(),
-                            None,
-                            state.clone(),
-                        )
-                        .await?;
+                    // R2: the turn's durable state was written entirely by the
+                    // processor through parts (marker, streamed text/think
+                    // parts, deferred tool-call parts, and — when every part
+                    // was terminal — the `complete_run`/`cancel_run` marker
+                    // terminalization). The v1 projection built above fed the
+                    // prompt/digest/anchor path only; v2 has no in-memory
+                    // `messages` projection to push it into, so nothing here
+                    // re-persists the turn — parts are the only durable write
+                    // source. The marker stays in-flight for a turn with
+                    // pending tools so the session remains Running; the
+                    // tool-execution persist terminalizes it once the
+                    // operations resolve (17.3/17.5).
+                    session.refresh_derived();
 
                     match termination {
                         SessionRunTermination::Completed => Ok((
-                            persisted_session,
+                            session,
                             ModelTurnOutcome {
                                 follow_up_requested: result.follow_up_requested,
                                 finish_reason: result.finish_reason,
@@ -1413,33 +1418,22 @@ impl SessionManager {
         } else if !ready_tools.is_empty() {
             // Mark every ready tool InProgress before fanning out so the live
             // transcript shows in-flight tools during the (potentially long)
-            // parallel execution instead of pending placeholders. Group changed
-            // parts by their owning message so each checkpoint stays within one
-            // message, then persist the batch transitions.
-            let mut parts_by_message = std::collections::HashMap::<i64, Vec<i64>>::new();
+            // parallel execution instead of pending placeholders. Each changed
+            // part id is one `update_part` in the batch transition checkpoint.
+            let mut changed_part_ids = Vec::new();
             for resolved in &ready_tools {
                 let Some(part) = session.part_mut(&resolved.pending.part) else {
                     continue;
                 };
-                if matches!(
-                    part.status,
-                    ExecutionStatus::Pending | ExecutionStatus::InProgress
-                ) {
-                    part.status = ExecutionStatus::InProgress;
-                    parts_by_message
-                        .entry(resolved.pending.part.message_id)
-                        .or_default()
-                        .push(part.id);
+                if matches!(part.state, PartState::Pending | PartState::InProgress) {
+                    part.state = PartState::InProgress;
+                    changed_part_ids.push(part.part_id);
                 }
             }
-            if !parts_by_message.is_empty() {
-                let checkpoints = parts_by_message
-                    .into_iter()
-                    .map(|(message_id, part_ids)| MessageCheckpoint::parts(message_id, part_ids))
-                    .collect::<Vec<_>>();
+            if !changed_part_ids.is_empty() {
                 session = Box::pin(self.persist_session_changes(
                     session,
-                    checkpoints,
+                    changed_part_ids,
                     None,
                     state.clone(),
                 ))
@@ -1475,7 +1469,7 @@ impl SessionManager {
             for pending_tool in sequential_tools {
                 if session
                     .part(&pending_tool.part)
-                    .is_some_and(|part| part.status == ExecutionStatus::Pending)
+                    .is_some_and(|part| part.state == PartState::Pending)
                 {
                     session =
                         Box::pin(self.resolve_pending_tool(session, pending_tool, state.clone()))
@@ -1561,7 +1555,7 @@ impl SessionManager {
             let authorization = operation_authorization(session, &resolved);
             let current_title = match session
                 .part(&resolved.pending.part)
-                .and_then(|part| part.content.as_ref())
+                .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
             {
                 Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
                     operation,
@@ -1572,17 +1566,20 @@ impl SessionManager {
             resolved.invocation = prepared.invocation.clone();
             let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 AppError::Internal(format!(
-                    "pending tool part not found: message={}, part={}",
-                    resolved.pending.part.message_id, resolved.pending.part.part_id
+                    "pending tool part not found: part={}",
+                    resolved.pending.part.part_id
                 ))
             })?;
-            tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
-                &resolved,
-                prepared.invocation,
-                prepared.title_override.unwrap_or(current_title),
-                resolved.lifecycle.clone(),
-                authorization,
-            )));
+            tool_part.content = part_content_to_value(&PartContent::operation(
+                pending_operation_for_resolved(
+                    &resolved,
+                    prepared.invocation,
+                    prepared.title_override.unwrap_or(current_title),
+                    resolved.lifecycle.clone(),
+                    authorization,
+                ),
+            ))
+            .expect("operation content is always JSON serializable");
         }
 
         let permission_checks = match scoped_executor
@@ -1607,8 +1604,9 @@ impl SessionManager {
             }
         };
 
-        let approved_actions = session.operation_permission_approved_actions(
-            resolved.pending.part.message_id,
+        let approved_actions = operation_permission_approved_actions(
+            session,
+            assistant_message_id(session, &resolved.pending.part)?,
             &resolved.operation_id,
         );
         let permission_checks = permission_checks
@@ -1732,7 +1730,7 @@ impl SessionManager {
             let authorization = operation_authorization(session, &resolved);
             let current_title = match session
                 .part(&resolved.pending.part)
-                .and_then(|part| part.content.as_ref())
+                .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
             {
                 Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
                     operation,
@@ -1743,17 +1741,20 @@ impl SessionManager {
             resolved.invocation = prepared.invocation.clone();
             let tool_part = session.part_mut(&resolved.pending.part).ok_or_else(|| {
                 PendingToolPreparationError::Session(AppError::Internal(format!(
-                    "pending tool part not found: message={}, part={}",
-                    resolved.pending.part.message_id, resolved.pending.part.part_id
+                    "pending tool part not found: part={}",
+                    resolved.pending.part.part_id
                 )))
             })?;
-            tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
-                &resolved,
-                prepared.invocation,
-                prepared.title_override.unwrap_or(current_title),
-                resolved.lifecycle.clone(),
-                authorization,
-            )));
+            tool_part.content = part_content_to_value(&PartContent::operation(
+                pending_operation_for_resolved(
+                    &resolved,
+                    prepared.invocation,
+                    prepared.title_override.unwrap_or(current_title),
+                    resolved.lifecycle.clone(),
+                    authorization,
+                ),
+            ))
+            .expect("operation content is always JSON serializable");
             session_changed = true;
         }
 
@@ -1854,8 +1855,9 @@ impl SessionManager {
             }
         };
 
-        let approved_actions = session.operation_permission_approved_actions(
-            resolved.pending.part.message_id,
+        let approved_actions = operation_permission_approved_actions(
+            &session,
+            assistant_message_id(&session, &resolved.pending.part)?,
             &resolved.operation_id,
         );
         let permission_checks = permission_checks
@@ -1906,10 +1908,7 @@ impl SessionManager {
         if session_changed {
             session = Box::pin(self.persist_session_changes(
                 session,
-                vec![MessageCheckpoint::part(
-                    resolved.pending.part.message_id,
-                    resolved.pending.part.part_id,
-                )],
+                vec![resolved.pending.part.part_id],
                 None,
                 state.clone(),
             ))
@@ -1927,12 +1926,12 @@ impl SessionManager {
         let part_was_pending = session
             .part_mut(&resolved.pending.part)
             .map(|tool_part| {
-                let was_pending = matches!(tool_part.status, ExecutionStatus::Pending);
+                let was_pending = matches!(tool_part.state, PartState::Pending);
                 if matches!(
-                    tool_part.status,
-                    ExecutionStatus::Pending | ExecutionStatus::InProgress
+                    tool_part.state,
+                    PartState::Pending | PartState::InProgress
                 ) {
-                    tool_part.status = ExecutionStatus::InProgress;
+                    tool_part.state = PartState::InProgress;
                 }
                 was_pending
             })
@@ -1940,10 +1939,7 @@ impl SessionManager {
         if part_was_pending {
             session = Box::pin(self.persist_session_changes(
                 session,
-                vec![MessageCheckpoint::part(
-                    resolved.pending.part.message_id,
-                    resolved.pending.part.part_id,
-                )],
+                vec![resolved.pending.part.part_id],
                 None,
                 state.clone(),
             ))
@@ -2417,7 +2413,7 @@ impl SessionManager {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let existing_permission_replied = session
             .part(&resolved.pending.part)
-            .and_then(|part| part.content.as_ref())
+            .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
             .and_then(|content| match content {
                 PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
                     operation
@@ -2454,25 +2450,23 @@ impl SessionManager {
             created_at: Utc::now(),
         };
 
-        let assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
-                    operation,
-                ))) = tool_part.content.as_mut()
-                else {
-                    return;
-                };
-                operation.authorization.push_pending(request.clone());
-                operation.set_summary(format!("Awaiting approval · {reason}"));
-                tool_part.status = ExecutionStatus::Pending;
-                tool_part.summary = Some(operation.summary.clone());
-            })?;
+        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+            let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                mut operation,
+            ))) = part_content_from_value(&tool_part.kind, &tool_part.content)
+            else {
+                return;
+            };
+            operation.authorization.push_pending(request.clone());
+            operation.set_summary(format!("Awaiting approval · {reason}"));
+            tool_part.summary = Some(operation.summary.clone());
+            tool_part.content = part_content_to_value(&PartContent::operation(operation))
+                .expect("operation content is always JSON serializable");
+            tool_part.state = PartState::Pending;
+        })?;
         self.persist_session_changes(
             session,
-            vec![MessageCheckpoint::part(
-                assistant_message.id,
-                resolved.pending.part.part_id,
-            )],
+            vec![resolved.pending.part.part_id],
             None,
             state.clone(),
         )
@@ -2514,56 +2508,84 @@ impl SessionManager {
         };
         let authorization = operation_authorization(&session, &resolved);
 
-        let _assistant_message =
-            update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-                tool_part.set_content(PartContent::operation(pending_operation_for_resolved(
+        update_resolved_tool_message(&mut session, &resolved, |tool_part| {
+            tool_part.content = part_content_to_value(&PartContent::operation(
+                pending_operation_for_resolved(
                     &resolved,
                     resolved.invocation.clone(),
                     ask_user_title(&request),
                     resolved.lifecycle.clone(),
                     authorization.clone(),
-                )));
-                tool_part.status = ExecutionStatus::Pending;
-                tool_part.summary = Some(match request.questions.len() {
-                    0 => "Ask user".to_string(),
-                    1 => "Waiting for answer".to_string(),
-                    count => format!("Waiting for {count} answers"),
-                });
-            })?;
+                ),
+            ))
+            .expect("operation content is always JSON serializable");
+            tool_part.state = PartState::Pending;
+            tool_part.summary = Some(match request.questions.len() {
+                0 => "Ask user".to_string(),
+                1 => "Waiting for answer".to_string(),
+                count => format!("Waiting for {count} answers"),
+            });
+        })?;
 
-        let user_input_request_part =
-            RequestPart::UserInput(InteractiveRequestPart::pending(request.clone()));
-        let assistant_message = match self.upsert_existing_pending_request_part(
-            &mut session,
-            &resolved,
-            request.request_id.as_str(),
-            agena_domain::PendingInteractiveRequestKind::UserInput,
-            user_input_request_part,
-        )? {
-            Some(message) => message,
-            None => {
-                let input_part_id = self.store.reserve_part_id().await?;
-                append_resolved_message_part(
-                    &mut session,
-                    &resolved,
-                    build_request_part(
-                        input_part_id,
-                        resolved.pending.part.message_id,
-                        resolved.operation_id.as_str(),
-                        RequestPart::UserInput(InteractiveRequestPart::pending(request.clone())),
-                    ),
-                )?
-            }
-        };
-        let checkpoint = MessageCheckpoint::parts(
-            assistant_message.id,
-            assistant_message
-                .parts
-                .iter()
-                .filter(|part| part.operation_id.as_deref() == Some(resolved.operation_id.as_str()))
-                .map(|part| part.id),
-        );
-        self.persist_session_changes(session, vec![checkpoint], None, state)
+        // Present the request as an `interaction` part under the owning run
+        // marker (v2): update an already-pending request for the same id in
+        // place, otherwise append a fresh part through the facade. The part
+        // content is the canonical `interaction` shape, which carries the
+        // request id under `content["request"]["request_id"]`.
+        let interaction_content = part_content_to_value(&PartContent::Activity(
+            crate::message::RuntimeActivity::Interaction(RequestPart::UserInput(
+                InteractiveRequestPart::pending(request.clone()),
+            )),
+        ))?;
+        let existing_request_part = session
+            .parts()
+            .iter()
+            .enumerate()
+            .find(|(_, part)| {
+                part.kind == "interaction"
+                    && part.state.is_in_flight()
+                    && part
+                        .content
+                        .get("request")
+                        .and_then(|value| value.get("request_id"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some(request.request_id.as_str())
+            })
+            .map(|(part_index, part)| (part_index, part.part_id));
+        let mut changed_part_ids = vec![resolved.pending.part.part_id];
+        if let Some((part_index, part_id)) = existing_request_part {
+            let part_ref = crate::session::model::SessionPartRef {
+                part_index,
+                part_id,
+            };
+            let part = session.part_mut(&part_ref).ok_or_else(|| {
+                AppError::Internal(format!(
+                    "pending interaction part not found while requesting user input: part={}",
+                    part_id
+                ))
+            })?;
+            part.content = interaction_content;
+            part.state = PartState::Pending;
+            changed_part_ids.push(part_id);
+        } else {
+            let run_marker_id = assistant_message_id(&session, &resolved.pending.part)?;
+            let new_part = new_part_from_content(
+                "interaction",
+                PartRole::Assistant,
+                &PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+                    RequestPart::UserInput(InteractiveRequestPart::pending(request.clone())),
+                )),
+                PartState::Pending,
+            )?;
+            let created = self
+                .store
+                .append_parts(session.id, run_marker_id, vec![new_part])
+                .await?;
+            let mut projected = session.parts().to_vec();
+            projected.extend(created);
+            session.install_projected_parts(projected);
+        }
+        self.persist_session_changes(session, changed_part_ids, None, state)
             .await
     }
 
@@ -2585,20 +2607,21 @@ impl SessionManager {
         let mut last_title_refresh = std::time::Instant::now();
         let mut streamed_output = String::new();
         // Resolve the Activity id once so live detail broadcasts never need a
-        // per-tick session load.
-        let streaming_activity_id = session
-            .part(&pending_tool.part)
-            .and_then(|part| part.activity_id);
+        // per-tick session load. v2 parts carry no activity id; the live
+        // handler is purely in-memory (broadcast is a no-op bridge), so a
+        // fresh id per stream is sufficient.
+        let streaming_activity_id = Some(agena_domain::ActivityId::new());
         // Activity v2 live bridge (07 §5.2, §6.1): one in-memory handler feeds
         // the unified wire events from the same text deltas that drive the
         // streamed tool part. Events are broadcast live (a no-op bridge in v2;
         // P5 re-homes onto the facade notification bus).
         let initial_title = session
             .part(&pending_tool.part)
-            .and_then(|part| match &part.content {
-                Some(crate::message::PartContent::Activity(
+            .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
+            .and_then(|content| match content {
+                crate::message::PartContent::Activity(
                     crate::message::RuntimeActivity::Operation(operation),
-                )) if !operation.title.is_empty() => Some(operation.title.clone()),
+                ) if !operation.title.is_empty() => Some(operation.title.clone()),
                 _ => None,
             })
             .unwrap_or_else(|| "tool".to_owned());
@@ -2609,12 +2632,14 @@ impl SessionManager {
             let invocation =
                 session
                     .part(&pending_tool.part)
-                    .and_then(|part| match &part.content {
-                        Some(crate::message::PartContent::Activity(
+                    .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
+                    .and_then(|content| match content {
+                        crate::message::PartContent::Activity(
                             crate::message::RuntimeActivity::Operation(operation),
-                        )) => Some(&operation.invocation),
+                        ) => Some(operation.invocation),
                         _ => None,
                     });
+            let invocation = invocation.as_ref();
             let command = invocation.and_then(|invocation| {
                 invocation
                     .input
@@ -2815,17 +2840,18 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
-        let _assistant_message = update_resolved_tool_message(&mut session, &resolved, |part| {
-            if let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+        let _run_marker_id = update_resolved_tool_message(&mut session, &resolved, |part| {
+            if let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
                 operation,
-            ))) = part.content.as_ref()
+            ))) = part_content_from_value(&part.kind, &part.content)
             {
-                let mut operation = operation.clone();
+                let mut operation = operation;
                 operation.set_summary("Execution cancelled");
                 operation.lifecycle = completed_lifecycle(&resolved.lifecycle);
-                part.set_content(PartContent::operation(operation));
+                part.content = part_content_to_value(&PartContent::operation(operation))
+                    .expect("operation content is always JSON serializable");
             }
-            part.status = ExecutionStatus::Cancelled;
+            part.state = PartState::Cancelled;
             part.summary = Some("Execution cancelled".to_string());
         })?;
 
@@ -2873,14 +2899,14 @@ impl SessionManager {
                 .part_mut(&tool_part_ref)
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
             if matches!(
-                tool_part.status,
-                ExecutionStatus::Pending | ExecutionStatus::InProgress
+                tool_part.state,
+                PartState::Pending | PartState::InProgress
             ) {
-                tool_part.status = ExecutionStatus::InProgress;
+                tool_part.state = PartState::InProgress;
             }
-            if let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
-                operation,
-            ))) = tool_part.content.as_mut()
+            if let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                mut operation,
+            ))) = part_content_from_value(&tool_part.kind, &tool_part.content)
             {
                 let elapsed_secs = if operation.lifecycle.start_ms > 0 {
                     (Utc::now().timestamp_millis() - operation.lifecycle.start_ms) / 1000
@@ -2900,6 +2926,8 @@ impl SessionManager {
                     );
                     operation.set_title(format!("{base_title} · {elapsed_secs}s"));
                 }
+                tool_part.content = part_content_to_value(&PartContent::operation(operation))
+                    .expect("operation content is always JSON serializable");
             }
         };
         // Persist the refreshed title as a part delta checkpoint (v2 D10):
@@ -2908,10 +2936,7 @@ impl SessionManager {
         // content-node title column to target.
         self.persist_session_changes(
             session,
-            vec![MessageCheckpoint::part(
-                pending_tool.part.message_id,
-                pending_tool.part.part_id,
-            )],
+            vec![pending_tool.part.part_id],
             None,
             state,
         )
@@ -2945,19 +2970,24 @@ impl SessionManager {
             let tool_part = session
                 .part_mut(&tool_part_ref)
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-            if !tool_part.append_tool_output_delta(preview.as_str()) {
+            // `append_tool_output_delta` becomes a decode → mutate → re-encode
+            // cycle on the part's canonical operation content.
+            let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                mut operation,
+            ))) = part_content_from_value(&tool_part.kind, &tool_part.content)
+            else {
                 return Err(AppError::Internal(format!(
-                    "streaming tool part refused terminal output: message={}, part={}",
-                    pending_tool.part.message_id, pending_tool.part.part_id
+                    "streaming tool part refused terminal output: part={}",
+                    pending_tool.part.part_id
                 )));
-            }
+            };
+            operation.append_output_delta(preview.as_str());
+            tool_part.content = part_content_to_value(&PartContent::operation(operation))
+                .expect("operation content is always JSON serializable");
         }
         self.persist_session_changes(
             session,
-            vec![MessageCheckpoint::part(
-                pending_tool.part.message_id,
-                pending_tool.part.part_id,
-            )],
+            vec![pending_tool.part.part_id],
             None,
             state,
         )
@@ -3070,21 +3100,58 @@ impl SessionManager {
                     .iter()
                     .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone()))),
             );
-            tool_part.set_content(PartContent::operation(operation));
-            tool_part.status = ExecutionStatus::Completed;
+            tool_part.content =
+                part_content_to_value(&PartContent::operation(operation))
+                    .expect("operation content is always JSON serializable");
+            tool_part.state = PartState::Completed;
         })?;
+        // Mirror the v1 message usage attribution into the owning run marker's
+        // `content["usage"]` (the v2 projection `aggregate_usage()` sums it).
+        // Flush the marker content directly: `persist_tool_completion` only
+        // persists the tool part and the cancelled request parts.
         if let Some(attributed_usage) = attributed_usage {
-            let message = session
-                .messages
-                .get_mut(resolved.pending.part.message_index)
+            let run_marker_id = assistant_message_id(&session, &resolved.pending.part)?;
+            let marker_index = session
+                .parts()
+                .iter()
+                .position(|part| part.part_id == run_marker_id)
                 .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
-            message
-                .usage
-                .get_or_insert_with(agena_provider::CompletionUsage::default)
-                .attributed_usage
-                .push(attributed_usage);
+            let marker_ref = crate::session::model::SessionPartRef {
+                part_index: marker_index,
+                part_id: run_marker_id,
+            };
+            let marker_content = session
+                .part(&marker_ref)
+                .map(|marker| {
+                    let mut merged = marker
+                        .content
+                        .get("usage")
+                        .cloned()
+                        .and_then(|usage| {
+                            serde_json::from_value::<agena_provider::CompletionUsage>(usage).ok()
+                        })
+                        .unwrap_or_default();
+                    merged.add_assign(&agena_provider::CompletionUsage {
+                        attributed_usage: vec![attributed_usage],
+                        ..Default::default()
+                    });
+                    let mut content = marker.content.clone();
+                    content["usage"] =
+                        serde_json::to_value(&merged).expect("usage is always JSON serializable");
+                    content
+                })
+                .ok_or_else(|| pending_tool_part_not_found_error(&resolved.pending.part))?;
+            self.store
+                .update_part(
+                    session.id,
+                    run_marker_id,
+                    agena_storage::store::PartDelta {
+                        content: Some(marker_content),
+                        ..Default::default()
+                    },
+                )
+                .await?;
         }
-        let _assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
 
         Box::pin(self.persist_tool_completion(session, &resolved, persisted_rules, state)).await
     }

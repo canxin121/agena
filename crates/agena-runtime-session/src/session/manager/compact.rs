@@ -1,12 +1,14 @@
 use super::{
     AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, ExecutionStatus,
-    Message, MessageSource, PromptCompactionRuntime, Role, SessionExecutionRequest, SessionManager,
-    SessionManagerState, SessionRunOptions, Utc,
+    Message, PromptCompactionRuntime, SessionExecutionRequest, SessionManager, SessionManagerState,
+    SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
 use crate::session::prompt_window;
-use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger, ThinkingRequest};
+use agena_domain::{
+    MessageSource, PromptCompactionStrategy, PromptCompactionTrigger, Role, ThinkingRequest,
+};
 use agena_provider::CompletionRequest;
 use agena_provider::ProviderErrorKind;
 use agena_provider::{CompletionFinishReason, ProviderCompactionContext, ProviderCompactionOutput};
@@ -189,13 +191,15 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
     ) -> Result<Session, (Session, AppError)> {
-        if session.messages.is_empty() {
+        if session.parts().is_empty() {
             return Ok(session);
         }
 
+        // The compaction boundary is the last run marker's part id (v2: the
+        // marker part id is the durable message id).
         let boundary = session
-            .last_conversation_message()
-            .map(|message| message.id)
+            .last_run_marker()
+            .map(|marker| marker.part_id)
             .unwrap_or_default();
         let prompt_inputs = match self.compaction_prompt_inputs(&session, options, state.as_ref()) {
             Ok(inputs) => inputs,

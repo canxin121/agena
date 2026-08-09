@@ -7,6 +7,7 @@ use super::{
     message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
 };
 use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
+use agena_storage::store::{Part, PartState, RunOutcome};
 use futures_util::StreamExt;
 use tracing::Instrument;
 
@@ -83,6 +84,21 @@ impl SessionProcessor {
         }
     }
 
+    /// Execute one provider model turn as a **parts-native** run (R2).
+    ///
+    /// The caller has already started the run marker (via
+    /// [`StoreAdapter::start_run`]) and passes its id as `run.next_message_id`.
+    /// This turn's durable state is written exclusively through parts: the
+    /// active text/think parts are appended under the marker
+    /// (`append_parts`), stream deltas are pushed as `content_text_delta`
+    /// (`update_part`, amortized by the facade per D10), think deltas replace
+    /// the full content document (D10 asymmetry — the thinking content is an
+    /// array shape, so `content_text_delta` cannot be applied), and the run is
+    /// terminalized with `complete_run`/`cancel_run`. In-flight tool-call
+    /// placeholders are deferred and appended only on the success path. The
+    /// result carries the persisted parts — never a v1 [`Message`] — so the
+    /// caller must not re-persist this turn (parts are the only durable write
+    /// source; no double write).
     pub(crate) async fn run_turn(
         &self,
         mut run: SessionRunRequest,
@@ -129,6 +145,8 @@ impl SessionProcessor {
         agena_runtime::record_provider_call(stream_result.is_ok());
         let mut stream = stream_result?;
 
+        // The run marker started by the caller is the assistant message's
+        // durable id (design 4.1: a message == one run).
         let assistant_message_id = run.next_message_id;
         run.next_message_id += 1;
         let model_turn_id = run.model_turn_id.unwrap_or(assistant_message_id);
@@ -150,6 +168,8 @@ impl SessionProcessor {
         };
 
         let started_at = Utc::now();
+        // In-memory v1 projection kept for the legacy prompt/UI path; every
+        // durable write goes through the `parts` accumulator below.
         let mut assistant = Message {
             id: assistant_message_id,
             role: Role::Assistant,
@@ -160,6 +180,10 @@ impl SessionProcessor {
             provider_state: None,
             usage: None,
         };
+        // Durable part rows created under the run marker, in creation order,
+        // with the latest engine state applied. This is what the result
+        // carries; the manager rebuilds the v1 projection from it.
+        let mut parts: Vec<Part> = Vec::new();
 
         let mut active_text_part: Option<i64> = None;
         let mut active_reasoning_part: Option<i64> = None;
@@ -196,22 +220,27 @@ impl SessionProcessor {
                     visible_text.push_str(delta.as_str());
                     if let Some(part_id) = active_reasoning_part.take() {
                         // A thinking segment is complete the moment the model
-                        // starts producing text. Terminalize it immediately so
-                        // the terminal stops showing the spinner instead of
-                        // waiting for the stream end.
+                        // starts producing text. Terminalize it immediately —
+                        // in memory and on the durable row — so the terminal
+                        // stops showing the spinner instead of waiting for the
+                        // stream end.
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
                     let part_id = match active_text_part {
                         Some(part_id) => part_id,
                         None => {
-                            let part_id = run.part_ids.reserve().await?;
-                            self.start_text_part(&mut assistant, part_id, Utc::now())?;
+                            let part_id = self
+                                .start_text_part(&run, &mut assistant, &mut parts, Utc::now())
+                                .await?;
                             active_text_part = Some(part_id);
                             part_id
                         }
                     };
 
-                    self.append_text_delta(&mut assistant, part_id, delta.as_str())?;
+                    self.append_text_delta(&run, &mut assistant, &mut parts, part_id, delta.as_str())
+                        .await?;
                 }
                 Ok(CompletionStreamEvent::ToolCallDelta {
                     stream_key,
@@ -223,9 +252,13 @@ impl SessionProcessor {
                     saw_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
 
                     let stream_key =
@@ -251,9 +284,13 @@ impl SessionProcessor {
                     saw_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
 
                     let stream_key =
@@ -289,9 +326,13 @@ impl SessionProcessor {
                     saw_provider_native_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
 
                     let pending = pending_provider_native_tool_calls
@@ -319,9 +360,13 @@ impl SessionProcessor {
                     saw_provider_native_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
 
                     let pending = pending_provider_native_tool_calls
@@ -360,18 +405,28 @@ impl SessionProcessor {
                     reasoning_text.push_str(delta.as_str());
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
+                        self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                            .await?;
                     }
                     let part_id = match active_reasoning_part {
                         Some(part_id) => part_id,
                         None => {
-                            let part_id = run.part_ids.reserve().await?;
-                            self.start_reasoning_part(&mut assistant, part_id, Utc::now())?;
+                            let part_id = self
+                                .start_reasoning_part(&run, &mut assistant, &mut parts, Utc::now())
+                                .await?;
                             active_reasoning_part = Some(part_id);
                             part_id
                         }
                     };
 
-                    self.append_reasoning_delta(&mut assistant, part_id, delta.as_str())?;
+                    self.append_reasoning_delta(
+                        &run,
+                        &mut assistant,
+                        &mut parts,
+                        part_id,
+                        delta.as_str(),
+                    )
+                    .await?;
                 }
                 Ok(CompletionStreamEvent::ProviderRetry { .. }) => {}
                 Err(err) => {
@@ -420,11 +475,15 @@ impl SessionProcessor {
                 true
             });
         } else {
-            if let Some(part_id) = active_text_part {
+            if let Some(part_id) = active_text_part.take() {
                 complete_part_status(&mut assistant, part_id)?;
+                self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                    .await?;
             }
-            if let Some(part_id) = active_reasoning_part {
+            if let Some(part_id) = active_reasoning_part.take() {
                 complete_part_status(&mut assistant, part_id)?;
+                self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                    .await?;
             }
         }
 
@@ -435,10 +494,14 @@ impl SessionProcessor {
             && !reasoning_text.trim().is_empty()
             && reasoning_text.trim() != REASONING_PLACEHOLDER
         {
-            let part_id = run.part_ids.reserve().await?;
-            self.start_text_part(&mut assistant, part_id, Utc::now())?;
-            self.append_text_delta(&mut assistant, part_id, reasoning_text.as_str())?;
+            let part_id = self
+                .start_text_part(&run, &mut assistant, &mut parts, Utc::now())
+                .await?;
+            self.append_text_delta(&run, &mut assistant, &mut parts, part_id, reasoning_text.as_str())
+                .await?;
             complete_part_status(&mut assistant, part_id)?;
+            self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                .await?;
         }
 
         // A successful stream that produced no visible text, no tool call,
@@ -457,7 +520,21 @@ impl SessionProcessor {
         }
 
         if provider_err.is_none() {
-            self.finalize_pending_tool_calls(&mut run, &mut assistant, pending_calls)
+            // A malformed final tool call is a run failure, not an abort: fold
+            // it into the terminal path below so the already-persisted text
+            // and think parts are terminalized alongside the marker.
+            if let Err(err) = self
+                .finalize_pending_tool_calls(&mut run, &mut assistant, pending_calls)
+                .await
+            {
+                provider_err = Some(err);
+            }
+        }
+        if provider_err.is_none() {
+            // Tool Operations publish their authoritative execution checkpoints
+            // through the tool executor later; this only makes the call-side
+            // parts durable so the run's children are complete.
+            self.persist_deferred_tool_parts(&run, &mut assistant, &mut parts)
                 .await?;
         }
 
@@ -471,6 +548,37 @@ impl SessionProcessor {
                 .transition_state(terminal_status)
                 .map_err(|err| AppError::Internal(err.to_string()))?;
 
+            // Persist the terminalization of every durable content part
+            // (text/think rows appended above), then terminalize the marker.
+            let durable_part_ids: Vec<i64> = parts.iter().map(|part| part.part_id).collect();
+            for part_id in durable_part_ids {
+                self.persist_part_state(&run, &mut assistant, &mut parts, part_id)
+                    .await?;
+            }
+            let marker = if cancelled {
+                // `cancel_run` cancels the marker and its in-flight children.
+                run.store
+                    .cancel_run(run.session_id, assistant_message_id)
+                    .await?;
+                self.collect_run_parts(&run.store, run.session_id, assistant_message_id)
+                    .await?
+            } else {
+                run.store
+                    .complete_run(
+                        run.session_id,
+                        assistant_message_id,
+                        RunOutcome {
+                            status: PartState::Failed,
+                            abort_reason: Some("provider_error".to_owned()),
+                            content: None,
+                            provider_state: None,
+                        },
+                    )
+                    .await?;
+                self.collect_run_parts(&run.store, run.session_id, assistant_message_id)
+                    .await?
+            };
+
             if !cancelled {
                 let failure = err.failure();
                 tracing::warn!(
@@ -482,7 +590,9 @@ impl SessionProcessor {
             }
             return Ok(SessionRunResult {
                 assistant_message_id,
-                state: vec![assistant],
+                run_marker: marker,
+                parts,
+                message_state: terminal_status,
                 provider_metadata,
                 termination: if cancelled {
                     SessionRunTermination::Cancelled
@@ -491,6 +601,7 @@ impl SessionProcessor {
                 },
                 follow_up_requested: false,
                 finish_reason: FinishReason::Stop,
+                usage: None,
             });
         }
 
@@ -508,13 +619,53 @@ impl SessionProcessor {
             .as_ref()
             .and_then(message_provider_state_from_provider_metadata);
 
+        // Terminalize the run marker only when every part under it is terminal
+        // (design 17.3/17.5): a successful turn with in-flight tool calls keeps
+        // the marker in-flight so the session stays Running while the tools
+        // execute; the deferred tool parts were appended above, and the
+        // tool-execution persist terminalizes the marker once they resolve.
+        let all_parts_terminal = assistant.parts.iter().all(|part| part.status.is_terminal());
+        let run_marker = if all_parts_terminal {
+            let provider_state = assistant.provider_state.as_ref().and_then(|state| {
+                serde_json::to_value(state)
+                    .map_err(|error| {
+                        tracing::warn!(
+                            target: "agena::session::processor",
+                            run_id = assistant_message_id,
+                            "failed to serialize run provider state: {error}"
+                        );
+                    })
+                    .ok()
+            });
+            run.store
+                .complete_run(
+                    run.session_id,
+                    assistant_message_id,
+                    RunOutcome {
+                        status: PartState::Completed,
+                        abort_reason: None,
+                        content: None,
+                        provider_state,
+                    },
+                )
+                .await?;
+            self.collect_run_parts(&run.store, run.session_id, assistant_message_id)
+                .await?
+        } else {
+            self.collect_run_parts(&run.store, run.session_id, assistant_message_id)
+                .await?
+        };
+
         Ok(SessionRunResult {
             assistant_message_id,
-            state: vec![assistant],
+            run_marker,
+            parts,
+            message_state: ExecutionStatus::Completed,
             provider_metadata,
             termination: SessionRunTermination::Completed,
             follow_up_requested,
             finish_reason: finish_reason_enum,
+            usage,
         })
     }
 

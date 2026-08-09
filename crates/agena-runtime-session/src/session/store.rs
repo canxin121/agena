@@ -470,105 +470,12 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
-    /// Reserve in-memory identity for a brand-new message. v2 makes the
-    /// engine the only durable id source (14.2), so these are negative
-    /// placeholders the adapter remaps to engine ids on the next persist.
-    pub(crate) async fn reserve_message_ids(
-        &self,
-        part_count: usize,
-    ) -> Result<ReservedMessageIds, AppError> {
-        Ok(ReservedMessageIds::unpersisted(part_count))
-    }
-
-    /// Reserve identity for a processor model run: a placeholder assistant
-    /// message id plus a placeholder part allocator. The run marker is
-    /// created by `start_run` on persist; its part id becomes the message id.
-    pub(crate) async fn reserve_processor_ids(&self) -> Result<ProcessorIds, AppError> {
-        Ok(ProcessorIds {
-            message_id: next_placeholder_id(),
-            part_ids: ProcessorPartIdAllocator,
-        })
-    }
-
-    pub(crate) async fn reserve_part_id(&self) -> Result<i64, AppError> {
-        Ok(next_placeholder_id())
-    }
-
     fn session_from_meta(&self, meta: SessionMeta) -> Result<Session, AppError> {
         let view = SessionView {
             meta,
             parts: Vec::new(),
         };
         session_from_view(view)
-    }
-}
-
-/// In-memory identity for one processor model run (see
-/// [`StoreAdapter::reserve_processor_ids`]).
-#[derive(Debug, Clone)]
-pub(crate) struct ProcessorIds {
-    pub(crate) message_id: i64,
-    pub(crate) part_ids: ProcessorPartIdAllocator,
-}
-
-/// Explicit delta for durable model-message projection.
-///
-/// A persist names the exact parts whose value or status changed. This
-/// prevents an update to one streamed Operation from checkpointing every
-/// older sibling in the same assistant message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct MessageCheckpoint {
-    pub(crate) message_id: i64,
-    pub(crate) part_ids: Vec<i64>,
-}
-
-impl MessageCheckpoint {
-    pub(crate) fn all(message: &Message) -> Self {
-        Self::parts(message.id, message.parts.iter().map(|part| part.id))
-    }
-
-    pub(crate) fn part(message_id: i64, part_id: i64) -> Self {
-        Self {
-            message_id,
-            part_ids: vec![part_id],
-        }
-    }
-
-    pub(crate) fn parts(message_id: i64, part_ids: impl IntoIterator<Item = i64>) -> Self {
-        let mut part_ids = part_ids.into_iter().collect::<Vec<_>>();
-        part_ids.sort_unstable();
-        part_ids.dedup();
-        Self {
-            message_id,
-            part_ids,
-        }
-    }
-}
-
-/// In-memory message/part identity before the engine assigns durable ids.
-///
-/// v2 makes the persistence engine the only id source (design 14.2), so the
-/// manager builds fresh in-memory messages with negative placeholder ids and
-/// the adapter remaps them to engine ids on every persist. `reserve_message_ids`
-/// in v1 pre-allocated real ids; v2 has no such allocator.
-#[derive(Debug, Clone)]
-pub(crate) struct ReservedMessageIds {
-    pub(crate) message_id: i64,
-    pub(crate) part_ids: Vec<i64>,
-}
-
-impl ReservedMessageIds {
-    /// A message id plus `part_count` part ids, all process-unique placeholders
-    /// (negative) that `persist_session` replaces with engine ids.
-    pub(crate) fn unpersisted(part_count: usize) -> Self {
-        let message_id = next_placeholder_id();
-        let part_ids = (0..part_count)
-            .map(|_| next_placeholder_id())
-            .collect::<Vec<_>>();
-        Self {
-            message_id,
-            part_ids,
-        }
     }
 }
 
@@ -588,301 +495,6 @@ pub(crate) struct ProcessorPartIdAllocator;
 impl ProcessorPartIdAllocator {
     pub(crate) async fn reserve(&self) -> Result<i64, AppError> {
         Ok(next_placeholder_id())
-    }
-}
-
-impl StoreAdapter {
-    /// Persist the session's in-memory deltas through the facade and return
-    /// the remapped aggregate (engine ids on every new message and part).
-    ///
-    /// This is the v2 replacement for the v1 `SessionCommit`/`persist` write
-    /// path. The manager mutates a `Session` it loaded (or built with
-    /// placeholder ids) and calls this with the [`MessageCheckpoint`]s naming
-    /// the parts whose value/status changed. The adapter:
-    ///
-    /// - submits brand-new user runs via `submit_user_message` (marker +
-    ///   content parts in one transaction, 7.1);
-    /// - starts brand-new non-user runs via `start_run` (the manager normally
-    ///   starts the run first so the marker is durable before the provider
-    ///   call, but a placeholder message here is started and appended);
-    /// - appends new parts under existing runs (`append_parts`, D10);
-    /// - pushes checkpointed part deltas (`update_part`);
-    /// - terminalizes completed/failed/cancelled runs (`complete_run`).
-    ///
-    /// Every created/updated engine id is written back onto the in-memory
-    /// aggregate and derived state is rebuilt, so the returned `Session` is
-    /// fully consistent for the next execution step.
-    pub(crate) async fn persist_session(
-        &self,
-        mut session: Session,
-        checkpoints: &[MessageCheckpoint],
-    ) -> Result<Session, AppError> {
-        let session_id = session.id;
-        let mut remapped = Vec::with_capacity(session.messages.len());
-        for mut message in std::mem::take(&mut session.messages) {
-            message = self
-                .persist_message(session_id, message, checkpoints)
-                .await?;
-            remapped.push(message);
-        }
-        session.messages = remapped;
-        session.install_projected_messages(session.messages.clone());
-        Ok(session)
-    }
-
-    /// Persist one message's deltas under its run. `message.id` is the run
-    /// marker part id (after remap) or a placeholder for a brand-new run.
-    async fn persist_message(
-        &self,
-        session_id: i64,
-        mut message: Message,
-        checkpoints: &[MessageCheckpoint],
-    ) -> Result<Message, AppError> {
-        let is_new_run = message.id < 0;
-        if is_new_run {
-            return self.persist_new_message(session_id, message).await;
-        }
-
-        // Existing run: append new parts, then push checkpointed deltas, then
-        // terminalize when the message state is final and this persist names it.
-        let run_id = message.id;
-        let new_parts: Vec<_> = message.parts.iter().filter(|part| part.id < 0).collect();
-        if !new_parts.is_empty() {
-            let created = self
-                .append_parts(
-                    session_id,
-                    run_id,
-                    new_parts
-                        .iter()
-                        .map(|part| new_part_from_message_part(part, message.role))
-                        .collect::<Result<Vec<_>, _>>()?,
-                )
-                .await?;
-            remap_new_parts(&mut message, &created);
-        }
-
-        let checkpointed = checkpoints.iter().find(|c| c.message_id == message.id);
-        if let Some(checkpoint) = checkpointed {
-            for part in &mut message.parts {
-                if part.id >= 0 && checkpoint.part_ids.contains(&part.id) {
-                    let delta = delta_for_part(part, self.now_ms())?;
-                    let updated = self.update_part(session_id, part.id, delta).await?;
-                    apply_part_to_message_part(part, &updated);
-                }
-            }
-        }
-
-        // Terminalize the run marker only when the whole run is terminal:
-        // every part under the marker must be terminal too. A successful
-        // model turn with pending tool calls keeps the marker in-flight so
-        // the session stays Running (design 17.3/17.5) while the tools
-        // execute; the marker completes on the persist that makes the last
-        // part terminal. `message.state` is already the terminal state the
-        // processor/manager assigned, so no field needs rewriting.
-        if message.state.is_terminal()
-            && checkpointed.is_some()
-            && message.parts.iter().all(|part| part.status.is_terminal())
-        {
-            let outcome = run_outcome_for(&message);
-            if matches!(message.state, ExecutionStatus::Cancelled) {
-                self.cancel_run(session_id, run_id).await?;
-            } else {
-                self.complete_run(session_id, run_id, outcome).await?;
-            }
-        }
-
-        Ok(message)
-    }
-
-    /// Persist a brand-new run: user messages submit (7.1); non-user messages
-    /// start a run marker then append their parts.
-    async fn persist_new_message(
-        &self,
-        session_id: i64,
-        mut message: Message,
-    ) -> Result<Message, AppError> {
-        if message.role == agena_domain::Role::User {
-            let new_parts = message
-                .parts
-                .iter()
-                .map(|part| new_part_from_message_part(part, message.role))
-                .collect::<Result<Vec<_>, _>>()?;
-            let idempotency_key = message.metadata.idempotency_key.clone();
-            let outcome = self
-                .submit_user_message(session_id, new_parts, idempotency_key)
-                .await?;
-            let run_id = outcome.run_id;
-            message.id = run_id;
-            message.metadata.model_turn_id = Some(run_id);
-            for (part, created) in message.parts.iter_mut().zip(outcome.parts.iter().skip(1)) {
-                part.id = created.part_id;
-                part.message_id = run_id;
-            }
-            self.terminalize_new_marker(session_id, &mut message, run_id)
-                .await?;
-            return Ok(message);
-        }
-
-        // Non-user run: start a marker, then append the parts.
-        let run_kind = "execution";
-        let run_id = self
-            .start_run(
-                session_id,
-                run_kind,
-                run_marker_content(
-                    run_kind,
-                    Some(message.metadata.model_provider_id.as_str()),
-                    Some(message.metadata.model_id.as_str()),
-                    message.metadata.conversation_turn_id,
-                    message.metadata.conversation_reply_id,
-                ),
-            )
-            .await?;
-        message.id = run_id;
-        message.metadata.model_turn_id = Some(run_id);
-        if !message.parts.is_empty() {
-            let new_parts = message
-                .parts
-                .iter()
-                .map(|part| new_part_from_message_part(part, message.role))
-                .collect::<Result<Vec<_>, _>>()?;
-            let created = self.append_parts(session_id, run_id, new_parts).await?;
-            remap_new_parts(&mut message, &created);
-        }
-        self.terminalize_new_marker(session_id, &mut message, run_id)
-            .await?;
-        Ok(message)
-    }
-
-    /// The engine creates a run marker in `pending`; a manager-built message
-    /// always carries its terminal state on first persist, so the marker must
-    /// be terminalized here or the derived session state (17.3) would leave
-    /// the session permanently in-flight. Mirrors the terminal block of
-    /// [`Self::persist_message`] for the brand-new-run case.
-    async fn terminalize_new_marker(
-        &self,
-        session_id: i64,
-        message: &mut Message,
-        run_id: i64,
-    ) -> Result<(), AppError> {
-        if !message.state.is_terminal() {
-            return Ok(());
-        }
-        // Same all-terminal rule as [`Self::persist_message`]: a brand-new
-        // message with a non-terminal part (e.g. a tool placeholder awaiting
-        // execution) must not complete its marker.
-        if message.parts.iter().any(|part| !part.status.is_terminal()) {
-            return Ok(());
-        }
-        if matches!(message.state, ExecutionStatus::Cancelled) {
-            self.cancel_run(session_id, run_id).await?;
-        } else {
-            let outcome = run_outcome_for(message);
-            self.complete_run(session_id, run_id, outcome).await?;
-        }
-        Ok(())
-    }
-}
-
-/// Convert an in-memory part payload into a [`NewPart`] for facade writes,
-/// using the part's current status as the initial state.
-fn new_part_from_message_part(part: &MessagePart, role: Role) -> Result<NewPart, AppError> {
-    let content = part.content.as_ref().ok_or_else(|| {
-        AppError::Internal("part with no content cannot be persisted".to_string())
-    })?;
-    new_part_from_content(
-        part_kind_for(part),
-        part_role_from_role(role),
-        content,
-        part_state_from_execution_status(part.status),
-    )
-}
-
-/// Map an in-memory part kind (the engine's content vocabulary) to the v2
-/// `parts.kind` column. The engine's open kind set covers the rich activity
-/// payloads; text and think use their literal kinds.
-fn part_kind_for(part: &MessagePart) -> &'static str {
-    match part.content.as_ref() {
-        Some(PartContent::Text(_)) => "text",
-        Some(PartContent::Activity(RuntimeActivity::Reasoning(_))) => "think",
-        Some(PartContent::Activity(RuntimeActivity::Operation(_))) => "tool_call",
-        Some(PartContent::Activity(RuntimeActivity::Interaction(_))) => "interaction",
-        Some(PartContent::Activity(RuntimeActivity::Hook(_))) => "hook",
-        Some(PartContent::Activity(RuntimeActivity::Notice(_))) => "notice",
-        Some(PartContent::Activity(RuntimeActivity::Error(_))) => "error",
-        Some(PartContent::Activity(RuntimeActivity::Resource(_))) => "file_ref",
-        Some(PartContent::Activity(RuntimeActivity::SkillReference(_))) => "skill_ref",
-        None => "text",
-    }
-}
-
-/// Build a streaming [`PartDelta`] for one part's current value/status.
-fn delta_for_part(part: &MessagePart, now_ms: i64) -> Result<PartDelta, AppError> {
-    let content = serialize_part_content(part)?;
-    Ok(PartDelta {
-        state: Some(part_state_from_execution_status(part.status)),
-        content: Some(content),
-        content_text_delta: None,
-        summary: part.summary.clone(),
-        rendered_markdown: None,
-        provider_state: None,
-        finished_at_ms: part.status.is_terminal().then_some(now_ms),
-    })
-}
-
-/// Apply the engine's authoritative part values back onto an in-memory part
-/// after an `update_part` (state/content/summary round-trip).
-fn apply_part_to_message_part(part: &mut MessagePart, updated: &Part) {
-    part.status = execution_status_from_part_state(updated.state);
-    if let Ok(content) = part_content_from_value(&updated.kind, &updated.content) {
-        part.content = Some(content);
-    }
-    if let Some(summary) = updated.summary.as_deref() {
-        part.summary = Some(summary.to_owned());
-    }
-}
-
-/// Reassign in-memory placeholder part ids from the facade's created parts.
-/// The created list matches the new parts in order; the run marker (if any)
-/// is the first element and is skipped.
-fn remap_new_parts(message: &mut Message, created: &[Part]) {
-    let mut created_iter = created.iter();
-    for part in &mut message.parts {
-        if part.id < 0
-            && let Some(c) = created_iter.next()
-        {
-            part.id = c.part_id;
-            part.message_id = message.id;
-        }
-    }
-}
-
-/// The terminal [`RunOutcome`] for a message whose state is final. The
-/// message's provider state (13.2) rides onto the run marker's
-/// `provider_state` column; only `MessageProviderState` persists this way.
-fn run_outcome_for(message: &Message) -> agena_storage::store::RunOutcome {
-    let status = part_state_from_execution_status(message.state);
-    let abort_reason = match message.state {
-        ExecutionStatus::Failed => Some("provider_error".to_string()),
-        ExecutionStatus::Cancelled => Some("user_cancelled".to_string()),
-        _ => None,
-    };
-    let provider_state = message.provider_state.as_ref().and_then(|state| {
-        serde_json::to_value(state)
-            .map_err(|error| {
-                tracing::warn!(
-                    target: "agena::session::store",
-                    message_id = message.id,
-                    "failed to serialize run provider state: {error}"
-                );
-            })
-            .ok()
-    });
-    agena_storage::store::RunOutcome {
-        status,
-        abort_reason,
-        content: None,
-        provider_state,
     }
 }
 
@@ -912,48 +524,14 @@ fn store_error(error: StoreError) -> AppError {
 /// Rebuild the execution-engine [`Session`] aggregate from a v2
 /// [`SessionView`] (metadata + ordered parts).
 ///
-/// Parts are grouped into [`Message`]s by their `run` marker (design 7.4):
-/// each `run` marker part produces one message whose `MessagePart`s are the
-/// marker's content parts in `(created_at_ms, part_id)` order. The message
-/// role, state, and runtime metadata are derived from the marker and its
-/// parts; provider anchors and execution selection come from the session row.
+/// The engine operates on the flat parts projection ([`Session::parts`],
+/// design 14-15): this installs the ordered part list and recomputes the
+/// derived state (pending operations, workflow, approx bytes) from it. The
+/// legacy v1 [`Message`] grouping is not materialized on the aggregate any
+/// more; the interim v1 bridge consumers (prompt window, query service, UI)
+/// rebuild it on demand through [`messages_from_parts`] until R6 removes it.
 pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> {
     let SessionView { meta, parts } = view;
-    let mut messages = Vec::new();
-
-    // Runs in the order their markers appear in the (already ordered) parts.
-    let mut by_run: BTreeMap<i64, Vec<&Part>> = BTreeMap::new();
-    let mut marker_by_run: BTreeMap<i64, &Part> = BTreeMap::new();
-    let mut singleton: Vec<&Part> = Vec::new();
-
-    for part in &parts {
-        if part.is_run_marker() {
-            marker_by_run.insert(part.part_id, part);
-            by_run.entry(part.part_id).or_default();
-        } else if let Some(run_id) = part.run_id {
-            by_run.entry(run_id).or_default().push(part);
-        } else {
-            // A content part with no run (should not happen for manager-owned
-            // sessions, but import/foreign data may produce one).
-            singleton.push(part);
-        }
-    }
-
-    // Content parts are ordered by (created_at_ms, part_id) — stable sort by
-    // id keeps the grouping deterministic per run.
-    for run_id in by_run.keys() {
-        let marker = marker_by_run
-            .get(run_id)
-            .copied()
-            .ok_or_else(|| AppError::Internal(format!("run marker {run_id} has no marker part")))?;
-        let mut run_parts = by_run[run_id].clone();
-        run_parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
-        messages.push(message_from_run(marker, run_parts)?);
-    }
-    for part in singleton {
-        messages.push(message_from_singleton(part)?);
-    }
-
     let mut session = Session::new(
         meta.id,
         meta.workspace_id,
@@ -969,10 +547,53 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     session.source_cutoff_seq_global = meta.cutoff_part_id;
     session.task_id = meta.task_id.clone();
     session.updated_at = timestamp_millis_to_utc(meta.updated_at_ms)?;
-    session.messages = messages;
     apply_meta_runtime(&mut session.runtime, &meta);
-    session.install_projected_messages(session.messages.clone());
+    session.install_projected_parts(parts);
     Ok(session)
+}
+
+/// Reconstruct the legacy v1 [`Message`] projection from a session's parts.
+///
+/// Interim v1 bridge (kept to R6): the prompt window, query service, and the
+/// manager's transcript surfaces still consume v1 [`Message`]s. Each `run`
+/// marker part produces one message whose [`MessagePart`]s are the marker's
+/// content parts in `(created_at_ms, part_id)` order; role, state, and
+/// runtime metadata are derived from the marker and its parts.
+pub(crate) fn messages_from_parts(parts: &[Part]) -> Result<Vec<Message>, AppError> {
+    // Runs in the order their markers appear in the (already ordered) parts.
+    let mut by_run: BTreeMap<i64, Vec<&Part>> = BTreeMap::new();
+    let mut marker_by_run: BTreeMap<i64, &Part> = BTreeMap::new();
+    let mut singleton: Vec<&Part> = Vec::new();
+
+    for part in parts {
+        if part.is_run_marker() {
+            marker_by_run.insert(part.part_id, part);
+            by_run.entry(part.part_id).or_default();
+        } else if let Some(run_id) = part.run_id {
+            by_run.entry(run_id).or_default().push(part);
+        } else {
+            // A content part with no run (should not happen for manager-owned
+            // sessions, but import/foreign data may produce one).
+            singleton.push(part);
+        }
+    }
+
+    let mut messages = Vec::new();
+    // Content parts are ordered by (created_at_ms, part_id) — stable sort by
+    // id keeps the grouping deterministic per run.
+    for run_id in by_run.keys() {
+        let marker = marker_by_run
+            .get(run_id)
+            .copied()
+            .ok_or_else(|| AppError::Internal(format!("run marker {run_id} has no marker part")))?;
+        let mut run_parts = by_run[run_id].clone();
+        run_parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+        messages.push(message_from_run(marker, run_parts)?);
+    }
+    for part in singleton {
+        messages.push(message_from_singleton(part)?);
+    }
+    Ok(messages)
 }
 
 fn message_from_run(marker: &Part, run_parts: Vec<&Part>) -> Result<Message, AppError> {
@@ -1090,7 +711,7 @@ pub(crate) fn serialize_part_content(part: &MessagePart) -> Result<Value, AppErr
 /// shape (design 4.1.1). Rich v1 fields the canonical spec does not name ride
 /// in the typed struct's lossless `extra` bucket so a later reload can rebuild
 /// them exactly (see the `*_from_*` helpers below).
-fn part_content_to_value(content: &PartContent) -> Result<Value, AppError> {
+pub(crate) fn part_content_to_value(content: &PartContent) -> Result<Value, AppError> {
     let value = match content {
         PartContent::Text(part) => part_content::TextContent {
             text: part.text.clone(),
@@ -2090,17 +1711,18 @@ mod tests {
         };
         let session = session_from_view(view).unwrap();
         assert_eq!(session.id, 1);
-        assert_eq!(session.messages.len(), 2);
-        assert_eq!(session.messages[0].role, Role::User);
-        assert_eq!(session.messages[0].id, 10);
-        assert_eq!(session.messages[0].parts.len(), 1);
+        let messages = messages_from_parts(session.parts()).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, Role::User);
+        assert_eq!(messages[0].id, 10);
+        assert_eq!(messages[0].parts.len(), 1);
         assert_eq!(
-            session.messages[0].parts[0].text(),
+            messages[0].parts[0].text(),
             Some("hello"),
             "part text round-trips through the canonical JSON payload"
         );
-        assert_eq!(session.messages[1].role, Role::Assistant);
-        assert_eq!(session.messages[1].parts[0].text(), Some("hi"));
+        assert_eq!(messages[1].role, Role::Assistant);
+        assert_eq!(messages[1].parts[0].text(), Some("hi"));
     }
 
     #[test]

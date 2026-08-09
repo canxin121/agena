@@ -1,10 +1,10 @@
 use super::{
-    AppError, AttachmentItem, ExecutionControlError, ExecutionStatus, HashSet, Message,
-    MessageMetadata, MessagePart, PartContent, PermissionAction, PermissionMode,
-    PermissionReplyKind, PermissionScope, PersistedPermissionRule, RequestPart, ReservedMessageIds,
-    ResolvedPendingTool, Role, RunAbortReason, SessionManager, SessionPendingTool, TimeRange,
-    ToolError, ToolInvocation, ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
+    AppError, AttachmentItem, ExecutionControlError, HashSet, PermissionAction, PermissionMode,
+    PermissionReplyKind, PermissionScope, PersistedPermissionRule, ResolvedPendingTool,
+    RunAbortReason, SessionManager, SessionPendingTool, TimeRange, ToolError, ToolInvocation,
+    ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
 };
+use super::replies::{operation_from_part, operation_id_from_part};
 use crate::session::Session;
 use agena_domain::{PermissionReply, UserInputReply, UserInputRequest};
 use agena_tool::ToolHumanRenderer;
@@ -81,52 +81,11 @@ pub(super) fn run_abort_reason(error: &AppError) -> RunAbortReason {
     }
 }
 
-pub(super) fn build_message(
-    ids: ReservedMessageIds,
-    role: Role,
-    message_state: ExecutionStatus,
-    parts: Vec<PartContent>,
-    metadata: MessageMetadata,
-) -> Result<Message, AppError> {
-    // Every part needs a reserved id; a caller that reserves fewer than it
-    // builds used to index past the end of `part_ids` and abort the process.
-    // Enforce the invariant here so a mismatch surfaces as an internal error
-    // instead of a crash.
-    if ids.part_ids.len() < parts.len() {
-        return Err(AppError::Internal(format!(
-            "reserved {} part ids for {} parts (message {})",
-            ids.part_ids.len(),
-            parts.len(),
-            ids.message_id
-        )));
-    }
-    let created_at = Utc::now();
-    let parts = parts
-        .into_iter()
-        .enumerate()
-        .map(|(idx, content)| {
-            MessagePart::from_content_with_index(
-                ids.part_ids[idx],
-                ids.message_id,
-                idx as i32,
-                created_at,
-                part_status(&content),
-                content,
-            )
-        })
-        .collect();
-    Ok(Message {
-        id: ids.message_id,
-        role,
-        state: message_state,
-        parts,
-        created_at,
-        metadata,
-        provider_state: None,
-        usage: None,
-    })
-}
-
+/// Resolve a pending tool ref to its decoded operation payload. The tool part
+/// is the durable `tool_call` part itself; the operation (with its call id,
+/// invocation, advertised identity, and lifecycle) rides in the part's
+/// canonical content under `extra.operation` (v2 has no in-memory message
+/// record — the store is the single source of truth).
 pub(super) fn resolve_pending_tool(
     session: &Session,
     pending_tool: &SessionPendingTool,
@@ -135,30 +94,37 @@ pub(super) fn resolve_pending_tool(
         .resolve_part_ref(&pending_tool.part)
         .ok_or_else(|| {
             AppError::Internal(format!(
-                "pending tool part not found: message={}, part={}",
-                pending_tool.part.message_id, pending_tool.part.part_id
+                "pending tool part not found: part={}",
+                pending_tool.part.part_id
             ))
         })?;
     let normalized_pending = SessionPendingTool {
         part: normalized_part,
     };
-    let record = session
-        .pending_tool_record(&normalized_pending)
+    let part = session
+        .part(&normalized_pending.part)
         .ok_or_else(|| {
             AppError::Internal(format!(
-                "pending tool payload missing: message={}, part={}",
-                pending_tool.part.message_id, pending_tool.part.part_id
+                "pending tool part not found: part={}",
+                normalized_pending.part.part_id
             ))
         })?;
+    let operation = operation_from_part(part).ok_or_else(|| {
+        AppError::Internal(format!(
+            "pending tool payload missing: part={}",
+            normalized_pending.part.part_id
+        ))
+    })?;
+    let advertised_tool_identity = operation.advertised_tool_identity().map(ToOwned::to_owned);
 
     Ok(ResolvedPendingTool {
         pending: normalized_pending,
-        operation_id: record.operation_id,
-        call_id: record.call_id,
-        invocation: record.invocation,
-        advertised_tool_identity: record.advertised_tool_identity,
+        operation_id: operation_id_from_part(part).unwrap_or_default(),
+        call_id: operation.call_id,
+        invocation: operation.invocation,
+        advertised_tool_identity,
         prepared_shell_command: None,
-        lifecycle: record.lifecycle,
+        lifecycle: operation.lifecycle,
         session_runtime: session.runtime.clone(),
     })
 }
@@ -214,31 +180,20 @@ pub(super) fn custom_payload_value(details: &ToolOutput) -> Option<serde_json::V
     details.to_json_payload()
 }
 
-pub(super) fn part_status(content: &PartContent) -> ExecutionStatus {
-    match content {
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(tool)) => tool.status(),
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
-            RequestPart::UserInput(request),
-        )) => request.status(),
-        _ => ExecutionStatus::Completed,
-    }
-}
-
-pub(super) fn build_request_part(
-    part_id: i64,
-    message_id: i64,
-    operation_id: &str,
-    request: RequestPart,
-) -> MessagePart {
-    let mut part = MessagePart::from_content(
-        part_id,
-        message_id,
-        Utc::now(),
-        request.status(),
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(request)),
-    );
-    part.operation_id = Some(operation_id.to_string());
-    part
+/// Find the pending tool whose decoded operation carries `call_id`. v2 has no
+/// in-memory message record — the durable `tool_call` part is the record and
+/// the call id rides inside its operation payload, so this resolves by
+/// decoding each pending tool part.
+pub(super) fn pending_tool_by_call_id(
+    session: &Session,
+    call_id: i64,
+) -> Option<SessionPendingTool> {
+    session.pending_tools().into_iter().find(|pending| {
+        session
+            .part(&pending.part)
+            .and_then(operation_from_part)
+            .is_some_and(|operation| operation.call_id == call_id)
+    })
 }
 
 pub(super) fn completed_lifecycle(lifecycle: &TimeRange) -> TimeRange {
@@ -531,51 +486,6 @@ mod tests {
 
     fn output(payload: ToolPayloadOutput) -> ToolOutput {
         payload.into_tool_output()
-    }
-
-    #[test]
-    fn build_message_rejects_fewer_reserved_part_ids_than_parts() {
-        // The original crash: indexing past the end of part_ids aborted the
-        // process. The guard must turn the mismatch into a clean error.
-        let ids = ReservedMessageIds {
-            message_id: 7,
-            part_ids: vec![100],
-        };
-        let err = build_message(
-            ids,
-            Role::User,
-            ExecutionStatus::Completed,
-            vec![PartContent::text("one"), PartContent::text("two")],
-            MessageMetadata::default(),
-        )
-        .expect_err("fewer reserved ids than parts must error");
-        match err {
-            AppError::Internal(message) => {
-                assert!(message.contains("1 part ids"), "got: {message}");
-                assert!(message.contains("2 parts"), "got: {message}");
-            }
-            other => panic!("expected internal error, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn build_message_succeeds_with_exactly_matching_ids() {
-        let ids = ReservedMessageIds {
-            message_id: 8,
-            part_ids: vec![200, 201],
-        };
-        let message = build_message(
-            ids,
-            Role::User,
-            ExecutionStatus::Completed,
-            vec![PartContent::text("one"), PartContent::text("two")],
-            MessageMetadata::default(),
-        )
-        .expect("matching ids build cleanly");
-        assert_eq!(message.id, 8);
-        assert_eq!(message.parts.len(), 2);
-        assert_eq!(message.parts[0].id, 200);
-        assert_eq!(message.parts[1].id, 201);
     }
 
     #[test]

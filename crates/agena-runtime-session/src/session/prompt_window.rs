@@ -19,6 +19,7 @@ use agena_provider::{PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionC
 
 use super::Session;
 use super::model::PromptCompactionContent;
+use super::store::messages_from_parts;
 use super::transcript::{
     ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
     TranscriptToolOutput,
@@ -121,6 +122,21 @@ pub(crate) struct PromptTokenEstimate {
     pub delta_chars: u64,
 }
 
+/// Project the session's parts back onto the v1 [`Message`] window the prompt
+/// path consumes (v2 has no in-memory message list). A part that fails to
+/// decode is logged and dropped from the window rather than taking down
+/// prompt assembly; the store is the durable source and already produced this
+/// projection once at load, so failures here are degenerate.
+fn projected_messages(session: &Session) -> Vec<Message> {
+    messages_from_parts(session.parts()).unwrap_or_else(|error| {
+        tracing::warn!(
+            session_id = session.id,
+            "failed to project parts for prompt window: {error}"
+        );
+        Vec::new()
+    })
+}
+
 pub(crate) fn active_prompt_messages(session: &Session) -> Vec<Message> {
     active_prompt_messages_for_model(session, None, None, None, false)
 }
@@ -142,7 +158,7 @@ pub(crate) fn active_prompt_messages_for_model(
         // Prompt-cache affinity depends on every later request preserving the
         // exact provider-visible prefix from earlier requests. Without an
         // installed compaction snapshot, the prompt path stays append-only.
-        return session.messages.clone();
+        return projected_messages(session);
     };
 
     match &compaction.content {
@@ -158,11 +174,9 @@ pub(crate) fn active_prompt_messages_for_model(
                     .map(|message| checkpoint_recent_message(session, message)),
             );
             messages.extend(
-                session
-                    .messages
-                    .iter()
-                    .filter(|message| message.id > compaction.compacted_through_message_id)
-                    .cloned(),
+                projected_messages(session)
+                    .into_iter()
+                    .filter(|message| message.id > compaction.compacted_through_message_id),
             );
             messages
         }
@@ -176,16 +190,14 @@ pub(crate) fn active_prompt_messages_for_model(
             && adapter_id == checkpoint_adapter.as_deref()
             && model_id == Some(checkpoint_model.as_str()) =>
         {
-            session
-                .messages
-                .iter()
+            projected_messages(session)
+                .into_iter()
                 .filter(|message| message.id > compaction.compacted_through_message_id)
-                .cloned()
                 .collect()
         }
         // Native provider checkpoints are not portable. A model switch must
         // replay canonical Agena history rather than interpreting opaque data.
-        PromptCompactionContent::OpenAiResponses { .. } => session.messages.clone(),
+        PromptCompactionContent::OpenAiResponses { .. } => projected_messages(session),
     }
 }
 
@@ -1223,30 +1235,132 @@ mod compaction_tests {
     use crate::session::model::{
         PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
     };
+    use crate::session::store::{
+        messages_from_parts, part_content_to_value, part_role_from_role, run_marker_content,
+    };
     use agena_domain::MessageSource;
     use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger};
     use agena_provider::CompletionUsage;
-    use chrono::Utc;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+    use chrono::{DateTime, Utc};
 
-    fn message(id: i64, role: Role, text: &str) -> Message {
-        let mut message = Message::prompt_text(role, text);
-        message.id = id;
-        message.metadata.source = if role == Role::User {
-            MessageSource::User
-        } else {
-            MessageSource::Assistant
-        };
-        message
+    /// Build one run marker part (`part_id` = the durable message id) plus its
+    /// text content part, the v2 parts shape the prompt path projects back
+    /// onto [`Message`] via `messages_from_parts`.
+    fn run_parts(id: i64, role: Role, source: &str, text: &str, now: DateTime<Utc>) -> Vec<Part> {
+        let mut content = run_marker_content("user_send", None, None, None, None);
+        content["source"] = serde_json::json!(source);
+        let part_role = part_role_from_role(role);
+        vec![
+            Part {
+                part_id: id,
+                kind: "run".to_owned(),
+                role: part_role,
+                state: PartState::Completed,
+                content,
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                run_id: None,
+                origin_session_id: 7,
+                revision: 0,
+                started_at_ms: now.timestamp_millis(),
+                finished_at_ms: None,
+                created_at_ms: now.timestamp_millis(),
+                updated_at_ms: now.timestamp_millis(),
+                provider_state: None,
+            },
+            Part {
+                part_id: id * 1000,
+                kind: "text".to_owned(),
+                role: part_role,
+                state: PartState::Completed,
+                content: part_content_to_value(&PartContent::text(text.to_owned()))
+                    .expect("text content is always serializable"),
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                run_id: Some(id),
+                origin_session_id: 7,
+                revision: 0,
+                started_at_ms: now.timestamp_millis(),
+                finished_at_ms: None,
+                created_at_ms: now.timestamp_millis(),
+                updated_at_ms: now.timestamp_millis(),
+                provider_state: None,
+            },
+        ]
+    }
+
+    /// Build a run marker part plus a `hook` content part (human-only activity
+    /// that must never reach the model prompt).
+    fn hook_run_parts(id: i64, now: DateTime<Utc>) -> Vec<Part> {
+        let mut content = run_marker_content("hook", None, None, None, None);
+        content["source"] = serde_json::json!("system");
+        vec![
+            Part {
+                part_id: id,
+                kind: "run".to_owned(),
+                role: PartRole::Assistant,
+                state: PartState::Completed,
+                content,
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                run_id: None,
+                origin_session_id: 7,
+                revision: 0,
+                started_at_ms: now.timestamp_millis(),
+                finished_at_ms: None,
+                created_at_ms: now.timestamp_millis(),
+                updated_at_ms: now.timestamp_millis(),
+                provider_state: None,
+            },
+            Part {
+                part_id: id * 1000,
+                kind: "hook".to_owned(),
+                role: PartRole::Assistant,
+                state: PartState::Completed,
+                content: part_content_to_value(&PartContent::hook(crate::message::HookPart {
+                    hook: "agent.stop".to_owned(),
+                    plugin_id: Some("agena.plan".to_owned()),
+                    summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
+                    detail: Some("continue with the next plan step".to_owned()),
+                }))
+                .expect("hook content is always serializable"),
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                run_id: Some(id),
+                origin_session_id: 7,
+                revision: 0,
+                started_at_ms: now.timestamp_millis(),
+                finished_at_ms: None,
+                created_at_ms: now.timestamp_millis(),
+                updated_at_ms: now.timestamp_millis(),
+                provider_state: None,
+            },
+        ]
     }
 
     fn session_with_messages() -> Session {
-        let mut session = Session::new(7, 11, "test", Utc::now());
-        session.messages = vec![
-            message(1, Role::User, "old user"),
-            message(2, Role::Assistant, "old assistant"),
-            message(3, Role::User, "future user"),
-        ];
+        let now = Utc::now();
+        let mut session = Session::new(7, 11, "test", now);
+        let mut parts = run_parts(1, Role::User, "user", "old user", now);
+        parts.extend(run_parts(2, Role::Assistant, "tool", "old assistant", now));
+        parts.extend(run_parts(3, Role::User, "user", "future user", now));
+        session.install_projected_parts(parts);
         session
+    }
+
+    /// Project the session's parts back onto v1 messages (the same bridge the
+    /// prompt path uses internally).
+    fn projected_messages(session: &Session) -> Vec<Message> {
+        messages_from_parts(session.parts()).expect("test parts project cleanly")
     }
 
     #[test]
@@ -1286,31 +1400,20 @@ mod compaction_tests {
 
     #[test]
     fn hook_only_activity_is_filtered_from_the_model_prompt() {
+        let now = Utc::now();
         let mut session = session_with_messages();
 
         // A recorded hook run (human-only activity) must never reach the
-        // model: it projects to no parts and its human-facing summary is not
-        // provider payload.
-        let mut hook_message = Message::prompt_parts(
-            Role::Assistant,
-            vec![PartContent::hook(crate::message::HookPart {
-                hook: "agent.stop".to_owned(),
-                plugin_id: Some("agena.plan".to_owned()),
-                summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
-                detail: Some("continue with the next plan step".to_owned()),
-            })],
-        );
-        hook_message.id = 99;
-        hook_message.metadata.source = MessageSource::System;
-        session.messages.push(hook_message);
+        // model: it projects to no provider payload and its human-facing
+        // summary is not provider payload.
+        let mut parts = session.parts().to_vec();
+        parts.extend(hook_run_parts(99, now));
 
         // A real user message following the hook-only activity is unaffected.
-        let mut plain_text = Message::prompt_text(Role::User, "future user");
-        plain_text.id = 100;
-        plain_text.metadata.source = MessageSource::User;
-        session.messages.push(plain_text);
+        parts.extend(run_parts(100, Role::User, "user", "future user", now));
+        session.install_projected_parts(parts);
 
-        let prompt_messages = prompt_messages_for_request(&session.messages);
+        let prompt_messages = prompt_messages_for_request(&projected_messages(&session));
         assert!(
             prompt_messages.iter().all(|m| m.id != 99),
             "hook-only assistant message must not be sent to the model; got {:?}",
@@ -1371,7 +1474,19 @@ mod compaction_tests {
             Some("gpt"),
             false,
         );
-        assert_eq!(locally_compacted, session.messages);
+        // Segment ids are ephemeral v1 identities the bridge re-mints on
+        // each projection (v2 parts are the durable source; there is no
+        // retained v1 message list, and the provider transcript excludes
+        // them). Compare the stable projection surface — message id, role
+        // and text — not the freshly-randomized segment ids.
+        let projected = projected_messages(&session);
+        assert_eq!(locally_compacted.len(), projected.len());
+        for (actual, expected) in locally_compacted.iter().zip(projected.iter()) {
+            assert_eq!(
+                (actual.id, actual.role, actual.as_text_lossy()),
+                (expected.id, expected.role, expected.as_text_lossy()),
+            );
+        }
         assert!(
             provider_compaction_for_model(&session, "openai", Some("responses"), "gpt", false)
                 .is_none()
@@ -1428,7 +1543,7 @@ mod compaction_tests {
     #[test]
     fn runtime_projection_counts_anchor_assistant_output() {
         let mut session = session_with_messages();
-        let messages = session.messages.clone();
+        let messages = projected_messages(&session);
         let digest = prompt_transcript_digest(&messages[..2]);
         session.runtime.record_prompt_tokens(
             2,

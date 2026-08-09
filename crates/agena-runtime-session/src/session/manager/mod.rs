@@ -11,27 +11,27 @@ use chrono::Utc;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
-use crate::message::{
-    AttachmentItem, InteractiveRequestPart, Message, MessageMetadata, MessagePart, OperationPart,
-    PartContent, RequestPart,
-};
+use crate::message::{AttachmentItem, Message, OperationPart, PartContent};
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::UserInputReply;
 use agena_domain::{
     DecisionTraceStep, ExecutionOutcome, ExecutionSource, PermissionAction, PermissionMode,
-    PermissionReplyKind, PermissionScope, Role, RunAbortReason, TimeRange, UserInputReplyKind,
+    PermissionReplyKind, PermissionScope, RunAbortReason, TimeRange, UserInputReplyKind,
 };
-use agena_domain::{ExecutionStatus, MessageSource};
+use agena_domain::ExecutionStatus;
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
 use agena_storage::PersistedPermissionRule;
 use agena_tool::PreparedShellCommand;
 
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
-use super::processor::{SessionRunRequest, SessionRunTermination};
+use super::processor::{
+    SessionRunRequest, SessionRunTermination, message_provider_state_from_provider_metadata,
+};
 use super::prompt_window::PromptRequestOptions;
-use super::store::{MessageCheckpoint, ReservedMessageIds, StoreAdapter};
+use super::store::StoreAdapter;
+use agena_storage::store::PartRole;
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
@@ -104,16 +104,12 @@ impl SessionUserMessageRequest {
 
 #[derive(Debug, Clone)]
 struct UserInputPart {
-    activity_id: Option<agena_domain::ActivityId>,
     content: PartContent,
 }
 
 impl UserInputPart {
     fn text_or_runtime(content: PartContent) -> Self {
-        Self {
-            activity_id: None,
-            content,
-        }
+        Self { content }
     }
 }
 
@@ -763,7 +759,6 @@ fn part_contents_from_composer_document(
         .into_iter()
         .map(|node| match node {
             ComposerNode::Text { text } => Ok(UserInputPart {
-                activity_id: None,
                 content: PartContent::text(text),
             }),
             ComposerNode::Activity { activity } => match activity.payload {
@@ -793,7 +788,6 @@ fn part_contents_from_composer_document(
                         }
                     };
                     Ok(UserInputPart {
-                        activity_id: Some(activity.id),
                         content: PartContent::attachments(vec![AttachmentItem {
                         kind,
                         mime: resource.media_type.unwrap_or_else(|| {
@@ -817,7 +811,6 @@ fn part_contents_from_composer_document(
                 }
                 ActivityPayload::SkillReference(skill) => {
                     Ok(UserInputPart {
-                        activity_id: Some(activity.id),
                         content: PartContent::Activity(
                             crate::message::RuntimeActivity::SkillReference(
                                 crate::message::SkillReferencePart {
@@ -835,7 +828,6 @@ fn part_contents_from_composer_document(
                     })
                 }
                 ActivityPayload::TextArtifact(artifact) => Ok(UserInputPart {
-                    activity_id: Some(activity.id),
                     content: PartContent::text(artifact.text),
                 }),
                 _ => Err(AppError::Config(
@@ -884,23 +876,28 @@ impl SessionManager {
         }
 
         // The canonical conversation identity is derived from the persisted
-        // assistant run markers (design 19.5): the newest assistant message
+        // assistant run markers (design 19.5): the newest assistant marker
         // that carries the UUID pair it registered with.
         let session = self.store.load_session(session_id).await?;
         let identity = session
-            .messages
+            .parts()
             .iter()
             .rev()
-            .find_map(|message| {
-                if message.role != Role::Assistant {
+            .find_map(|marker| {
+                if marker.kind != "run" || marker.role != PartRole::Assistant {
                     return None;
                 }
                 match (
-                    message.metadata.conversation_turn_id,
-                    message.metadata.conversation_reply_id,
+                    marker.content.get("turn_id").and_then(serde_json::Value::as_str),
+                    marker.content.get("reply_id").and_then(serde_json::Value::as_str),
                 ) {
                     (Some(turn_id), Some(reply_id)) => {
-                        Some(ConversationIdentity { turn_id, reply_id })
+                        let turn_id = uuid::Uuid::parse_str(turn_id).ok()?;
+                        let reply_id = uuid::Uuid::parse_str(reply_id).ok()?;
+                        Some(ConversationIdentity {
+                            turn_id: agena_domain::TurnId(turn_id),
+                            reply_id: agena_domain::AssistantReplyId(reply_id),
+                        })
                     }
                     _ => None,
                 }
@@ -926,25 +923,37 @@ impl SessionManager {
         message_id: i64,
     ) -> Result<ConversationIdentity, AppError> {
         let session = self.store.load_session(session_id).await?;
-        let message = session
-            .messages
+        let marker = session
+            .parts()
             .iter()
-            .find(|message| message.id == message_id)
+            .find(|part| part.part_id == message_id && part.kind == "run")
             .ok_or_else(|| {
                 AppError::Internal(format!(
                     "message {message_id} in session {session_id} has no canonical assistant reply identity"
                 ))
             })?;
-        let turn_id = message.metadata.conversation_turn_id.ok_or_else(|| {
-            AppError::Internal(format!(
-                "message {message_id} in session {session_id} has no canonical turn identity"
-            ))
-        })?;
-        let reply_id = message.metadata.conversation_reply_id.ok_or_else(|| {
-            AppError::Internal(format!(
-                "message {message_id} in session {session_id} has no canonical reply identity"
-            ))
-        })?;
+        let turn_id = marker
+            .content
+            .get("turn_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .map(agena_domain::TurnId)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "message {message_id} in session {session_id} has no canonical turn identity"
+                ))
+            })?;
+        let reply_id = marker
+            .content
+            .get("reply_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .map(agena_domain::AssistantReplyId)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "message {message_id} in session {session_id} has no canonical reply identity"
+                ))
+            })?;
         Ok(ConversationIdentity { turn_id, reply_id })
     }
 
@@ -1319,14 +1328,15 @@ impl SessionManager {
     ) -> Result<agena_plugin_host::sdk::host_api::AskUserResponse, AppError> {
         let state = self.execution_state();
         let session = self.store.load_session(session_id).await?;
-        let pending_tool = session.pending_tool_by_call_id(call_id).ok_or_else(|| {
+        let pending_tool = pending_tool_by_call_id(&session, call_id).ok_or_else(|| {
             AppError::Internal(format!(
                 "pending tool not found for host user input: session={session_id}, call={call_id}"
             ))
         })?;
         let resolved_pending = resolve_pending_tool(&session, &pending_tool)?;
         let sequence_index = self.next_host_user_input_sequence(session_id, call_id);
-        if let Some(existing) = session.user_input_request_for_operation(
+        if let Some(existing) = replies::user_input_request_for_operation(
+            &session,
             resolved_pending.operation_id.as_str(),
             sequence_index,
         ) {
@@ -1402,7 +1412,7 @@ impl SessionManager {
         // A host callback may execute the same pending operation that was
         // originally created by the model. Reuse that operation's correlation
         // ids so shell output remains attached to the visible Activity.
-        let outer_pending_tool = session.pending_tool_by_call_id(call_id);
+        let outer_pending_tool = pending_tool_by_call_id(&session, call_id);
         let command_event_sink = outer_pending_tool
             .as_ref()
             .and_then(|pending| resolve_pending_tool(&session, pending).ok())
@@ -1564,7 +1574,7 @@ impl SessionManager {
                         let session = self.store
                             .load_session(session_id)
                             .await?;
-                        if session.has_replied_user_input_request(request_id) {
+                        if replies::has_replied_user_input_request(&session, request_id) {
                             // A concurrent process persisted the reply. The
                             // answer content is durable in the event stream;
                             // returning a default response lets the caller

@@ -8,7 +8,6 @@ impl SessionProcessor {
         blocks: Vec<agena_domain::ViewBlock>,
     ) -> Vec<agena_domain::ViewBlock> {
         let workspace_root = self.workspace_root.as_path();
-
         let mut media_index = 0usize;
         let mut persisted = Vec::with_capacity(blocks.len());
         for block in blocks {

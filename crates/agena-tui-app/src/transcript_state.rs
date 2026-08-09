@@ -3314,10 +3314,9 @@ mod stall_recovery_tests {
 #[cfg(test)]
 mod activity_v2_tests {
     use super::*;
-    use agena_domain::EventMeta;
     use agena_domain::{ActivityId, ActivityState, CommandOutputStream, RenderDelta, ViewBlock};
     use agena_runtime::{
-        RuntimePresentationEvent, RuntimePresentationEventKind,
+        RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
         session::activity::{ActivityKind, ActivityLiveEvent, ActivityStateNode},
     };
     use chrono::Utc;
@@ -3334,7 +3333,7 @@ mod activity_v2_tests {
 
     fn v2_event(activity: ActivityLiveEvent, seq: i64) -> RuntimePresentationEvent {
         RuntimePresentationEvent {
-            meta: EventMeta {
+            meta: RuntimePresentationEventMeta {
                 id: Uuid::new_v4(),
                 seq_global: seq,
                 seq_session: Some(seq),

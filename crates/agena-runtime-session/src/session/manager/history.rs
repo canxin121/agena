@@ -311,13 +311,13 @@ fn assistant_reply_snapshot(
             .unwrap_or_else(agena_domain::TurnId::new)
     });
     let turn_span = canonical_turn_span(session, user_index);
-    let (reply_id, status, content_nodes, created_at_ms, finished_at_ms, failure) =
+    let (reply_id, status, transcript_nodes, created_at_ms, finished_at_ms, failure) =
         assistant_reply_fields(session, &turn_span)?;
     Ok(agena_domain::AssistantReplySnapshot {
         id: reply_id,
         turn_id,
         status,
-        content: agena_domain::ContentDocument::new(content_nodes),
+        content: agena_domain::ContentDocument::new(transcript_nodes),
         revision_seq: session.version,
         created_at_ms,
         finished_at_ms,
@@ -366,7 +366,7 @@ fn assistant_reply_fields(
         reply_id = reply_id.or(message.metadata.conversation_reply_id);
         for part in &message.parts {
             if let Some(node) =
-                content_node_from_part(session.version, part, message.role, reply_id)?
+                transcript_node_from_part(session.version, part, message.role, reply_id)?
             {
                 nodes.push(node);
             }
@@ -439,7 +439,7 @@ fn content_document_from_message(
 ) -> Result<agena_domain::ContentDocument, AppError> {
     let mut nodes = Vec::new();
     for part in &message.parts {
-        if let Some(node) = content_node_from_part(session.version, part, message.role, None)? {
+        if let Some(node) = transcript_node_from_part(session.version, part, message.role, None)? {
             nodes.push(node);
         }
     }
@@ -451,7 +451,7 @@ fn content_document_from_message(
 /// Mirrors the live patch mapping: text parts become text segments, activity
 /// parts become activity nodes carrying the durable payload with the
 /// human-facing operation detail derived on load.
-fn content_node_from_part(
+fn transcript_node_from_part(
     revision_seq: i64,
     part: &MessagePart,
     role: Role,

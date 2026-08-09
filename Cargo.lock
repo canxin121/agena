@@ -1003,13 +1003,9 @@ dependencies = [
  "agena-failure",
  "agena-provider",
  "agena-runtime-contracts",
- "agena-storage",
- "agena-storage-sqlite",
  "chrono",
- "sea-orm",
  "serde",
  "serde_json",
- "tokio",
  "uuid",
 ]
 

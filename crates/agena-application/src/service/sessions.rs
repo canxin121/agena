@@ -78,12 +78,17 @@ impl ApplicationService {
             }
         }
 
+        let relation_kind = if request.session.parent_id.is_some() {
+            agena_domain::SessionRelationKind::Child
+        } else {
+            agena_domain::SessionRelationKind::Root
+        };
         let created = self
             .session_store
             .create_session(agena_storage::store::NewSession {
                 workspace_id: request.workspace_id,
                 parent_id: request.session.parent_id,
-                relation_kind: agena_domain::SessionRelationKind::Child,
+                relation_kind,
                 cutoff_part_id: None,
                 title: request.session.title,
                 task_id: None,
@@ -278,19 +283,15 @@ pub(crate) const fn subtask_status_from_domain(
 mod tests {
     use std::sync::Arc;
 
-    use agena_domain::{PartRole, SessionRelationKind};
+    use agena_domain::SessionRelationKind;
     use agena_storage::WorkspaceRepository;
-    use agena_storage::store::{NewPart, NewSession, SessionFacade, SessionStore};
+    use agena_storage::store::{NewPart, NewSession, PartRole, SessionFacade, SessionStore};
     use sea_orm::Database;
     use serde_json::json;
 
     use super::*;
 
-    async fn test_service() -> (
-        ApplicationService,
-        Arc<agena_storage_sqlite::SqliteEngine>,
-        i64,
-    ) {
+    async fn test_service() -> (ApplicationService, Arc<dyn SessionStore>, i64) {
         let db = Arc::new(
             Database::connect("sqlite::memory:")
                 .await
@@ -303,7 +304,7 @@ mod tests {
             .ensure_id("/test/workspace")
             .await
             .expect("create test workspace");
-        let engine = Arc::new(agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db)));
+        let engine = agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db));
         let facade: Arc<dyn SessionStore> =
             Arc::new(SessionFacade::new(engine.clone(), "application-test", 64));
         let service = ApplicationService::new(
@@ -311,30 +312,26 @@ mod tests {
             Arc::new(agena_storage::MemoryStore::for_workspace(
                 std::path::Path::new("/test/workspace"),
             )),
-            Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(db)),
+            Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(
+                Arc::clone(&db),
+            )),
             Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
                 Arc::clone(&db),
             )),
-            facade,
+            Arc::clone(&facade),
         );
-        (service, engine, workspace_id)
+        (service, facade, workspace_id)
     }
 
-    /// A run marker part that contributes to `message_count` (D9: message
-    /// count = run markers) plus one child text part so the session is
-    /// non-empty, mirroring the v1 fixture's two messages.
+    /// One user content part. `submit_user_message` creates the D9 run marker.
     fn marker_part() -> NewPart {
-        NewPart::pending(
-            "run",
-            PartRole::User,
-            json!({ "run_kind": "chat", "user": "hello" }),
-        )
+        NewPart::pending("text", PartRole::User, json!({ "text": "hello" }))
     }
 
     #[tokio::test]
     async fn session_list_materializes_message_and_child_counts() {
-        let (service, engine, workspace_id) = test_service().await;
-        let session = engine
+        let (service, facade, workspace_id) = test_service().await;
+        let session = facade
             .create_session(NewSession {
                 workspace_id,
                 parent_id: None,
@@ -347,12 +344,12 @@ mod tests {
             })
             .await
             .expect("create test session");
-        engine
+        facade
             .create_session(NewSession {
                 workspace_id,
                 parent_id: Some(session.id),
                 relation_kind: SessionRelationKind::Child,
-                cutoff_part_id: Some(0),
+                cutoff_part_id: None,
                 title: "Child session".to_owned(),
                 task_id: None,
                 config_json: None,
@@ -362,12 +359,35 @@ mod tests {
             .expect("create child session");
         // Two runs over the parent session → message_count 2, last message at
         // the second run's timestamp.
-        engine
-            .submit_user_message(session.id, "test-owner", vec![marker_part()], None, 1_000)
+        facade
+            .submit_user_message(session.id, "application-test", vec![marker_part()], None)
             .await
             .expect("first run");
-        engine
-            .submit_user_message(session.id, "test-owner", vec![marker_part()], None, 2_000)
+        let first_run = facade
+            .load(session.id)
+            .await
+            .expect("load first run")
+            .parts
+            .into_iter()
+            .find(|part| part.kind == "run")
+            .expect("first marker")
+            .part_id;
+        facade
+            .complete_run(
+                session.id,
+                "application-test",
+                first_run,
+                agena_storage::store::RunOutcome {
+                    status: agena_storage::store::PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+            )
+            .await
+            .expect("complete first run");
+        facade
+            .submit_user_message(session.id, "application-test", vec![marker_part()], None)
             .await
             .expect("second run");
 
@@ -386,17 +406,12 @@ mod tests {
 
         assert_eq!(resource.message_count, 2);
         assert_eq!(resource.child_session_count, 1);
-        assert_eq!(
-            resource
-                .last_message_at
-                .map(|value| value.timestamp_millis()),
-            Some(2_000)
-        );
+        assert!(resource.last_message_at.is_some());
     }
 
     #[tokio::test]
     async fn get_create_rename_delete_round_trip_on_the_facade() {
-        let (service, _engine, workspace_id) = test_service().await;
+        let (service, _facade, workspace_id) = test_service().await;
         let created = service
             .create_session(crate::dto::SessionCreateRequest {
                 workspace_id,

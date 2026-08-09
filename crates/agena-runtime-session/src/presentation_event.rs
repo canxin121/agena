@@ -1,14 +1,13 @@
-//! Typed live-event projections for presentation consumers.
+//! Typed live presentation updates for in-process consumers.
 //!
-//! The generic Runtime event stream remains the transport/API boundary. This
-//! parallel surface exists for consumers that need live transcript updates
-//! without reconstructing a private Runtime event envelope from JSON.
+//! Persisted session data arrives as facade part patches. Activity updates are
+//! ephemeral. Neither path is a history/replay mechanism.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-/// Routing and observability metadata outside a presentation event payload.
+/// Routing and observability metadata outside a presentation update payload.
 ///
 /// v2 has no event log, so these fields are derived from the operation that
 /// produced the notification (part id / session version / created-at) rather
@@ -28,7 +27,7 @@ pub struct RuntimePresentationEventMeta {
 }
 
 #[derive(Debug, Clone)]
-/// Kind of a runtime presentation event.
+/// Kind of a runtime presentation update.
 pub enum RuntimePresentationEventKind {
     /// A committed v2 part/meta patch from the sealed session facade. The TUI
     /// currently treats this as an incremental invalidation and reloads the
@@ -54,15 +53,11 @@ pub enum RuntimePresentationEventKind {
 }
 
 #[derive(Debug, Clone)]
-/// A presentation event delivered to live subscribers.
+/// A presentation update delivered to live subscribers.
 ///
-/// `durable` mirrors whether the underlying domain event was written to the
-/// persistent event log (`EventKind::is_persistent`). Live-only events
-/// (`ActivityV2`, streamed text upserts, retry notices) consume a global
-/// sequence number but are never persisted, so consumers that use
-/// `meta.seq_global` as a high-water mark against the durable log (for
-/// example the TUI's staleness check against the server's durable
-/// `latest_event_seq`) must only count durable events.
+/// `durable` means the update reflects a committed part/meta mutation. Live
+/// activity signals set it to false. Catch-up always reloads current parts;
+/// these updates are never replayed.
 pub struct RuntimePresentationEvent {
     pub meta: RuntimePresentationEventMeta,
     pub invalidates_ancestor_projection: bool,
@@ -78,7 +73,7 @@ pub enum RuntimeLivePresentationSubscriptionItem {
 }
 
 #[async_trait]
-/// A live subscription to presentation events.
+/// A live subscription to presentation updates.
 pub trait RuntimeLivePresentationSubscription: Send {
     async fn recv(&mut self) -> Option<RuntimeLivePresentationSubscriptionItem>;
 }

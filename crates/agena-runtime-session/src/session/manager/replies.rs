@@ -494,7 +494,7 @@ impl SessionManager {
         Ok((state, session))
     }
 
-    async fn resume_active_reply_execution(
+    async fn resume_active_reply(
         &self,
         session: &Session,
         conversation_identity: ConversationIdentity,
@@ -878,7 +878,7 @@ impl SessionManager {
         match request.request.reply.kind {
             PermissionReplyKind::AllowOnce | PermissionReplyKind::AllowAlways => {
                 if let Some(dispatch) = self
-                    .resume_active_reply_execution(&session, conversation_identity, mode)
+                    .resume_active_reply(&session, conversation_identity, mode)
                     .await
                 {
                     return Ok(dispatch);
@@ -960,7 +960,7 @@ impl SessionManager {
         }
 
         if let Some(dispatch) = self
-            .resume_active_reply_execution(&session, conversation_identity, mode)
+            .resume_active_reply(&session, conversation_identity, mode)
             .await
         {
             return Ok(dispatch);
@@ -1225,7 +1225,7 @@ impl SessionManager {
         })?;
 
         if let Some(dispatch) = self
-            .resume_active_reply_execution(&session, conversation_identity, mode)
+            .resume_active_reply(&session, conversation_identity, mode)
             .await
         {
             return Ok(dispatch);

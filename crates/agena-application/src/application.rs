@@ -1069,7 +1069,7 @@ mod notification_aggregator_tests {
                 state: PartState::Completed,
                 content: serde_json::to_value(content).expect("serialize notice content"),
                 summary: None,
-                visibility: agena_storage::store::PartVisibility::Normal,
+                visibility: agena_storage::store::PartVisibility::Both,
                 rendered_markdown: None,
                 parent_part_id: None,
                 run_id: Some(1),
@@ -1105,7 +1105,7 @@ mod notification_aggregator_tests {
 
     #[test]
     fn non_notice_part_changes_project_to_none() {
-        let text = PartContent::Text("hello".to_owned());
+        let text = PartContent::text("hello");
         let change = SessionChange::PartAdded {
             session_id: 7,
             part: Part {
@@ -1115,7 +1115,7 @@ mod notification_aggregator_tests {
                 state: PartState::Completed,
                 content: serde_json::to_value(text).expect("serialize text content"),
                 summary: None,
-                visibility: agena_storage::store::PartVisibility::Normal,
+                visibility: agena_storage::store::PartVisibility::Both,
                 rendered_markdown: None,
                 parent_part_id: Some(1),
                 run_id: Some(1),

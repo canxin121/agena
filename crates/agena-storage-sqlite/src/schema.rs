@@ -281,60 +281,40 @@ mod tests {
     #[tokio::test]
     async fn v2_schema_initializes_with_only_nine_chat_tables() {
         let db = initialized_database().await;
-        // The v1 event/projection tables must not exist anywhere.
-        for v1_table in [
-            "agena_events",
-            "agena_turns",
-            "agena_assistant_replies",
-            "agena_reply_executions",
-            "agena_content_nodes",
-            "agena_model_messages",
-            "agena_model_message_parts",
-            "agena_session_messages",
-            "agena_model_projection_states",
-            "agena_session_lineage",
-            "agena_session_sequences",
-        ] {
-            let exists: i64 = db
-                .query_one(Statement::from_string(
-                    DatabaseBackend::Sqlite,
-                    format!(
-                        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = '{v1_table}'"
-                    ),
-                ))
-                .await
-                .expect("check v1 table")
-                .expect("check row")
-                .try_get("", "count")
-                .expect("count value");
-            assert_eq!(exists, 0, "v1 table {v1_table} must not be created");
-        }
-        // The nine v2 chat tables exist.
-        for v2_table in [
-            "agena_parts",
-            "agena_session_parts",
-            "agena_sessions",
-            "agena_execution_leases",
-            "agena_sequences",
-            "agena_workspaces",
-            "agena_permission_rules",
-            "agena_usage",
-            "agena_idempotency",
-        ] {
-            let exists: i64 = db
-                .query_one(Statement::from_string(
-                    DatabaseBackend::Sqlite,
-                    format!(
-                        "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = '{v2_table}'"
-                    ),
-                ))
-                .await
-                .expect("check v2 table")
-                .expect("check row")
-                .try_get("", "count")
-                .expect("count value");
-            assert_eq!(exists, 1, "v2 table {v2_table} must exist");
-        }
+        // Assert the complete Agena-owned table set, not only positive
+        // existence of the nine chat tables. Any historical chat table or
+        // accidental dead-data table makes this exact-set assertion fail.
+        let expected = std::collections::BTreeSet::from(
+            [
+                "agena_parts",
+                "agena_session_parts",
+                "agena_sessions",
+                "agena_execution_leases",
+                "agena_sequences",
+                "agena_workspaces",
+                "agena_permission_rules",
+                "agena_usage",
+                "agena_idempotency",
+                "agena_model_catalog_entries",
+                "agena_model_catalog_state",
+                "agena_scheduler_jobs",
+                "agena_scheduler_history",
+            ]
+            .map(str::to_owned),
+        );
+        let rows = db
+            .query_all(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'agena_%' ORDER BY name"
+                    .to_owned(),
+            ))
+            .await
+            .expect("list Agena-owned tables");
+        let actual = rows
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "name").expect("table name"))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(actual, expected);
     }
 
     #[tokio::test]

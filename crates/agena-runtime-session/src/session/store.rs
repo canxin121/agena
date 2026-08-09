@@ -1668,7 +1668,7 @@ mod tests {
         let value = serde_json::to_value(&content).unwrap();
         let back = part_content_from_value(&value).unwrap();
         assert_eq!(back, content);
-        assert_eq!(back.text(), Some("round trip"));
+        assert_eq!(back.text_value(), Some("round trip"));
     }
 
     #[test]

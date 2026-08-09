@@ -2789,7 +2789,7 @@ impl SessionManager {
         // successfully and broadcast it live (a no-op bridge in v2; P5
         // re-homes onto the notification bus). The durable payload is the
         // streamed output the tool part checkpoint carries — the v1
-        // `upsert_content_node` projection is deleted.
+        // The former duplicate transcript write path is deleted.
         if let Some(mut handler) = activity_handler.take() {
             let node = handler.finish(
                 agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(streamed_output)),

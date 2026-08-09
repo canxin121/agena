@@ -33,8 +33,6 @@ use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
 use super::store::{MessageCheckpoint, ReservedMessageIds, StoreAdapter};
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
-#[cfg(test)]
-use crate::SessionCachePolicy;
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
 
@@ -381,6 +379,7 @@ mod runs;
 mod session_prompt;
 mod sessions;
 mod stats;
+#[cfg(test)]
 mod tests;
 
 use self::helpers::*;
@@ -428,11 +427,6 @@ impl SessionManagerState {
             rule_snapshots,
             auto_projection,
         }
-    }
-
-    #[cfg(test)]
-    fn cache_policy(&self) -> SessionCachePolicy {
-        self.config.cache_policy()
     }
 }
 

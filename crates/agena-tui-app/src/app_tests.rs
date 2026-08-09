@@ -3405,18 +3405,20 @@ mod live_transcript_tests {
         ActivityActor, ActivityId, ActivityLifecycle, ActivityNode, ActivityOwner, ActivityPayload,
         ActivityProvenance, ActivityState, AssistantReplyId, AssistantReplySnapshot,
         AssistantReplyStatus, ComposerActivity, ComposerDocument, ComposerNode, ContentDocument,
-        ContentNode, ContentPosition, EventMeta, ReasoningActivity, ReasoningPart,
-        ResourceActivity, ResourceKind, ResourceReference, TextArtifactActivity, TextSegmentId,
-        TranscriptPatch, TranscriptSnapshot, TurnId, TurnSnapshot,
+        ContentNode, ContentPosition, ReasoningActivity, ReasoningPart, ResourceActivity,
+        ResourceKind, ResourceReference, TextArtifactActivity, TextSegmentId, TranscriptPatch,
+        TranscriptSnapshot, TurnId, TurnSnapshot,
     };
-    use agena_runtime::{RuntimePresentationEvent, RuntimePresentationEventKind};
+    use agena_runtime::{
+        RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
+    };
     use uuid::Uuid;
 
     use super::super::{PendingUserMessage, TranscriptState, Utc};
 
     fn event(kind: RuntimePresentationEventKind, seq: i64) -> RuntimePresentationEvent {
         RuntimePresentationEvent {
-            meta: EventMeta {
+            meta: RuntimePresentationEventMeta {
                 id: Uuid::new_v4(),
                 seq_global: seq,
                 seq_session: Some(seq),
@@ -3536,7 +3538,7 @@ mod live_transcript_tests {
         // events, so counting one would make every later refresh look stale
         // and drop the terminal execution + completed reply.
         let live = RuntimePresentationEvent {
-            meta: EventMeta {
+            meta: RuntimePresentationEventMeta {
                 id: Uuid::new_v4(),
                 seq_global: 50,
                 seq_session: Some(50),

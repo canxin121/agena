@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use sea_orm::FromJsonQueryResult;
 use serde::{Deserialize, Serialize};
 
 use crate::message::{
@@ -17,7 +16,7 @@ use agena_domain::{
     UserInputRequest, WorkflowState,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Runtime state of a subtask.
 pub struct SubtaskRuntimeState {
     pub status: SubtaskStatus,
@@ -164,7 +163,7 @@ impl SessionPendingOperation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Runtime state of the session workflow.
 pub struct WorkflowRuntimeState {
     #[serde(default)]
@@ -221,7 +220,7 @@ pub enum PromptCompactionContent {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Runtime state of a prompt compaction.
 pub struct PromptCompactionRuntime {
     pub checkpoint_id: String,
@@ -256,7 +255,7 @@ impl PromptCompactionRuntime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Runtime state of the prompt window.
 pub struct PromptWindowRuntime {
     #[serde(default)]
@@ -385,7 +384,7 @@ fn prompt_token_usage_snapshot(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Runtime state of prompt token accounting.
 pub struct PromptTokenRuntime {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -465,7 +464,7 @@ impl PromptTokenRuntime {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 /// Provider-side anchor for prompt continuation.
 pub struct ProviderPromptAnchor {
     pub provider_id: String,
@@ -484,7 +483,7 @@ pub struct ProviderPromptAnchor {
     pub transcript_digest: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Full runtime state of a session.
 pub struct SessionRuntimeState {
     #[serde(default, skip_serializing_if = "WorkflowRuntimeState::is_empty")]
@@ -501,7 +500,7 @@ pub struct SessionRuntimeState {
     pub subtask: SubtaskRuntimeState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default, FromJsonQueryResult)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Execution context of a session.
 pub struct SessionExecutionContext {
     #[serde(flatten)]
@@ -743,7 +742,7 @@ impl SessionRuntimeState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A session with its runtime state.
 pub struct Session {
     pub id: i64,

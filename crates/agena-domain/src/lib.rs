@@ -13,11 +13,11 @@
 //!   [`PermissionReplyKind`], path/network access rules, and resolution
 //!   outcomes.
 //! - **Sessions & messages** — session lifecycle, message activities and
-//!   parts, events, and pending interactive requests.
+//!   parts, and pending interactive requests.
 //! - **Providers & catalog** — provider ids, model metadata, and catalog
 //!   values.
-//! - **Utilities** — [`ActivityId`], [`EventFilter`] / [`EventScope`],
-//!   [`ToolInvocation`], and [`get_json_path`] JSON path evaluation.
+//! - **Utilities** — [`ActivityId`], [`ToolInvocation`], and [`get_json_path`]
+//!   JSON path evaluation.
 //!
 //! Domain types are plain data: they serialize with `serde` and carry no
 //! behavior beyond validation helpers.

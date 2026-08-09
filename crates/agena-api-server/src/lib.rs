@@ -408,9 +408,7 @@ pub fn transport_router(state: AppState) -> Router {
 mod router_contract_tests {
     use agena_application::Application;
     use agena_notification::NotificationService;
-    use agena_runtime::{
-        RuntimeBootstrapRequest, RuntimeEventPublishRequest, bootstrap_application_services,
-    };
+    use agena_runtime::{RuntimeBootstrapRequest, bootstrap_application_services};
     use axum::body::to_bytes;
     use futures_util::{SinkExt, StreamExt};
     use http::Request;
@@ -647,10 +645,14 @@ mod router_contract_tests {
         })
         .await
         .expect("build test runtime");
-        let event_publisher = runtime
-            .application_services()
-            .event_publisher
-            .expect("access stable websocket event publisher");
+        let services = runtime.application_services();
+        let session_store = services
+            .session_store
+            .expect("access websocket session store facade");
+        let workspace_repository = services
+            .repositories
+            .expect("access websocket repositories")
+            .workspace;
         let state = AppState::from_application(application_for_test(&runtime));
         let app = router(state);
         let listener = TcpListener::bind(("127.0.0.1", 0))
@@ -820,8 +822,6 @@ mod router_contract_tests {
                     id: "global-subscription".into(),
                     request: agena_api::subscribe::SubscribeRequest {
                         scope: agena_api::Scope::Global,
-                        kinds: None,
-                        since_seq_global: None,
                     },
                 })
                 .expect("encode websocket subscribe request")
@@ -845,15 +845,23 @@ mod router_contract_tests {
                 if id == "global-subscription"
         ));
 
-        event_publisher
-            .publish_event(RuntimeEventPublishRequest::PluginEvent {
-                plugin_id: agena_plugin_host::PluginKey::new("contract", "fixture")
-                    .expect("build fixture plugin key"),
-                kind_label: "contract_event".to_owned(),
-                payload: serde_json::json!({"value": 42}),
+        let live_workspace_id = workspace_repository
+            .ensure_id(workspace_path.to_string_lossy().as_ref())
+            .await
+            .expect("create workspace for live patch");
+        let live_session = session_store
+            .create_session(agena_storage::store::NewSession {
+                workspace_id: live_workspace_id,
+                parent_id: None,
+                relation_kind: agena_domain::SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "websocket live patch".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
             })
             .await
-            .expect("publish websocket notification fixture event");
+            .expect("create session patch fixture");
         let notification = socket
             .next()
             .await
@@ -867,11 +875,13 @@ mod router_contract_tests {
         assert!(matches!(
             notification,
             agena_api::ws::ServerMessage::Notification(
-                agena_api::notifications::Notification::Event { subscription, event }
+                agena_api::notifications::Notification::SessionChanged { subscription, change }
             ) if subscription == "global-subscription"
-                && event.kind == "plugin_event"
-                && event.payload["kind_label"] == "contract_event"
-                && event.payload["payload"]["value"] == 42
+                && matches!(*change, agena_api::live::SessionChangeResource::SessionMetaUpdated {
+                    session_id,
+                    ref title,
+                    ..
+                } if session_id == live_session.id && title == "websocket live patch")
         ));
 
         socket

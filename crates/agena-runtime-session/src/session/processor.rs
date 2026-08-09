@@ -77,10 +77,10 @@ pub struct SessionProcessor {
     workspace_root: PathBuf,
 }
 
-mod events;
 mod helpers;
 mod media;
 mod parts;
+mod provider_media;
 mod run;
 mod tool_call_helpers;
 mod tool_calls;

@@ -792,16 +792,16 @@ impl PersistenceEngine for SqliteEngine {
         } else if query.roots_only {
             where_clauses.push("s.parent_id IS NULL".to_owned());
         }
-        if let Some(search) = query.search.as_deref() {
-            if !search.trim().is_empty() {
-                where_clauses.push("s.title LIKE ? ESCAPE '\\'".to_owned());
-                // Escape `%`/`_` so user input is a literal substring match.
-                let escaped = search
-                    .replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_");
-                values.push(Value::String(Some(Box::new(format!("%{escaped}%")))));
-            }
+        if let Some(search) = query.search.as_deref()
+            && !search.trim().is_empty()
+        {
+            where_clauses.push("s.title LIKE ? ESCAPE '\\'".to_owned());
+            // Escape `%`/`_` so user input is a literal substring match.
+            let escaped = search
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            values.push(Value::String(Some(Box::new(format!("%{escaped}%")))));
         }
         if let Some(before) = query.before {
             where_clauses.push("(s.updated_at_ms, s.id) < (?, ?)".to_owned());

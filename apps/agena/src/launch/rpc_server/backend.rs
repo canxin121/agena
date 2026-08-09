@@ -5,9 +5,9 @@ use crate::error::AgenaProcessError;
 use agena_api_server::jsonrpc::protocol::{
     CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
-    MessageItem, PermissionDecision as AppPermissionDecision, PermissionRememberScope,
-    PermissionReplyParams, PermissionReplyResult, ReadMessagesParams, ReadMessagesResult,
-    SessionListItem, SubmitMessageParams, SubmitMessageResult,
+    PermissionDecision as AppPermissionDecision, PermissionRememberScope, PermissionReplyParams,
+    PermissionReplyResult, ReadMessagesParams, ReadMessagesResult, SessionListItem,
+    SubmitMessageParams, SubmitMessageResult,
 };
 use agena_api_server::jsonrpc::{self, AppServerError};
 use agena_cli::{AgenaCli, RpcServerRequest, RpcServerTransport};
@@ -153,10 +153,22 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .list_projected_messages(outcome.session_id, true)
             .await
             .map_err(app_backend_error)?;
+        // The v2 run result: the newest run's marker plus its content parts.
+        // The just-submitted run is the last projected message (its id is the
+        // run marker part id).
+        let run_id = messages.last().map(|message| message.id);
+        let parts = match messages.last() {
+            Some(message) => {
+                agena_application::session::project_session_transcript(std::slice::from_ref(
+                    message,
+                ))
+            }
+            None => Vec::new(),
+        };
         Ok(SubmitMessageResult {
             session_id: presentation.id,
-            status: format!("{:?}", presentation.workflow_state).to_ascii_lowercase(),
-            text: last_assistant_text_from_projection(messages),
+            run_id,
+            parts,
         })
     }
 
@@ -235,16 +247,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .await
             .map_err(app_backend_error)?;
         Ok(ReadMessagesResult {
-            messages: messages
-                .into_iter()
-                .map(|message| MessageItem {
-                    message_id: message.id,
-                    role: message.role.to_string(),
-                    status: message.state.to_string(),
-                    text: projected_message_visible_text(&message),
-                    created_at: message.created_at,
-                })
-                .collect(),
+            parts: agena_application::session::project_session_transcript(&messages),
         })
     }
 
@@ -348,32 +351,6 @@ fn default_model(
         .default_model()
         .map_err(|error| AgenaProcessError::Configuration(error.to_string()))?
         .ok_or_else(|| AgenaProcessError::Configuration("no providers configured".to_owned()))
-}
-
-fn last_assistant_text_from_projection(
-    messages: Vec<agena_runtime::SessionProjectedMessage>,
-) -> Option<String> {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message.role == agena_domain::Role::Assistant)
-        .map(projected_message_visible_text)
-        .filter(|text| !text.trim().is_empty())
-}
-
-fn projected_message_visible_text(message: &agena_runtime::SessionProjectedMessage) -> String {
-    message
-        .parts
-        .iter()
-        .filter_map(|part| match part.detail.as_ref() {
-            Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {
-                Some(text.clone())
-            }
-            _ => part.summary.clone(),
-        })
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 fn session_storage_error() -> AgenaProcessError {

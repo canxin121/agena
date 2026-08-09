@@ -214,10 +214,7 @@ impl ApplicationService {
             .map_err(session_query_error)?;
 
         let scheduler_jobs = list_scheduled_jobs(execution_control).await;
-        let transcript = session_queries
-            .transcript_snapshot(session_id)
-            .await
-            .map_err(session_query_error)?;
+        let transcript = session_transcript_parts(session_queries, session_id).await?;
         let pending_interactive_requests =
             pending_interactive_requests(session_queries, session_id).await?;
         // Workflow readiness and execution liveness are separate facts. A
@@ -239,7 +236,7 @@ impl ApplicationService {
 
         Ok(SessionExecutionResource {
             session: session_resource,
-            transcript,
+            parts: transcript,
             workflow_state: workflow_state_from_domain(context.workflow_state),
             active_execution,
             latest_event_seq: self
@@ -496,6 +493,20 @@ async fn pending_interactive_requests(
 
 fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationError {
     ApplicationError::from_failure(*error.failure)
+}
+
+/// Project a session's v2 part transcript for presentation. Reads the runtime
+/// part projection (`list_projected_messages`) and flattens each run into its
+/// run marker plus content parts (shared `project_session_transcript`).
+async fn session_transcript_parts(
+    session_queries: &dyn agena_runtime::SessionQueryService,
+    session_id: i64,
+) -> ApplicationResult<Vec<agena_api::resource::SessionTranscriptPart>> {
+    let messages = session_queries
+        .list_projected_messages(session_id, true)
+        .await
+        .map_err(session_query_error)?;
+    Ok(crate::session::project_session_transcript(&messages))
 }
 
 fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {

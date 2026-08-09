@@ -1161,11 +1161,40 @@ pub struct SessionUsageResource {
     pub model_max_output_tokens: Option<u32>,
 }
 
+/// One v2 part in a session transcript projection.
+///
+/// The transcript is the session's ordered v2 part list ("everything is a
+/// part", database-design-v2.md 4.1.1). Each projected run contributes a `run`
+/// marker part followed by its content parts; `run_id` links content parts to
+/// their marker, and the marker's `state` mirrors the run/reply status.
+///
+/// This is a wire projection of the parts surfaced by the runtime
+/// `SessionQueryService`; `parent_part_id`/`run_id` are populated when the
+/// projection exposes them (both are `None` for fields the current projection
+/// does not carry). `kind`/`role`/`state` are stable strings.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SessionTranscriptPart {
+    pub part_id: i64,
+    pub kind: String,
+    pub role: String,
+    pub state: String,
+    pub content: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    pub created_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_part_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Full execution view of a session.
 pub struct SessionExecutionResource {
     pub session: SessionResource,
-    pub transcript: agena_domain::TranscriptSnapshot,
+    /// The session's v2 parts (ordered parts, including `run` markers).
+    /// Replaces the v1 `TranscriptSnapshot` aggregate.
+    pub parts: Vec<SessionTranscriptPart>,
     pub workflow_state: WorkflowState,
     pub active_execution: Option<ActiveExecutionResource>,
     #[serde(skip_serializing_if = "Option::is_none")]

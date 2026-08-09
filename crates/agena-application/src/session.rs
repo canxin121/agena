@@ -43,6 +43,52 @@ pub async fn session_user_input_reply_request(
     .await
 }
 
+/// Flatten projected session messages into the v2 part transcript projection.
+///
+/// Each projected message is one v2 run: its id is the run marker part id, so
+/// the projection emits a `run` marker part followed by the message's content
+/// parts in order. `role` is the run's role; content parts carry `run_id`
+/// linking them back to the marker. This is the shared transcript shape for
+/// the REST `SessionExecutionResource.parts` and the JSON-RPC
+/// `messages/list` / `message/submit` surfaces.
+pub fn project_session_transcript(
+    messages: &[agena_runtime::SessionProjectedMessage],
+) -> Vec<agena_api::resource::SessionTranscriptPart> {
+    let mut parts = Vec::new();
+    for message in messages {
+        let run_id = message.id;
+        parts.push(agena_api::resource::SessionTranscriptPart {
+            part_id: run_id,
+            kind: "run".to_owned(),
+            role: message.role.to_string(),
+            state: message.state.to_string(),
+            content: if message.metadata.is_object() {
+                message.metadata.clone()
+            } else {
+                serde_json::json!({})
+            },
+            summary: None,
+            created_at_ms: message.created_at.timestamp_millis(),
+            parent_part_id: None,
+            run_id: Some(run_id),
+        });
+        for part in &message.parts {
+            parts.push(agena_api::resource::SessionTranscriptPart {
+                part_id: part.id,
+                kind: part.kind.to_string(),
+                role: message.role.to_string(),
+                state: part.status.to_string(),
+                content: part.content.clone().unwrap_or(serde_json::Value::Null),
+                summary: part.summary.clone(),
+                created_at_ms: part.created_at.timestamp_millis(),
+                parent_part_id: None,
+                run_id: Some(run_id),
+            });
+        }
+    }
+    parts
+}
+
 pub async fn resolve_session_run_options(
     state: &Application,
     session_id: i64,

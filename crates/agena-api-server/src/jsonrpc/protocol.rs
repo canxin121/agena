@@ -86,7 +86,9 @@ pub mod method {
     pub const SESSIONS_LIST: &str = "sessions/list";
     pub const MESSAGES_LIST: &str = "messages/list";
     pub const RUN_CANCEL: &str = "run/cancel";
-    pub const EVENTS_SUBSCRIBE: &str = "events/subscribe";
+    // The v1 `events/subscribe` method is removed in the v2 protocol: session
+    // mutations are delivered as SessionChange part-patch notifications (see
+    // `AppServerNotification`) rather than through an explicit subscription.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,13 +120,20 @@ pub struct SubmitMessageParams {
     pub max_output_tokens: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Result of the submit-message method.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Result of the submit-message method: the accepted v2 run result.
+///
+/// `run_id` is the accepted run marker part id; `parts` carries that run's
+/// marker plus its content parts in creation order, aligned with the storage
+/// `SubmitOutcome{run_id, created, parts}` contract. The run marker's `state`
+/// conveys the run status that v1 reported as `status`; the v1 `text` field is
+/// replaced by reading the assistant `text` parts from `parts`.
 pub struct SubmitMessageResult {
     pub session_id: i64,
-    pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+    pub run_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<agena_api::resource::SessionTranscriptPart>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,20 +202,10 @@ pub struct ReadMessagesParams {
     pub session_id: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// One message in a message listing.
-pub struct MessageItem {
-    pub message_id: i64,
-    pub role: String,
-    pub status: String,
-    pub text: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Result of the read-messages method.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// Result of the read-messages method: the session's v2 part transcript.
 pub struct ReadMessagesResult {
-    pub messages: Vec<MessageItem>,
+    pub parts: Vec<agena_api::resource::SessionTranscriptPart>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -226,14 +225,31 @@ pub struct CancelRunResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 /// Server-initiated notification sent to clients.
+///
+/// The v1 `MessageDelta` / `ToolEvent` payloads are replaced by v2 part
+/// patches: every committed session mutation is delivered as a
+/// `PartAdded` / `PartUpdated` / `PartRemoved` / `SessionMetaUpdated`
+/// notification (mirroring `agena_api::live::SessionChangeResource`), with the
+/// part payload in the v2 `SessionTranscriptPart` shape. `PermissionRequest`
+/// and `SessionStateChanged` remain dedicated lifecycle signals.
 pub enum AppServerNotification {
-    MessageDelta {
+    PartAdded {
         session_id: i64,
-        text: String,
+        part: Box<agena_api::resource::SessionTranscriptPart>,
     },
-    ToolEvent {
-        session_id: Option<i64>,
-        payload: Value,
+    PartUpdated {
+        session_id: i64,
+        part: Box<agena_api::resource::SessionTranscriptPart>,
+    },
+    PartRemoved {
+        session_id: i64,
+        part_id: i64,
+    },
+    SessionMetaUpdated {
+        session_id: i64,
+        version: i64,
+        title: String,
+        updated_at_ms: i64,
     },
     PermissionRequest {
         session_id: i64,

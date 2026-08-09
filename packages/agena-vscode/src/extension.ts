@@ -50,8 +50,35 @@ class AgenaClient {
   }
 
   async submitTurn(sessionId: number, prompt: string): Promise<string> {
-    const result = await this.request('message/submit', { session_id: sessionId, prompt }) as { text?: string };
-    return result.text ?? '';
+    // v2 protocol: message/submit returns the accepted run (run_id + v2 parts)
+    // instead of a v1 `text` field. Read the run marker state and the parts,
+    // and derive the visible assistant text out of the assistant `text` parts.
+    const result = await this.request('message/submit', {
+      session_id: sessionId,
+      prompt,
+    }) as {
+      run_id?: number;
+      parts?: Array<{
+        kind: string;
+        role: string;
+        state: string;
+        content?: unknown;
+        summary?: string;
+      }>;
+    };
+    const parts = result.parts ?? [];
+    const textParts = parts.filter(
+      part => part.kind === 'text' && part.role === 'assistant' && part.state !== 'failed',
+    );
+    const fallback = parts.filter(part => part.kind === 'text');
+    const text = (textParts.length > 0 ? textParts : fallback)
+      .map(part => {
+        const content = part.content as { text?: string } | null;
+        return (content?.text ?? part.summary ?? '').trim();
+      })
+      .filter(Boolean)
+      .join('\n');
+    return text;
   }
 
   private request(method: string, params: unknown): Promise<unknown> {

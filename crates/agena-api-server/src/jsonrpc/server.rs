@@ -156,8 +156,22 @@ where
                         self.events
                             .publish(AppServerNotification::SessionStateChanged {
                                 session_id: result.session_id,
-                                status: result.status.clone(),
+                                // The run marker (first part of the returned
+                                // run) mirrors the run/reply status.
+                                status: result
+                                    .parts
+                                    .first()
+                                    .map(|part| part.state.clone())
+                                    .unwrap_or_else(|| "submitted".to_owned()),
                             });
+                        // Deliver the accepted parts as v2 part patches so live
+                        // clients can reconcile without re-reading the session.
+                        for part in &result.parts {
+                            self.events.publish(AppServerNotification::PartAdded {
+                                session_id: result.session_id,
+                                part: Box::new(part.clone()),
+                            });
+                        }
                         Ok(result)
                     },
                 )
@@ -191,7 +205,6 @@ where
                 )
                 .await
             }
-            protocol::method::EVENTS_SUBSCRIBE => Ok(serde_json::json!({"subscribed": true})),
             _ => Err(JsonRpcError {
                 code: -32601,
                 message: format!("method not found: {}", request.method),

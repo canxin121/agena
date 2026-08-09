@@ -592,16 +592,28 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let generation = session.runtime.prompt_window.generation.saturating_add(1);
         session.runtime.prompt_window.generation = generation;
-        session.runtime.prompt_window.compaction = Some(runtime);
         session.runtime.prompt_window.record_compaction_success();
         session.runtime.clear_provider_anchors();
         session.runtime.clear_prompt_tokens();
 
         // Durable compaction boundary (13.3 / 13.4): a `compaction` run marker
-        // closes the preceding window and the engine clears the persisted
+        // closes the preceding window, records the checkpoint as its content
+        // (4.1.1 `CompactionContent`), and the engine clears the persisted
         // provider anchors. Prompt-window state itself is derived from parts
-        // and deliberately not stored per session (D5).
-        let _compaction_run_id = self.store.compact_session(session.id).await?;
+        // and deliberately not stored per session (D5) — the summary lives on
+        // the part, not in memory.
+        let summary = match &runtime.content {
+            PromptCompactionContent::TextSummary { summary, .. } => Some(summary.clone()),
+            PromptCompactionContent::OpenAiResponses { .. } => None,
+        };
+        let window = Some(format!(
+            "through_message:{}",
+            runtime.compacted_through_message_id
+        ));
+        let _compaction_run_id = self
+            .store
+            .compact_session(session.id, summary, window)
+            .await?;
         Ok(session)
     }
 }
@@ -775,6 +787,9 @@ fn truncate_middle(value: &str, max_chars: usize) -> String {
 }
 
 fn checkpoint_message(session: &Session, summary: &str) -> Message {
+    // Token-estimation proxy for the checkpoint summary that prompt assembly
+    // will materialize from the compaction part (R4b). The ids are irrelevant
+    // to token accounting, so no synthetic compaction id is fabricated here.
     let mut message = Message::prompt_text(
         Role::User,
         format!(
@@ -783,15 +798,7 @@ fn checkpoint_message(session: &Session, summary: &str) -> Message {
             summary.trim()
         ),
     );
-    message.id = -9_000_000_000_i64
-        .saturating_sub(session.runtime.prompt_window.generation as i64)
-        .saturating_sub(1);
     message.created_at = session.created_at;
-    for (index, part) in message.parts.iter_mut().enumerate() {
-        part.id = message.id.saturating_sub(index as i64 + 1);
-        part.message_id = message.id;
-        part.created_at = session.created_at;
-    }
     message
 }
 

@@ -265,9 +265,19 @@ pub trait SessionStore: Send + Sync {
     async fn reconcile(&self, session_id: i64) -> Result<(), StoreError>;
 
     /// Compact the session: a `compaction` run marker closes the preceding
-    /// window; provider anchors are cleared (13.3). Returns the compaction
-    /// run's part id.
-    async fn compact_session(&self, session_id: i64, owner_id: &str) -> Result<i64, StoreError>;
+    /// window and records the durable checkpoint (13.3 / 13.4); provider
+    /// anchors are cleared. The marker's content is the 4.1.1
+    /// `CompactionContent` shape — `{"summary": ..., "window": ...}` — where
+    /// `summary` is the continuation record and `window` describes the span of
+    /// conversation the compaction covered (absent or null when the caller has
+    /// nothing to report). Returns the compaction run's part id.
+    async fn compact_session(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        summary: Option<String>,
+        window: Option<String>,
+    ) -> Result<i64, StoreError>;
 
     /// Delete a session (membership cascades; shared parts survive and are
     /// GC'd by reference count, 7.6).
@@ -1155,7 +1165,7 @@ where
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
         self.memory
-            .apply_committed(session_id, &[updated.clone()], Some(meta.version));
+            .apply_committed(session_id, std::slice::from_ref(&updated), Some(meta.version));
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
             part: updated.clone(),
@@ -1179,7 +1189,7 @@ where
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
         self.memory
-            .apply_committed(session_id, &[marker.clone()], Some(meta.version));
+            .apply_committed(session_id, std::slice::from_ref(&marker), Some(meta.version));
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
             part: marker.clone(),
@@ -1364,19 +1374,26 @@ where
         SessionFacade::reconcile(self, session_id).await
     }
 
-    async fn compact_session(&self, session_id: i64, owner_id: &str) -> Result<i64, StoreError> {
+    async fn compact_session(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        summary: Option<String>,
+        window: Option<String>,
+    ) -> Result<i64, StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner).await?;
-        // A compaction run marker closes the preceding window (13.4); provider
-        // anchors are cleared because compaction changes the prompt window
-        // (13.3).
+        // A compaction run marker closes the preceding window and records the
+        // durable checkpoint as its content (4.1.1 `CompactionContent`,
+        // 13.4); provider anchors are cleared because compaction changes the
+        // prompt window (13.3).
         let outcome = self
             .engine
             .start_run(
                 session_id,
                 &owner,
                 "compaction",
-                json!({ "summary": null }),
+                json!({ "summary": summary, "window": window }),
                 None,
                 self.now(),
             )
@@ -2043,7 +2060,7 @@ mod tests {
             .await
             .expect("set anchors");
         let compaction_id = facade
-            .compact_session(session_id, "owner-a")
+            .compact_session(session_id, "owner-a", Some("checkpoint".to_owned()), None)
             .await
             .expect("compact");
         assert!(compaction_id > 0);
@@ -2057,6 +2074,38 @@ mod tests {
         assert!(
             view.parts.iter().any(|p| p.is_run_marker()),
             "compaction run marker created"
+        );
+    }
+
+    #[tokio::test]
+    async fn compaction_part_content_records_the_checkpoint_summary() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "t").await;
+        let summary = "durable continuation record for the next agent step";
+        facade
+            .compact_session(
+                session_id,
+                "owner-a",
+                Some(summary.to_owned()),
+                Some("through:42".to_owned()),
+            )
+            .await
+            .expect("compact");
+        let view = facade.load(session_id).await.expect("load");
+        let compaction = view
+            .parts
+            .iter()
+            .find(|part| part.content["run_kind"] == json!("compaction"))
+            .expect("compaction run marker");
+        assert_eq!(
+            compaction.content["summary"],
+            json!(summary),
+            "summary persisted on the compaction part"
+        );
+        assert_eq!(
+            compaction.content["window"],
+            json!("through:42"),
+            "window description persisted on the compaction part"
         );
     }
 
@@ -2081,7 +2130,7 @@ mod tests {
         // marker is not re-emitted (`created == false`) while the run id and
         // content parts match.
         assert_eq!(first.run_id, second.run_id, "replay returns the same run id");
-        assert!(second.created == false, "replay is not a re-creation");
+        assert!(!second.created, "replay is not a re-creation");
         let view = facade.load(session_id).await.expect("load");
         assert_eq!(view.parts.len(), 2, "no duplicate parts");
     }

@@ -324,10 +324,17 @@ impl StoreAdapter {
             .map_err(store_error)
     }
 
-    /// Start a compaction run; returns the compaction run marker part id.
-    pub(crate) async fn compact_session(&self, session_id: i64) -> Result<i64, AppError> {
+    /// Start a compaction run; returns the compaction run marker part id. The
+    /// checkpoint `summary` (and optional `window` description) are recorded
+    /// on the marker's content (4.1.1 `CompactionContent`).
+    pub(crate) async fn compact_session(
+        &self,
+        session_id: i64,
+        summary: Option<String>,
+        window: Option<String>,
+    ) -> Result<i64, AppError> {
         self.facade
-            .compact_session(session_id, &self.owner_id)
+            .compact_session(session_id, &self.owner_id, summary, window)
             .await
             .map_err(store_error)
     }

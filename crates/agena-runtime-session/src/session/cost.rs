@@ -5,10 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use agena_domain::{ModelCostBreakdown, Role, SessionCostSummary};
+use agena_domain::{ModelCostBreakdown, SessionCostSummary};
 use agena_provider::CompletionUsage;
-
-use crate::message::Message;
+use agena_storage::store::{Part, PartRole};
 
 fn fold_billable_units(
     totals: &mut Vec<agena_domain::UsageBillableUnitTotal>,
@@ -139,21 +138,44 @@ fn for_each_usage_observation(
     }
 }
 
-/// Build a per-session summary from Runtime's concrete message history.
-pub(crate) fn summarize(messages: &[Message]) -> SessionCostSummary {
+/// Parse a `usage` object embedded in a run marker's content into a provider
+/// `CompletionUsage`. Tolerant: any subset of fields parses (serde defaults
+/// fill the rest); empty objects are ignored.
+fn usage_from_run_marker_content(content: &serde_json::Value) -> Option<CompletionUsage> {
+    let usage = content.get("usage")?;
+    let parsed: CompletionUsage = serde_json::from_value(usage.clone()).ok()?;
+    (parsed.requests > 0 || parsed.own_total_tokens() > 0).then_some(parsed)
+}
+
+/// Build a per-session summary from the parts projection.
+///
+/// Usage and model identity are read from the assistant run markers, which are
+/// the durable home for run cost input (the engine folds attributed usage into
+/// `content["usage"]`, mirroring the v2 `aggregate_usage()` projection).
+pub(crate) fn summarize(parts: &[Part]) -> SessionCostSummary {
     let mut result = SessionCostSummary::default();
     let mut by_model: BTreeMap<(String, String), ModelCostBreakdown> = BTreeMap::new();
-    for message in messages {
-        if message.role != Role::Assistant {
+    for part in parts {
+        if !part.is_run_marker() || part.role != PartRole::Assistant {
             continue;
         }
-        let Some(usage) = message.usage.as_ref() else {
+        let Some(usage) = usage_from_run_marker_content(&part.content) else {
             continue;
         };
+        let provider_id = part
+            .content
+            .get("provider_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let model_id = part
+            .content
+            .get("model_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
         for_each_usage_observation(
-            message.metadata.model_provider_id.as_str(),
-            message.metadata.model_id.as_str(),
-            usage,
+            provider_id,
+            model_id,
+            &usage,
             &mut |provider_id, model_id, observation| {
                 fold_session_cost(&mut result, provider_id, model_id, observation);
                 let item = by_model

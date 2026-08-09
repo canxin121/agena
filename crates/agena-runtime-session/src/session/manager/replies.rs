@@ -1650,7 +1650,7 @@ use super::{
     StreamingToolExecution, TimeRange, ToolError, ToolInvocation, ToolInvocationExecution,
     UserInputReplyKind, Utc, ask_user_title, completed_lifecycle, custom_payload_value,
     execution_control_to_app_error, host_user_input_response, mpsc,
-    message_provider_state_from_provider_metadata, operation_blocks_from_tool_output,
+    operation_blocks_from_tool_output,
     payload_tool_name_for_invocation, permission_action_key, persisted_rules_for_reply,
     resolve_pending_tool, run_abort_reason, text_result_blocks, tool_name, user_input_execution,
 };

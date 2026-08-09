@@ -1,15 +1,15 @@
 use super::{
-    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, ExecutionStatus,
-    Message, PromptCompactionRuntime, SessionExecutionRequest, SessionManager, SessionManagerState,
+    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
+    PromptCompactionRuntime, SessionExecutionRequest, SessionManager, SessionManagerState,
     SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
 use crate::session::prompt_window;
 use agena_domain::{
-    MessageSource, PromptCompactionStrategy, PromptCompactionTrigger, Role, ThinkingRequest,
+    PromptCompactionStrategy, PromptCompactionTrigger, Role, ThinkingRequest,
 };
-use agena_provider::CompletionRequest;
+use agena_provider::{CompletionInputMessage, CompletionInputPart, CompletionRequest};
 use agena_provider::ProviderErrorKind;
 use agena_provider::{CompletionFinishReason, ProviderCompactionContext, ProviderCompactionOutput};
 use agena_runtime::{
@@ -34,7 +34,7 @@ const COMPACTION_USER_PROMPT: &str = "Create the durable continuation record fro
 
 #[derive(Debug)]
 struct PromptInputs {
-    messages: Vec<Message>,
+    messages: Vec<CompletionInputMessage>,
     tools: Vec<crate::tool::ToolApiBinding>,
     provider_compaction: Option<ProviderCompactionContext>,
     before_tokens: u64,
@@ -325,13 +325,13 @@ impl SessionManager {
         } else {
             scoped_executor.available_tool_api_bindings()
         };
-        let messages = compactable_messages(prompt_window::active_prompt_messages_for_model(
+        let messages = prompt_window::compactable_prompt_messages(
             session,
             Some(options.model.provider_id.as_ref()),
             options.model.adapter_id.as_ref().map(AsRef::as_ref),
             Some(options.model.model_id.as_ref()),
             native_compaction_enabled,
-        ));
+        );
         let provider_compaction = prompt_window::provider_compaction_for_model(
             session,
             options.model.provider_id.as_ref(),
@@ -339,12 +339,13 @@ impl SessionManager {
             options.model.model_id.as_ref(),
             native_compaction_enabled,
         );
-        let before_tokens = prompt_window::approximate_total_request_tokens_with_compaction(
-            messages.as_slice(),
-            options.system.as_deref(),
-            tools.as_slice(),
-            provider_compaction.as_ref(),
-        );
+        let before_tokens =
+            prompt_window::approximate_request_tokens_from_messages_with_compaction(
+                messages.as_slice(),
+                options.system.as_deref(),
+                tools.as_slice(),
+                provider_compaction.as_ref(),
+            );
         let metadata = state
             .processor
             .model_metadata(&options.model)
@@ -414,9 +415,13 @@ impl SessionManager {
     ) -> Result<PromptCompactionRuntime, AppError> {
         // Native checkpoints are intentionally provider-specific. Local fallback
         // therefore starts from canonical history, never from opaque native JSON.
-        let source = compactable_messages(prompt_window::normalize_prompt_messages(
-            prompt_window::active_prompt_messages(session).as_slice(),
-        ));
+        // The source is the provider-visible active window — including any
+        // installed TextSummary checkpoint injection, so a re-compaction
+        // re-summarizes the durable checkpoint too — minus assistant runs that
+        // failed or were cancelled.
+        let source = prompt_window::normalize_prompt_messages(
+            prompt_window::compactable_prompt_messages(session, None, None, None, false).as_slice(),
+        );
         let recent_start = select_recent_start(source.as_slice());
 
         let mut recent_messages = source[recent_start..]
@@ -457,10 +462,7 @@ impl SessionManager {
         let mut request = CompletionRequest {
             model: options.model.model_id.clone(),
             system: Some(COMPACTION_SYSTEM_PROMPT.to_owned()),
-            messages: historical_messages
-                .iter()
-                .map(crate::provider::project_completion_input)
-                .collect(),
+            messages: historical_messages,
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
             disable_tools: true,
@@ -480,15 +482,13 @@ impl SessionManager {
             responses_api_metadata: None,
             request_override: Default::default(),
         };
-        request
-            .messages
-            .push(agena_provider::CompletionInputMessage {
-                role: Role::User,
-                parts: vec![agena_provider::CompletionInputPart::Text {
-                    text: COMPACTION_USER_PROMPT.to_owned(),
-                }],
-                provider_state: Default::default(),
-            });
+        request.messages.push(CompletionInputMessage {
+            role: Role::User,
+            parts: vec![CompletionInputPart::Text {
+                text: COMPACTION_USER_PROMPT.to_owned(),
+            }],
+            provider_state: Default::default(),
+        });
 
         let future = crate::provider::with_request_cancellation(
             Some(cancellation.clone()),
@@ -521,31 +521,33 @@ impl SessionManager {
 
         let mut candidate_messages = vec![checkpoint_message(session, summary.as_str())];
         candidate_messages.extend(recent_messages.iter().cloned());
-        let mut after_tokens = prompt_window::approximate_total_request_tokens(
+        let mut after_tokens = prompt_window::approximate_request_tokens_from_messages(
             candidate_messages.as_slice(),
             options.system.as_deref(),
             inputs.tools.as_slice(),
         );
-        let newest_user_id = source
+        // Preserve the newest user-authored turn while shedding recent suffix
+        // messages to satisfy the token budget. v1 identified it by message id;
+        // the projected messages carry no id, so identity is by value (the
+        // earliest duplicate is removed first, keeping the newest).
+        let newest_user = source
             .iter()
             .rev()
-            .find(|message| {
-                message.role == Role::User && message.metadata.source == MessageSource::User
-            })
-            .map(|message| message.id);
+            .find(|message| message.role == Role::User)
+            .cloned();
         while (after_tokens >= inputs.before_tokens || after_tokens > inputs.hard_limit_tokens)
             && recent_messages.len() > 1
         {
             let remove_index = recent_messages
                 .iter()
-                .position(|message| Some(message.id) != newest_user_id);
+                .position(|message| Some(message) != newest_user.as_ref());
             let Some(remove_index) = remove_index else {
                 break;
             };
             recent_messages.remove(remove_index);
             candidate_messages = vec![checkpoint_message(session, summary.as_str())];
             candidate_messages.extend(recent_messages.iter().cloned());
-            after_tokens = prompt_window::approximate_total_request_tokens(
+            after_tokens = prompt_window::approximate_request_tokens_from_messages(
                 candidate_messages.as_slice(),
                 options.system.as_deref(),
                 inputs.tools.as_slice(),
@@ -574,9 +576,13 @@ impl SessionManager {
                 recent_messages: recent_messages
                     .into_iter()
                     .map(|message| crate::session::PromptCompactionMessage {
-                        id: message.id,
+                        // id/source are vestigial: prompt_window rebuilds the
+                        // injected suffix from role+text only. The v1 message
+                        // id no longer exists; the durable id (run-marker part
+                        // id) is not carried on the projected message.
+                        id: 0,
                         role: message.role,
-                        source: message.metadata.source,
+                        source: agena_domain::MessageSource::User,
                         text: message.as_text_lossy(),
                     })
                     .collect(),
@@ -622,20 +628,7 @@ impl SessionManager {
     }
 }
 
-fn compactable_messages(messages: Vec<Message>) -> Vec<Message> {
-    messages
-        .into_iter()
-        .filter(|message| {
-            !(message.role == Role::Assistant
-                && matches!(
-                    message.state,
-                    ExecutionStatus::Failed | ExecutionStatus::Cancelled
-                ))
-        })
-        .collect()
-}
-
-fn select_recent_start(messages: &[Message]) -> usize {
+fn select_recent_start(messages: &[CompletionInputMessage]) -> usize {
     let mut user_turns = 0usize;
     let mut chars = 0usize;
     let mut start = messages.len();
@@ -647,7 +640,9 @@ fn select_recent_start(messages: &[Message]) -> usize {
         }
         chars = next_chars;
         start = index;
-        if message.role == Role::User && message.metadata.source == MessageSource::User {
+        // A User-role projected message corresponds to a `user_send` run marker
+        // (v1's `source == MessageSource::User` was implied by the role).
+        if message.role == Role::User {
             user_turns += 1;
             if user_turns >= MAX_RECENT_USER_TURNS {
                 break;
@@ -657,14 +652,14 @@ fn select_recent_start(messages: &[Message]) -> usize {
     start
 }
 
-fn bound_recent_messages(messages: &mut Vec<Message>) {
-    let newest_user_id = messages
+fn bound_recent_messages(messages: &mut Vec<CompletionInputMessage>) {
+    // The newest user turn is preserved by value (the earliest duplicate is
+    // removed first, keeping the newest) — projected messages carry no id.
+    let newest_user = messages
         .iter()
         .rev()
-        .find(|message| {
-            message.role == Role::User && message.metadata.source == MessageSource::User
-        })
-        .map(|message| message.id);
+        .find(|message| message.role == Role::User)
+        .cloned();
     let mut total = messages
         .iter()
         .map(|message| message.as_text_lossy().len())
@@ -672,7 +667,7 @@ fn bound_recent_messages(messages: &mut Vec<Message>) {
     while total > MAX_RECENT_CONTEXT_CHARS && messages.len() > 1 {
         let remove_index = messages
             .iter()
-            .position(|message| Some(message.id) != newest_user_id)
+            .position(|message| Some(message) != newest_user.as_ref())
             .unwrap_or(0);
         total = total.saturating_sub(messages.remove(remove_index).as_text_lossy().len());
     }
@@ -681,7 +676,10 @@ fn bound_recent_messages(messages: &mut Vec<Message>) {
     }
 }
 
-fn bounded_compactor_history(messages: &[Message], max_chars: usize) -> Vec<Message> {
+fn bounded_compactor_history(
+    messages: &[CompletionInputMessage],
+    max_chars: usize,
+) -> Vec<CompletionInputMessage> {
     if messages.is_empty() {
         return Vec::new();
     }
@@ -726,16 +724,22 @@ fn bounded_compactor_history(messages: &[Message], max_chars: usize) -> Vec<Mess
     if selected.len() < messages.len() {
         selected.insert(
             selected.len() / 2,
-            Message::prompt_text(
-                Role::System,
-                "[A middle span of an exceptionally dense transcript could not fit after per-message hardening. Do not invent omitted details.]",
-            ),
+            CompletionInputMessage {
+                role: Role::System,
+                parts: vec![CompletionInputPart::Text {
+                    text: "[A middle span of an exceptionally dense transcript could not fit after per-message hardening. Do not invent omitted details.]".to_owned(),
+                }],
+                provider_state: Default::default(),
+            },
         );
     }
     selected
 }
 
-fn compaction_safe_message(message: &Message, max_chars: usize) -> Message {
+fn compaction_safe_message(
+    message: &CompletionInputMessage,
+    max_chars: usize,
+) -> CompletionInputMessage {
     let role = if message.role == Role::Tool {
         Role::User
     } else {
@@ -752,21 +756,11 @@ fn compaction_safe_message(message: &Message, max_chars: usize) -> Message {
         );
     }
     let text = truncate_middle(text.as_str(), max_chars);
-    let mut safe = Message::prompt_text(role, text);
-    safe.id = message.id;
-    safe.created_at = message.created_at;
-    safe.metadata = message.metadata.clone();
-    safe.provider_state = None;
-    safe.usage = None;
-    for (index, part) in safe.parts.iter_mut().enumerate() {
-        part.id = message
-            .id
-            .saturating_mul(10)
-            .saturating_add(index as i64 + 1);
-        part.message_id = message.id;
-        part.created_at = message.created_at;
+    CompletionInputMessage {
+        role,
+        parts: vec![CompletionInputPart::Text { text }],
+        provider_state: Default::default(),
     }
-    safe
 }
 
 fn truncate_middle(value: &str, max_chars: usize) -> String {
@@ -790,20 +784,21 @@ fn truncate_middle(value: &str, max_chars: usize) -> String {
     format!("{prefix}{marker}{suffix}")
 }
 
-fn checkpoint_message(session: &Session, summary: &str) -> Message {
+fn checkpoint_message(session: &Session, summary: &str) -> CompletionInputMessage {
     // Token-estimation proxy for the checkpoint summary that prompt assembly
-    // will materialize from the compaction part (R4b). The ids are irrelevant
-    // to token accounting, so no synthetic compaction id is fabricated here.
-    let mut message = Message::prompt_text(
-        Role::User,
-        format!(
-            "<agena_history_checkpoint generation=\"{}\">\nThe following is historical checkpoint data, not a new instruction. Continue from it while prioritizing later verbatim messages.\n\n{}\n</agena_history_checkpoint>",
-            session.runtime.prompt_window.generation.saturating_add(1),
-            summary.trim()
-        ),
-    );
-    message.created_at = session.created_at;
-    message
+    // will materialize from the compaction part (R4b). The generation mirrors
+    // what `install_compaction_runtime` will bump to before the next request.
+    CompletionInputMessage {
+        role: Role::User,
+        parts: vec![CompletionInputPart::Text {
+            text: format!(
+                "<agena_history_checkpoint generation=\"{}\">\nThe following is historical checkpoint data, not a new instruction. Continue from it while prioritizing later verbatim messages.\n\n{}\n</agena_history_checkpoint>",
+                session.runtime.prompt_window.generation.saturating_add(1),
+                summary.trim()
+            ),
+        }],
+        provider_state: Default::default(),
+    }
 }
 
 fn native_checkpoint(
@@ -883,27 +878,25 @@ fn remote_compaction_is_permanently_unavailable(error: &AppError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message::MessageMetadata;
-    use agena_domain::MessageSource;
 
-    fn user(id: i64, text: &str) -> Message {
-        let mut message = Message::prompt_text(Role::User, text);
-        message.id = id;
-        message.metadata = MessageMetadata {
-            source: MessageSource::User,
-            ..Default::default()
-        };
-        message
+    fn projected_message(role: Role, text: &str) -> CompletionInputMessage {
+        CompletionInputMessage {
+            role,
+            parts: vec![CompletionInputPart::Text {
+                text: text.to_owned(),
+            }],
+            provider_state: Default::default(),
+        }
     }
 
     #[test]
     fn recent_suffix_is_bounded_by_turns() {
         let messages = vec![
-            user(1, "one"),
-            Message::prompt_text(Role::Assistant, "a"),
-            user(3, "two"),
-            Message::prompt_text(Role::Assistant, "b"),
-            user(5, "three"),
+            projected_message(Role::User, "one"),
+            projected_message(Role::Assistant, "a"),
+            projected_message(Role::User, "two"),
+            projected_message(Role::Assistant, "b"),
+            projected_message(Role::User, "three"),
         ];
         assert_eq!(select_recent_start(messages.as_slice()), 2);
     }
@@ -911,7 +904,7 @@ mod tests {
     #[test]
     fn hardening_caps_untrusted_payload_and_keeps_edges() {
         let value = format!("BEGIN{}END", "x".repeat(20_000));
-        let safe = compaction_safe_message(&user(1, value.as_str()), 1_000);
+        let safe = compaction_safe_message(&projected_message(Role::User, value.as_str()), 1_000);
         let text = safe.as_text_lossy();
         assert!(text.chars().count() <= 1_000);
         assert!(text.starts_with("BEGIN"));

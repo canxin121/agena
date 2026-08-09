@@ -3,15 +3,60 @@ use super::{
     SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
     SessionUserMessageRequest, StableRunContext, UserInputPart, mpsc,
 };
-use crate::session::store::{messages_from_parts, new_part_from_content};
+use crate::session::store::{new_part_from_content, part_content_from_value};
 use crate::session::Session;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
 use agena_runtime_contracts::message::{SkillReference, SkillReferencePart};
-use agena_storage::store::{PartRole, PartState};
+use agena_storage::store::{Part, PartRole, PartState};
 use std::path::Path;
+
+/// The lossy visible text of one run group, mirroring the v1
+/// `Message::visible_text_lossy` over the run's decoded content parts: text
+/// and skill-reference parts render their content, operation parts their
+/// best-effort output, and the remaining part kinds fall back to their
+/// summary.
+pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
+    run.iter()
+        .skip(1)
+        .filter_map(|part| {
+            match part_content_from_value(&part.kind, &part.content) {
+                Ok(PartContent::Text(text)) => Some(text.text.clone()),
+                Ok(PartContent::Activity(
+                    agena_runtime_contracts::message::RuntimeActivity::SkillReference(skill),
+                )) => Some(skill.summary()),
+                Ok(PartContent::Activity(
+                    agena_runtime_contracts::message::RuntimeActivity::Operation(tool),
+                )) => tool_visible_text_lossy(&tool),
+                Ok(PartContent::Activity(
+                    agena_runtime_contracts::message::RuntimeActivity::Reasoning(_),
+                )) => None,
+                _ => part.summary.clone(),
+            }
+        })
+        .filter(|text| !text.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Best-effort textual rendering of an operation part, mirroring the v1
+/// `Message::tool_text_lossy` (private in contracts): first non-empty of
+/// output text, error message, title, or summary.
+fn tool_visible_text_lossy(tool: &agena_runtime_contracts::message::OperationPart) -> Option<String> {
+    let candidates = [
+        tool.output_text(),
+        tool.error_message(),
+        tool.title(),
+        (!tool.summary.trim().is_empty()).then_some(tool.summary.as_str()),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|text| !text.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
 
 /// Resolve requested Skill names/aliases into immutable Skill references
 /// for a delegated subtask. The catalog is rebuilt on demand from bundled
@@ -126,16 +171,22 @@ impl SessionManager {
             .require_subtask_session(parent_session_id, task_id)
             .await?;
         let limit = limit.clamp(1, 500) as usize;
-        let mut messages = messages_from_parts(child.parts())?
+        let mut messages = crate::session::store::parts_into_runs(child.parts())
             .into_iter()
-            .filter(|message| message.id > after_cursor)
-            .filter_map(|message| {
-                let text = message.visible_text_lossy();
+            .filter_map(|run| {
+                let marker_id = run.first().map(|marker| marker.part_id);
+                marker_id
+                    .filter(|marker_id| *marker_id > after_cursor)
+                    .map(|_| run)
+            })
+            .filter_map(|run| {
+                let marker = run.first().expect("run group has a marker");
+                let text = run_visible_text_lossy(&run);
                 (!text.trim().is_empty()).then_some(crate::SessionSubtaskOutputChunk {
-                    cursor: message.id,
-                    role: message.role,
+                    cursor: marker.part_id,
+                    role: crate::session::store::role_from_part_role(marker.role),
                     text,
-                    created_at_ms: message.created_at.timestamp_millis(),
+                    created_at_ms: marker.created_at_ms,
                 })
             })
             .collect::<Vec<_>>();

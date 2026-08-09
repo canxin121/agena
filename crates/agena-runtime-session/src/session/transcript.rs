@@ -133,73 +133,6 @@ impl TranscriptContent {
         Self { blocks }
     }
 
-    /// Project a `Message`'s parts into transcript form. Multi-modal fidelity
-    /// is preserved: text, reasoning, image and attachment blocks all round-
-    /// trip; everything else collapses to its lossy text rendering as a final
-    /// fallback so a message never produces an empty body.
-    ///
-    /// The name retains the `_lossy` suffix because the lossy fallback path
-    /// is unavoidable for content kinds (file changes, web searches, …) the
-    /// transcript shape simply does not model.
-    #[cfg(test)]
-    pub fn from_message_lossy(message: &crate::message::Message) -> Self {
-        use crate::message::{AttachmentKind, PartContent, RuntimeActivity};
-        let mut blocks = Vec::new();
-        let mut had_any = false;
-        for part in &message.parts {
-            match part.content.as_ref() {
-                Some(PartContent::Text(text)) => {
-                    if !text.text.is_empty() {
-                        blocks.push(TranscriptBlock::Text {
-                            text: text.text.clone(),
-                        });
-                        had_any = true;
-                    }
-                }
-                Some(PartContent::Activity(RuntimeActivity::Reasoning(reasoning))) => {
-                    let joined = reasoning.preferred_text();
-                    if !joined.is_empty() {
-                        blocks.push(TranscriptBlock::Reasoning { text: joined });
-                        had_any = true;
-                    }
-                }
-                Some(PartContent::Activity(RuntimeActivity::Resource(attachment))) => {
-                    for item in &attachment.attachments {
-                        let media_type: SmolStr = item.mime.as_str().into();
-                        let block = match item.kind {
-                            AttachmentKind::Image => TranscriptBlock::Image {
-                                media_type,
-                                digest: attachment_digest_label(&item.source),
-                            },
-                            _ => TranscriptBlock::Attachment {
-                                file_id: attachment_digest_label(&item.source).into(),
-                                media_type: Some(media_type),
-                            },
-                        };
-                        blocks.push(block);
-                        had_any = true;
-                    }
-                }
-                Some(PartContent::Activity(RuntimeActivity::SkillReference(skill_reference)))
-                    if !skill_reference.skills.is_empty() =>
-                {
-                    blocks.push(TranscriptBlock::Text {
-                        text: skill_reference.model_context_text(),
-                    });
-                    had_any = true;
-                }
-                _ => {}
-            }
-        }
-        if !had_any {
-            let fallback = message.as_text_lossy();
-            if !fallback.is_empty() {
-                blocks.push(TranscriptBlock::Text { text: fallback });
-            }
-        }
-        Self { blocks }
-    }
-
     fn hash_into(&self, hasher: &mut blake3::Hasher) {
         hash_len(hasher, self.blocks.len() as u64);
         for block in &self.blocks {
@@ -300,33 +233,6 @@ impl TranscriptToolOutput {
 #[inline]
 fn hash_len(hasher: &mut blake3::Hasher, len: u64) {
     hasher.update(&len.to_le_bytes());
-}
-
-/// Best-effort short label for an attachment source. The transcript only
-/// keeps a content-stable handle (digest / file id), not the raw payload, so
-/// any URL is hashed by its byte content via the existing transcript
-/// digester; the label here just feeds back into `TranscriptBlock::Image`
-/// or `TranscriptBlock::Attachment` so prompt-cache stability stays tied to
-/// a value the provider also sees.
-#[cfg(test)]
-fn attachment_digest_label(source: &crate::message::AttachmentSource) -> String {
-    use crate::message::AttachmentSource;
-    match source {
-        AttachmentSource::Url { url } | AttachmentSource::DataUrl { url } => url.clone(),
-        AttachmentSource::Base64 { data } => format!("base64:{}", short_digest(data)),
-        AttachmentSource::FileId { file_id } => file_id.clone(),
-        AttachmentSource::LocalPath { path } => path.clone(),
-    }
-}
-
-/// 16-char prefix of a blake3 digest of `value`. Used to keep an
-/// attachment's transcript label content-stable without storing the full
-/// payload in the event log.
-#[cfg(test)]
-fn short_digest(value: &str) -> String {
-    let mut hex = blake3::hash(value.as_bytes()).to_hex().to_string();
-    hex.truncate(16);
-    hex
 }
 
 #[inline]

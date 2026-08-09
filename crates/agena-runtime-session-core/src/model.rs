@@ -877,7 +877,7 @@ impl Session {
         match self
             .parts
             .iter()
-            .rposition(|part| is_compaction_marker(part))
+            .rposition(is_compaction_marker)
         {
             Some(index) => &self.parts[index + 1..],
             None => &self.parts[..],

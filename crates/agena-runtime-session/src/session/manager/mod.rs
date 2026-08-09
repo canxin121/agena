@@ -11,7 +11,7 @@ use chrono::Utc;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
-use crate::message::{AttachmentItem, Message, OperationPart, PartContent};
+use crate::message::{AttachmentItem, OperationPart, PartContent};
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
@@ -27,7 +27,7 @@ use agena_tool::PreparedShellCommand;
 
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
 use super::processor::{
-    SessionRunRequest, SessionRunTermination, message_provider_state_from_provider_metadata,
+    SessionRunRequest, SessionRunTermination,
 };
 use super::prompt_window::PromptRequestOptions;
 use super::store::StoreAdapter;
@@ -46,7 +46,7 @@ use agena_runtime::{
 fn completion_request(
     options: &SessionRunOptions,
     system: Option<String>,
-    messages: Vec<Message>,
+    messages: Vec<agena_provider::CompletionInputMessage>,
     tool_api_functions: Vec<crate::tool::ToolApiBinding>,
     prompt_cache_key: Option<String>,
     previous_response_id: Option<String>,
@@ -55,10 +55,7 @@ fn completion_request(
     agena_runtime::build_completion_request(agena_runtime::CompletionRequestInputs {
         model: options.model.model_id.clone(),
         system,
-        messages: messages
-            .iter()
-            .map(crate::provider::project_completion_input)
-            .collect(),
+        messages,
         tool_api_functions: tool_api_functions
             .into_iter()
             .map(|binding| binding.definition())

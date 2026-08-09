@@ -646,7 +646,7 @@ pub(super) enum AppMessage {
     },
     RewindMessagesLoaded {
         session_id: i64,
-        result: UiResult<Vec<agena_domain::TurnSnapshot>>,
+        result: UiResult<Vec<RewindTarget>>,
     },
     ModelCatalogLoaded {
         query: String,

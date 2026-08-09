@@ -324,7 +324,7 @@ pub(crate) use self::surface_selection::{
 pub(crate) use agena_tui_transcript::renderer as transcript_view;
 pub(crate) use agena_tui_transcript::text as ui_text;
 use agena_tui_transcript::{
-    initial_search_match_index, normalize_transcript_text_selection, transcript_entries,
+    initial_search_match_index, normalize_transcript_text_selection,
     transcript_node_highlight_range, transcript_node_kind_label,
     transcript_selection_scroll_position, transcript_spinner_placeholder,
     transcript_text_selection_text,
@@ -339,7 +339,7 @@ use agena_tui_transcript::{
 
 use self::transcript_view::{
     current_spinner_millis, refresh_spinner_line, render_entry_detailed, render_entry_export,
-    render_transcript_snapshot_export_markdown, spinner_frame,
+    render_parts_export_markdown, spinner_frame,
 };
 pub(crate) use agena_tui_transcript::sanitize_terminal_text;
 

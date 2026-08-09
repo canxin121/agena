@@ -962,6 +962,26 @@ pub fn render_transcript_snapshot_export_markdown(
     )
 }
 
+/// Export markdown from the v2 parts projection (the live wire transcript).
+/// Mirrors [`render_transcript_snapshot_export_markdown`] but renders the
+/// ordered part list, projecting it through [`crate::parts_entries`].
+pub fn render_parts_export_markdown(
+    i18n: &I18n,
+    session_id: Option<i64>,
+    session_title: &str,
+    execution: Option<&SessionExecutionResource>,
+    parts: &[agena_api::resource::SessionTranscriptPart],
+) -> String {
+    let entries = crate::parts_entries(parts);
+    render_transcript_entries_export_markdown(
+        i18n,
+        session_id,
+        session_title,
+        execution,
+        entries.as_slice(),
+    )
+}
+
 pub(crate) fn tool_output_preview(text: &str) -> ToolOutputPreview {
     tool_output_preview_with_limits(text, TOOL_CARD_PREVIEW_LINES, TOOL_CARD_PREVIEW_CHARS)
 }

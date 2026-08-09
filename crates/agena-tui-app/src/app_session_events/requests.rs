@@ -139,7 +139,7 @@ impl App {
             let result = backend
                 .get_session_state(session_id)
                 .await
-                .map(|state| state.transcript.turns)
+                .map(|state| rewind_targets_from_parts(&state.parts))
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx.send(AppMessage::RewindMessagesLoaded { session_id, result });
         });
@@ -473,3 +473,38 @@ use crate::{
 };
 use agena_tui::main_focus::Focus;
 use agena_tui_session::session_view::SessionViewMode;
+
+/// Derive rewind picker targets from the v2 part projection: one target per
+/// user `run` marker, with the run's text parts joined as the message preview.
+/// Mirrors the v1 turn list (one target per user turn boundary).
+fn rewind_targets_from_parts(
+    parts: &[agena_api::resource::SessionTranscriptPart],
+) -> Vec<crate::RewindTarget> {
+    let mut targets = Vec::new();
+    let mut sequence = 0i64;
+    let mut current_run: Option<&agena_api::resource::SessionTranscriptPart> = None;
+    let mut run_text = String::new();
+    for part in parts {
+        if part.kind == "run" {
+            if let Some(marker) = current_run.take() {
+                if marker.role == "user" {
+                    targets.push(RewindTarget::from_run(marker, sequence, &run_text));
+                    sequence += 1;
+                }
+            }
+            current_run = Some(part);
+            run_text = String::new();
+        } else if part.kind == "text"
+            && let Some(text) = part.content.get("text").and_then(serde_json::Value::as_str)
+        {
+            run_text.push_str(text);
+            run_text.push('\n');
+        }
+    }
+    if let Some(marker) = current_run
+        && marker.role == "user"
+    {
+        targets.push(RewindTarget::from_run(marker, sequence, &run_text));
+    }
+    targets
+}

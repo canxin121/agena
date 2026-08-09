@@ -36,7 +36,7 @@ impl TranscriptState {
             session_title: String::new(),
             #[cfg(test)]
             messages: Vec::new(),
-            snapshot: agena_domain::TranscriptSnapshot::default(),
+            parts: Vec::new(),
             reply_failures: BTreeMap::new(),
             pending_user_messages: Vec::new(),
             refreshing: false,
@@ -69,10 +69,7 @@ impl TranscriptState {
         self.session_title = title;
         #[cfg(test)]
         self.messages.clear();
-        self.snapshot = agena_domain::TranscriptSnapshot {
-            session_id,
-            ..Default::default()
-        };
+        self.parts.clear();
         self.reply_failures.clear();
         self.pending_user_messages.clear();
         self.refreshing = false;
@@ -93,7 +90,7 @@ impl TranscriptState {
     pub(crate) fn apply_execution(&mut self, execution: SessionExecutionResource) {
         self.session_title = execution.session.title.clone();
         self.last_event_seq = execution.latest_event_seq;
-        self.merge_snapshot(execution.transcript.clone());
+        self.merge_parts(execution.parts.clone());
         self.execution = Some(execution);
         self.invalidate_render();
     }
@@ -123,54 +120,38 @@ impl TranscriptState {
         recovered
     }
 
-    /// True when any assistant reply in the snapshot has not reached a
-    /// terminal status. A terminal execution must never leave such a reply
-    /// behind; the caller uses this as a safety net to force a refresh.
+    /// True when any run marker in the parts has not reached a terminal
+    /// status. A terminal execution must never leave such a run behind; the
+    /// caller uses this as a safety net to force a refresh.
     pub(crate) fn has_non_terminal_replies(&self) -> bool {
-        self.snapshot
-            .turns
-            .iter()
-            .any(|turn| !turn.reply.status.is_terminal())
+        agena_tui_transcript::parts_have_non_terminal_runs(&self.parts)
     }
 
-    pub(crate) fn merge_snapshot(&mut self, snapshot: agena_domain::TranscriptSnapshot) {
-        self.apply_snapshot_change(|current| current.merge(snapshot));
+    pub(crate) fn merge_parts(&mut self, parts: Vec<agena_api::resource::SessionTranscriptPart>) {
+        self.apply_parts_change(|current| *current = parts);
         self.invalidate_render();
     }
 
     /// Apply one canonical transcript mutation and reconcile optimistic user
     /// entries against user inputs that became visible because of it.
     ///
-    /// A turn can arrive first as an empty execution envelope and acquire its
-    /// input document in a later durable snapshot or live patch. Comparing
-    /// only newly seen turn ids leaves the optimistic entry behind in that
-    /// case. Visibility is the actual transcript boundary: a stable turn id
-    /// crossing from absent/empty to non-empty replaces exactly one pending
-    /// user entry, while permission continuations with empty input replace
-    /// none.
-    fn apply_snapshot_change(
+    /// A run can arrive first as an empty execution envelope and acquire its
+    /// text part in a later durable projection. Visibility is the actual
+    /// transcript boundary: a user run marker crossing from no-text to
+    /// text-carrying replaces exactly one pending user entry, while
+    /// permission continuations with empty input replace none.
+    fn apply_parts_change(
         &mut self,
-        change: impl FnOnce(&mut agena_domain::TranscriptSnapshot),
+        change: impl FnOnce(&mut Vec<agena_api::resource::SessionTranscriptPart>),
     ) {
-        let visible_before = self
-            .snapshot
-            .turns
-            .iter()
-            .filter(|turn| !turn.input.is_empty())
-            .map(|turn| (self.snapshot.session_id, turn.id))
-            .collect::<BTreeSet<_>>();
+        let visible_before = agena_tui_transcript::parts_visible_user_inputs(&self.parts);
 
-        change(&mut self.snapshot);
+        change(&mut self.parts);
         self.record_reply_failures();
 
-        let newly_visible_user_inputs = self
-            .snapshot
-            .turns
-            .iter()
-            .filter(|turn| !turn.input.is_empty())
-            .filter(|turn| !visible_before.contains(&(self.snapshot.session_id, turn.id)))
-            .count();
-        let reconciled = newly_visible_user_inputs.min(self.pending_user_messages.len());
+        let visible_after = agena_tui_transcript::parts_visible_user_inputs(&self.parts);
+        let newly_visible = visible_after.saturating_sub(visible_before);
+        let reconciled = newly_visible.min(self.pending_user_messages.len());
         self.pending_user_messages.drain(..reconciled);
     }
 
@@ -197,16 +178,26 @@ impl TranscriptState {
         }
     }
 
-    /// Remember the latest structured failure observed per assistant reply so
-    /// a later continuation that recovers the reply keeps the failure visible
-    /// in the chat. The runtime clears its failure projection when the reply
+    /// Remember the latest structured failure observed per run marker so a
+    /// later continuation that recovers the run keeps the failure visible in
+    /// the chat. The runtime clears its failure projection when the run
     /// completes, but the chat is a user-facing history: the failure stays.
     fn record_reply_failures(&mut self) {
-        for turn in &self.snapshot.turns {
-            if let Some(failure) = turn.reply.failure.clone() {
-                self.reply_failures.insert(turn.reply.id, failure);
+        let mut failures = BTreeMap::new();
+        let mut current_run: Option<i64> = None;
+        for part in &self.parts {
+            if part.kind == "run" {
+                current_run = Some(part.part_id);
+            } else if part.kind == "error"
+                && let Some(run_id) = current_run
+                && let Ok(error) = serde_json::from_value::<
+                    agena_api::message_part::MessageErrorPartResource,
+                >(part.content.clone())
+            {
+                failures.insert(run_id, error.problem);
             }
         }
+        self.reply_failures.extend(failures);
     }
 
     /// Apply the Runtime-owned live projection used by the terminal backend.
@@ -218,17 +209,11 @@ impl TranscriptState {
         height: u16,
     ) -> bool {
         let refresh_needed = match &event.kind {
+            // v2 has no incremental transcript patch surface: both a committed
+            // part patch and the legacy transcript patch invalidate the cached
+            // projection and trigger a full parts reload.
             agena_runtime::RuntimePresentationEventKind::PartPatch(_) => true,
-            agena_runtime::RuntimePresentationEventKind::TranscriptPatch(patch) => {
-                if transcript_patch_can_materialize_user_input(patch) {
-                    self.apply_snapshot_change(|snapshot| snapshot.apply((**patch).clone()));
-                } else {
-                    self.snapshot.apply((**patch).clone());
-                    self.record_reply_failures();
-                }
-                self.invalidate_render();
-                false
-            }
+            agena_runtime::RuntimePresentationEventKind::TranscriptPatch(_) => true,
             agena_runtime::RuntimePresentationEventKind::Refresh { .. } => true,
             agena_runtime::RuntimePresentationEventKind::ActivityChanged { .. } => true,
             agena_runtime::RuntimePresentationEventKind::ActivityV2(_) => {
@@ -947,29 +932,19 @@ impl TranscriptState {
         let mut lines = Vec::new();
         let mut nodes = Vec::new();
         let mut line_nodes = Vec::new();
-        let mut presentation_snapshot = self.snapshot.clone();
-        for turn in &mut presentation_snapshot.turns {
-            if let Some(failure) = self.reply_failures.get(&turn.reply.id) {
-                turn.reply.failure = Some(failure.clone());
-            }
-        }
-        let snapshot_entries = transcript_entries(&presentation_snapshot);
-        #[cfg(not(test))]
-        let entries = snapshot_entries;
+        let mut entries = agena_tui_transcript::parts_entries(&self.parts);
+        inject_remembered_failures(&mut entries, &self.reply_failures);
         #[cfg(test)]
-        let entries = if self.session_id == Some(self.snapshot.session_id) {
-            snapshot_entries
-        } else {
+        let entries = if self.parts.is_empty() {
             self.messages
                 .iter()
                 .map(agena_tui_transcript::TranscriptEntry::from)
                 .collect::<Vec<_>>()
+        } else {
+            entries
         };
-        let entries = weave_pending_user_entries(
-            &self.snapshot,
-            entries,
-            self.pending_user_messages.as_slice(),
-        );
+        let entries =
+            weave_pending_user_entries(&self.parts, entries, self.pending_user_messages.as_slice());
         if entries.is_empty() && self.pending_user_messages.is_empty() && self.session_id.is_some()
         {
             lines.push(
@@ -2998,17 +2973,16 @@ pub(crate) fn render_activity_block(block: &agena_domain::ViewBlock) -> Vec<Stri
     }
 }
 
-fn weave_pending_user_entries<'a>(
-    snapshot: &'a agena_domain::TranscriptSnapshot,
-    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'a>>,
-    pending_messages: &'a [PendingUserMessage],
-) -> Vec<agena_tui_transcript::TranscriptEntry<'a>> {
-    let empty_active_replies = snapshot
-        .turns
-        .iter()
-        .filter(|turn| turn.input.is_empty() && !turn.reply.status.is_terminal())
-        .map(|turn| turn.reply.id)
-        .collect::<BTreeSet<_>>();
+/// A run is an "empty active reply envelope" when it is an assistant run whose
+/// marker is non-terminal and whose projection carries no body yet. Optimistic
+/// user messages are woven just ahead of such envelopes so the just-sent input
+/// is visible while the assistant streams.
+fn weave_pending_user_entries(
+    parts: &[agena_api::resource::SessionTranscriptPart],
+    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'static>>,
+    pending_messages: &[PendingUserMessage],
+) -> Vec<agena_tui_transcript::TranscriptEntry<'static>> {
+    let empty_active_replies = empty_active_run_ids(parts);
     let mut pending = pending_messages.iter();
     let mut entries = Vec::with_capacity(
         canonical_entries
@@ -3018,8 +2992,8 @@ fn weave_pending_user_entries<'a>(
     for entry in canonical_entries {
         if matches!(
             entry.id,
-            agena_tui_transcript::TranscriptEntryId::AssistantReply(reply_id)
-                if empty_active_replies.contains(&reply_id)
+            agena_tui_transcript::TranscriptEntryId::StoredMessage(run_id)
+                if empty_active_replies.contains(&run_id)
         ) && let Some(message) = pending.next()
         {
             entries.push(agena_tui_transcript::pending_user_entry(
@@ -3036,14 +3010,76 @@ fn weave_pending_user_entries<'a>(
     entries
 }
 
-fn transcript_patch_can_materialize_user_input(patch: &agena_domain::TranscriptPatch) -> bool {
-    match patch {
-        agena_domain::TranscriptPatch::TurnOpened { turn, .. } => !turn.input.is_empty(),
-        agena_domain::TranscriptPatch::ContentUpserted { owner, .. } => {
-            matches!(owner, agena_domain::ActivityOwner::TurnInput { .. })
+fn empty_active_run_ids(parts: &[agena_api::resource::SessionTranscriptPart]) -> BTreeSet<i64> {
+    let mut active = BTreeSet::new();
+    let mut current_run: Option<agena_api::resource::SessionTranscriptPart> = None;
+    let mut run_has_text = false;
+    for part in parts {
+        if part.kind == "run" {
+            if let Some(marker) = current_run.take() {
+                if is_empty_active_run(&marker, run_has_text) {
+                    active.insert(marker.part_id);
+                }
+            }
+            current_run = Some(part.clone());
+            run_has_text = false;
+        } else if part.kind == "text" {
+            run_has_text = true;
         }
-        agena_domain::TranscriptPatch::AssistantReplyUpdated { .. } => false,
-        agena_domain::TranscriptPatch::ContentRemoved { .. } => false,
+    }
+    if let Some(marker) = current_run
+        && is_empty_active_run(&marker, run_has_text)
+    {
+        active.insert(marker.part_id);
+    }
+    active
+}
+
+fn is_empty_active_run(
+    marker: &agena_api::resource::SessionTranscriptPart,
+    has_text: bool,
+) -> bool {
+    marker.role == "assistant"
+        && !has_text
+        && !agena_tui_transcript::part_state_is_terminal(&marker.state)
+}
+
+fn inject_remembered_failures(
+    entries: &mut [agena_tui_transcript::TranscriptEntry<'static>],
+    reply_failures: &BTreeMap<i64, agena_failure::UserProblem>,
+) {
+    for entry in entries {
+        if entry.role != Some(agena_api::resource::MessageRole::Assistant) {
+            continue;
+        }
+        let agena_tui_transcript::TranscriptEntryId::StoredMessage(run_id) = entry.id else {
+            continue;
+        };
+        let Some(problem) = reply_failures.get(&run_id) else {
+            continue;
+        };
+        let has_error = entry.parts.iter().any(|part| {
+            matches!(
+                part.content,
+                agena_tui_transcript::TranscriptPartContent::Activity(
+                    agena_tui_transcript::TranscriptActivityContent::Error(_)
+                )
+            )
+        });
+        if has_error {
+            continue;
+        }
+        entry.parts.push(agena_tui_transcript::TranscriptEntryPart {
+            id: agena_tui_transcript::TranscriptContentId::StoredPart(run_id),
+            status: agena_api::message_part::PartExecutionStatusResource::Failed,
+            content: agena_tui_transcript::TranscriptPartContent::Activity(
+                agena_tui_transcript::TranscriptActivityContent::Error(
+                    agena_api::message_part::MessageErrorPartResource {
+                        problem: problem.clone(),
+                    },
+                ),
+            ),
+        });
     }
 }
 
@@ -3224,9 +3260,8 @@ use crate::{
     TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection,
     TranscriptViewport, TranscriptVisualSelectionMode, TranscriptVisualSelectionSnapshot,
     V2LiveActivity, contains_case_insensitive, initial_search_match_index, min,
-    normalize_transcript_text_selection, render_entry_detailed, transcript_entries,
-    transcript_node_highlight_range, transcript_selection_scroll_position,
-    transcript_text_selection_text, ui_text,
+    normalize_transcript_text_selection, render_entry_detailed, transcript_node_highlight_range,
+    transcript_selection_scroll_position, transcript_text_selection_text, ui_text,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -3285,28 +3320,23 @@ mod stall_recovery_tests {
     #[test]
     fn in_progress_reply_counts_as_non_terminal_until_completed() {
         let mut state = state();
-        let turn_id = agena_domain::TurnId::new();
-        state.snapshot.turns.push(agena_domain::TurnSnapshot {
-            id: turn_id,
-            session_id: 1,
-            sequence: 1,
-            input: agena_domain::ContentDocument::default(),
-            reply: agena_domain::AssistantReplySnapshot {
-                id: agena_domain::AssistantReplyId::new(),
-                turn_id,
-                status: agena_domain::AssistantReplyStatus::InProgress,
-                content: agena_domain::ContentDocument::default(),
-                revision_seq: 1,
+        state
+            .parts
+            .push(agena_api::resource::SessionTranscriptPart {
+                part_id: 1,
+                kind: "run".to_owned(),
+                role: "assistant".to_owned(),
+                state: "in_progress".to_owned(),
+                content: serde_json::json!({}),
+                summary: None,
                 created_at_ms: 0,
-                finished_at_ms: None,
-                failure: None,
-            },
-            created_at_ms: 0,
-        });
+                parent_part_id: None,
+                run_id: Some(1),
+            });
 
         assert!(state.has_non_terminal_replies());
 
-        state.snapshot.turns[0].reply.status = agena_domain::AssistantReplyStatus::Completed;
+        state.parts[0].state = "completed".to_owned();
         assert!(!state.has_non_terminal_replies());
     }
 }

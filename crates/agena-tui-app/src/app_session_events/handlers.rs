@@ -357,7 +357,7 @@ impl App {
     pub(crate) fn handle_rewind_messages_loaded(
         &mut self,
         session_id: i64,
-        result: UiResult<Vec<agena_domain::TurnSnapshot>>,
+        result: UiResult<Vec<crate::RewindTarget>>,
     ) {
         let Some(mut dialog) = self.take_session_navigation_route() else {
             return;
@@ -377,11 +377,11 @@ impl App {
         dialog.presentation.set_loading(false);
         dialog.presentation.empty_message = ui_text::t(&self.i18n, "overlay-rewind-empty");
         match result {
-            Ok(turns) => {
-                let rows = turns
+            Ok(targets) => {
+                let rows = targets
                     .into_iter()
                     .rev()
-                    .map(|turn| self.rewind_turn_navigation_item(session_id, turn))
+                    .map(|target| self.rewind_turn_navigation_item(session_id, target))
                     .collect::<Vec<_>>();
                 dialog.actions = rows
                     .iter()

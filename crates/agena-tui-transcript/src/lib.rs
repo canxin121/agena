@@ -16,6 +16,7 @@ use ratatui::layout::Rect;
 pub mod markdown;
 pub mod math;
 pub mod navigation;
+pub mod parts;
 pub mod render_model;
 pub mod renderer;
 pub mod selection;
@@ -25,10 +26,15 @@ pub mod text;
 pub use markdown::*;
 pub use math::*;
 pub use navigation::*;
+pub use parts::{
+    last_assistant_reply_text, part_state_is_terminal, parts_entries, parts_have_non_terminal_runs,
+    parts_visible_user_inputs,
+};
 pub use render_model::*;
 pub use renderer::{
     render_entry_detailed, render_entry_export, render_markdown_document,
-    render_transcript_snapshot_export_markdown, rewind_message_preview,
+    render_parts_export_markdown, render_transcript_snapshot_export_markdown,
+    rewind_message_preview,
 };
 pub use selection::{normalize_transcript_text_selection, transcript_text_selection_text};
 pub use snapshot::{pending_user_entry, transcript_entries};

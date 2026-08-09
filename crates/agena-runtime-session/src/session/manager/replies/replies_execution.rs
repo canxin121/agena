@@ -5,8 +5,7 @@ use super::{
     SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination,
     StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
     ask_user_title, assistant_message_id, completed_lifecycle, execution_control_to_app_error,
-    is_authorization_phase_title, message_provider_state_from_provider_metadata,
-    operation_authorization, operation_blocks_from_tool_output,
+    is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
     operation_permission_approved_actions, pending_operation_for_resolved,
     pending_tool_part_not_found_error, permission_action_key, push_unique_permission_action,
     resolve_pending_tool, responses_api_request_metadata, run_abort_reason,
@@ -15,16 +14,14 @@ use super::{
 };
 use crate::message::{InteractiveRequestPart, RequestPart};
 use crate::session::Session;
-use crate::session::processor::assistant_message_from_run_parts;
 use crate::session::prompt_window;
 use crate::session::store::{
-    messages_from_parts, new_part_from_content, part_content_from_value, part_content_to_value,
-    run_marker_content,
+    new_part_from_content, part_content_from_value, part_content_to_value, run_marker_content,
 };
 use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
-    PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind, Role, RunAbortReason,
+    PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind, RunAbortReason,
 };
 use agena_storage::store::{Part, PartRole, PartState};
 use tracing::Instrument;
@@ -126,6 +123,16 @@ fn should_continue_turn(
         return TurnContinuation::Stop;
     }
     TurnContinuation::Stop
+}
+
+/// The id (run-marker part_id) of the most recent user-authored message in
+/// the session, if any. Used to detect new steer input across model turns.
+fn last_user_message_id(parts: &[Part]) -> Option<i64> {
+    parts
+        .iter()
+        .rev()
+        .find(|part| part.is_run_marker() && part.role == PartRole::User)
+        .map(|marker| marker.part_id)
 }
 
 /// True for tools whose operation is scoped to concrete paths (filesystem
@@ -258,11 +265,7 @@ impl SessionManager {
         // This flag becomes true only at command entry, after the entire
         // pending tool batch reaches a barrier, or after new steer input.
         let mut model_requested = true;
-        let mut observed_user_message_id = messages_from_parts(session.parts())?
-            .into_iter()
-            .rev()
-            .find(|message| message.role == Role::User)
-            .map(|message| message.id);
+        let mut observed_user_message_id = last_user_message_id(session.parts());
         loop {
             let current_options =
                 self.apply_execution_context_to_run_options(&session, options.clone())?;
@@ -274,16 +277,10 @@ impl SessionManager {
                 .drain_steer_input(session, &mut steer_rx, &current_options, state.clone())
                 .await?;
 
-            let latest_user = messages_from_parts(session.parts())?
-                .into_iter()
-                .rev()
-                .find(|message| message.role == Role::User);
-            if latest_user.as_ref().map(|message| message.id) != observed_user_message_id {
-                active_model_turn_id = latest_user
-                    .as_ref()
-                    .and_then(|message| message.metadata.model_turn_id)
-                    .or_else(|| latest_user.as_ref().map(|message| message.id));
-                observed_user_message_id = latest_user.as_ref().map(|message| message.id);
+            let latest_user = last_user_message_id(session.parts());
+            if latest_user != observed_user_message_id {
+                active_model_turn_id = latest_user;
+                observed_user_message_id = latest_user;
                 model_requested = true;
             }
 
@@ -399,17 +396,21 @@ impl SessionManager {
             }
 
             if !model_requested && !force_model_retry {
-                let last_assistant_text = messages_from_parts(session.parts())?
+                let last_assistant_text = crate::session::store::parts_into_runs(session.parts())
                     .into_iter()
                     .rev()
-                    // Only real assistant-authored messages count as the last
-                    // assistant text: hook-only System-originated assistant
-                    // messages carry no body and must not feed the stop input.
-                    .find(|m| {
-                        m.role == agena_domain::Role::Assistant
-                            && m.metadata.source == agena_domain::MessageSource::Assistant
+                    // Only real assistant-authored runs count as the last
+                    // assistant text: hook-only System-originated runs carry no
+                    // body and must not feed the stop input.
+                    .find(|run| {
+                        run.first().is_some_and(|marker| {
+                            marker.is_run_marker()
+                                && marker.role == PartRole::Assistant
+                                && marker.content.get("source").and_then(serde_json::Value::as_str)
+                                    == Some("tool")
+                        })
                     })
-                    .map(|m| m.as_text_lossy());
+                    .map(|run| crate::provider::project_session_text_lossy(&run));
                 let stop_input = agena_plugin_host::AgentStopInput {
                     session_id: session.id,
                     stop_hook_active: false,
@@ -527,17 +528,14 @@ impl SessionManager {
                 .await
                 .map_err(execution_control_to_app_error)?;
 
-            let last_message_id = messages_from_parts(session.parts())?
-                .into_iter()
-                .next_back()
-                .map(|message| message.id);
-            let already_auto_compacted_at_boundary = session
-                .runtime
-                .prompt_window
-                .compaction
-                .as_ref()
-                .map(|compaction| compaction.compacted_through_message_id)
-                == last_message_id;
+            // The compaction marker is appended after the boundary run, so an
+            // already-compacted boundary is exactly a trailing compaction
+            // checkpoint part (the window it closes is empty of new input).
+            let already_auto_compacted_at_boundary = session.parts().last().is_some_and(|part| {
+                part.kind == "run"
+                    && part.content.get("run_kind").and_then(serde_json::Value::as_str)
+                        == Some("compaction")
+            });
             let session_usage = self.session_usage(&session)?;
             if state.config.auto_compaction.enabled
                 && !session.runtime.prompt_window.auto_compaction_disabled
@@ -572,7 +570,7 @@ impl SessionManager {
                 "{}/{}",
                 current_options.model.provider_id, current_options.model.model_id
             );
-            let message_count = messages_from_parts(session.parts())?.len();
+            let message_count = crate::session::store::parts_into_runs(session.parts()).len();
             let pre_run_input = agena_plugin_host::PreRunInput {
                 session_id,
                 model: model.clone(),
@@ -588,7 +586,6 @@ impl SessionManager {
                 session,
                 &current_options,
                 base_run_source,
-                active_model_turn_id,
                 state.clone(),
                 control.clone(),
             ))
@@ -629,18 +626,20 @@ impl SessionManager {
                         }
                     }
                     if active_model_turn_id.is_none() {
-                        active_model_turn_id = messages_from_parts(session.parts())?
-                            .into_iter()
+                        active_model_turn_id = session
+                            .parts()
+                            .iter()
                             .rev()
-                            .find(|message| message.role == Role::Assistant)
-                            .and_then(|message| message.metadata.model_turn_id);
+                            .find(|part| part.kind == "run" && part.role == PartRole::Assistant)
+                            .map(|marker| marker.part_id);
                     }
                     reactive_compaction_attempted = false;
                     let post_run_input = agena_plugin_host::PostRunInput {
                         session_id: session.id,
                         model,
                         status: format!("{:?}", session.workflow_state()),
-                        message_count: messages_from_parts(session.parts())?.len(),
+                        message_count: crate::session::store::parts_into_runs(session.parts())
+                            .len(),
                     };
                     state
                         .tool_executor
@@ -903,7 +902,6 @@ impl SessionManager {
         mut session: Session,
         options: &SessionRunOptions,
         _run_source: ExecutionSource,
-        model_turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
     ) -> Result<(Session, ModelTurnOutcome), AppError> {
@@ -917,13 +915,6 @@ impl SessionManager {
             let provider_registry = state.processor.provider_registry();
             let native_compaction_enabled =
                 provider_registry.native_compaction_enabled(&options.model)?;
-            let active_messages = prompt_window::active_prompt_messages_for_model(
-                &session,
-                Some(options.model.provider_id.as_ref()),
-                options.model.adapter_id.as_ref().map(AsRef::as_ref),
-                Some(options.model.model_id.as_ref()),
-                native_compaction_enabled,
-            );
             let scoped_executor = state
                 .tool_executor
                 .for_session_context(&session.runtime.execution);
@@ -959,22 +950,22 @@ impl SessionManager {
             };
             let prompt_fingerprints =
                 prompt_window::prompt_request_fingerprints(&prompt_request_options);
+            let active_window_parts = session.active_window_parts();
             let prompt_exceeds_runtime_budget = prompt_window::estimate_prompt_tokens_from_runtime(
                 &session,
-                active_messages.as_slice(),
+                active_window_parts,
                 prompt_fingerprints.system_fingerprint.as_str(),
                 prompt_fingerprints.request_options_fingerprint.as_str(),
             )
             .is_some_and(|estimate| estimate.total_tokens > prompt_budget.max_prompt_tokens);
             if prompt_exceeds_runtime_budget
-                || state.processor.prompt_exceeds_budget(
-                    active_messages.as_slice(),
-                    prompt_budget.max_prompt_chars,
-                )
+                || state
+                    .processor
+                    .prompt_exceeds_budget(active_window_parts, prompt_budget.max_prompt_chars)
             {
                 tracing::warn!(
                     session_id = session.id,
-                    prompt_message_count = active_messages.len(),
+                    prompt_message_count = active_window_parts.len(),
                     max_prompt_chars = prompt_budget.max_prompt_chars,
                     max_prompt_tokens = prompt_budget.max_prompt_tokens,
                     "prompt exceeds configured budget threshold; preserving append-only provider prefix and sending the full prompt"
@@ -1060,17 +1051,8 @@ impl SessionManager {
                 .await?;
 
             let run = SessionRunRequest {
-                turn_id,
-                reply_id,
                 session_id: session.id,
-                model_turn_id,
-                completion_parent_message_id: messages_from_parts(session.parts())?
-                    .into_iter()
-                    .next_back()
-                    .map(|message| message.id),
                 model: options.model.clone(),
-                model_thinking_mode: options.thinking_mode.clone(),
-                model_speed_mode: options.speed_mode.clone(),
                 completion,
                 next_message_id: marker_run_id,
                 part_ids: Default::default(),
@@ -1109,33 +1091,16 @@ impl SessionManager {
                             .await?;
                     }
                     let termination = result.termination;
-                    // R2: the processor persisted this turn entirely through
-                    // parts. Rebuild the in-memory v1 projection from the
-                    // persisted run (marker + child parts) for the legacy
-                    // prompt/digest/anchor path. Nothing here re-persists the
-                    // turn — parts are the only durable write source.
-                    let assistant_message = assistant_message_from_run_parts(
-                        result.assistant_message_id,
-                        result.message_state,
-                        &result.run_marker,
-                        &result.parts,
-                        result
-                            .provider_metadata
-                            .as_ref()
-                            .and_then(message_provider_state_from_provider_metadata),
-                        result.usage.clone(),
-                    )?;
+                    // R2/T6: the processor persisted this turn entirely through
+                    // parts. The transcript digest covers the active window plus
+                    // this turn's freshly persisted run (marker + child parts).
+                    // Nothing here re-persists the turn — parts are the only
+                    // durable write source.
                     let transcript_digest = {
-                        let mut transcript_messages =
-                            prompt_window::active_prompt_messages_for_model(
-                                &session,
-                                Some(options.model.provider_id.as_ref()),
-                                options.model.adapter_id.as_ref().map(AsRef::as_ref),
-                                Some(options.model.model_id.as_ref()),
-                                native_compaction_enabled,
-                            );
-                        transcript_messages.push(assistant_message.clone());
-                        prompt_window::prompt_transcript_digest(transcript_messages.as_slice())
+                        let mut transcript_parts = session.active_window_parts().to_vec();
+                        transcript_parts.push(result.run_marker.clone());
+                        transcript_parts.extend(result.parts.iter().cloned());
+                        prompt_window::prompt_transcript_digest(transcript_parts.as_slice())
                     };
                     let anchored_provider_request_shape = match state
                         .processor
@@ -1168,9 +1133,9 @@ impl SessionManager {
                     let anchored_fingerprints = prompt_window::prompt_request_fingerprints(
                         &anchored_prompt_request_options,
                     );
-                    if let Some(usage) = assistant_message.usage.as_ref() {
+                    if let Some(usage) = result.usage.as_ref() {
                         session.runtime.record_prompt_tokens(
-                            assistant_message.id,
+                            result.assistant_message_id,
                             usage,
                             prepared.prompt_window_generation,
                             prompt_budget.model_context_window_tokens,
@@ -1186,7 +1151,7 @@ impl SessionManager {
                             provider_id: options.model.provider_id.to_string(),
                             model_id: options.model.model_id.to_string(),
                             previous_response_id: response_id,
-                            assistant_message_id: assistant_message.id,
+                            assistant_message_id: result.assistant_message_id,
                             prompt_window_generation: prepared.prompt_window_generation,
                             system_fingerprint: anchored_fingerprints.system_fingerprint,
                             request_options_fingerprint: anchored_fingerprints

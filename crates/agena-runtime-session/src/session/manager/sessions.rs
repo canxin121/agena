@@ -1,8 +1,8 @@
 use super::{
-    AppError, Message, PartContent, SessionCreateRequest, SessionListRequest, SessionManager,
+    AppError, PartContent, SessionCreateRequest, SessionListRequest, SessionManager,
     SessionRunOptions, SessionSummary,
 };
-use crate::session::store::{messages_from_parts, new_part_from_content};
+use crate::session::store::new_part_from_content;
 use crate::session::Session;
 use crate::session::prompt_window;
 use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
@@ -320,18 +320,6 @@ impl SessionManager {
             })
             .transpose()?
             .unwrap_or(false);
-        let active_messages = options.as_ref().map_or_else(
-            || prompt_window::active_prompt_messages(session),
-            |options| {
-                prompt_window::active_prompt_messages_for_model(
-                    session,
-                    Some(options.model.provider_id.as_ref()),
-                    options.model.adapter_id.as_ref().map(AsRef::as_ref),
-                    Some(options.model.model_id.as_ref()),
-                    native_compaction_enabled,
-                )
-            },
-        );
         let scoped_executor = state
             .tool_executor
             .for_session_context(&session.runtime.execution);
@@ -416,7 +404,7 @@ impl SessionManager {
         let projected_tokens = prompt_fingerprints.as_ref().and_then(|fingerprints| {
             prompt_window::estimate_prompt_tokens_from_runtime(
                 session,
-                active_messages.as_slice(),
+                session.active_window_parts(),
                 fingerprints.system_fingerprint.as_str(),
                 fingerprints.request_options_fingerprint.as_str(),
             )
@@ -433,7 +421,7 @@ impl SessionManager {
             )
         });
         let approximate_tokens = prompt_window::approximate_total_request_tokens_with_compaction(
-            active_messages.as_slice(),
+            session.active_window_parts(),
             request_system.as_deref(),
             tool_api_functions.as_slice(),
             provider_compaction.as_ref(),
@@ -551,19 +539,24 @@ impl SessionManager {
         &self,
         session_id: i64,
         include_full_parts: bool,
-    ) -> Result<Vec<Message>, AppError> {
+    ) -> Result<Vec<crate::session_query_service::SessionProjectedMessage>, AppError> {
         // v2 has no separate "projected" transcript: the canonical read is
         // the aggregate rebuilt from parts (`load_session`). `include_full_parts`
         // is retained for callers that historically fetched headers only; the
         // aggregate always carries full parts.
         let _ = include_full_parts;
         let session = self.store.load_session(session_id).await?;
-        messages_from_parts(session.parts())
+        super::history::projected_messages_from_parts(session.parts())
     }
 
     /// Returns whether a persisted user message already owns an external
     /// idempotency key. Scheduler/connector sinks call this before replaying a
     /// delivery that may have been submitted just before a process crash.
+    ///
+    /// The key is not a column on the parts schema; when a submit recorded it
+    /// on the user run marker's content, it is recovered there. (The storage
+    /// engine additionally keeps the key in its idempotency table and dedups
+    /// re-submits by it, so a miss here is still safe at submit time.)
     pub async fn has_user_message_idempotency_key(
         &self,
         session_id: i64,
@@ -573,11 +566,16 @@ impl SessionManager {
             return Ok(false);
         }
         let session = self.store.load_session(session_id).await?;
-        Ok(messages_from_parts(session.parts())?
-            .into_iter()
-            .any(|message| {
-                message.role == agena_domain::Role::User
-                    && message.metadata.idempotency_key.as_deref() == Some(key)
+        Ok(session
+            .parts()
+            .iter()
+            .filter(|part| part.is_run_marker() && part.role == PartRole::User)
+            .any(|marker| {
+                marker
+                    .content
+                    .get("idempotency_key")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(key)
             }))
     }
 

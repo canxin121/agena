@@ -1,16 +1,22 @@
 use super::{
-    AppError, BTreeMap, ExecutionStatus, Message, MessagePart, OperationPart, PartContent,
-    PendingProviderNativeToolCall, PendingToolCall, SessionProcessor, SessionRunRequest,
-    StructuredObject, TimeRange, ToolInvocation, Utc, parse_tool_invocation_lossy,
-    placeholder_tool_invocation, provider_native_tool_execution_title,
-    tool_api_definition_identity, tool_execution_title, tool_execution_title_for_invocation,
+    AppError, BTreeMap, OperationPart, PartContent, PendingProviderNativeToolCall,
+    PendingToolCall, SessionProcessor, SessionRunRequest, StructuredObject, TimeRange,
+    ToolInvocation, Utc, parse_tool_invocation_lossy, placeholder_tool_invocation,
+    provider_native_tool_execution_title, tool_api_definition_identity, tool_execution_title,
+    tool_execution_title_for_invocation,
 };
+use crate::message::RuntimeActivity;
+use crate::session::store::{
+    OPERATION_ID_METADATA_KEY, part_content_from_value, part_content_to_value,
+};
+use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
 
 impl SessionProcessor {
     pub(crate) async fn ensure_pending_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
-        assistant: &mut Message,
+        run_id: i64,
+        parts: &mut Vec<Part>,
         pending: &mut PendingToolCall,
     ) -> Result<(), AppError> {
         if pending.part_id.is_none() {
@@ -36,22 +42,8 @@ impl SessionProcessor {
             }) {
                 operation.set_advertised_tool_identity(identity);
             }
-
-            let mut part = MessagePart::from_content(
-                part_id,
-                assistant.id,
-                start,
-                ExecutionStatus::Pending,
-                PartContent::operation(operation),
-            );
-            part.part_index = assistant.parts.len() as i32;
-            assistant.parts.push(part);
-            if assistant.state == ExecutionStatus::Pending {
-                assistant
-                    .transition_state(ExecutionStatus::InProgress)
-                    .map_err(|err| AppError::Internal(err.to_string()))?;
-            }
-
+            let content = part_content_to_value(&PartContent::operation(operation))?;
+            parts.push(placeholder_part(part_id, run_id, start.timestamp_millis(), content));
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
             pending.started_at_ms = Some(start.timestamp_millis());
@@ -65,17 +57,25 @@ impl SessionProcessor {
                 .filter(|id| !id.trim().is_empty())
                 .cloned(),
         ) {
-            let part = assistant
-                .parts
+            let part = parts
                 .iter_mut()
-                .find(|part| part.id == part_id)
+                .find(|part| part.part_id == part_id)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
-                        "tool part missing from assistant snapshot: {part_id}"
+                        "tool part missing from turn accumulator: {part_id}"
                     ))
                 })?;
-            if part.operation_id.as_deref() != Some(operation_id.as_str()) {
-                part.operation_id = Some(operation_id);
+            let mut content = part_content_from_value(&part.kind, &part.content)?;
+            if let PartContent::Activity(RuntimeActivity::Operation(operation)) = &mut content
+                && operation.metadata.get(OPERATION_ID_METADATA_KEY).and_then(
+                    serde_json::Value::as_str,
+                ) != Some(operation_id.as_str())
+            {
+                operation.metadata.insert(
+                    OPERATION_ID_METADATA_KEY.to_owned(),
+                    serde_json::Value::String(operation_id.clone()),
+                );
+                part.content = part_content_to_value(&content)?;
             }
         }
 
@@ -91,23 +91,22 @@ impl SessionProcessor {
                 .map(str::trim)
                 .filter(|name| !name.is_empty()),
         ) {
-            let part = assistant
-                .parts
+            let part = parts
                 .iter_mut()
-                .find(|part| part.id == part_id)
+                .find(|part| part.part_id == part_id)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
-                        "tool part missing from assistant snapshot: {part_id}"
+                        "tool part missing from turn accumulator: {part_id}"
                     ))
                 })?;
-            if let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
-                operation,
-            ))) = part.content.as_mut()
+            let mut content = part_content_from_value(&part.kind, &part.content)?;
+            if let PartContent::Activity(RuntimeActivity::Operation(operation)) = &mut content
                 && (operation.invocation.name != name
                     || operation.title != tool_execution_title(Some(name)))
             {
                 operation.invocation.name = name.to_owned();
                 operation.set_title(tool_execution_title(Some(name)));
+                part.content = part_content_to_value(&content)?;
             }
         }
 
@@ -117,11 +116,12 @@ impl SessionProcessor {
     pub(crate) async fn finalize_pending_tool_calls(
         &self,
         run: &mut SessionRunRequest,
-        assistant: &mut Message,
+        run_id: i64,
+        parts: &mut Vec<Part>,
         pending_calls: BTreeMap<String, PendingToolCall>,
     ) -> Result<(), AppError> {
         for mut pending in pending_calls.into_values() {
-            self.ensure_pending_tool_call_part(run, assistant, &mut pending)
+            self.ensure_pending_tool_call_part(run, run_id, parts, &mut pending)
                 .await?;
 
             // A tool call with no name fragment at all is a malformed provider
@@ -150,13 +150,12 @@ impl SessionProcessor {
             };
             let call_id = pending.call_id.unwrap_or(0);
 
-            let part = assistant
-                .parts
+            let part = parts
                 .iter_mut()
-                .find(|part| part.id == part_id)
+                .find(|part| part.part_id == part_id)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
-                        "tool part missing from assistant snapshot: {part_id}"
+                        "tool part missing from turn accumulator: {part_id}"
                     ))
                 })?;
             let mut operation = OperationPart::pending(
@@ -179,7 +178,7 @@ impl SessionProcessor {
             {
                 operation.set_advertised_tool_identity(identity);
             }
-            part.set_content(PartContent::operation(operation));
+            part.content = part_content_to_value(&PartContent::operation(operation))?;
         }
 
         Ok(())
@@ -188,7 +187,8 @@ impl SessionProcessor {
     pub(crate) async fn ensure_provider_native_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
-        assistant: &mut Message,
+        run_id: i64,
+        parts: &mut Vec<Part>,
         pending: &mut PendingProviderNativeToolCall,
     ) -> Result<(), AppError> {
         let invocation = pending.invocation.clone().unwrap_or_else(|| {
@@ -225,34 +225,24 @@ impl SessionProcessor {
             operation.set_provider_only(true);
             operation.raw = raw.clone();
             operation.result.raw = raw;
-
-            let mut part = MessagePart::from_content(
-                part_id,
-                assistant.id,
-                start,
-                ExecutionStatus::InProgress,
-                PartContent::operation(operation),
-            );
-            part.part_index = assistant.parts.len() as i32;
-            part.operation_id = operation_id.clone();
-            assistant.parts.push(part);
-            if assistant.state == ExecutionStatus::Pending {
-                assistant
-                    .transition_state(ExecutionStatus::InProgress)
-                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            if let Some(operation_id) = &operation_id {
+                operation.metadata.insert(
+                    OPERATION_ID_METADATA_KEY.to_owned(),
+                    serde_json::Value::String(operation_id.clone()),
+                );
             }
-
+            let content = part_content_to_value(&PartContent::operation(operation))?;
+            parts.push(placeholder_part(part_id, run_id, start.timestamp_millis(), content));
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
             pending.started_at_ms = Some(start.timestamp_millis());
         } else if let Some(part_id) = pending.part_id {
-            let part = assistant
-                .parts
+            let part = parts
                 .iter_mut()
-                .find(|part| part.id == part_id)
+                .find(|part| part.part_id == part_id)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
-                        "provider tool part missing from assistant snapshot: {part_id}"
+                        "provider tool part missing from turn accumulator: {part_id}"
                     ))
                 })?;
             let started_at_ms = pending
@@ -270,13 +260,15 @@ impl SessionProcessor {
             operation.set_provider_only(true);
             operation.raw = raw.clone();
             operation.result.raw = raw;
-            part.set_content(PartContent::operation(operation));
-            if part.status == ExecutionStatus::Pending {
-                part.transition_status(ExecutionStatus::InProgress)
-                    .map_err(|err| AppError::Internal(err.to_string()))?;
+            if let Some(operation_id) = &operation_id {
+                operation.metadata.insert(
+                    OPERATION_ID_METADATA_KEY.to_owned(),
+                    serde_json::Value::String(operation_id.clone()),
+                );
             }
-            if part.operation_id != operation_id {
-                part.operation_id = operation_id.clone();
+            part.content = part_content_to_value(&PartContent::operation(operation))?;
+            if part.state == PartState::Pending {
+                part.state = PartState::InProgress;
             }
         }
 
@@ -287,7 +279,8 @@ impl SessionProcessor {
     pub(crate) async fn complete_provider_native_tool_call_part(
         &self,
         run: &mut SessionRunRequest,
-        assistant: &mut Message,
+        run_id: i64,
+        parts: &mut Vec<Part>,
         mut pending: PendingProviderNativeToolCall,
         id: Option<String>,
         invocation: ToolInvocation,
@@ -302,7 +295,7 @@ impl SessionProcessor {
         pending.invocation = Some(invocation.clone());
         pending.title = title.clone();
         pending.raw = raw.clone();
-        self.ensure_provider_native_tool_call_part(run, assistant, &mut pending)
+        self.ensure_provider_native_tool_call_part(run, run_id, parts, &mut pending)
             .await?;
 
         let artifact_key = pending
@@ -319,13 +312,12 @@ impl SessionProcessor {
         let Some(part_id) = pending.part_id else {
             return Ok(());
         };
-        let part = assistant
-            .parts
+        let part = parts
             .iter_mut()
-            .find(|part| part.id == part_id)
+            .find(|part| part.part_id == part_id)
             .ok_or_else(|| {
                 AppError::Internal(format!(
-                    "provider tool part missing from assistant snapshot: {part_id}"
+                    "provider tool part missing from turn accumulator: {part_id}"
                 ))
             })?;
         let mut operation = OperationPart::completed(
@@ -349,20 +341,52 @@ impl SessionProcessor {
         operation.set_provider_only(true);
         operation.raw = raw.clone();
         operation.result.raw = raw;
-        part.set_content(PartContent::operation(operation));
-        if part.status != ExecutionStatus::Completed {
-            part.transition_status(ExecutionStatus::Completed)
-                .map_err(|err| AppError::Internal(err.to_string()))?;
-        }
         if let Some(operation_id) = pending
             .id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            part.operation_id = Some(operation_id.to_owned());
+            operation.metadata.insert(
+                OPERATION_ID_METADATA_KEY.to_owned(),
+                serde_json::Value::String(operation_id.to_owned()),
+            );
+        }
+        part.content = part_content_to_value(&PartContent::operation(operation))?;
+        if part.state != PartState::Completed {
+            part.state = PartState::Completed;
         }
 
         Ok(())
+    }
+}
+
+/// Build an in-memory placeholder part for a tool call streamed during the
+/// run. The id is negative until the call-side part is persisted (deferred
+/// tool parts), at which point the accumulator remaps it onto the engine id.
+fn placeholder_part(
+    part_id: i64,
+    run_id: i64,
+    started_at_ms: i64,
+    content: serde_json::Value,
+) -> Part {
+    Part {
+        part_id,
+        kind: "tool_call".to_owned(),
+        role: PartRole::Assistant,
+        state: PartState::InProgress,
+        content,
+        summary: None,
+        visibility: PartVisibility::Both,
+        rendered_markdown: None,
+        parent_part_id: None,
+        run_id: Some(run_id),
+        origin_session_id: 0,
+        revision: 0,
+        started_at_ms,
+        finished_at_ms: None,
+        created_at_ms: started_at_ms,
+        updated_at_ms: started_at_ms,
+        provider_state: None,
     }
 }

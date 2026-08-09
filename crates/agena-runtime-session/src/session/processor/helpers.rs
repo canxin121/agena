@@ -1,45 +1,40 @@
 use super::{
-    AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, ExecutionStatus,
-    FinishReason, Message, MessageProviderState, ToolInvocation,
+    AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, FinishReason,
+    MessageProviderState, ToolInvocation,
 };
 use agena_provider::CompletionInputProviderState;
+use agena_storage::store::{Part, PartState};
 
-pub(crate) fn complete_part_status(assistant: &mut Message, part_id: i64) -> Result<(), AppError> {
-    let part = assistant
-        .parts
+pub(crate) fn complete_part_status(parts: &mut [Part], part_id: i64) -> Result<(), AppError> {
+    let part = parts
         .iter_mut()
-        .find(|part| part.id == part_id)
+        .find(|part| part.part_id == part_id)
         .ok_or_else(|| {
             AppError::Internal(format!(
-                "completing missing part on assistant snapshot: {part_id}"
+                "completing missing part on turn accumulator: {part_id}"
             ))
         })?;
-    if part.status == ExecutionStatus::InProgress {
-        part.transition_status(ExecutionStatus::Completed)
-            .map_err(|err| AppError::Internal(err.to_string()))?;
+    if part.state == PartState::InProgress {
+        part.state = PartState::Completed;
     }
     Ok(())
 }
 
-pub(crate) fn cancel_nonterminal_parts(assistant: &mut Message) -> Result<(), AppError> {
-    terminalize_nonterminal_parts(assistant, ExecutionStatus::Cancelled)
+pub(crate) fn cancel_nonterminal_parts(parts: &mut [Part]) -> Result<(), AppError> {
+    terminalize_nonterminal_parts(parts, PartState::Cancelled)
 }
 
-pub(crate) fn fail_nonterminal_parts(assistant: &mut Message) -> Result<(), AppError> {
-    terminalize_nonterminal_parts(assistant, ExecutionStatus::Failed)
+pub(crate) fn fail_nonterminal_parts(parts: &mut [Part]) -> Result<(), AppError> {
+    terminalize_nonterminal_parts(parts, PartState::Failed)
 }
 
 fn terminalize_nonterminal_parts(
-    assistant: &mut Message,
-    terminal_status: ExecutionStatus,
+    parts: &mut [Part],
+    terminal_state: PartState,
 ) -> Result<(), AppError> {
-    for part in &mut assistant.parts {
-        if matches!(
-            part.status,
-            ExecutionStatus::Pending | ExecutionStatus::InProgress
-        ) {
-            part.transition_status(terminal_status)
-                .map_err(|err| AppError::Internal(err.to_string()))?;
+    for part in parts.iter_mut() {
+        if matches!(part.state, PartState::Pending | PartState::InProgress) {
+            part.state = terminal_state;
         }
     }
     Ok(())

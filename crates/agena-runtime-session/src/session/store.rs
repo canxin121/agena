@@ -8,9 +8,9 @@
 //!
 //! This module is the manager's thin adapter over that facade. It:
 //!
-//! - converts a [`SessionView`] (metadata + parts) back into the v1
-//!   [`Session`] aggregate the execution engine still operates on
-//!   (parts are grouped into [`Message`]s by their `run` marker);
+//! - converts a [`SessionView`] (metadata + parts) back into the
+//!   [`Session`] aggregate the execution engine operates on
+//!   (parts are grouped into runs by their `run` marker);
 //! - converts [`PartContent`] payloads to and from the JSON stored on
 //!   `parts.content`;
 //! - translates every manager write (submit, append, update, run lifecycle,
@@ -40,8 +40,7 @@ use serde_json::Value;
 
 use crate::AppError;
 use crate::message::{
-    Message, MessageMetadata, MessagePart, MessageProviderState, OperationPart, PartContent,
-    RequestPart, RuntimeActivity, SkillReferencePart,
+    OperationPart, PartContent, RequestPart, RuntimeActivity, SkillReferencePart,
 };
 use crate::session::Session;
 
@@ -520,9 +519,9 @@ fn store_error(error: StoreError) -> AppError {
 /// The engine operates on the flat parts projection ([`Session::parts`],
 /// design 14-15): this installs the ordered part list and recomputes the
 /// derived state (pending operations, workflow, approx bytes) from it. The
-/// legacy v1 [`Message`] grouping is not materialized on the aggregate any
-/// more; the interim v1 bridge consumers (prompt window, query service, UI)
-/// rebuild it on demand through [`messages_from_parts`] until R6 removes it.
+/// v1 [`Message`] grouping is not materialized on the aggregate; consumers
+/// rebuild logical runs on demand through [`parts_into_runs`] / the
+/// provider projectors.
 pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> {
     let SessionView { meta, parts } = view;
     let mut session = Session::new(
@@ -545,125 +544,48 @@ pub(crate) fn session_from_view(view: SessionView) -> Result<Session, AppError> 
     Ok(session)
 }
 
-/// Reconstruct the legacy v1 [`Message`] projection from a session's parts.
-///
-/// Interim v1 bridge (kept to R6): the prompt window, query service, and the
-/// manager's transcript surfaces still consume v1 [`Message`]s. Each `run`
-/// marker part produces one message whose [`MessagePart`]s are the marker's
-/// content parts in `(created_at_ms, part_id)` order; role, state, and
-/// runtime metadata are derived from the marker and its parts.
-pub(crate) fn messages_from_parts(parts: &[Part]) -> Result<Vec<Message>, AppError> {
-    // Runs in the order their markers appear in the (already ordered) parts.
-    let mut by_run: BTreeMap<i64, Vec<&Part>> = BTreeMap::new();
+/// Group a flat ordered parts slice into logical messages: each run marker
+/// part starts a group that collects its content parts (in `(created_at_ms,
+/// part_id)` order); bare content parts (no run) form singleton groups. Runs
+/// are emitted in the order their markers appear in the (already ordered)
+/// parts, with singletons appended after. The provider projectors
+/// (`project_completion_input`, `project_persisted`) consume one group at a
+/// time.
+pub(crate) fn parts_into_runs(parts: &[Part]) -> Vec<Vec<Part>> {
+    let mut run_ids: Vec<i64> = Vec::new();
     let mut marker_by_run: BTreeMap<i64, &Part> = BTreeMap::new();
-    let mut singleton: Vec<&Part> = Vec::new();
+    let mut content_by_run: BTreeMap<i64, Vec<Part>> = BTreeMap::new();
+    let mut singleton: Vec<Part> = Vec::new();
 
     for part in parts {
         if part.is_run_marker() {
+            if !marker_by_run.contains_key(&part.part_id) {
+                run_ids.push(part.part_id);
+            }
             marker_by_run.insert(part.part_id, part);
-            by_run.entry(part.part_id).or_default();
         } else if let Some(run_id) = part.run_id {
-            by_run.entry(run_id).or_default().push(part);
+            content_by_run.entry(run_id).or_default().push(part.clone());
         } else {
-            // A content part with no run (should not happen for manager-owned
-            // sessions, but import/foreign data may produce one).
-            singleton.push(part);
+            singleton.push(part.clone());
         }
     }
 
-    let mut messages = Vec::new();
-    // Content parts are ordered by (created_at_ms, part_id) — stable sort by
-    // id keeps the grouping deterministic per run.
-    for run_id in by_run.keys() {
+    let mut runs = Vec::with_capacity(run_ids.len().saturating_add(singleton.len()));
+    for run_id in run_ids {
         let marker = marker_by_run
-            .get(run_id)
+            .get(&run_id)
             .copied()
-            .ok_or_else(|| AppError::Internal(format!("run marker {run_id} has no marker part")))?;
-        let mut run_parts = by_run[run_id].clone();
-        run_parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
-        messages.push(message_from_run(marker, run_parts)?);
+            .cloned()
+            .expect("run marker registered before content grouping");
+        let mut content = content_by_run.remove(&run_id).unwrap_or_default();
+        content.sort_by_key(|part| (part.created_at_ms, part.part_id));
+        let mut group = Vec::with_capacity(content.len().saturating_add(1));
+        group.push(marker);
+        group.extend(content);
+        runs.push(group);
     }
-    for part in singleton {
-        messages.push(message_from_singleton(part)?);
-    }
-    Ok(messages)
-}
-
-fn message_from_run(marker: &Part, run_parts: Vec<&Part>) -> Result<Message, AppError> {
-    let role = role_from_part_role(marker.role);
-    let state = execution_status_from_part_state(marker.state);
-    let created_at = timestamp_millis_to_utc(marker.created_at_ms)?;
-    let metadata = metadata_from_parts(marker, &run_parts);
-    let provider_state = marker
-        .provider_state
-        .as_ref()
-        .map(|value| serde_json::from_value::<MessageProviderState>(value.clone()))
-        .transpose()
-        .map_err(|error| AppError::Internal(format!("decode run provider state: {error}")))?;
-    let mut parts = Vec::with_capacity(run_parts.len());
-    for (index, part) in run_parts.into_iter().enumerate() {
-        parts.push(part_to_message_part(part, marker.part_id, index as i32)?);
-    }
-    Ok(Message {
-        id: marker.part_id,
-        role,
-        state,
-        parts,
-        created_at,
-        metadata,
-        provider_state,
-        usage: None,
-    })
-}
-
-fn message_from_singleton(part: &Part) -> Result<Message, AppError> {
-    Ok(Message {
-        id: part.part_id,
-        role: role_from_part_role(part.role),
-        state: execution_status_from_part_state(part.state),
-        parts: vec![part_to_message_part(part, part.part_id, 0)?],
-        created_at: timestamp_millis_to_utc(part.created_at_ms)?,
-        metadata: MessageMetadata::default(),
-        provider_state: None,
-        usage: None,
-    })
-}
-
-fn metadata_from_parts(marker: &Part, _parts: &[&Part]) -> MessageMetadata {
-    let mut metadata = MessageMetadata {
-        model_turn_id: Some(marker.part_id),
-        ..Default::default()
-    };
-    // The canonical conversation identity (design 19.5) is persisted on the
-    // run marker so it survives reload: reply wake-up and reply-command
-    // matching resolve the same UUID pair the execution registered with.
-    if let Some(turn_id) = marker.content.get("turn_id").and_then(Value::as_str)
-        && let Ok(uuid) = uuid::Uuid::parse_str(turn_id)
-    {
-        metadata.conversation_turn_id = Some(agena_domain::TurnId(uuid));
-    }
-    if let Some(reply_id) = marker.content.get("reply_id").and_then(Value::as_str)
-        && let Ok(uuid) = uuid::Uuid::parse_str(reply_id)
-    {
-        metadata.conversation_reply_id = Some(agena_domain::AssistantReplyId(uuid));
-    }
-    // Model identity, when recorded on the run marker content, is surfaced
-    // here so prompt assembly can resolve the provider/model that produced it.
-    if let Some(model_id) = marker.content.get("model_id").and_then(Value::as_str) {
-        metadata.model_id = model_id.to_owned();
-    }
-    if let Some(provider_id) = marker.content.get("provider_id").and_then(Value::as_str) {
-        metadata.model_provider_id = provider_id.to_owned();
-    }
-    if let Some(source) = marker.content.get("source").and_then(Value::as_str) {
-        metadata.source = match source {
-            "user" => agena_domain::MessageSource::User,
-            "system" => agena_domain::MessageSource::System,
-            "tool" => agena_domain::MessageSource::Assistant,
-            _ => agena_domain::MessageSource::User,
-        };
-    }
-    metadata
+    runs.extend(singleton.into_iter().map(|part| vec![part]));
+    runs
 }
 
 /// The key under which the adapter persists a part's provider `operation_id`
@@ -674,30 +596,6 @@ fn metadata_from_parts(marker: &Part, _parts: &[&Part]) -> MessageMetadata {
 /// is invisible to everything that reads `parts.content` as the canonical
 /// payload.
 pub(crate) const OPERATION_ID_METADATA_KEY: &str = "agena.operation_id";
-
-/// Serialize an in-memory part's content into the canonical JSON stored on
-/// `parts.content`, stashing the provider `operation_id` (when any) into the
-/// rich `OperationPart.metadata` map so a later reload can recover it (see
-/// [`OPERATION_ID_METADATA_KEY`]). The in-memory aggregate is never mutated.
-///
-/// The v1 [`PartContent`] payload is projected onto its typed canonical shape
-/// (design 4.1.1) via [`part_content_to_value`]; rich v1 fields the canonical
-/// spec does not name ride in the typed struct's lossless `extra` bucket.
-pub(crate) fn serialize_part_content(part: &MessagePart) -> Result<Value, AppError> {
-    let Some(content) = part.content.as_ref() else {
-        return Ok(Value::Null);
-    };
-    let mut content = content.clone();
-    if let Some(operation_id) = part.operation_id.as_deref()
-        && let PartContent::Activity(RuntimeActivity::Operation(operation)) = &mut content
-    {
-        operation.metadata.insert(
-            OPERATION_ID_METADATA_KEY.to_owned(),
-            Value::String(operation_id.to_owned()),
-        );
-    }
-    part_content_to_value(&content)
-}
 
 /// Serialize an in-memory [`PartContent`] into the canonical JSON payload
 /// stored on `parts.content`, mapping each v1 variant onto its typed content
@@ -754,52 +652,6 @@ pub(crate) fn part_content_to_value(content: &PartContent) -> Result<Value, AppE
     Ok(value)
 }
 
-/// Convert one persisted part into the execution-engine [`MessagePart`],
-/// decoding the canonical JSON payload back into [`PartContent`].
-fn part_to_message_part(
-    part: &Part,
-    message_id: i64,
-    part_index: i32,
-) -> Result<MessagePart, AppError> {
-    let content = part_content_from_value(&part.kind, &part.content)?;
-    // The coarse state column carries the lifecycle; the fine-grained status
-    // (including denial outcomes) is reconstructed from the rich content.
-    let status = match &content {
-        PartContent::Activity(RuntimeActivity::Operation(operation)) => operation.status(),
-        PartContent::Activity(RuntimeActivity::Interaction(RequestPart::UserInput(request))) => {
-            request.status()
-        }
-        _ => execution_status_from_part_state(part.state),
-    };
-    let mut message_part = MessagePart::from_content_with_index(
-        part.part_id,
-        message_id,
-        part_index,
-        timestamp_millis_to_utc(part.created_at_ms)?,
-        status,
-        content,
-    );
-    if let Some(summary) = part.summary.as_deref() {
-        message_part.summary = Some(summary.to_owned());
-    }
-    message_part.has_detail = part.content.is_object();
-    // Recover the provider operation id stashed by `serialize_part_content` so
-    // pending-tool correlation and prompt assembly survive a reload.
-    if let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
-        message_part.content.as_ref()
-    {
-        if message_part.operation_id.is_none() {
-            message_part.operation_id = operation
-                .metadata
-                .get(OPERATION_ID_METADATA_KEY)
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-        }
-        message_part.activity_id = Some(agena_domain::ActivityId::new());
-    }
-    Ok(message_part)
-}
-
 /// Build a [`NewPart`] from an execution-engine part payload.
 ///
 /// `state` defaults to `pending`; content is the canonical JSON of the
@@ -811,7 +663,7 @@ pub(crate) fn new_part_from_content(
     state: PartState,
 ) -> Result<NewPart, AppError> {
     // Project the v1 payload onto its canonical typed shape (4.1.1) exactly as
-    // `serialize_part_content` does for updates, so both write paths agree.
+    // the update path does, so both write paths agree.
     let value = part_content_to_value(content)?;
     Ok(NewPart {
         kind: kind.into(),
@@ -1046,15 +898,6 @@ pub(crate) fn role_from_part_role(role: PartRole) -> Role {
     }
 }
 
-pub(crate) fn part_role_from_role(role: Role) -> PartRole {
-    match role {
-        Role::User => PartRole::User,
-        Role::Assistant => PartRole::Assistant,
-        Role::System => PartRole::System,
-        Role::Tool => PartRole::Tool,
-    }
-}
-
 pub(crate) fn execution_status_from_part_state(state: PartState) -> ExecutionStatus {
     match state {
         PartState::Pending => ExecutionStatus::Pending,
@@ -1274,7 +1117,7 @@ impl From<&crate::session::model::SessionExecutionContext> for PersistedExecutio
     }
 }
 
-fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {
+pub(crate) fn timestamp_millis_to_utc(timestamp_ms: i64) -> Result<DateTime<Utc>, AppError> {
     let seconds = timestamp_ms.div_euclid(1000);
     let nanos = (timestamp_ms.rem_euclid(1000) * 1_000_000) as u32;
     DateTime::from_timestamp(seconds, nanos)
@@ -1464,18 +1307,25 @@ mod tests {
         };
         let session = session_from_view(view).unwrap();
         assert_eq!(session.id, 1);
-        let messages = messages_from_parts(session.parts()).unwrap();
-        assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].role, Role::User);
-        assert_eq!(messages[0].id, 10);
-        assert_eq!(messages[0].parts.len(), 1);
+        let runs = parts_into_runs(session.parts());
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0][0].role, PartRole::User);
+        assert_eq!(runs[0][0].part_id, 10);
+        assert_eq!(runs[0].len(), 2);
         assert_eq!(
-            messages[0].parts[0].text(),
+            part_content_from_value("text", &runs[0][1].content)
+                .unwrap()
+                .text_value(),
             Some("hello"),
             "part text round-trips through the canonical JSON payload"
         );
-        assert_eq!(messages[1].role, Role::Assistant);
-        assert_eq!(messages[1].parts[0].text(), Some("hi"));
+        assert_eq!(runs[1][0].role, PartRole::Assistant);
+        assert_eq!(
+            part_content_from_value("text", &runs[1][1].content)
+                .unwrap()
+                .text_value(),
+            Some("hi")
+        );
     }
 
     #[test]
@@ -1526,22 +1376,7 @@ mod tests {
         let content = PartContent::Activity(RuntimeActivity::Operation(operation.clone()));
 
         // Serialize via the typed canonical shape, then rebuild.
-        let value = serialize_part_content(&MessagePart {
-            id: 7,
-            message_id: 1,
-            part_index: 0,
-            status: ExecutionStatus::Completed,
-            kind: agena_domain::PartKind::Activity,
-            name: Some("fs.read".to_owned()),
-            summary: None,
-            has_detail: true,
-            activity_id: None,
-            segment_id: None,
-            operation_id: Some("op-42".to_owned()),
-            created_at: Utc::now(),
-            content: Some(content.clone()),
-        })
-        .unwrap();
+        let value = part_content_to_value(&content).unwrap();
 
         // Canonical named keys are present; the rich payload is an extra key.
         assert_eq!(value["name"], serde_json::json!("fs.read"));

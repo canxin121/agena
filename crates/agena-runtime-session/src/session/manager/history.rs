@@ -1,11 +1,18 @@
 use super::{ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
-    message::{Message, MessagePart, PartContent},
-    session::{Session, SessionManager},
+    message::PartContent,
+    session::{
+        store::{
+            execution_status_from_part_state, part_content_from_value, parts_into_runs,
+            role_from_part_role, timestamp_millis_to_utc, OPERATION_ID_METADATA_KEY,
+        },
+        Session, SessionManager,
+    },
 };
 use agena_domain::{ExecutionStatus, Role, SessionSummary};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
+use agena_storage::store::{Part, PartRole};
 
 impl SessionManager {
     pub async fn fork_session(&self, request: SessionForkRequest) -> Result<Session, AppError> {
@@ -24,23 +31,16 @@ impl SessionManager {
         // message's final member part so the fork includes the entire message,
         // not only its marker. A literal part id that is not a message marker
         // remains a valid precise cutoff for internal callers.
-        let messages = crate::session::store::messages_from_parts(source.parts())?;
         let at_part_id = match request.at_message_id {
-            Some(part_id) => messages
-                .iter()
-                .find(|message| message.id == part_id)
-                .map(message_inclusive_cutoff)
-                .unwrap_or(part_id),
-            None => messages
-                .last()
-                .map(message_inclusive_cutoff)
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "cannot fork session {}: it has no message to use as the cutoff",
-                        request.session_id
-                    ))
-                })?,
-        };
+            Some(part_id) => last_part_id_for_run_marker(source.parts(), part_id),
+            None => last_part_id_for_last_run(source.parts()),
+        }
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "cannot fork session {}: it has no message to use as the cutoff",
+                request.session_id
+            ))
+        })?;
         let title = request
             .title
             .unwrap_or_else(|| format!("Fork of {}", source.title));
@@ -147,18 +147,17 @@ impl SessionManager {
             });
         }
         let message_id = user_message_id_for_turn(&source, request.turn_id)?;
-        let messages = crate::session::store::messages_from_parts(source.parts())?;
-        if !is_completed_user_rewind_target(
-            messages
-                .iter()
-                .find(|message| message.id == message_id)
-                .ok_or_else(|| {
-                    AppError::Internal(format!(
-                        "canonical turn {} has no projected user message in session {}",
-                        request.turn_id, source.id
-                    ))
-                })?,
-        ) {
+        let user_marker = source
+            .parts()
+            .iter()
+            .find(|part| part.is_run_marker() && part.part_id == message_id)
+            .ok_or_else(|| {
+                AppError::Internal(format!(
+                    "canonical turn {} has no projected user message in session {}",
+                    request.turn_id, source.id
+                ))
+            })?;
+        if !is_completed_user_rewind_target(user_marker) {
             return Err(AppError::Internal(format!(
                 "rewind target must be a completed canonical user turn: {}",
                 request.turn_id
@@ -212,44 +211,77 @@ impl SessionManager {
     }
 }
 
-/// Inclusive storage cutoff for a projected message. The marker is the
-/// message id; content parts follow it in canonical `(created_at_ms, part_id)`
-/// order, so the final member is the end of the message's shared prefix.
-fn message_inclusive_cutoff(message: &Message) -> i64 {
-    message
-        .parts
-        .last()
-        .map(|part| part.id)
-        .unwrap_or(message.id)
+/// Inclusive storage cutoff for a projected message named by its run-marker
+/// part id. The marker is the message id; content parts follow it in canonical
+/// `(created_at_ms, part_id)` order, so the final member with `run_id ==
+/// marker_part_id` is the end of the message's shared prefix. A part id that
+/// is not a run marker (a literal cutoff) passes through unchanged.
+fn last_part_id_for_run_marker(parts: &[Part], marker_part_id: i64) -> Option<i64> {
+    if !parts
+        .iter()
+        .any(|part| part.is_run_marker() && part.part_id == marker_part_id)
+    {
+        return Some(marker_part_id);
+    }
+    parts
+        .iter()
+        .rev()
+        .find(|part| part.run_id == Some(marker_part_id))
+        .map(|part| part.part_id)
+        .or(Some(marker_part_id))
+}
+
+/// Inclusive storage cutoff for a session's final message: the id of the last
+/// content part of the final run, or the marker id when that run is empty.
+/// Sessions with no run markers fall back to the final part id (foreign data
+/// may hold bare content parts).
+fn last_part_id_for_last_run(parts: &[Part]) -> Option<i64> {
+    match parts.iter().rev().find(|part| part.is_run_marker()) {
+        Some(marker) => parts
+            .iter()
+            .rev()
+            .find(|part| part.run_id == Some(marker.part_id))
+            .map(|part| part.part_id)
+            .or(Some(marker.part_id)),
+        None => parts.last().map(|part| part.part_id),
+    }
 }
 
 /// Resolve the canonical user message that owns `turn_id`.
 ///
 /// Assistant run markers persist the conversation UUID pair on their content
-/// (`conversation_turn_id`/`conversation_reply_id`, recovered by
-/// `metadata_from_parts`), so the message that carries the turn id is the
+/// (`turn_id`/`reply_id`), so the run that carries the turn id is the
 /// assistant reply. The user input of the same canonical turn is the nearest
-/// completed user message before that reply; user-run markers themselves do
-/// not persist the UUID pair (they are written as `{"run_kind":"user_send"}`).
+/// user-role run marker before that reply; user-run markers themselves do not
+/// persist the UUID pair (they are written as `{"run_kind":"user_send"}`).
 fn user_message_id_for_turn(
     session: &Session,
     turn_id: agena_domain::TurnId,
 ) -> Result<i64, AppError> {
-    let messages = crate::session::store::messages_from_parts(session.parts())?;
-    let reply_index = messages
+    let parts = session.parts();
+    let reply_index = parts
         .iter()
-        .position(|message| message.metadata.conversation_turn_id == Some(turn_id))
+        .position(|part| {
+            part.is_run_marker()
+                && part
+                    .content
+                    .get("turn_id")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                    .map(agena_domain::TurnId)
+                    == Some(turn_id)
+        })
         .ok_or_else(|| {
             AppError::Internal(format!(
                 "canonical turn not found in session {}: {turn_id}",
                 session.id
             ))
         })?;
-    messages[..reply_index]
+    parts[..reply_index]
         .iter()
         .rev()
-        .find(|message| message.role == Role::User)
-        .map(|message| message.id)
+        .find(|part| part.is_run_marker() && part.role == PartRole::User)
+        .map(|part| part.part_id)
         .ok_or_else(|| {
             AppError::Internal(format!(
                 "canonical turn {} has no user message in session {}",
@@ -269,15 +301,16 @@ fn transcript_snapshot_from_session(
     let seq_session = session.version;
     let mut turns = Vec::new();
     let mut sequence = 0i64;
-    let messages = crate::session::store::messages_from_parts(session.parts())?;
-    for (index, message) in messages.iter().enumerate() {
-        if message.role != Role::User {
+    let runs = parts_into_runs(session.parts());
+    for (index, run) in runs.iter().enumerate() {
+        let marker = run.first().expect("run group has a marker");
+        if marker.role != PartRole::User {
             continue;
         }
-        let user_document = content_document_from_message(session, message)?;
+        let user_document = content_document_from_run(session, run)?;
         let reply = assistant_reply_snapshot(session, index)?;
-        let created_at_ms = message.created_at.timestamp_millis();
-        let turn_id = reply_turn_id(message, &reply);
+        let created_at_ms = marker.created_at_ms;
+        let turn_id = reply_turn_id(marker, &reply);
         turns.push(agena_domain::TurnSnapshot {
             id: turn_id,
             session_id: session.id,
@@ -298,38 +331,55 @@ fn transcript_snapshot_from_session(
     })
 }
 
-/// The canonical turn id of a turn: the user message's own persisted turn id
+/// The canonical turn id of a turn: the user marker's own persisted turn id
 /// when present, otherwise the reply's turn id (recovered from the assistant
 /// run marker).
 fn reply_turn_id(
-    user_message: &Message,
+    user_marker: &Part,
     reply: &agena_domain::AssistantReplySnapshot,
 ) -> agena_domain::TurnId {
-    user_message
-        .metadata
-        .conversation_turn_id
+    user_marker
+        .content
+        .get("turn_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .map(agena_domain::TurnId)
         .unwrap_or(reply.turn_id)
 }
 
 /// Compose the assistant reply snapshot for the canonical turn beginning at
-/// `user_index`. The turn's assistant content is the concatenation of every
-/// non-user message that follows the user message (a canonical reply can span
-/// several continuation runs), in message order.
+/// run `user_index`. The turn's assistant content is the concatenation of every
+/// non-user run that follows the user run (a canonical reply can span several
+/// continuation runs), in run order.
 fn assistant_reply_snapshot(
     session: &Session,
     user_index: usize,
 ) -> Result<agena_domain::AssistantReplySnapshot, AppError> {
-    let messages = crate::session::store::messages_from_parts(session.parts())?;
-    let user = &messages[user_index];
-    let turn_id = user.metadata.conversation_turn_id.unwrap_or_else(|| {
-        // Reloaded user markers do not persist the UUID pair; recover the
-        // canonical turn id from the first following non-user run marker.
-        messages[user_index + 1..]
-            .iter()
-            .find(|message| message.role != Role::User)
-            .and_then(|message| message.metadata.conversation_turn_id)
-            .unwrap_or_else(agena_domain::TurnId::new)
-    });
+    let runs = parts_into_runs(session.parts());
+    let user_marker = runs[user_index].first().expect("run group has a marker");
+    let turn_id = user_marker
+        .content
+        .get("turn_id")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        .map(agena_domain::TurnId)
+        .unwrap_or_else(|| {
+            // Reloaded user markers do not persist the UUID pair; recover the
+            // canonical turn id from the first following non-user run marker.
+            runs[user_index + 1..]
+                .iter()
+                .find(|run| run.first().map(|marker| marker.role) != Some(PartRole::User))
+                .and_then(|run| run.first())
+                .and_then(|marker| {
+                    marker
+                        .content
+                        .get("turn_id")
+                        .and_then(serde_json::Value::as_str)
+                        .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                })
+                .map(agena_domain::TurnId)
+                .unwrap_or_else(agena_domain::TurnId::new)
+        });
     let turn_span = canonical_turn_span(session, user_index);
     let (reply_id, status, transcript_nodes, created_at_ms, finished_at_ms, failure) =
         assistant_reply_fields(session, &turn_span)?;
@@ -345,22 +395,23 @@ fn assistant_reply_snapshot(
     })
 }
 
-/// Return the message-index span `[start, end)` that belongs to the canonical
-/// turn beginning at `user_index`: the user message and every following
-/// non-user message until the next user message. Reloaded user markers do not
-/// persist the conversation UUID pair, so adjacency is the reliable grouping.
+/// Return the run-index span `[start, end)` that belongs to the canonical
+/// turn beginning at run `user_index`: the user run and every following
+/// non-user run until the next user run. Reloaded user markers do not persist
+/// the conversation UUID pair, so adjacency is the reliable grouping.
 fn canonical_turn_span(session: &Session, user_index: usize) -> std::ops::Range<usize> {
-    let messages =
-        crate::session::store::messages_from_parts(session.parts()).unwrap_or_else(|_| Vec::new());
+    let runs = parts_into_runs(session.parts());
     let mut end = user_index + 1;
-    while end < messages.len() && messages[end].role != Role::User {
+    while end < runs.len()
+        && runs[end].first().map(|marker| marker.role) != Some(PartRole::User)
+    {
         end += 1;
     }
     user_index..end
 }
 
-/// Compute the reply identity fields by scanning the messages of one
-/// canonical turn.
+/// Compute the reply identity fields by scanning the runs of one canonical
+/// turn.
 fn assistant_reply_fields(
     session: &Session,
     turn_span: &std::ops::Range<usize>,
@@ -381,28 +432,38 @@ fn assistant_reply_fields(
     let mut created_at_ms = i64::MAX;
     let mut finished_at_ms: Option<i64> = None;
     let mut failure: Option<agena_failure::UserProblem> = None;
-    let messages = crate::session::store::messages_from_parts(session.parts())?;
-    for message in &messages[turn_span.clone()] {
-        if message.role == Role::User {
+    let runs = parts_into_runs(session.parts());
+    for run in &runs[turn_span.clone()] {
+        let marker = run.first().expect("run group has a marker");
+        if marker.role == PartRole::User {
             continue;
         }
-        reply_id = reply_id.or(message.metadata.conversation_reply_id);
-        for part in &message.parts {
+        reply_id = reply_id.or(
+            marker
+                .content
+                .get("reply_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| uuid::Uuid::parse_str(value).ok())
+                .map(agena_domain::AssistantReplyId),
+        );
+        let role = role_from_part_role(marker.role);
+        for (index, part) in run.iter().enumerate().skip(1) {
+            let decoded = decode_part(part, index as i32)?;
             if let Some(node) =
-                transcript_node_from_part(session.version, part, message.role, reply_id)?
+                transcript_node_from_part(session.version, &decoded, role, reply_id)?
             {
                 nodes.push(node);
             }
-            status = more_terminal_status(status, assistant_status_from_execution(part.status));
-            created_at_ms = created_at_ms.min(part.created_at.timestamp_millis());
-            if part.status.is_terminal() {
+            status = more_terminal_status(status, assistant_status_from_execution(decoded.status));
+            created_at_ms = created_at_ms.min(decoded.created_at.timestamp_millis());
+            if decoded.status.is_terminal() {
                 finished_at_ms = Some(
                     finished_at_ms
-                        .unwrap_or(part.created_at.timestamp_millis())
-                        .max(part.created_at.timestamp_millis()),
+                        .unwrap_or(decoded.created_at.timestamp_millis())
+                        .max(decoded.created_at.timestamp_millis()),
                 );
             }
-            if let Some(problem) = part_failure(part) {
+            if let Some(problem) = part_failure(&decoded) {
                 failure = Some(problem);
             }
         }
@@ -439,7 +500,7 @@ fn more_terminal_status(
 }
 
 /// The failure of a canonical turn, when any part reports one.
-fn part_failure(part: &MessagePart) -> Option<agena_failure::UserProblem> {
+fn part_failure(part: &DecodedPart) -> Option<agena_failure::UserProblem> {
     match part.content.as_ref()? {
         PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => operation
             .error
@@ -453,30 +514,33 @@ fn part_failure(part: &MessagePart) -> Option<agena_failure::UserProblem> {
 }
 
 /// Compose the user input [`agena_domain::ContentDocument`] for one canonical
-/// turn. The user message's parts render as text/activity nodes; when the
-/// message carries no parts (the persisted user marker holds only its run
+/// turn. The user run's content parts render as text/activity nodes; when the
+/// run carries no content parts (the persisted user marker holds only its run
 /// metadata), the document is empty.
-fn content_document_from_message(
+fn content_document_from_run(
     session: &Session,
-    message: &Message,
+    run: &[Part],
 ) -> Result<agena_domain::ContentDocument, AppError> {
+    let marker = run.first().expect("run group has a marker");
+    let role = role_from_part_role(marker.role);
     let mut nodes = Vec::new();
-    for part in &message.parts {
-        if let Some(node) = transcript_node_from_part(session.version, part, message.role, None)? {
+    for (index, part) in run.iter().enumerate().skip(1) {
+        let decoded = decode_part(part, index as i32)?;
+        if let Some(node) = transcript_node_from_part(session.version, &decoded, role, None)? {
             nodes.push(node);
         }
     }
     Ok(agena_domain::ContentDocument::new(nodes))
 }
 
-/// Project one message part into a transcript [`agena_domain::ContentNode`].
+/// Project one decoded content part into a transcript [`agena_domain::ContentNode`].
 ///
 /// Mirrors the live patch mapping: text parts become text segments, activity
 /// parts become activity nodes carrying the durable payload with the
 /// human-facing operation detail derived on load.
 fn transcript_node_from_part(
     revision_seq: i64,
-    part: &MessagePart,
+    part: &DecodedPart,
     role: Role,
     reply_id: Option<agena_domain::AssistantReplyId>,
 ) -> Result<Option<agena_domain::ContentNode>, AppError> {
@@ -574,7 +638,7 @@ fn activity_actor_from_role(role: Role) -> agena_domain::ActivityActor {
 /// the part. Operation parts carry their compact tool data; the human-facing
 /// detail Markdown is derived here, at snapshot load, and never persisted.
 fn activity_payload_from_part(
-    part: &MessagePart,
+    part: &DecodedPart,
     role: Role,
 ) -> Result<Option<agena_domain::ActivityPayload>, AppError> {
     use agena_domain::{
@@ -799,9 +863,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let workflow_state = session.workflow_state();
-        let message_count = crate::session::store::messages_from_parts(session.parts())
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?
-            .len();
+        let message_count = session.parts().iter().filter(|part| part.is_run_marker()).count();
         Ok(agena_runtime::SessionPresentation {
             id: session.id,
             parent_id: session.parent_id,
@@ -895,34 +957,12 @@ impl agena_runtime::SessionQueryService for SessionManager {
         session_id: i64,
         include_content: bool,
     ) -> Result<Vec<agena_runtime::SessionProjectedMessage>, agena_runtime::SessionQueryError> {
+        // Parts-native: `SessionManager::list_projected_messages` already
+        // builds the stable `SessionProjectedMessage` values directly from the
+        // session's parts; only the error type needs adapting here.
         SessionManager::list_projected_messages(self, session_id, include_content)
             .await
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?
-            .into_iter()
-            .map(|message| {
-                Ok(agena_runtime::SessionProjectedMessage {
-                    id: message.id,
-                    role: message.role,
-                    state: message.state,
-                    created_at: message.created_at,
-                    metadata: serde_json::to_value(message.metadata).map_err(|error| {
-                        agena_runtime::SessionQueryError::internal(error.to_string())
-                    })?,
-                    usage: message
-                        .usage
-                        .map(serde_json::to_value)
-                        .transpose()
-                        .map_err(|error| {
-                            agena_runtime::SessionQueryError::internal(error.to_string())
-                        })?,
-                    parts: message
-                        .parts
-                        .into_iter()
-                        .map(project_message_part)
-                        .collect::<Result<Vec<_>, agena_runtime::SessionQueryError>>()?,
-                })
-            })
-            .collect()
+            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
 
     async fn list_session_tree(
@@ -1123,33 +1163,169 @@ impl agena_runtime::SessionQueryService for SessionManager {
     }
 }
 
-/// Projects one private Runtime message part into the stable transcript value.
+/// Project a session's parts into the stable transcript values, one per run.
 ///
-/// Live event consumers use this adapter before crossing into API/TUI
-/// presentation mappings; they never need an Application → Runtime-internal
-/// dependency.
-fn project_message_part(
-    part: MessagePart,
-) -> Result<agena_runtime::SessionProjectedMessagePart, agena_runtime::SessionQueryError> {
+/// Each run marker becomes a `SessionProjectedMessage` whose parts are the
+/// run's content parts, decoded from the canonical store payload. This is the
+/// parts-native replacement for the removed v1 `messages_from_parts` bridge,
+/// preserving the exact wire shape `agena-application` / `agena-cli` consume.
+pub(crate) fn projected_messages_from_parts(
+    parts: &[Part],
+) -> Result<Vec<crate::session_query_service::SessionProjectedMessage>, AppError> {
+    parts_into_runs(parts)
+        .into_iter()
+        .map(|run| {
+            let marker = run.first().expect("run group has a marker");
+            let mut projected_parts = Vec::with_capacity(run.len().saturating_sub(1));
+            for (index, part) in run.iter().enumerate().skip(1) {
+                projected_parts.push(project_storage_part(part, marker.part_id, index as i32)?);
+            }
+            Ok(crate::session_query_service::SessionProjectedMessage {
+                id: marker.part_id,
+                role: role_from_part_role(marker.role),
+                state: execution_status_from_part_state(marker.state),
+                created_at: timestamp_millis_to_utc(marker.created_at_ms)?,
+                // The run marker's content is the durable header payload; the
+                // v1 bridge surfaced a derived `MessageMetadata` projection of
+                // the same fields, and consumers pass it through as the run
+                // part's content.
+                metadata: marker.content.clone(),
+                usage: None,
+                parts: projected_parts,
+            })
+        })
+        .collect()
+}
+
+/// A decoded content part: the parts-native projection of one storage [`Part`]
+/// into the fields the transcript and query surfaces need, mirroring the v1
+/// `MessagePart` reconstruction without materializing v1 messages.
+struct DecodedPart {
+    id: i64,
+    part_index: i32,
+    status: ExecutionStatus,
+    kind: agena_domain::PartKind,
+    name: Option<String>,
+    summary: Option<String>,
+    has_detail: bool,
+    activity_id: Option<agena_domain::ActivityId>,
+    segment_id: Option<agena_domain::TextSegmentId>,
+    operation_id: Option<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    content: Option<PartContent>,
+}
+
+/// Decode one persisted content part (its `kind` column plus canonical JSON
+/// payload) into the [`DecodedPart`] view. Mirrors the removed
+/// `store::part_to_message_part` exactly so the transcript and projected-message
+/// surfaces keep the same shape without the v1 message bridge.
+fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
+    let content = part_content_from_value(&part.kind, &part.content)?;
+    // The coarse state column carries the lifecycle; the fine-grained status
+    // (including denial outcomes) is reconstructed from the rich content.
+    let status = match &content {
+        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+            operation.status()
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+            crate::message::RequestPart::UserInput(request),
+        )) => request.status(),
+        _ => execution_status_from_part_state(part.state),
+    };
+    // Recover the provider operation id stashed by `serialize_part_content` so
+    // pending-tool correlation and prompt assembly survive a reload.
+    let operation_id = match &content {
+        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => operation
+            .metadata
+            .get(OPERATION_ID_METADATA_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        _ => None,
+    };
+    Ok(DecodedPart {
+        id: part.part_id,
+        part_index,
+        status,
+        kind: content.kind(),
+        name: part_name_from_content(&content),
+        summary: part.summary.clone(),
+        has_detail: part.content.is_object(),
+        activity_id: matches!(&content, PartContent::Activity(_))
+            .then(agena_domain::ActivityId::new),
+        segment_id: matches!(&content, PartContent::Text(_))
+            .then(agena_domain::TextSegmentId::new),
+        operation_id,
+        created_at: timestamp_millis_to_utc(part.created_at_ms)?,
+        content: Some(content),
+    })
+}
+
+/// The v1 `MessagePart::name` derivation from decoded content: text/reasoning
+/// are plain labels, operations use their header title (falling back to the
+/// invocation name), and failures use their problem code.
+fn part_name_from_content(content: &PartContent) -> Option<String> {
+    match content {
+        PartContent::Text(_) => Some("text".to_string()),
+        PartContent::Activity(crate::message::RuntimeActivity::Reasoning(_)) => {
+            Some("reasoning".to_string())
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+            let title = operation.title.trim();
+            Some(if title.is_empty() {
+                operation.invocation.name.clone()
+            } else {
+                title.to_owned()
+            })
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::SkillReference(_)) => {
+            Some("skill_reference".to_string())
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Error(error)) => {
+            Some(error.problem.code.to_string())
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Resource(_)) => {
+            Some("resource".to_string())
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+            crate::message::RequestPart::UserInput(_),
+        )) => Some("user_input".to_string()),
+        PartContent::Activity(crate::message::RuntimeActivity::Hook(hook)) => {
+            Some(format!("hook:{}", hook.hook))
+        }
+        PartContent::Activity(crate::message::RuntimeActivity::Notice(_)) => {
+            Some("notice".to_string())
+        }
+    }
+}
+
+/// Project one persisted content part into the stable transcript part value,
+/// preserving the wire shape the v1 bridge produced for `MessagePart`.
+fn project_storage_part(
+    part: &Part,
+    message_id: i64,
+    part_index: i32,
+) -> Result<agena_runtime::SessionProjectedMessagePart, AppError> {
+    let decoded = decode_part(part, part_index)?;
     Ok(agena_runtime::SessionProjectedMessagePart {
-        id: part.id,
-        message_id: part.message_id,
-        part_index: part.part_index,
-        status: part.status,
-        kind: part.kind,
-        name: part.name,
-        summary: part.summary,
-        has_detail: part.has_detail,
-        activity_id: part.activity_id,
-        segment_id: part.segment_id,
-        operation_id: part.operation_id,
-        created_at: part.created_at,
-        detail: part.content.as_ref().map(project_part_detail),
-        content: part
+        id: decoded.id,
+        message_id,
+        part_index: decoded.part_index,
+        status: decoded.status,
+        kind: decoded.kind,
+        name: decoded.name,
+        summary: decoded.summary,
+        has_detail: decoded.has_detail,
+        activity_id: decoded.activity_id,
+        segment_id: decoded.segment_id,
+        operation_id: decoded.operation_id,
+        created_at: decoded.created_at,
+        detail: decoded.content.as_ref().map(project_part_detail),
+        content: decoded
             .content
+            .as_ref()
             .map(serde_json::to_value)
             .transpose()
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?,
+            .map_err(|error| AppError::Internal(format!("serialize part content: {error}")))?,
     })
 }
 
@@ -1391,18 +1567,43 @@ fn cancel_active_execution_result(
     }
 }
 
-fn is_completed_user_rewind_target(message: &Message) -> bool {
-    message.role == Role::User && message.state == ExecutionStatus::Completed
+fn is_completed_user_rewind_target(part: &Part) -> bool {
+    part.role == PartRole::User
+        && execution_status_from_part_state(part.state) == ExecutionStatus::Completed
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        ExecutionControlError, Message, Role, cancel_active_execution_result,
-        descendant_cancellation_order, is_completed_user_rewind_target,
+        ExecutionControlError, cancel_active_execution_result, descendant_cancellation_order,
+        is_completed_user_rewind_target,
     };
     use agena_domain::SessionSummary;
-    use agena_domain::{ExecutionStatus, SubtaskStatus};
+    use agena_domain::SubtaskStatus;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+
+    fn marker(part_id: i64, role: PartRole, state: PartState) -> Part {
+        let now = chrono::Utc::now().timestamp_millis();
+        Part {
+            part_id,
+            kind: "run".to_owned(),
+            role,
+            state,
+            content: serde_json::json!({}),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: None,
+            origin_session_id: 1,
+            revision: 0,
+            started_at_ms: now,
+            finished_at_ms: None,
+            created_at_ms: now,
+            updated_at_ms: now,
+            provider_state: None,
+        }
+    }
 
     #[test]
     fn cancelling_a_completed_run_is_a_successful_no_op() {
@@ -1415,12 +1616,9 @@ mod tests {
 
     #[test]
     fn rewind_accepts_only_completed_user_messages() {
-        let mut user = Message::prompt_text(Role::User, "undo this");
-        user.state = ExecutionStatus::Completed;
-        let mut assistant = Message::prompt_text(Role::Assistant, "response");
-        assistant.state = ExecutionStatus::Completed;
-        let mut pending_user = Message::prompt_text(Role::User, "pending");
-        pending_user.state = ExecutionStatus::Pending;
+        let user = marker(1, PartRole::User, PartState::Completed);
+        let assistant = marker(2, PartRole::Assistant, PartState::Completed);
+        let pending_user = marker(3, PartRole::User, PartState::Pending);
 
         assert!(is_completed_user_rewind_target(&user));
         assert!(!is_completed_user_rewind_target(&assistant));

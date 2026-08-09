@@ -7,7 +7,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use agena_domain::{
-    AssistantReplyId, ExecutionStatus, ModelId, ModelRef, ProviderId, Role, TurnId,
+    AssistantReplyId, ModelId, ModelRef, ProviderId, Role, TurnId,
 };
 use agena_plugin_host::{PluginHost, PluginHostBuildConfig, PluginsConfig, ToolPresentationConfig};
 use agena_provider::{
@@ -22,9 +22,10 @@ use sea_orm::{Database, DatabaseConnection};
 
 use super::{SessionManager, SessionRunRequest, SessionRunTermination, merge_system_prompts};
 use crate::provider::{ModelRuntime, ProviderError};
+use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
-    ProcessorPartIdAllocator, messages_from_parts, new_part_from_content, part_content_to_value,
-    part_role_from_role, run_marker_content,
+    ProcessorPartIdAllocator, new_part_from_content, part_content_to_value, parts_into_runs,
+    run_marker_content,
 };
 use crate::{
     RuntimeSessionManagerConfig,
@@ -107,10 +108,16 @@ async fn append_message(
     role: Role,
     contents: Vec<PartContent>,
 ) -> Session {
+    let part_role = match role {
+        Role::User => PartRole::User,
+        Role::Assistant => PartRole::Assistant,
+        Role::System => PartRole::System,
+        Role::Tool => PartRole::Tool,
+    };
     let new_parts = contents
         .iter()
         .map(|content| {
-            new_part_from_content("text", part_role_from_role(role), content, PartState::Completed)
+            new_part_from_content("text", part_role, content, PartState::Completed)
         })
         .collect::<Result<Vec<_>, _>>()
         .expect("build message parts");
@@ -342,15 +349,12 @@ async fn fork_renders_the_shared_prefix_without_copying_parts() {
             .map(|part| part.part_id)
             .collect::<Vec<_>>()
     );
-    let child_messages = messages_from_parts(
-        manager
-            .get_session(child_id)
-            .await
-            .expect("project fork transcript")
-            .parts(),
-    )
-    .expect("project fork transcript");
-    assert_eq!(child_messages[0].as_text_lossy(), "shared prompt");
+    let child_session = manager
+        .get_session(child_id)
+        .await
+        .expect("project fork transcript");
+    let child_runs = parts_into_runs(child_session.parts());
+    assert_eq!(run_visible_text_lossy(&child_runs[0]), "shared prompt");
 }
 
 #[tokio::test]
@@ -378,10 +382,10 @@ async fn default_manager_fork_includes_the_complete_last_message() {
         .await
         .expect("fork complete history through manager");
 
-    let child_messages = messages_from_parts(child.parts()).expect("project child transcript");
-    assert_eq!(child_messages.len(), 1);
+    let child_runs = parts_into_runs(child.parts());
+    assert_eq!(child_runs.len(), 1);
     assert_eq!(
-        child_messages[0].as_text_lossy(),
+        run_visible_text_lossy(&child_runs[0]),
         "shared first\nshared second"
     );
     let source_view = manager
@@ -411,21 +415,20 @@ async fn default_manager_fork_includes_the_complete_last_message() {
     let explicit = manager
         .fork_session(agena_runtime::SessionForkRequest {
             session_id: session.id,
-            at_message_id: Some(
-                messages_from_parts(session.parts())
-                    .expect("project source transcript")[0]
-                    .id,
-            ),
+            at_message_id: session
+                .parts()
+                .iter()
+                .find(|part| part.is_run_marker())
+                .map(|part| part.part_id),
             title: Some("explicit marker fork child".to_owned()),
             expected_version: None,
         })
         .await
         .expect("fork at an explicit message marker");
-    let explicit_messages =
-        messages_from_parts(explicit.parts()).expect("project explicit fork transcript");
-    assert_eq!(explicit_messages.len(), 1);
+    let explicit_runs = parts_into_runs(explicit.parts());
+    assert_eq!(explicit_runs.len(), 1);
     assert_eq!(
-        explicit_messages[0].as_text_lossy(),
+        run_visible_text_lossy(&explicit_runs[0]),
         "shared first\nshared second",
         "an explicit message marker resolves to that message's inclusive tail"
     );
@@ -582,9 +585,9 @@ async fn manager_jsonl_round_trip_restores_parts_as_an_independent_root() {
         .expect("import JSONL");
     assert_ne!(imported.id, session.id);
     assert!(imported.parent_id.is_none());
-    let imported_messages = messages_from_parts(imported.parts()).expect("project imported transcript");
-    assert_eq!(imported_messages.len(), 1);
-    assert_eq!(imported_messages[0].as_text_lossy(), "round trip");
+    let imported_runs = parts_into_runs(imported.parts());
+    assert_eq!(imported_runs.len(), 1);
+    assert_eq!(run_visible_text_lossy(&imported_runs[0]), "round trip");
 }
 
 #[tokio::test]
@@ -608,7 +611,8 @@ async fn query_projection_is_derived_from_persisted_parts() {
         projected[0].parts[0]
             .content
             .as_ref()
-            .and_then(PartContent::text_value),
+            .and_then(|value| value.get("text"))
+            .and_then(serde_json::Value::as_str),
         Some("query me")
     );
 }
@@ -819,14 +823,8 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
         .expect("start run marker");
 
     let run = SessionRunRequest {
-        turn_id,
-        reply_id,
         session_id: session.id,
-        model_turn_id: None,
-        completion_parent_message_id: None,
         model: ModelRef::new("fake", "fake-model"),
-        model_thinking_mode: None,
-        model_speed_mode: None,
         completion: CompletionRequest {
             model: ModelId::new("fake-model"),
             system: None,
@@ -866,7 +864,6 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
 
     // Terminal Completed: the marker and every content part end terminal.
     assert!(matches!(result.termination, SessionRunTermination::Completed));
-    assert_eq!(result.message_state, ExecutionStatus::Completed);
     assert_eq!(result.run_marker.part_id, run_id);
     assert_eq!(result.run_marker.kind, "run");
     assert_eq!(result.run_marker.state, PartState::Completed);

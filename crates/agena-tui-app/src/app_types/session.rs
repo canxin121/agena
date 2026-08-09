@@ -144,7 +144,6 @@ pub(crate) enum SessionNavigationCommand {
 #[derive(Debug, Clone)]
 pub(crate) struct RewindTarget {
     pub(crate) turn_id: agena_domain::TurnId,
-    pub(crate) run_part_id: i64,
     pub(crate) sequence: i64,
     pub(crate) message_text: String,
     pub(crate) created_at_ms: i64,
@@ -158,7 +157,6 @@ impl RewindTarget {
     ) -> Self {
         Self {
             turn_id: turn_id_for_run(marker.part_id),
-            run_part_id: marker.part_id,
             sequence,
             message_text: text.trim().to_owned(),
             created_at_ms: marker.created_at_ms,

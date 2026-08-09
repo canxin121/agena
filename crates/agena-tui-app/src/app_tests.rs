@@ -378,6 +378,7 @@ mod transcript_character_cursor_tests {
         ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptFixture,
         TranscriptMoveDirection, TranscriptState, TranscriptTextPosition, Utc,
     };
+    use super::parts_fixtures;
     use unicode_width::UnicodeWidthStr;
 
     fn message(id: i64, text: &str) -> MessageResource {
@@ -846,13 +847,14 @@ mod transcript_character_cursor_tests {
             lines[cancelled], "  ▸ – Response cancelled",
             "a response outcome must use the visible Activity headline contract"
         );
+        // The cancelled run marker (part_id 3) projects to an Activity node
+        // keyed by its part id in the v2 parts model (database-design-v2.md
+        // §4.1.1), rendered just after its user turn.
         assert!(transcript.rendered(80).nodes.iter().any(|node| {
             matches!(
                 node.key,
                 agena_tui_transcript::TranscriptNodeKey::Activity {
-                    content_id: agena_tui_transcript::TranscriptContentId::AssistantReplyLifecycle(
-                        _
-                    ),
+                    content_id: agena_tui_transcript::TranscriptContentId::StoredPart(3),
                     ..
                 }
             ) && node.kind == agena_tui_transcript::TranscriptNodeKind::Activity
@@ -984,6 +986,7 @@ mod prompt_history_tests {
 #[cfg(test)]
 mod pending_message_tests {
     use super::super::{PendingUserMessage, TranscriptState};
+    use super::parts_fixtures;
     use agena_domain::{
         ActivityId, ActivityPayload, ActivityProvenance, ComposerActivity, ComposerDocument,
         ComposerNode, SkillReferenceActivity,
@@ -2071,6 +2074,7 @@ mod transcript_expansion_tests {
         TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
         transcript_text_selection_text,
     };
+    use super::parts_fixtures;
 
     #[test]
     fn activity_expansion_survives_a_full_parts_refresh() {
@@ -3247,6 +3251,7 @@ mod live_transcript_tests {
     use uuid::Uuid;
 
     use super::super::{PendingUserMessage, TranscriptState, Utc};
+    use super::parts_fixtures;
 
     fn event(kind: RuntimePresentationEventKind, seq: i64) -> RuntimePresentationEvent {
         RuntimePresentationEvent {
@@ -3288,12 +3293,14 @@ mod live_transcript_tests {
     }
 
     /// A completed assistant run carrying a tall multi-line body, used to
-    /// exercise viewport follow/recovery across full parts refreshes.
+    /// exercise viewport follow/recovery across full parts refreshes. Each
+    /// line is its own markdown paragraph so the v2 renderer keeps them as
+    /// separate focusable rows instead of folding them into soft breaks.
     fn tall_assistant(prefix: &str, run_id: i64, text_id: i64) -> Vec<SessionTranscriptPart> {
         let body = (0..40)
             .map(|line| format!("{prefix} line {line}"))
             .collect::<Vec<_>>()
-            .join("\n");
+            .join("\n\n");
         vec![
             parts_fixtures::run(run_id, "assistant", "completed"),
             parts_fixtures::text(text_id, "assistant", &body),

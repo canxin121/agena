@@ -2977,11 +2977,11 @@ pub(crate) fn render_activity_block(block: &agena_domain::ViewBlock) -> Vec<Stri
 /// marker is non-terminal and whose projection carries no body yet. Optimistic
 /// user messages are woven just ahead of such envelopes so the just-sent input
 /// is visible while the assistant streams.
-fn weave_pending_user_entries(
+fn weave_pending_user_entries<'a>(
     parts: &[agena_api::resource::SessionTranscriptPart],
-    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'static>>,
-    pending_messages: &[PendingUserMessage],
-) -> Vec<agena_tui_transcript::TranscriptEntry<'static>> {
+    canonical_entries: Vec<agena_tui_transcript::TranscriptEntry<'a>>,
+    pending_messages: &'a [PendingUserMessage],
+) -> Vec<agena_tui_transcript::TranscriptEntry<'a>> {
     let empty_active_replies = empty_active_run_ids(parts);
     let mut pending = pending_messages.iter();
     let mut entries = Vec::with_capacity(

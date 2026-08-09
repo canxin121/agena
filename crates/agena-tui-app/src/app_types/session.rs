@@ -151,7 +151,7 @@ pub(crate) struct RewindTarget {
 }
 
 impl RewindTarget {
-    fn from_run(
+    pub(crate) fn from_run(
         marker: &agena_api::resource::SessionTranscriptPart,
         sequence: i64,
         text: &str,

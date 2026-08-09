@@ -488,7 +488,7 @@ fn rewind_targets_from_parts(
         if part.kind == "run" {
             if let Some(marker) = current_run.take() {
                 if marker.role == "user" {
-                    targets.push(RewindTarget::from_run(marker, sequence, &run_text));
+                    targets.push(crate::RewindTarget::from_run(marker, sequence, &run_text));
                     sequence += 1;
                 }
             }
@@ -504,7 +504,7 @@ fn rewind_targets_from_parts(
     if let Some(marker) = current_run
         && marker.role == "user"
     {
-        targets.push(RewindTarget::from_run(marker, sequence, &run_text));
+        targets.push(crate::RewindTarget::from_run(marker, sequence, &run_text));
     }
     targets
 }

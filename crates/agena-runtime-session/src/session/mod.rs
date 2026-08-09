@@ -20,6 +20,8 @@ pub use manager::{
 };
 pub use processor::SessionProcessor;
 
-pub(crate) type ExecutionControl = agena_runtime::ExecutionControl<crate::part::PartContent>;
-pub(crate) type ExecutionRegistry = agena_runtime::ExecutionRegistry<crate::part::PartContent>;
+pub(crate) type ExecutionControl =
+    agena_runtime::ExecutionControl<agena_runtime_contracts::part_content::TypedContent>;
+pub(crate) type ExecutionRegistry =
+    agena_runtime::ExecutionRegistry<agena_runtime_contracts::part_content::TypedContent>;
 pub(crate) use agena_runtime::ExecutionControlError;

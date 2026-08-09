@@ -1,15 +1,19 @@
 use super::{
-    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, PartContent,
+    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
     SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
     SessionUserRunRequest, StableRunContext, UserInputPart, mpsc,
 };
-use crate::session::store::{new_part_from_content, part_content_from_value};
+use crate::session::store::{
+    new_part_from_content, operation_from_tool_call, skill_ref_from_reference,
+    skill_reference_from_skill_ref, text_content, typed_content_from_value, typed_text,
+};
 use crate::session::Session;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
 use agena_runtime_contracts::part::{SkillReference, SkillReferencePart};
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{Part, PartRole, PartState};
 use std::path::Path;
 
@@ -22,17 +26,15 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
     run.iter()
         .skip(1)
         .filter_map(|part| {
-            match part_content_from_value(&part.kind, &part.content) {
-                Ok(PartContent::Text(text)) => Some(text.text.clone()),
-                Ok(PartContent::Activity(
-                    agena_runtime_contracts::part::RuntimeActivity::SkillReference(skill),
-                )) => Some(skill.summary()),
-                Ok(PartContent::Activity(
-                    agena_runtime_contracts::part::RuntimeActivity::Operation(tool),
-                )) => tool_visible_text_lossy(&tool),
-                Ok(PartContent::Activity(
-                    agena_runtime_contracts::part::RuntimeActivity::Reasoning(_),
-                )) => None,
+            match typed_content_from_value(&part.kind, &part.content) {
+                Ok(TypedContent::Text(text)) => Some(text.text.clone()),
+                Ok(TypedContent::SkillRef(skill)) => {
+                    Some(skill_reference_from_skill_ref(&skill).summary())
+                }
+                Ok(TypedContent::ToolCall(tool)) => {
+                    tool_visible_text_lossy(&operation_from_tool_call(&tool))
+                }
+                Ok(TypedContent::Think(_)) => None,
                 _ => part.summary.clone(),
             }
         })
@@ -155,8 +157,11 @@ impl SessionManager {
         let child = self
             .require_subtask_session(parent_session_id, task_id)
             .await?;
-        self.steer_input(child.id, vec![PartContent::text(message)])
-            .await?;
+        self.steer_input(
+            child.id,
+            vec![TypedContent::Text(text_content(message))],
+        )
+        .await?;
         Ok(child.id)
     }
 
@@ -228,7 +233,7 @@ impl SessionManager {
         &self,
         mut request: SessionUserRunRequest,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
         usage_budget: Option<super::SubtaskUsageBudget>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
@@ -238,7 +243,7 @@ impl SessionManager {
         let prompt_text = request
             .parts
             .iter()
-            .filter_map(|p| p.content.text_value())
+            .filter_map(|p| typed_text(&p.content))
             .collect::<Vec<_>>()
             .join("\n");
         if !prompt_text.is_empty() {
@@ -256,15 +261,15 @@ impl SessionManager {
                     // Replace text parts with the (potentially rewritten) prompt.
                     let mut replaced = false;
                     for part in &mut request.parts {
-                        if part.content.text_value().is_some() {
-                            part.content = PartContent::text(updated.prompt.clone());
+                        if typed_text(&part.content).is_some() {
+                            part.content = TypedContent::Text(text_content(updated.prompt.clone()));
                             replaced = true;
                             break;
                         }
                     }
                     if !replaced {
                         request.parts.push(UserInputPart {
-                            content: PartContent::text(updated.prompt),
+                            content: TypedContent::Text(text_content(updated.prompt)),
                         });
                     }
                 }
@@ -461,7 +466,7 @@ impl SessionManager {
         &self,
         request: SessionExecutionRequest,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
         let mut session = self.store.load_session(request.session_id).await?;
@@ -642,11 +647,13 @@ impl SessionManager {
         let prompt = delegated_prompt.to_string();
         let skill_references = subtask_skill_references;
         let mut run = tokio::task::spawn(async move {
-            let mut parts = vec![PartContent::text(prompt)];
+            let mut parts = vec![TypedContent::Text(text_content(prompt))];
             if let Some(skill_references) = skill_references {
-                parts.push(PartContent::skill_reference(SkillReferencePart {
-                    skills: skill_references,
-                }));
+                parts.push(TypedContent::SkillRef(skill_ref_from_reference(
+                    &SkillReferencePart {
+                        skills: skill_references,
+                    },
+                )));
             }
             manager
                 .submit_subtask_user_message(

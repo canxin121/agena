@@ -1,9 +1,10 @@
 use super::{
-    AppError, PartContent, SessionCreateRequest, SessionListRequest, SessionManager,
-    SessionRunOptions, SessionSummary,
+    AppError, SessionCreateRequest, SessionListRequest, SessionManager, SessionRunOptions,
+    SessionSummary,
 };
 use crate::session::store::new_part_from_content;
 use crate::session::Session;
+use agena_runtime_contracts::part_content::TypedContent;
 use crate::session::prompt_window;
 use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
 use agena_storage::store::{PartRole, PartState};
@@ -186,7 +187,7 @@ impl SessionManager {
             injected_new_parts.push(new_part_from_content(
                 "text",
                 PartRole::System,
-                &PartContent::text(additional_context),
+                &TypedContent::Text(crate::session::store::text_content(additional_context)),
                 PartState::Completed,
             )?);
         }
@@ -194,7 +195,7 @@ impl SessionManager {
             injected_new_parts.push(new_part_from_content(
                 "text",
                 PartRole::User,
-                &PartContent::text(initial_user_message),
+                &TypedContent::Text(crate::session::store::text_content(initial_user_message)),
                 PartState::Completed,
             )?);
         }

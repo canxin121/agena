@@ -1031,16 +1031,22 @@ fn notification_from_session_change(
     let agena_storage::store::SessionChange::PartAdded { session_id, part } = change else {
         return None;
     };
-    let content: agena_runtime::part::PartContent =
-        serde_json::from_value(part.content.clone()).ok()?;
-    let agena_runtime::part::PartContent::Activity(
-        agena_runtime::part::RuntimeActivity::Notice(notice),
-    ) = content
-    else {
+    // Storage rows carry the canonical typed JSON keyed by the part's `kind`
+    // column (the v1 2-arm encoding is gone), so decode through the contracts
+    // dispatcher rather than deserializing a v1 payload.
+    let content =
+        agena_runtime_contracts::part_content::decode(&part.kind, &part.content).ok()?;
+    let agena_runtime_contracts::part_content::TypedContent::Notice(notice) = content else {
         return None;
     };
+    let notice_part = agena_runtime_contracts::NoticePart {
+        kind: notice.kind,
+        summary: notice.summary,
+        detail: notice.detail,
+        title: notice.title,
+    };
     Some(agena_runtime_notifications::from_notice_part(
-        &notice,
+        &notice_part,
         NotificationScope::Session(*session_id),
         part.created_at_ms,
     ))
@@ -1050,16 +1056,17 @@ fn notification_from_session_change(
 mod notification_aggregator_tests {
     use super::*;
     use agena_notification::model::{NotificationKind, NotificationSurface};
-    use agena_runtime::part::{NoticePart, PartContent, RuntimeActivity};
     use agena_storage::store::{Part, PartRole, PartState, SessionChange};
 
     fn notice_part_change(kind: &str, summary: &str) -> SessionChange {
-        let content = PartContent::Activity(RuntimeActivity::Notice(NoticePart {
+        let content = agena_runtime_contracts::part_content::NoticeContent {
             kind: kind.to_owned(),
             summary: summary.to_owned(),
             detail: Some("Reduce scope".to_owned()),
             title: None,
-        }));
+            extra: Default::default(),
+        }
+        .as_value();
         SessionChange::PartAdded {
             session_id: 7,
             part: Part {
@@ -1067,7 +1074,7 @@ mod notification_aggregator_tests {
                 kind: "notice".to_owned(),
                 role: PartRole::Assistant,
                 state: PartState::Completed,
-                content: serde_json::to_value(content).expect("serialize notice content"),
+                content,
                 summary: None,
                 visibility: agena_storage::store::PartVisibility::Both,
                 rendered_markdown: None,
@@ -1105,7 +1112,6 @@ mod notification_aggregator_tests {
 
     #[test]
     fn non_notice_part_changes_project_to_none() {
-        let text = PartContent::text("hello");
         let change = SessionChange::PartAdded {
             session_id: 7,
             part: Part {
@@ -1113,7 +1119,12 @@ mod notification_aggregator_tests {
                 kind: "text".to_owned(),
                 role: PartRole::User,
                 state: PartState::Completed,
-                content: serde_json::to_value(text).expect("serialize text content"),
+                content: agena_runtime_contracts::part_content::TextContent {
+                    text: "hello".to_owned(),
+                    synthetic: false,
+                    extra: Default::default(),
+                }
+                .as_value(),
                 summary: None,
                 visibility: agena_storage::store::PartVisibility::Both,
                 rendered_markdown: None,

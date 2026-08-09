@@ -9,8 +9,8 @@
 use agena_domain::{DoomLoopHit, DoomLoopPolicy, ToolInvocation};
 use agena_storage::store::{Part, PartRole};
 
-use crate::part::PartContent;
-use crate::session::store::part_content_from_value;
+use crate::session::store::{operation_from_tool_call, typed_content_from_value};
+use agena_runtime_contracts::part_content::TypedContent;
 
 /// Walk `parts` from the tail forward and detect a run of identical
 /// assistant tool invocations. Only assistant-role `Operation` parts
@@ -39,8 +39,8 @@ pub fn detect(parts: &[Part], policy: DoomLoopPolicy) -> Option<DoomLoopHit> {
             saw_tool_in_run = false;
             continue;
         }
-        let Ok(PartContent::Activity(crate::part::RuntimeActivity::Operation(exec))) =
-            part_content_from_value(&part.kind, &part.content)
+        let Ok(TypedContent::ToolCall(tool_call)) =
+            typed_content_from_value(&part.kind, &part.content)
         else {
             if latest_signature.is_some() {
                 break 'parts;
@@ -48,6 +48,7 @@ pub fn detect(parts: &[Part], policy: DoomLoopPolicy) -> Option<DoomLoopHit> {
             continue;
         };
         saw_tool_in_run = true;
+        let exec = operation_from_tool_call(&tool_call);
         let signature = signature_of(exec.invocation());
         match &latest_signature {
             Some(prev) if prev == &signature => {

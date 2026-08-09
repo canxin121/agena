@@ -1,7 +1,8 @@
 use super::{AppError, SessionProcessor, SessionRunRequest, Utc};
 use crate::session::store::{
-    StoreAdapter, new_part_from_content, part_content_from_value, part_content_to_value,
+    StoreAdapter, new_part_from_content, typed_content_from_value, typed_content_to_value,
 };
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{NewPart, Part, PartDelta, PartRole, PartState, PartVisibility};
 
 impl SessionProcessor {
@@ -143,13 +144,15 @@ impl SessionProcessor {
                     "active reasoning part missing from turn accumulator: {part_id}"
                 ))
             })?;
-        let mut content = part_content_from_value(&part.kind, &part.content)?;
-        if !content.append_reasoning_summary_delta(delta.to_owned()) {
+        let mut content = typed_content_from_value(&part.kind, &part.content)?;
+        if let TypedContent::Think(think) = &mut content {
+            think.summary.push(delta.to_owned());
+        } else {
             return Err(AppError::Internal(format!(
                 "failed to append reasoning delta to part {part_id}: kind mismatch"
             )));
         }
-        let content = part_content_to_value(&content)?;
+        let content = typed_content_to_value(&content)?;
         let updated = run
             .store
             .update_part(
@@ -185,8 +188,8 @@ impl SessionProcessor {
                     "part missing from turn accumulator while persisting: {part_id}"
                 ))
             })?;
-        let content = part_content_from_value(&part.kind, &part.content)?;
-        let content = part_content_to_value(&content)?;
+        let content = typed_content_from_value(&part.kind, &part.content)?;
+        let content = typed_content_to_value(&content)?;
         let updated = run
             .store
             .update_part(
@@ -293,6 +296,6 @@ fn upsert_part(parts: &mut Vec<Part>, updated: Part) {
 /// operation metadata (see [`crate::session::store::OPERATION_ID_METADATA_KEY`]),
 /// so re-serializing preserves it for a later projection (and reload).
 fn new_part_for_deferred_tool_part(part: &Part) -> Result<NewPart, AppError> {
-    let content = part_content_from_value(&part.kind, &part.content)?;
+    let content = typed_content_from_value(&part.kind, &part.content)?;
     new_part_from_content("tool_call", part.role, &content, part.state)
 }

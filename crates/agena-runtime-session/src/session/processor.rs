@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::error::AppError;
-use crate::part::{OperationPart, PartContent};
+use crate::part::OperationPart;
 use crate::provider::ProviderRegistry;
 use crate::provider_state::PartProviderState;
 use agena_domain::ModelRef;

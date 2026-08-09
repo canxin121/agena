@@ -198,6 +198,7 @@ dependencies = [
  "agena-plugin-host",
  "agena-provider",
  "agena-runtime",
+ "agena-runtime-contracts",
  "agena-runtime-notifications",
  "agena-scheduler",
  "agena-storage",

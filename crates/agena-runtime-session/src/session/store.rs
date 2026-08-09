@@ -27,15 +27,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use agena_domain::{
-    ExecutionAccess, ExecutionSelection, ExecutionStatus, ReasoningPart, Role, StructuredObject,
-    TimeRange, ToolInvocation,
-};
-use agena_failure::{
-    FailureCategory, FailureCode, FailureId, FailureImpact, FailureResponsibility,
-    RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
-};
-use agena_plugin_sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
+use agena_domain::{ExecutionAccess, ExecutionSelection, ExecutionStatus, ReasoningPart, Role};
+use agena_plugin_sdk::attachment::{AttachmentPart, AttachmentSource};
 use agena_runtime_contracts::part_content;
 use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{
@@ -46,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::AppError;
-use crate::part::{OperationPart, RequestPart, SkillReference, SkillReferencePart};
+use crate::part::{OperationPart, RequestPart, SkillReferencePart};
 use crate::session::Session;
 
 /// The facade-backed store adapter used by [`crate::SessionManager`].
@@ -614,13 +607,15 @@ pub(crate) fn typed_content_to_value(content: &TypedContent) -> Result<Value, Ap
         TypedContent::ToolCall(part) => part.as_value(),
         TypedContent::ToolResult(part) => part.as_value(),
         TypedContent::FileRef(part) => part.as_value(),
-        TypedContent::PasteRef(part) => serde_json::to_value(part)
-            .expect("paste ref content is always JSON serializable"),
+        TypedContent::PasteRef(part) => {
+            serde_json::to_value(part).expect("paste ref content is always JSON serializable")
+        }
         TypedContent::SkillRef(part) => part.as_value(),
         TypedContent::Notice(part) => part.as_value(),
         TypedContent::Hook(part) => part.as_value(),
-        TypedContent::Compaction(part) => serde_json::to_value(part)
-            .expect("compaction content is always JSON serializable"),
+        TypedContent::Compaction(part) => {
+            serde_json::to_value(part).expect("compaction content is always JSON serializable")
+        }
         TypedContent::Error(part) => part.as_value(),
         TypedContent::Interaction(part) => part.as_value(),
     };
@@ -655,23 +650,25 @@ fn part_summary(content: &TypedContent) -> Option<String> {
         TypedContent::Text(text) => truncate(&text.text),
         TypedContent::Think(think) => truncate(&reasoning_from_think(think).preferred_text()),
         TypedContent::ToolCall(tool_call) => {
-            let operation = operation_from_tool_call(tool_call);
+            let operation = part_content::operation_from_tool_call(tool_call);
             operation
                 .error_message()
                 .or_else(|| (!operation.summary.is_empty()).then_some(operation.summary.as_str()))
                 .and_then(truncate)
         }
-        TypedContent::Error(error) => truncate(&user_problem_from_error(error).user.fallback),
+        TypedContent::Error(error) => {
+            truncate(&part_content::user_problem_from_error(error).user.fallback)
+        }
         TypedContent::SkillRef(reference) => {
-            truncate(&skill_reference_from_skill_ref(reference).summary())
+            truncate(&part_content::skill_reference_from_skill_ref(reference).summary())
         }
         TypedContent::Interaction(request) => {
-            truncate(&interaction_from_content(request).summary_text())
+            truncate(&part_content::interaction_from_content(request).summary_text())
         }
         TypedContent::Hook(hook) => truncate(&hook.summary),
         TypedContent::Notice(notice) => truncate(&notice.summary),
         TypedContent::FileRef(attachment) => {
-            let attachment = attachment_from_file_ref(attachment);
+            let attachment = part_content::attachment_from_file_ref(attachment);
             if attachment.attachments.is_empty() {
                 Some("0 attachment(s)".to_string())
             } else {
@@ -708,7 +705,10 @@ fn truncate(value: &str) -> Option<String> {
 /// layer in `agena-runtime-contracts` ([`agena_runtime_contracts::part_content::decode`]).
 /// Rich v1 payloads ride losslessly in the typed struct's `extra` bucket and
 /// are recovered on demand by the `*_from_*` mirrors in this module.
-pub(crate) fn typed_content_from_value(kind: &str, value: &Value) -> Result<TypedContent, AppError> {
+pub(crate) fn typed_content_from_value(
+    kind: &str,
+    value: &Value,
+) -> Result<TypedContent, AppError> {
     agena_runtime_contracts::part_content::decode(kind, value)
         .map_err(|error| AppError::Internal(format!("decode part content from store: {error}")))
 }
@@ -721,8 +721,7 @@ pub(crate) fn tool_call_from_operation(operation: &OperationPart) -> part_conten
     let mut extra = BTreeMap::new();
     extra.insert(
         "operation".to_owned(),
-        serde_json::to_value(operation)
-            .expect("operation payload is always JSON serializable"),
+        serde_json::to_value(operation).expect("operation payload is always JSON serializable"),
     );
     if let Some(api_call) = &operation.invocation.tool_api_call {
         extra.insert(
@@ -752,7 +751,10 @@ pub(crate) fn file_ref_from_attachment(part: &AttachmentPart) -> part_content::F
         );
     }
     if let Some(first) = part.attachments.first() {
-        extra.insert("kind".to_owned(), Value::String(first.kind.as_ref().to_owned()));
+        extra.insert(
+            "kind".to_owned(),
+            Value::String(first.kind.as_ref().to_owned()),
+        );
         extra.insert(
             "source".to_owned(),
             serde_json::to_value(&first.source)
@@ -823,8 +825,8 @@ pub(crate) fn interaction_from_request(part: &RequestPart) -> part_content::Inte
             .expect("user input request is always JSON serializable"),
     );
     if let Some(reply) = &interactive.reply {
-        let reply_json = serde_json::to_value(reply)
-            .expect("user input reply is always JSON serializable");
+        let reply_json =
+            serde_json::to_value(reply).expect("user input reply is always JSON serializable");
         extra.insert("reply".to_owned(), reply_json.clone());
         reply_value = Some(reply_json);
     }
@@ -877,11 +879,10 @@ pub(crate) fn typed_text(content: &TypedContent) -> Option<&str> {
 // The v1 payload structs (`OperationPart`, `AttachmentPart`,
 // `SkillReferencePart`, `ReasoningPart`, `RequestPart`, `UserProblem`) survive
 // the T8 migration — they ride losslessly in the typed content's `extra`
-// bucket and are recovered here. The contracts equivalents in
-// `agena-runtime-contracts::part_content` are private until T8 stage 4 (which
-// re-signs them `pub` and `&`-taking); these local mirrors keep the session
-// independent of the v1 two-arm content enum and its typed fold, so stage 4
-// can delete those unhindered.
+// bucket and are recovered through the public extractor helpers in
+// `agena_runtime_contracts::part_content` (`operation_from_tool_call`,
+// `attachment_from_file_ref`, `skill_reference_from_skill_ref`,
+// `user_problem_from_error`, `interaction_from_content`).
 
 /// Rebuild a v1 [`ReasoningPart`] from the canonical `think` shape.
 pub(crate) fn reasoning_from_think(part: &part_content::ThinkContent) -> ReasoningPart {
@@ -890,195 +891,6 @@ pub(crate) fn reasoning_from_think(part: &part_content::ThinkContent) -> Reasoni
         raw_content: part.raw.clone(),
         encrypted_content: part.encrypted_content.clone(),
     }
-}
-
-/// Rebuild a v1 [`OperationPart`] from the canonical `tool_call` shape,
-/// restoring the full payload from `extra["operation"]` and falling back to a
-/// pending operation built from the canonical invocation identity.
-pub(crate) fn operation_from_tool_call(part: &part_content::ToolCallContent) -> OperationPart {
-    if let Some(operation) = part
-        .extra
-        .get("operation")
-        .and_then(|value| serde_json::from_value::<OperationPart>(value.clone()).ok())
-    {
-        return operation;
-    }
-    let invocation = ToolInvocation {
-        tool_api_call: part
-            .extra
-            .get("tool_api_call")
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        name: part.name.clone(),
-        plugin_name: part.plugin.clone(),
-        input: StructuredObject::try_from(part.input.clone()).unwrap_or_default(),
-    };
-    let call_id = part.extra.get("call_id").and_then(Value::as_i64).unwrap_or(0);
-    OperationPart::pending(call_id, invocation, "", TimeRange::default())
-}
-
-/// Rebuild a v1 [`AttachmentPart`] from the canonical `file_ref` shape,
-/// preferring the lossless `extra["attachments"]` list and otherwise
-/// reconstructing a single item from the named keys + extended keys.
-pub(crate) fn attachment_from_file_ref(part: &part_content::FileRefContent) -> AttachmentPart {
-    if let Some(items) = part
-        .extra
-        .get("attachments")
-        .and_then(|value| serde_json::from_value::<Vec<AttachmentItem>>(value.clone()).ok())
-    {
-        return AttachmentPart { attachments: items };
-    }
-    let kind = part
-        .extra
-        .get("kind")
-        .and_then(Value::as_str)
-        .and_then(|value| {
-            serde_json::from_value::<AttachmentKind>(Value::String(value.to_owned())).ok()
-        })
-        .unwrap_or(AttachmentKind::File);
-    let source = attachment_source_from_file_ref(part);
-    AttachmentPart {
-        attachments: vec![AttachmentItem {
-            kind,
-            mime: part.mime.clone().unwrap_or_default(),
-            source,
-            filename: part.name.clone(),
-            title: part.extra.get("title").and_then(Value::as_str).map(str::to_owned),
-            size_bytes: part.extra.get("size_bytes").and_then(Value::as_u64),
-            sha256: part.sha.clone(),
-            width: part.extra.get("width").and_then(Value::as_u64).map(|v| v as u32),
-            height: part
-                .extra
-                .get("height")
-                .and_then(Value::as_u64)
-                .map(|v| v as u32),
-            duration_ms: part.extra.get("duration_ms").and_then(Value::as_u64),
-            page_count: part
-                .extra
-                .get("page_count")
-                .and_then(Value::as_u64)
-                .map(|v| v as u32),
-        }],
-    }
-}
-
-/// Rebuild an [`AttachmentSource`] from the canonical `file_ref` named keys
-/// and extended keys (`url`, `data_url`, `base64`, `file_id`, `path`).
-fn attachment_source_from_file_ref(part: &part_content::FileRefContent) -> AttachmentSource {
-    let extra = &part.extra;
-    if let Some(url) = extra.get("url").and_then(Value::as_str) {
-        return AttachmentSource::Url {
-            url: url.to_owned(),
-        };
-    }
-    if let Some(url) = extra.get("data_url").and_then(Value::as_str) {
-        return AttachmentSource::DataUrl {
-            url: url.to_owned(),
-        };
-    }
-    if let Some(data) = extra.get("base64").and_then(Value::as_str) {
-        return AttachmentSource::Base64 {
-            data: data.to_owned(),
-        };
-    }
-    if let Some(file_id) = extra.get("file_id").and_then(Value::as_str) {
-        return AttachmentSource::FileId {
-            file_id: file_id.to_owned(),
-        };
-    }
-    if let Some(path) = part.path.as_deref() {
-        return AttachmentSource::LocalPath {
-            path: path.to_owned(),
-        };
-    }
-    if let Some(source) = extra
-        .get("source")
-        .and_then(|value| serde_json::from_value::<AttachmentSource>(value.clone()).ok())
-    {
-        return source;
-    }
-    AttachmentSource::LocalPath {
-        path: String::new(),
-    }
-}
-
-/// Rebuild a v1 [`SkillReferencePart`] from `extra["skills"]` (empty when the
-/// snapshot is missing or does not match the v1 shape).
-pub(crate) fn skill_reference_from_skill_ref(part: &part_content::SkillRefContent) -> SkillReferencePart {
-    let skills = part
-        .extra
-        .get("skills")
-        .and_then(|value| serde_json::from_value::<Vec<SkillReference>>(value.clone()).ok())
-        .unwrap_or_default();
-    SkillReferencePart { skills }
-}
-
-/// Rebuild a v1 [`agena_failure::UserProblem`] from the canonical `error`
-/// shape, preferring the lossless `extra["problem"]` object and otherwise
-/// constructing a minimal problem from the named keys.
-pub(crate) fn user_problem_from_error(part: &part_content::ErrorContent) -> UserProblem {
-    if let Some(problem) = part
-        .extra
-        .get("problem")
-        .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
-    {
-        return problem;
-    }
-    UserProblem {
-        id: FailureId::new(),
-        code: FailureCode::new("runtime.error"),
-        category: part
-            .category
-            .as_deref()
-            .and_then(|value| {
-                serde_json::from_value::<FailureCategory>(Value::String(value.to_owned())).ok()
-            })
-            .unwrap_or(FailureCategory::Internal),
-        responsibility: FailureResponsibility::System,
-        retry: RetryDirective::Never,
-        recovery: RecoveryDirective::None,
-        impact: FailureImpact::OperationFailed,
-        user: UserPresentation {
-            key: part
-                .category
-                .clone()
-                .unwrap_or_else(|| "runtime-error".to_owned()),
-            fallback: part.message.clone(),
-            detail_key: None,
-        },
-    }
-}
-
-/// Rebuild a v1 [`RequestPart`] from the canonical `interaction` shape,
-/// preferring the lossless `extra["request"]`/`extra["reply"]` objects and
-/// otherwise reconstructing from the named display keys.
-pub(crate) fn interaction_from_content(part: &part_content::InteractionContent) -> RequestPart {
-    let extra = &part.extra;
-    let request = extra
-        .get("request")
-        .and_then(|value| serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok())
-        .unwrap_or_else(|| agena_domain::UserInputRequest {
-            request_id: format!("restored-{}", part.kind),
-            session_id: None,
-            title: part.prompt.clone().unwrap_or_default(),
-            kind: part.kind.clone(),
-            auto_resolution_ms: None,
-            presented_at: None,
-            questions: part
-                .options
-                .as_ref()
-                .and_then(|value| serde_json::from_value(value.clone()).ok())
-                .unwrap_or_default(),
-            created_at: chrono::Utc::now(),
-        });
-    let reply = extra
-        .get("reply")
-        .and_then(|value| serde_json::from_value::<agena_domain::UserInputReply>(value.clone()).ok())
-        .or_else(|| {
-            part.response
-                .as_ref()
-                .and_then(|value| serde_json::from_value::<agena_domain::UserInputReply>(value.clone()).ok())
-        });
-    crate::part::RequestPart::UserInput(crate::part::InteractiveRequestPart { request, reply })
 }
 
 pub(crate) fn role_from_part_role(role: PartRole) -> Role {
@@ -1527,10 +1339,7 @@ mod tests {
         let value = typed_content_to_value(&content).unwrap();
         let back = typed_content_from_value("text", &value).unwrap();
         assert_eq!(back, content);
-        assert_eq!(
-            typed_text_from_value(&value).as_deref(),
-            Some("round trip")
-        );
+        assert_eq!(typed_text_from_value(&value).as_deref(), Some("round trip"));
     }
 
     #[test]
@@ -1610,10 +1419,16 @@ mod tests {
         let TypedContent::ToolCall(tool_call) = back else {
             panic!("tool_call must rebuild as a typed tool call");
         };
-        let rebuilt = operation_from_tool_call(&tool_call);
-        assert_eq!(rebuilt, operation, "rich operation must survive the canonical round trip");
+        let rebuilt = part_content::operation_from_tool_call(&tool_call);
         assert_eq!(
-            rebuilt.metadata.get(OPERATION_ID_METADATA_KEY).and_then(Value::as_str),
+            rebuilt, operation,
+            "rich operation must survive the canonical round trip"
+        );
+        assert_eq!(
+            rebuilt
+                .metadata
+                .get(OPERATION_ID_METADATA_KEY)
+                .and_then(Value::as_str),
             Some("op-42")
         );
     }

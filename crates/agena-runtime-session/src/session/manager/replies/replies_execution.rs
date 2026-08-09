@@ -16,15 +16,15 @@ use crate::part::{InteractiveRequestPart, RequestPart};
 use crate::session::Session;
 use crate::session::prompt_window;
 use crate::session::store::{
-    interaction_from_request, new_part_from_content, operation_from_tool_call, run_marker_content,
-    text_content, tool_call_from_operation, typed_content_from_value, typed_content_to_value,
+    interaction_from_request, new_part_from_content, run_marker_content, text_content,
+    tool_call_from_operation, typed_content_from_value, typed_content_to_value,
 };
-use agena_runtime_contracts::part_content::TypedContent;
 use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
     PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind, RunAbortReason,
 };
+use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
 use agena_storage::store::{Part, PartRole, PartState};
 use tracing::Instrument;
 
@@ -535,7 +535,10 @@ impl SessionManager {
             // checkpoint part (the window it closes is empty of new input).
             let already_auto_compacted_at_boundary = session.parts().last().is_some_and(|part| {
                 part.kind == "run"
-                    && part.content.get("run_kind").and_then(serde_json::Value::as_str)
+                    && part
+                        .content
+                        .get("run_kind")
+                        .and_then(serde_json::Value::as_str)
                         == Some("compaction")
             });
             let session_usage = self.session_usage(&session)?;
@@ -1895,10 +1898,7 @@ impl SessionManager {
             .part_mut(&resolved.pending.part)
             .map(|tool_part| {
                 let was_pending = matches!(tool_part.state, PartState::Pending);
-                if matches!(
-                    tool_part.state,
-                    PartState::Pending | PartState::InProgress
-                ) {
+                if matches!(tool_part.state, PartState::Pending | PartState::InProgress) {
                     tool_part.state = PartState::InProgress;
                 }
                 was_pending
@@ -2600,16 +2600,15 @@ impl SessionManager {
             // The built-in human renderer maps the tool's structured output to
             // ViewBlocks (v2). Shell/process executions carry the command line
             // so the human view renders a `$ command` card.
-            let invocation =
-                session
-                    .part(&pending_tool.part)
-                    .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
-                    .and_then(|content| match content {
-                        TypedContent::ToolCall(tool_call) => {
-                            Some(operation_from_tool_call(&tool_call).invocation)
-                        }
-                        _ => None,
-                    });
+            let invocation = session
+                .part(&pending_tool.part)
+                .and_then(|part| typed_content_from_value(&part.kind, &part.content).ok())
+                .and_then(|content| match content {
+                    TypedContent::ToolCall(tool_call) => {
+                        Some(operation_from_tool_call(&tool_call).invocation)
+                    }
+                    _ => None,
+                });
             let invocation = invocation.as_ref();
             let command = invocation.and_then(|invocation| {
                 invocation
@@ -2870,10 +2869,7 @@ impl SessionManager {
             let tool_part = session
                 .part_mut(&tool_part_ref)
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-            if matches!(
-                tool_part.state,
-                PartState::Pending | PartState::InProgress
-            ) {
+            if matches!(tool_part.state, PartState::Pending | PartState::InProgress) {
                 tool_part.state = PartState::InProgress;
             }
             if let Ok(TypedContent::ToolCall(tool_call)) =
@@ -2908,13 +2904,8 @@ impl SessionManager {
         // the in-memory title change is written through the facade, which is
         // the single write path for streamed content. There is no separate
         // content-node title column to target.
-        self.persist_session_changes(
-            session,
-            vec![pending_tool.part.part_id],
-            None,
-            state,
-        )
-        .await
+        self.persist_session_changes(session, vec![pending_tool.part.part_id], None, state)
+            .await
     }
 
     /// Persist a bounded preview of the streamed output into the Operation at
@@ -2961,13 +2952,8 @@ impl SessionManager {
             ))
             .expect("operation content is always JSON serializable");
         }
-        self.persist_session_changes(
-            session,
-            vec![pending_tool.part.part_id],
-            None,
-            state,
-        )
-        .await
+        self.persist_session_changes(session, vec![pending_tool.part.part_id], None, state)
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_success(

@@ -353,13 +353,13 @@ mod interactive_request_visibility_tests {
 }
 
 macro_rules! api_message_part {
-    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, PartContent::text($text:expr $(,)?) $(,)?) => {
+    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, FixturePart::text($text:expr $(,)?) $(,)?) => {
         crate::TranscriptFixture::text_part($id, $message_id, $created_at, $status, $text)
     };
-    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, PartContent::Reasoning($reasoning:expr) $(,)?) => {
+    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, FixturePart::Reasoning($reasoning:expr) $(,)?) => {
         crate::TranscriptFixture::reasoning_part($id, $message_id, $created_at, $status, $reasoning)
     };
-    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, PartContent::Text($text_part:expr) $(,)?) => {{
+    ($id:expr, $message_id:expr, $created_at:expr, $status:expr, FixturePart::Text($text_part:expr) $(,)?) => {{
         let text_part = $text_part;
         crate::TranscriptFixture::text_part_with_flags(
             $id,
@@ -1236,7 +1236,7 @@ mod transcript_mouse_scroll_tests {
     }
 
     use super::super::{
-        RunResource, RunRole, RunStatus, PendingUserMessage, TranscriptMoveDirection,
+        PendingUserMessage, RunResource, RunRole, RunStatus, TranscriptMoveDirection,
         TranscriptNodeKey, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
     };
 
@@ -1361,7 +1361,7 @@ mod transcript_mouse_scroll_tests {
                 id,
                 now,
                 ExecutionStatus::Completed,
-                PartContent::text(text),
+                FixturePart::text(text),
             )]),
         };
         let long_text = |prefix: &str| {
@@ -1435,7 +1435,7 @@ mod transcript_mouse_scroll_tests {
                     1,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "first paragraph contains enough words to wrap across several rendered lines while remaining one markdown block\n\nsecond paragraph",
                     ),
                 )]),
@@ -1564,7 +1564,7 @@ mod transcript_mouse_scroll_tests {
                     1,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "a deliberately long markdown paragraph whose wrapped rows change when the terminal width changes but whose semantic identity must remain stable",
                     ),
                 )]),
@@ -1604,8 +1604,8 @@ mod transcript_paging_tests {
     use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        RunResource, RunRole, RunStatus, PendingUserMessage, TranscriptNodeKey,
-        TranscriptState, TranscriptTextPosition, Utc,
+        PendingUserMessage, RunResource, RunRole, RunStatus, TranscriptNodeKey, TranscriptState,
+        TranscriptTextPosition, Utc,
     };
 
     fn pending_document(text: String) -> ComposerDocument {
@@ -1757,7 +1757,7 @@ mod transcript_paging_tests {
             18,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec![
                     (0..40)
                         .map(|line| format!("deep thought line {line}"))
@@ -1902,14 +1902,11 @@ mod transcript_paging_tests {
 #[cfg(test)]
 mod transcript_activity_copy_tests {
     use super::super::{
-        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptNodeKey,
-        TranscriptState, TranscriptTextPosition, TranscriptVisualSelectionMode, Utc,
+        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptNodeKey, TranscriptState,
+        TranscriptTextPosition, TranscriptVisualSelectionMode, Utc,
     };
 
-    fn reasoning_activity(
-        message_id: i64,
-        part_id: i64,
-    ) -> agena_api::part::PartResource {
+    fn reasoning_activity(message_id: i64, part_id: i64) -> agena_api::part::PartResource {
         crate::TranscriptFixture::reasoning_part(
             part_id,
             message_id,
@@ -1927,9 +1924,7 @@ mod transcript_activity_copy_tests {
         (51..59).map(|part| reasoning_activity(19, part)).collect()
     }
 
-    fn folded_run_transcript(
-        parts: Vec<agena_api::part::PartResource>,
-    ) -> TranscriptState {
+    fn folded_run_transcript(parts: Vec<agena_api::part::PartResource>) -> TranscriptState {
         TranscriptState {
             session_id: Some(7),
             messages: vec![RunResource {
@@ -2183,7 +2178,7 @@ mod transcript_expansion_tests {
             message_id,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec!["first line\nsecond line\nthird line".to_string()],
                 raw_content: Vec::new(),
                 encrypted_content: None,
@@ -2259,7 +2254,7 @@ mod transcript_expansion_tests {
             message_id,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec![body.clone()],
                 raw_content: Vec::new(),
                 encrypted_content: None,
@@ -2328,14 +2323,14 @@ mod transcript_expansion_tests {
             17,
             now,
             ExecutionStatus::Completed,
-            PartContent::text("one\n\ntwo\n\nthree\n\nfour\n\nfive"),
+            FixturePart::text("one\n\ntwo\n\nthree\n\nfour\n\nfive"),
         );
         let activity = api_message_part!(
             24,
             18,
             now,
             ExecutionStatus::Completed,
-            PartContent::Reasoning(ReasoningPart {
+            FixturePart::Reasoning(ReasoningPart {
                 summary: vec!["first line\nsecond line\nthird line".to_string()],
                 raw_content: Vec::new(),
                 encrypted_content: None,
@@ -2427,7 +2422,7 @@ mod transcript_expansion_tests {
                 id,
                 now,
                 ExecutionStatus::Completed,
-                PartContent::text(text),
+                FixturePart::text(text),
             )]),
         };
         let mut transcript = TranscriptState {
@@ -2545,7 +2540,7 @@ mod transcript_expansion_tests {
                     10,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "before\n\n```rust\nlet first = \"abcdefghijklmnopqrstuvwxyz\";\nlet second = 2;\n```\n\nafter",
                     ),
                 )]),
@@ -2685,7 +2680,7 @@ mod transcript_expansion_tests {
                     10,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(
+                    FixturePart::text(
                         "before\n\n| name | value |\n| --- | ---: |\n| answer | 42 |\n\nafter",
                     ),
                 )]),
@@ -2799,7 +2794,7 @@ mod transcript_expansion_tests {
                 id,
                 now,
                 ExecutionStatus::Completed,
-                PartContent::text(text),
+                FixturePart::text(text),
             )]),
         };
         let mut transcript = TranscriptState {
@@ -2912,7 +2907,7 @@ mod transcript_expansion_tests {
                     12,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(aligned),
+                    FixturePart::text(aligned),
                 )]),
             }],
             ..TranscriptState::default()
@@ -2992,7 +2987,7 @@ mod transcript_expansion_tests {
                     13,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(source),
+                    FixturePart::text(source),
                 )]),
             }],
             ..TranscriptState::default()
@@ -3070,7 +3065,7 @@ mod transcript_expansion_tests {
                     14,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(source),
+                    FixturePart::text(source),
                 )]),
             }],
             ..TranscriptState::default()
@@ -3120,7 +3115,7 @@ mod transcript_expansion_tests {
                     15,
                     now,
                     ExecutionStatus::Completed,
-                    PartContent::text(concat!(
+                    FixturePart::text(concat!(
                         "$$\n",
                         "\\begin{aligned}\n",
                         "\\lim_{x \\to 0} \\frac{e^x - 1 - x}{x^2}\n",

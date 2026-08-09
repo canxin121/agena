@@ -17,20 +17,17 @@ use base64::Engine as _;
 use serde::Deserialize;
 
 use crate::ProviderError;
-use agena_domain::{
-    ExecutionStatus, ReasoningPart, Role, StructuredObject, TimeRange, ToolApiFunction,
-    ToolInvocation,
-};
+use agena_domain::{ExecutionStatus, ReasoningPart, Role, ToolApiFunction, ToolInvocation};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
-    CompletionInputRun, CompletionInputPart, CompletionInputProviderState, ModelToolFunction,
+    CompletionInputPart, CompletionInputProviderState, CompletionInputRun, ModelToolFunction,
 };
 use agena_runtime_contracts::part::{
-    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, OperationPart,
-    SkillReference, SkillReferencePart,
+    AttachmentItem, AttachmentKind, AttachmentSource, OperationPart,
 };
 use agena_runtime_contracts::part_content::{
-    TypedContent, decode, FileRefContent, SkillRefContent, ThinkContent, ToolCallContent,
+    ThinkContent, TypedContent, attachment_from_file_ref, decode, operation_from_tool_call,
+    skill_reference_from_skill_ref,
 };
 use agena_runtime_contracts::provider_state::PartProviderState;
 use agena_storage::store::{Part, PartRole};
@@ -123,144 +120,10 @@ fn project_operation_call_id(exec: &OperationPart) -> String {
 //
 // The v1 payload structs (`OperationPart`, `AttachmentPart`, `SkillReferencePart`,
 // `ReasoningPart`) survive the T8 migration — they ride losslessly in the typed
-// content's `extra` bucket and are recovered here. The contracts equivalents in
-// the contracts `part_content` module are private until T8 stage 4 (which
-// re-signs them `pub` and `&`-taking); these local mirrors keep the provider
-// independent of the v1 two-arm content enum and its typed fold, so stage 4 can
-// delete those unhindered.
-
-/// Rebuild a v1 [`OperationPart`] from the canonical `tool_call` shape,
-/// restoring the full payload from `extra["operation"]` and falling back to a
-/// pending operation built from the canonical invocation identity.
-fn operation_from_tool_call(part: &ToolCallContent) -> OperationPart {
-    if let Some(operation) = part
-        .extra
-        .get("operation")
-        .and_then(|value| serde_json::from_value::<OperationPart>(value.clone()).ok())
-    {
-        return operation;
-    }
-    let invocation = ToolInvocation {
-        tool_api_call: part
-            .extra
-            .get("tool_api_call")
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        name: part.name.clone(),
-        plugin_name: part.plugin.clone(),
-        input: StructuredObject::try_from(part.input.clone()).unwrap_or_default(),
-    };
-    let call_id = part
-        .extra
-        .get("call_id")
-        .and_then(serde_json::Value::as_i64)
-        .unwrap_or(0);
-    OperationPart::pending(call_id, invocation, "", TimeRange::default())
-}
-
-/// Rebuild a v1 [`AttachmentPart`] from the canonical `file_ref` shape,
-/// preferring the lossless `extra["attachments"]` list and otherwise
-/// reconstructing a single item from the named keys + extended keys.
-fn attachment_from_file_ref(part: &FileRefContent) -> AttachmentPart {
-    if let Some(items) = part
-        .extra
-        .get("attachments")
-        .and_then(|value| serde_json::from_value::<Vec<AttachmentItem>>(value.clone()).ok())
-    {
-        return AttachmentPart { attachments: items };
-    }
-    let kind = part
-        .extra
-        .get("kind")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| {
-            serde_json::from_value::<AttachmentKind>(serde_json::Value::String(value.to_owned()))
-                .ok()
-        })
-        .unwrap_or(AttachmentKind::File);
-    let source = attachment_source_from_file_ref(part);
-    AttachmentPart {
-        attachments: vec![AttachmentItem {
-            kind,
-            mime: part.mime.clone().unwrap_or_default(),
-            source,
-            filename: part.name.clone(),
-            title: part
-                .extra
-                .get("title")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
-            size_bytes: part.extra.get("size_bytes").and_then(serde_json::Value::as_u64),
-            sha256: part.sha.clone(),
-            width: part
-                .extra
-                .get("width")
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32),
-            height: part
-                .extra
-                .get("height")
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32),
-            duration_ms: part.extra.get("duration_ms").and_then(serde_json::Value::as_u64),
-            page_count: part
-                .extra
-                .get("page_count")
-                .and_then(serde_json::Value::as_u64)
-                .map(|v| v as u32),
-        }],
-    }
-}
-
-/// Rebuild an [`AttachmentSource`] from the canonical `file_ref` named keys
-/// and extended keys (`url`, `data_url`, `base64`, `file_id`, `path`).
-fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSource {
-    let extra = &part.extra;
-    if let Some(url) = extra.get("url").and_then(serde_json::Value::as_str) {
-        return AttachmentSource::Url {
-            url: url.to_owned(),
-        };
-    }
-    if let Some(url) = extra.get("data_url").and_then(serde_json::Value::as_str) {
-        return AttachmentSource::DataUrl {
-            url: url.to_owned(),
-        };
-    }
-    if let Some(data) = extra.get("base64").and_then(serde_json::Value::as_str) {
-        return AttachmentSource::Base64 {
-            data: data.to_owned(),
-        };
-    }
-    if let Some(file_id) = extra.get("file_id").and_then(serde_json::Value::as_str) {
-        return AttachmentSource::FileId {
-            file_id: file_id.to_owned(),
-        };
-    }
-    if let Some(path) = part.path.as_deref() {
-        return AttachmentSource::LocalPath {
-            path: path.to_owned(),
-        };
-    }
-    if let Some(source) = extra
-        .get("source")
-        .and_then(|value| serde_json::from_value::<AttachmentSource>(value.clone()).ok())
-    {
-        return source;
-    }
-    AttachmentSource::LocalPath {
-        path: String::new(),
-    }
-}
-
-/// Rebuild a v1 [`SkillReferencePart`] from `extra["skills"]` (empty when the
-/// snapshot is missing or does not match the v1 shape).
-fn skill_reference_from_skill_ref(part: &SkillRefContent) -> SkillReferencePart {
-    let skills = part
-        .extra
-        .get("skills")
-        .and_then(|value| serde_json::from_value::<Vec<SkillReference>>(value.clone()).ok())
-        .unwrap_or_default();
-    SkillReferencePart { skills }
-}
+// content's `extra` bucket and are recovered through the public extractor
+// helpers in `agena_runtime_contracts::part_content`
+// (`operation_from_tool_call`, `attachment_from_file_ref`,
+// `skill_reference_from_skill_ref`, …).
 
 /// Rebuild the reasoning text the v1 [`ReasoningPart`] prefers from the
 /// canonical `think` shape (summary wins, raw content otherwise).
@@ -551,7 +414,9 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
     }
 }
 
-fn completion_input_provider_state(value: &serde_json::Value) -> Option<CompletionInputProviderState> {
+fn completion_input_provider_state(
+    value: &serde_json::Value,
+) -> Option<CompletionInputProviderState> {
     serde_json::from_value::<PartProviderState>(value.clone())
         .ok()
         .map(Into::into)
@@ -583,9 +448,11 @@ pub fn validate_provider_native_tool_history(parts: &[Part]) -> Result<(), Provi
         if operation.is_provider_only() {
             continue;
         }
-        model_tool_function_for_invocation(operation.invocation()).map_err(|reason| ProviderError::Internal(format!(
-            "invalid provider tool history at parts[{part_index}]: {reason}"
-        )))?;
+        model_tool_function_for_invocation(operation.invocation()).map_err(|reason| {
+            ProviderError::Internal(format!(
+                "invalid provider tool history at parts[{part_index}]: {reason}"
+            ))
+        })?;
     }
     Ok(())
 }
@@ -1477,8 +1344,8 @@ mod tests {
             StructuredObject::default(),
         ));
 
-        let error =
-            validate_provider_native_tool_history(&[part]).expect_err("execution-tool call must fail");
+        let error = validate_provider_native_tool_history(&[part])
+            .expect_err("execution-tool call must fail");
         assert!(
             error
                 .to_string()
@@ -1498,8 +1365,7 @@ mod tests {
         });
         let part = assistant_operation(invocation);
 
-        let error =
-            validate_provider_native_tool_history(&[part]).expect_err("mismatch must fail");
+        let error = validate_provider_native_tool_history(&[part]).expect_err("mismatch must fail");
         assert!(
             error
                 .to_string()

@@ -1,7 +1,6 @@
 //! The retained "everything is a part" model, at contracts top level.
 
 mod attachment;
-mod content;
 mod hook;
 mod interaction;
 mod notice;
@@ -9,7 +8,6 @@ mod skill_reference;
 mod tool;
 
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
-pub use content::{PartContent, RuntimeActivity};
 pub use hook::HookPart;
 pub use interaction::{InteractiveRequestPart, RequestPart};
 pub use notice::NoticePart;

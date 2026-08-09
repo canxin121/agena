@@ -9,8 +9,8 @@
 use agena_domain::{DoomLoopHit, DoomLoopPolicy, ToolInvocation};
 use agena_storage::store::{Part, PartRole};
 
-use crate::session::store::{operation_from_tool_call, typed_content_from_value};
-use agena_runtime_contracts::part_content::TypedContent;
+use crate::session::store::typed_content_from_value;
+use agena_runtime_contracts::part_content::{TypedContent, operation_from_tool_call};
 
 /// Walk `parts` from the tail forward and detect a run of identical
 /// assistant tool invocations. Only assistant-role `Operation` parts

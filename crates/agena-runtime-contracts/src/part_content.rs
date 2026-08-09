@@ -2,13 +2,11 @@
 //!
 //! The v2 `parts` table stores every chat entity as a row with a `kind`
 //! column and a canonical JSON payload on `parts.content` (design 4.1.1).
-//! The execution engine still operates on the v1 [`PartContent`] vocabulary
-//! (that module is removed in R6), so this module is the typed contract
-//! between the two: one struct per kind whose named fields are the canonical
-//! keys (4.1.1) plus the extended keys (19.4), and a lossless `extra` bucket
-//! (`#[serde(flatten)]`) that captures every key this crate does not name, so
-//! a round-trip never drops data even when a producer writes richer payloads
-//! than the canonical spec lists.
+//! This module is the single content model: one struct per kind whose named
+//! fields are the canonical keys (4.1.1) plus the extended keys (19.4), and a
+//! lossless `extra` bucket (`#[serde(flatten)]`) that captures every key this
+//! crate does not name, so a round-trip never drops data even when a producer
+//! writes richer payloads than the canonical spec lists.
 //!
 //! Decoding is deliberately lenient ("reload 宁缺勿崩"): every named field is
 //! `#[serde(default)]`, so a payload missing canonical keys decodes to its
@@ -27,19 +25,15 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use agena_domain::{
-    ErrorPart, ReasoningPart, StructuredObject, TextPart, TimeRange, ToolInvocation,
-    UserInputReply, UserInputRequest,
-};
+use agena_domain::{StructuredObject, TimeRange, ToolInvocation, UserInputReply, UserInputRequest};
 use agena_failure::{
     FailureCategory, FailureCode, FailureId, FailureImpact, FailureResponsibility,
     RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
 };
 
 use crate::part::{
-    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, HookPart,
-    InteractiveRequestPart, NoticePart, OperationPart, PartContent, RequestPart, RuntimeActivity,
-    SkillReference, SkillReferencePart,
+    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, InteractiveRequestPart,
+    NoticePart, OperationPart, RequestPart, SkillReference, SkillReferencePart,
 };
 
 fn is_false(value: &bool) -> bool {
@@ -54,7 +48,10 @@ where
     T: for<'de> Deserialize<'de>,
 {
     if !value.is_object() {
-        return Err(format!("{kind} content must be a JSON object, got {}", value));
+        return Err(format!(
+            "{kind} content must be a JSON object, got {}",
+            value
+        ));
     }
     serde_json::from_value(value.clone()).map_err(|error| format!("decode {kind} content: {error}"))
 }
@@ -523,84 +520,13 @@ pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Typed → v1 PartContent rebuild (decode direction)
+// Rich v1 payload extractors (recover the full v1 structs from `extra`)
 // ---------------------------------------------------------------------------
-
-/// Decode a part's canonical JSON payload directly into the execution-engine
-/// [`PartContent`], dispatching on the `kind` column and rebuilding the v1
-/// payload through [`part_content_from_typed`].
-///
-/// This is the provider-facing entry point for projecting persisted parts:
-/// a storage row's `(kind, content)` becomes the same rich [`PartContent`]
-/// the session reload path builds, so projections behave identically whether
-/// they consume v1 messages or v2 parts.
-pub fn decode_part_content(kind: &str, value: &Value) -> Result<PartContent, String> {
-    let typed = decode(kind, value)?;
-    Ok(part_content_from_typed(typed))
-}
-
-/// Rebuild the execution-engine [`PartContent`] from a decoded typed payload.
-///
-/// The rebuild is lossless for every v1 variant the engine still reads its
-/// rich fields from (the v1 payload is preserved verbatim in the typed
-/// struct's `extra` bucket). Kinds the v1 vocabulary has no representation
-/// for (`paste_ref`, `tool_result`, `compaction`, `run`) degrade to a text
-/// part rather than fail the reload (design principle: reload 宁缺勿崩). Run
-/// markers are handled as the message marker by the caller and never reach
-/// this path — that arm is purely defensive.
-pub fn part_content_from_typed(typed: TypedContent) -> PartContent {
-    match typed {
-        TypedContent::Text(part) => PartContent::Text(TextPart {
-            text: part.text,
-            synthetic: part.synthetic,
-        }),
-        TypedContent::Think(part) => PartContent::Activity(RuntimeActivity::Reasoning(
-            ReasoningPart {
-                summary: part.summary,
-                raw_content: part.raw,
-                encrypted_content: part.encrypted_content,
-            },
-        )),
-        TypedContent::ToolCall(part) => {
-            PartContent::Activity(RuntimeActivity::Operation(operation_from_tool_call(part)))
-        }
-        TypedContent::FileRef(part) => {
-            PartContent::Activity(RuntimeActivity::Resource(attachment_from_file_ref(part)))
-        }
-        TypedContent::SkillRef(part) => PartContent::Activity(RuntimeActivity::SkillReference(
-            skill_reference_from_skill_ref(part),
-        )),
-        TypedContent::Notice(part) => PartContent::Activity(RuntimeActivity::Notice(NoticePart {
-            kind: part.kind,
-            summary: part.summary,
-            detail: part.detail,
-            title: part.title,
-        })),
-        TypedContent::Hook(part) => PartContent::Activity(RuntimeActivity::Hook(HookPart {
-            hook: part.hook,
-            plugin_id: part.plugin_id,
-            summary: part.summary,
-            detail: part.detail,
-        })),
-        TypedContent::Error(part) => {
-            PartContent::Activity(RuntimeActivity::Error(ErrorPart {
-                problem: user_problem_from_error(part),
-            }))
-        }
-        TypedContent::Interaction(part) => {
-            PartContent::Activity(RuntimeActivity::Interaction(interaction_from_content(part)))
-        }
-        TypedContent::Run(_) => PartContent::text(String::new()),
-        TypedContent::PasteRef(part) => PartContent::text(part.text),
-        TypedContent::ToolResult(part) => PartContent::text(part.output),
-        TypedContent::Compaction(part) => PartContent::text(part.summary.unwrap_or_default()),
-    }
-}
 
 /// Rebuild a v1 [`OperationPart`] from the canonical `tool_call` shape,
 /// restoring the full payload from `extra["operation"]` and falling back to a
 /// pending operation built from the canonical invocation identity.
-fn operation_from_tool_call(part: ToolCallContent) -> OperationPart {
+pub fn operation_from_tool_call(part: &ToolCallContent) -> OperationPart {
     if let Some(operation) = part
         .extra
         .get("operation")
@@ -613,18 +539,22 @@ fn operation_from_tool_call(part: ToolCallContent) -> OperationPart {
             .extra
             .get("tool_api_call")
             .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        name: part.name,
-        plugin_name: part.plugin,
-        input: StructuredObject::try_from(part.input).unwrap_or_default(),
+        name: part.name.clone(),
+        plugin_name: part.plugin.clone(),
+        input: StructuredObject::try_from(part.input.clone()).unwrap_or_default(),
     };
-    let call_id = part.extra.get("call_id").and_then(Value::as_i64).unwrap_or(0);
+    let call_id = part
+        .extra
+        .get("call_id")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
     OperationPart::pending(call_id, invocation, "", TimeRange::default())
 }
 
 /// Rebuild a v1 [`AttachmentPart`] from the canonical `file_ref` shape,
 /// preferring the lossless `extra["attachments"]` list and otherwise
 /// reconstructing a single item from the named keys + extended keys.
-fn attachment_from_file_ref(part: FileRefContent) -> AttachmentPart {
+pub fn attachment_from_file_ref(part: &FileRefContent) -> AttachmentPart {
     if let Some(items) = part
         .extra
         .get("attachments")
@@ -640,17 +570,25 @@ fn attachment_from_file_ref(part: FileRefContent) -> AttachmentPart {
             serde_json::from_value::<AttachmentKind>(Value::String(value.to_owned())).ok()
         })
         .unwrap_or(AttachmentKind::File);
-    let source = attachment_source_from_file_ref(&part);
+    let source = attachment_source_from_file_ref(part);
     AttachmentPart {
         attachments: vec![AttachmentItem {
             kind,
-            mime: part.mime.unwrap_or_default(),
+            mime: part.mime.clone().unwrap_or_default(),
             source,
-            filename: part.name,
-            title: part.extra.get("title").and_then(Value::as_str).map(str::to_owned),
+            filename: part.name.clone(),
+            title: part
+                .extra
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             size_bytes: part.extra.get("size_bytes").and_then(Value::as_u64),
-            sha256: part.sha,
-            width: part.extra.get("width").and_then(Value::as_u64).map(|v| v as u32),
+            sha256: part.sha.clone(),
+            width: part
+                .extra
+                .get("width")
+                .and_then(Value::as_u64)
+                .map(|v| v as u32),
             height: part
                 .extra
                 .get("height")
@@ -668,7 +606,7 @@ fn attachment_from_file_ref(part: FileRefContent) -> AttachmentPart {
 
 /// Rebuild an [`AttachmentSource`] from the canonical `file_ref` named keys
 /// and extended keys (`url`, `data_url`, `base64`, `file_id`, `path`).
-fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSource {
+pub fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSource {
     let extra = &part.extra;
     if let Some(url) = extra.get("url").and_then(Value::as_str) {
         return AttachmentSource::Url {
@@ -708,7 +646,7 @@ fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSource {
 
 /// Rebuild a v1 [`SkillReferencePart`] from `extra["skills"]` (empty when the
 /// snapshot is missing or does not match the v1 shape).
-fn skill_reference_from_skill_ref(part: SkillRefContent) -> SkillReferencePart {
+pub fn skill_reference_from_skill_ref(part: &SkillRefContent) -> SkillReferencePart {
     let skills = part
         .extra
         .get("skills")
@@ -720,7 +658,7 @@ fn skill_reference_from_skill_ref(part: SkillRefContent) -> SkillReferencePart {
 /// Rebuild a v1 [`agena_failure::UserProblem`] from the canonical `error`
 /// shape, preferring the lossless `extra["problem"]` object and otherwise
 /// constructing a minimal problem from the named keys.
-fn user_problem_from_error(part: ErrorContent) -> UserProblem {
+pub fn user_problem_from_error(part: &ErrorContent) -> UserProblem {
     if let Some(problem) = part
         .extra
         .get("problem")
@@ -743,8 +681,11 @@ fn user_problem_from_error(part: ErrorContent) -> UserProblem {
         recovery: RecoveryDirective::None,
         impact: FailureImpact::OperationFailed,
         user: UserPresentation {
-            key: part.category.unwrap_or_else(|| "runtime-error".to_owned()),
-            fallback: part.message,
+            key: part
+                .category
+                .clone()
+                .unwrap_or_else(|| "runtime-error".to_owned()),
+            fallback: part.message.clone(),
             detail_key: None,
         },
     }
@@ -753,7 +694,7 @@ fn user_problem_from_error(part: ErrorContent) -> UserProblem {
 /// Rebuild a v1 [`RequestPart`] from the canonical `interaction` shape,
 /// preferring the lossless `extra["request"]`/`extra["reply"]` objects and
 /// otherwise reconstructing from the named display keys.
-fn interaction_from_content(part: InteractionContent) -> RequestPart {
+pub fn interaction_from_content(part: &InteractionContent) -> RequestPart {
     let extra = &part.extra;
     let request = extra
         .get("request")
@@ -781,6 +722,16 @@ fn interaction_from_content(part: InteractionContent) -> RequestPart {
                 .and_then(|value| serde_json::from_value::<UserInputReply>(value.clone()).ok())
         });
     RequestPart::UserInput(InteractiveRequestPart { request, reply })
+}
+
+/// Rebuild a v1 [`NoticePart`] from the canonical `notice` shape.
+pub fn notice_part_from_notice_content(part: &NoticeContent) -> NoticePart {
+    NoticePart {
+        kind: part.kind.clone(),
+        summary: part.summary.clone(),
+        detail: part.detail.clone(),
+        title: part.title.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -964,7 +915,10 @@ mod tests {
         assert_eq!(back.prompt.as_deref(), Some("Pick an option"));
         assert_eq!(back.extra["request"]["session_id"], json!(7));
         assert_eq!(back.extra["reply"]["kind"], json!("submit"));
-        assert_eq!(back.response.as_ref().unwrap()["answers"]["q1"], json!(["A"]));
+        assert_eq!(
+            back.response.as_ref().unwrap()["answers"]["q1"],
+            json!(["A"])
+        );
     }
 
     #[test]
@@ -998,8 +952,27 @@ mod tests {
     }
 
     #[test]
+    fn notice_part_rebuilt_from_canonical_shape() {
+        let content = NoticeContent {
+            kind: "hook.completed".to_owned(),
+            summary: "Hook ran".to_owned(),
+            detail: Some("details".to_owned()),
+            title: Some("Title".to_owned()),
+            extra: Default::default(),
+        };
+        let part = notice_part_from_notice_content(&content);
+        assert_eq!(part.kind, "hook.completed");
+        assert_eq!(part.summary, "Hook ran");
+        assert_eq!(part.detail.as_deref(), Some("details"));
+        assert_eq!(part.title.as_deref(), Some("Title"));
+    }
+
+    #[test]
     fn decode_dispatches_by_kind_and_rejects_unknown() {
-        assert!(matches!(decode("text", &json!({"text": "x"})), Ok(TypedContent::Text(_))));
+        assert!(matches!(
+            decode("text", &json!({"text": "x"})),
+            Ok(TypedContent::Text(_))
+        ));
         assert!(matches!(
             decode("interaction", &json!({"type": "permission"})),
             Ok(TypedContent::Interaction(_))
@@ -1008,6 +981,9 @@ mod tests {
         // Non-object payloads are the only hard decode failure.
         assert!(decode("text", &json!("not an object")).is_err());
         // A known kind with a completely empty object still decodes (all defaults).
-        assert!(matches!(decode("compaction", &json!({})), Ok(TypedContent::Compaction(_))));
+        assert!(matches!(
+            decode("compaction", &json!({})),
+            Ok(TypedContent::Compaction(_))
+        ));
     }
 }

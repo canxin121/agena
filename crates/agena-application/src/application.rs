@@ -1034,17 +1034,12 @@ fn notification_from_session_change(
     // Storage rows carry the canonical typed JSON keyed by the part's `kind`
     // column (the v1 2-arm encoding is gone), so decode through the contracts
     // dispatcher rather than deserializing a v1 payload.
-    let content =
-        agena_runtime_contracts::part_content::decode(&part.kind, &part.content).ok()?;
+    let content = agena_runtime_contracts::part_content::decode(&part.kind, &part.content).ok()?;
     let agena_runtime_contracts::part_content::TypedContent::Notice(notice) = content else {
         return None;
     };
-    let notice_part = agena_runtime_contracts::NoticePart {
-        kind: notice.kind,
-        summary: notice.summary,
-        detail: notice.detail,
-        title: notice.title,
-    };
+    let notice_part =
+        agena_runtime_contracts::part_content::notice_part_from_notice_content(&notice);
     Some(agena_runtime_notifications::from_notice_part(
         &notice_part,
         NotificationScope::Session(*session_id),

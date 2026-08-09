@@ -2,18 +2,20 @@ use super::{ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
     session::{
-        store::{
-            attachment_from_file_ref, execution_status_from_part_state, interaction_from_content,
-            operation_from_tool_call, parts_into_runs, role_from_part_role,
-            skill_reference_from_skill_ref, timestamp_millis_to_utc, typed_content_from_value,
-            typed_content_to_value, user_problem_from_error, OPERATION_ID_METADATA_KEY,
-        },
         Session, SessionManager,
+        store::{
+            OPERATION_ID_METADATA_KEY, execution_status_from_part_state, parts_into_runs,
+            role_from_part_role, timestamp_millis_to_utc, typed_content_from_value,
+            typed_content_to_value,
+        },
     },
 };
-use agena_runtime_contracts::part_content::TypedContent;
 use agena_domain::{ExecutionStatus, Role, SessionSummary};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
+use agena_runtime_contracts::part_content::{
+    TypedContent, attachment_from_file_ref, interaction_from_content, operation_from_tool_call,
+    skill_reference_from_skill_ref, user_problem_from_error,
+};
 use agena_storage::store::{Part, PartRole};
 
 impl SessionManager {
@@ -404,9 +406,7 @@ fn assistant_reply_snapshot(
 fn canonical_turn_span(session: &Session, user_index: usize) -> std::ops::Range<usize> {
     let runs = parts_into_runs(session.parts());
     let mut end = user_index + 1;
-    while end < runs.len()
-        && runs[end].first().map(|marker| marker.role) != Some(PartRole::User)
-    {
+    while end < runs.len() && runs[end].first().map(|marker| marker.role) != Some(PartRole::User) {
         end += 1;
     }
     user_index..end
@@ -440,14 +440,12 @@ fn assistant_reply_fields(
         if marker.role == PartRole::User {
             continue;
         }
-        reply_id = reply_id.or(
-            marker
-                .content
-                .get("reply_id")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| uuid::Uuid::parse_str(value).ok())
-                .map(agena_domain::AssistantReplyId),
-        );
+        reply_id = reply_id.or(marker
+            .content
+            .get("reply_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+            .map(agena_domain::AssistantReplyId));
         let role = role_from_part_role(marker.role);
         for (index, part) in run.iter().enumerate().skip(1) {
             let decoded = decode_part(part, index as i32)?;
@@ -662,11 +660,9 @@ fn activity_payload_from_part(
                 label: part.summary.clone(),
             })),
         },
-        Some(TypedContent::Think(think)) => {
-            Some(ActivityPayload::Reasoning(ReasoningActivity {
-                content: crate::session::store::reasoning_from_think(think),
-            }))
-        }
+        Some(TypedContent::Think(think)) => Some(ActivityPayload::Reasoning(ReasoningActivity {
+            content: crate::session::store::reasoning_from_think(think),
+        })),
         Some(TypedContent::ToolCall(tool_call)) => {
             let operation = operation_from_tool_call(tool_call);
             // The compact `ToolResult` payload is the only durable tool data.
@@ -758,28 +754,24 @@ fn activity_payload_from_part(
                 aliases: skill.aliases.clone(),
             }))
         }
-        Some(TypedContent::Interaction(interaction)) => {
-            Some(ActivityPayload::Interaction(match interaction_from_content(interaction) {
+        Some(TypedContent::Interaction(interaction)) => Some(ActivityPayload::Interaction(
+            match interaction_from_content(interaction) {
                 crate::part::RequestPart::UserInput(value) => InteractionActivity::UserInput {
                     request: value.request.clone(),
                     reply: value.reply.clone(),
                 },
-            }))
-        }
-        Some(TypedContent::Error(error)) => {
-            Some(ActivityPayload::Error(ErrorActivity {
-                problem: user_problem_from_error(error),
-            }))
-        }
-        Some(TypedContent::Hook(hook)) => {
-            Some(ActivityPayload::Notice(NoticeActivity {
-                kind: "hook".to_owned(),
-                summary: hook.summary.clone(),
-                detail: hook.detail.clone(),
-                occurred_at_ms: None,
-                title: None,
-            }))
-        }
+            },
+        )),
+        Some(TypedContent::Error(error)) => Some(ActivityPayload::Error(ErrorActivity {
+            problem: user_problem_from_error(error),
+        })),
+        Some(TypedContent::Hook(hook)) => Some(ActivityPayload::Notice(NoticeActivity {
+            kind: "hook".to_owned(),
+            summary: hook.summary.clone(),
+            detail: hook.detail.clone(),
+            occurred_at_ms: None,
+            title: None,
+        })),
         Some(TypedContent::Notice(notice)) => Some(ActivityPayload::Notice(NoticeActivity {
             kind: notice.kind.clone(),
             summary: notice.summary.clone(),
@@ -820,8 +812,7 @@ fn pending_interactive_requests_from_session(
             continue;
         };
         for permission in operation.authorization.awaiting() {
-            let request =
-                agena_domain::PendingInteractiveRequest::from(permission.request.clone());
+            let request = agena_domain::PendingInteractiveRequest::from(permission.request.clone());
             if seen.insert(format!("{:?}:{}", request.kind(), request.request_id())) {
                 requests.push(request);
             }
@@ -834,13 +825,9 @@ fn pending_interactive_requests_from_session(
         if part.content.get("kind").and_then(serde_json::Value::as_str) == Some("permission") {
             continue;
         }
-        let Some(request) = part
-            .content
-            .get("request")
-            .and_then(|value| {
-                serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
-            })
-        else {
+        let Some(request) = part.content.get("request").and_then(|value| {
+            serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
+        }) else {
             continue;
         };
         let request = agena_domain::PendingInteractiveRequest::from(request);
@@ -870,7 +857,11 @@ impl agena_runtime::SessionQueryService for SessionManager {
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
         let workflow_state = session.workflow_state();
-        let message_count = session.parts().iter().filter(|part| part.is_run_marker()).count();
+        let message_count = session
+            .parts()
+            .iter()
+            .filter(|part| part.is_run_marker())
+            .count();
         Ok(agena_runtime::SessionPresentation {
             id: session.id,
             parent_id: session.parent_id,
@@ -1232,11 +1223,9 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
     // (including denial outcomes) is reconstructed from the rich content.
     let status = match &content {
         TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call).status(),
-        TypedContent::Interaction(interaction) => {
-            match interaction_from_content(interaction) {
-                crate::part::RequestPart::UserInput(request) => request.status(),
-            }
-        }
+        TypedContent::Interaction(interaction) => match interaction_from_content(interaction) {
+            crate::part::RequestPart::UserInput(request) => request.status(),
+        },
         _ => execution_status_from_part_state(part.state),
     };
     // Recover the provider operation id stashed by the tool-call serialization
@@ -1296,11 +1285,9 @@ fn part_name_from_content(content: &TypedContent) -> Option<String> {
         TypedContent::SkillRef(_) => Some("skill_reference".to_string()),
         TypedContent::Error(error) => Some(user_problem_from_error(error).code.to_string()),
         TypedContent::FileRef(_) => Some("resource".to_string()),
-        TypedContent::Interaction(interaction) => {
-            match interaction_from_content(interaction) {
-                crate::part::RequestPart::UserInput(_) => Some("user_input".to_string()),
-            }
-        }
+        TypedContent::Interaction(interaction) => match interaction_from_content(interaction) {
+            crate::part::RequestPart::UserInput(_) => Some("user_input".to_string()),
+        },
         TypedContent::Hook(hook) => Some(format!("hook:{}", hook.hook)),
         TypedContent::Notice(_) => Some("notice".to_string()),
         TypedContent::Run(_)
@@ -1349,41 +1336,31 @@ fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjecte
             text: value.text.clone(),
             synthetic: value.synthetic,
         },
-        TypedContent::Think(value) => {
-            agena_runtime::SessionProjectedPartDetail::Reasoning {
-                summary: value.summary.clone(),
-                raw_content: value.raw.clone(),
-                encrypted_content: value.encrypted_content.clone(),
-            }
-        }
-        TypedContent::Error(value) => {
-            agena_runtime::SessionProjectedPartDetail::Error {
-                problem: user_problem_from_error(value),
-            }
-        }
+        TypedContent::Think(value) => agena_runtime::SessionProjectedPartDetail::Reasoning {
+            summary: value.summary.clone(),
+            raw_content: value.raw.clone(),
+            encrypted_content: value.encrypted_content.clone(),
+        },
+        TypedContent::Error(value) => agena_runtime::SessionProjectedPartDetail::Error {
+            problem: user_problem_from_error(value),
+        },
         TypedContent::FileRef(value) => {
-            agena_runtime::SessionProjectedPartDetail::Attachment(
-                attachment_from_file_ref(value),
-            )
+            agena_runtime::SessionProjectedPartDetail::Attachment(attachment_from_file_ref(value))
         }
         TypedContent::SkillRef(value) => agena_runtime::SessionProjectedPartDetail::SkillReference(
             skill_reference_from_skill_ref(value),
         ),
-        TypedContent::Interaction(value) => {
-            match interaction_from_content(value) {
-                crate::part::RequestPart::UserInput(request) => {
-                    agena_runtime::SessionProjectedPartDetail::UserInputRequest {
-                        request: request.request.clone(),
-                        reply: request.reply.clone(),
-                    }
+        TypedContent::Interaction(value) => match interaction_from_content(value) {
+            crate::part::RequestPart::UserInput(request) => {
+                agena_runtime::SessionProjectedPartDetail::UserInputRequest {
+                    request: request.request.clone(),
+                    reply: request.reply.clone(),
                 }
             }
-        }
-        TypedContent::ToolCall(value) => {
-            agena_runtime::SessionProjectedPartDetail::Operation(Box::new(
-                project_operation_part(&operation_from_tool_call(value)),
-            ))
-        }
+        },
+        TypedContent::ToolCall(value) => agena_runtime::SessionProjectedPartDetail::Operation(
+            Box::new(project_operation_part(&operation_from_tool_call(value))),
+        ),
         TypedContent::Hook(value) => agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
             agena_runtime::SessionProjectedHookPart {
                 hook: value.hook.clone(),

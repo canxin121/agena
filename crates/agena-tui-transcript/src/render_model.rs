@@ -1,13 +1,13 @@
 //! Transcript render model: lines, blocks, and layout.
 
 use agena_api::{
-    message_part::{
-        MessageAttachmentPartResource, MessageErrorPartResource, MessageHookPartResource,
-        MessagePartDetailResource, MessageReasoningPartResource, MessageRequestPartResource,
-        MessageSkillReferencePartResource, MessageTextPartResource, OperationPartResource,
+    part::{
+        AttachmentPartResource, ErrorPartResource, HookPartResource,
+        PartDetailResource, ReasoningPartResource, RequestPartResource,
+        SkillReferencePartResource, TextPartResource, OperationPartResource,
         PartExecutionStatusResource,
     },
-    resource::{MessageResource, MessageRole, MessageStatus},
+    resource::{RunResource, RunRole, RunStatus},
 };
 use agena_domain::{
     ActivityId, ActivityPayload, AssistantReplyId, TextSegmentActivity, TextSegmentId, TurnId,
@@ -72,7 +72,7 @@ pub struct TranscriptEntryPart<'a> {
 /// Content of a transcript part.
 pub enum TranscriptPartContent<'a> {
     UserDocument(TranscriptUserDocument),
-    Text(MessageTextPartResource),
+    Text(TextPartResource),
     Activity(TranscriptActivityContent<'a>),
 }
 
@@ -86,14 +86,14 @@ pub enum TranscriptActivityContent<'a> {
     /// cannot borrow from a synthetic, function-local payload). Renderers
     /// treat it exactly like `Canonical` of a persisted TextSegment.
     TextSegment(Box<TextSegmentActivity>),
-    Reasoning(MessageReasoningPartResource),
-    Attachment(MessageAttachmentPartResource),
-    SkillReference(MessageSkillReferencePartResource),
-    Error(MessageErrorPartResource),
+    Reasoning(ReasoningPartResource),
+    Attachment(AttachmentPartResource),
+    SkillReference(SkillReferencePartResource),
+    Error(ErrorPartResource),
     Operation(Box<OperationPartResource>),
-    Hook(Box<MessageHookPartResource>),
+    Hook(Box<HookPartResource>),
     AssistantReplyLifecycle(TranscriptAssistantReplyLifecycle),
-    Request(Box<MessageRequestPartResource>),
+    Request(Box<RequestPartResource>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,29 +160,29 @@ pub struct TranscriptActivityPresentation {
     /// from this value and cannot accept an arbitrary diagnostic string.
     pub problem: Option<agena_failure::UserProblem>,
 }
-impl From<MessagePartDetailResource> for TranscriptPartContent<'static> {
-    fn from(content: MessagePartDetailResource) -> Self {
+impl From<PartDetailResource> for TranscriptPartContent<'static> {
+    fn from(content: PartDetailResource) -> Self {
         match content {
-            MessagePartDetailResource::Text(value) => Self::Text(value),
-            MessagePartDetailResource::Reasoning(value) => {
+            PartDetailResource::Text(value) => Self::Text(value),
+            PartDetailResource::Reasoning(value) => {
                 Self::Activity(TranscriptActivityContent::Reasoning(value))
             }
-            MessagePartDetailResource::Attachment(value) => {
+            PartDetailResource::Attachment(value) => {
                 Self::Activity(TranscriptActivityContent::Attachment(value))
             }
-            MessagePartDetailResource::SkillReference(value) => {
+            PartDetailResource::SkillReference(value) => {
                 Self::Activity(TranscriptActivityContent::SkillReference(value))
             }
-            MessagePartDetailResource::Error(value) => {
+            PartDetailResource::Error(value) => {
                 Self::Activity(TranscriptActivityContent::Error(value))
             }
-            MessagePartDetailResource::Operation(value) => {
+            PartDetailResource::Operation(value) => {
                 Self::Activity(TranscriptActivityContent::Operation(value))
             }
-            MessagePartDetailResource::Hook(value) => {
+            PartDetailResource::Hook(value) => {
                 Self::Activity(TranscriptActivityContent::Hook(Box::new(value)))
             }
-            MessagePartDetailResource::Request(value) => {
+            PartDetailResource::Request(value) => {
                 Self::Activity(TranscriptActivityContent::Request(value))
             }
         }
@@ -195,14 +195,14 @@ pub struct TranscriptEntry<'a> {
     pub id: TranscriptEntryId,
     /// Message role when this entry is a Turn/Response. Session-owned
     /// activities are top-level Activity entries and therefore have no role.
-    pub role: Option<MessageRole>,
-    pub state: MessageStatus,
+    pub role: Option<RunRole>,
+    pub state: RunStatus,
     pub created_at: DateTime<Utc>,
     pub parts: Vec<TranscriptEntryPart<'a>>,
 }
 
-impl<'a> From<&'a MessageResource> for TranscriptEntry<'a> {
-    fn from(message: &MessageResource) -> Self {
+impl<'a> From<&'a RunResource> for TranscriptEntry<'a> {
+    fn from(message: &RunResource) -> Self {
         Self {
             id: TranscriptEntryId::StoredMessage(message.id),
             role: Some(message.role),

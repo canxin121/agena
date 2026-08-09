@@ -30,11 +30,11 @@ pub(super) fn clear_responses_prompt_cache_hints(input: &mut [OpenAiResponsesInp
 }
 
 pub(super) fn session_text_lossy(
-    message: &agena_provider::CompletionInputMessage,
+    run: &agena_provider::CompletionInputRun,
     projected_parts: &[wire_message::WirePart],
 ) -> String {
     if projected_parts.is_empty() {
-        message.as_text_lossy()
+        run.as_text_lossy()
     } else {
         wire_message::parts_text_lossy(projected_parts)
     }

@@ -1800,7 +1800,7 @@ impl CompletionInputProviderState {
 
 /// A single provider-ready conversation message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct CompletionInputMessage {
+pub struct CompletionInputRun {
     pub role: agena_domain::Role,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<CompletionInputPart>,
@@ -1811,7 +1811,7 @@ pub struct CompletionInputMessage {
     pub provider_state: CompletionInputProviderState,
 }
 
-impl CompletionInputMessage {
+impl CompletionInputRun {
     /// Best-effort plain-text rendering for providers that accept only text.
     /// This is intentionally defined on the provider contract so adapters do
     /// not need to reach back into core message storage for their fallback.
@@ -1836,14 +1836,15 @@ impl CompletionInputMessage {
 }
 
 /// Complete provider execution request. Persisted core messages are projected
-/// into [`CompletionInputMessage`] at the session boundary before this value
+/// into [`CompletionInputRun`] at the session boundary before this value
 /// is constructed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CompletionRequest {
     pub model: ModelId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
-    pub messages: Vec<CompletionInputMessage>,
+    #[serde(rename = "messages")]
+    pub turns: Vec<CompletionInputRun>,
     #[serde(default, skip_serializing_if = "Vec::is_empty", rename = "tools")]
     pub tool_api_functions: Vec<ToolApiDefinition>,
     #[serde(default, skip_serializing_if = "ProviderNativeToolsConfig::is_empty")]

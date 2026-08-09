@@ -623,8 +623,8 @@ fn validate_request_capabilities(
         provider.model_capabilities_for_adapter(model.adapter_id.as_ref(), &model.model_id);
 
     let mut unsupported = Vec::new();
-    for message in &request.messages {
-        for part in wire_message::project(message) {
+    for run in &request.turns {
+        for part in wire_message::project(run) {
             let wire_message::WirePart::Attachment { item } = part else {
                 continue;
             };

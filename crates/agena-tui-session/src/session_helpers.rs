@@ -7,7 +7,7 @@
 use std::ops::Range;
 
 use agena_api::resource::{
-    MessageResource, MessageRole, MessageStatus, SessionExecutionContextResource,
+    RunResource, RunRole, RunStatus, SessionExecutionContextResource,
 };
 use agena_domain::{ModelRef, UserInputQuestion};
 use agena_tui::user_input::UserInputAnswerDraft;
@@ -64,8 +64,8 @@ pub fn execution_model_name_status_label(
         .map(str::to_owned)
 }
 
-pub fn is_rewind_target_message(message: &MessageResource) -> bool {
-    message.role == MessageRole::User && message.state == MessageStatus::Completed
+pub fn is_rewind_target_message(message: &RunResource) -> bool {
+    message.role == RunRole::User && message.state == RunStatus::Completed
 }
 
 pub fn user_input_answer_values(

@@ -4,15 +4,15 @@ use super::{
     CompletionResponse, CompletionUsage, FIRST_PARTY_ANTHROPIC_HOSTS, ModelRuntime, ProviderError,
     Role, Value, anthropic_wire_tool_name, map_anthropic_usage, prompt_cache, utils, wire_message,
 };
-use agena_provider::CompletionInputMessage;
+use agena_provider::CompletionInputRun;
 use agena_provider::ProviderNativeToolKind;
 use agena_provider::ProviderNativeToolRoute;
 
 impl AnthropicAdapter {
     pub(crate) fn thinking_blocks_from_message(
-        message: &CompletionInputMessage,
+        run: &CompletionInputRun,
     ) -> Vec<AnthropicTextBlock> {
-        message
+        run
             .provider_state
             .anthropic_thinking_blocks
             .iter()
@@ -36,17 +36,17 @@ impl AnthropicAdapter {
         utils::aggregate_stream(self.id.as_ref(), fallback_model, stream).await
     }
 
-    pub(crate) fn content_to_blocks(message: &CompletionInputMessage) -> Vec<AnthropicTextBlock> {
-        let projected = wire_message::project(message);
-        Self::blocks_from_projected_parts(message, projected.as_slice())
+    pub(crate) fn content_to_blocks(run: &CompletionInputRun) -> Vec<AnthropicTextBlock> {
+        let projected = wire_message::project(run);
+        Self::blocks_from_projected_parts(run, projected.as_slice())
     }
 
     pub(crate) fn blocks_from_projected_parts(
-        message: &CompletionInputMessage,
+        run: &CompletionInputRun,
         projected: &[wire_message::WirePart],
     ) -> Vec<AnthropicTextBlock> {
         if projected.is_empty() {
-            let text = message.as_text_lossy();
+            let text = run.as_text_lossy();
             if text.is_empty() {
                 return Vec::new();
             }
@@ -90,16 +90,16 @@ impl AnthropicAdapter {
     }
 
     pub(crate) fn assistant_messages_from_parts(
-        message: &CompletionInputMessage,
+        run: &CompletionInputRun,
     ) -> Vec<AnthropicMessage> {
-        let projected = wire_message::project(message);
+        let projected = wire_message::project(run);
         if !projected
             .iter()
             .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
         {
-            let mut content = Self::thinking_blocks_from_message(message);
+            let mut content = Self::thinking_blocks_from_message(run);
             content.extend(Self::blocks_from_projected_parts(
-                message,
+                run,
                 projected.as_slice(),
             ));
             return vec![AnthropicMessage {
@@ -117,7 +117,7 @@ impl AnthropicAdapter {
                     output_json,
                     ..
                 } if !tool_call_id.trim().is_empty() => {
-                    Self::flush_assistant_blocks(message, &mut messages, &mut buffered);
+                    Self::flush_assistant_blocks(run, &mut messages, &mut buffered);
                     Self::push_request_message(
                         &mut messages,
                         AnthropicMessage {
@@ -137,15 +137,15 @@ impl AnthropicAdapter {
                 other => buffered.push(other.clone()),
             }
         }
-        Self::flush_assistant_blocks(message, &mut messages, &mut buffered);
+        Self::flush_assistant_blocks(run, &mut messages, &mut buffered);
 
         messages
     }
 
     pub(crate) fn tool_messages_from_parts(
-        message: &CompletionInputMessage,
+        run: &CompletionInputRun,
     ) -> Vec<AnthropicMessage> {
-        let content = wire_message::project(message)
+        let content = wire_message::project(run)
             .into_iter()
             .filter_map(|part| match part {
                 wire_message::WirePart::ToolResult {
@@ -194,21 +194,21 @@ impl AnthropicAdapter {
     }
 
     pub(crate) fn flush_assistant_blocks(
-        message: &CompletionInputMessage,
+        run: &CompletionInputRun,
         messages: &mut Vec<AnthropicMessage>,
         buffered: &mut Vec<wire_message::WirePart>,
     ) {
         if buffered.is_empty() {
             return;
         }
-        let content = Self::blocks_from_projected_parts(message, buffered.as_slice());
+        let content = Self::blocks_from_projected_parts(run, buffered.as_slice());
         buffered.clear();
         if content.is_empty() {
             return;
         }
         let mut content = content;
-        if !messages.iter().any(|message| message.role == "assistant") {
-            let mut thinking = Self::thinking_blocks_from_message(message);
+        if !messages.iter().any(|run| run.role == "assistant") {
+            let mut thinking = Self::thinking_blocks_from_message(run);
             thinking.append(&mut content);
             content = thinking;
         }
@@ -259,7 +259,7 @@ impl AnthropicAdapter {
     }
 
     pub(crate) fn is_vision_request(request: &CompletionRequest) -> bool {
-        request.messages.iter().any(|message| {
+        request.turns.iter().any(|message| {
             wire_message::project(message).iter().any(|part| {
                 matches!(
                     part,
@@ -271,7 +271,7 @@ impl AnthropicAdapter {
     }
 
     pub(crate) fn initiator(request: &CompletionRequest) -> &'static str {
-        match request.messages.last().map(|m| m.role) {
+        match request.turns.last().map(|m| m.role) {
             Some(Role::User) => "user",
             _ => "agent",
         }
@@ -559,7 +559,7 @@ mod tests {
         let mut request = CompletionRequest {
             model: ModelId::new("claude-test"),
             system: None,
-            messages: Vec::new(),
+            turns: Vec::new(),
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
             disable_tools: false,

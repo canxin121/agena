@@ -20,7 +20,7 @@ mod ui;
 /// only need the marker/content order.
 #[cfg(test)]
 mod parts_fixtures {
-    use agena_api::message_part::MessageErrorPartResource;
+    use agena_api::part::ErrorPartResource;
     use agena_api::resource::SessionTranscriptPart;
 
     pub(super) fn run(part_id: i64, role: &str, state: &str) -> SessionTranscriptPart {
@@ -61,7 +61,7 @@ mod parts_fixtures {
             kind: "error".to_owned(),
             role: role.to_owned(),
             state: "failed".to_owned(),
-            content: serde_json::to_value(MessageErrorPartResource { problem })
+            content: serde_json::to_value(ErrorPartResource { problem })
                 .expect("error part serializes"),
             summary: None,
             created_at_ms: part_id * 10,
@@ -375,23 +375,23 @@ macro_rules! api_message_part {
 #[cfg(test)]
 mod transcript_character_cursor_tests {
     use super::super::{
-        ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptFixture,
+        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptFixture,
         TranscriptMoveDirection, TranscriptState, TranscriptTextPosition, Utc,
     };
     use super::parts_fixtures;
     use unicode_width::UnicodeWidthStr;
 
-    fn message(id: i64, text: &str) -> MessageResource {
-        message_with_role(id, MessageRole::Assistant, text)
+    fn message(id: i64, text: &str) -> RunResource {
+        message_with_role(id, RunRole::Assistant, text)
     }
 
-    fn message_with_role(id: i64, role: MessageRole, text: &str) -> MessageResource {
+    fn message_with_role(id: i64, role: RunRole, text: &str) -> RunResource {
         let now = Utc::now();
-        MessageResource {
+        RunResource {
             id,
             session_id: 7,
             role,
-            state: MessageStatus::Completed,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -1236,7 +1236,7 @@ mod transcript_mouse_scroll_tests {
     }
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptMoveDirection,
+        RunResource, RunRole, RunStatus, PendingUserMessage, TranscriptMoveDirection,
         TranscriptNodeKey, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
     };
 
@@ -1346,11 +1346,11 @@ mod transcript_mouse_scroll_tests {
     #[test]
     fn scrollbar_relocation_collapses_a_block_and_selects_the_directional_edge() {
         let now = Utc::now();
-        let message = |id: i64, text: String| MessageResource {
+        let message = |id: i64, text: String| RunResource {
             id,
             session_id: 7,
-            role: MessageRole::Assistant,
-            state: MessageStatus::Completed,
+            role: RunRole::Assistant,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -1420,11 +1420,11 @@ mod transcript_mouse_scroll_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 1,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -1549,11 +1549,11 @@ mod transcript_mouse_scroll_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 1,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -1604,7 +1604,7 @@ mod transcript_paging_tests {
     use agena_domain::{ComposerDocument, ComposerNode, ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, PendingUserMessage, TranscriptNodeKey,
+        RunResource, RunRole, RunStatus, PendingUserMessage, TranscriptNodeKey,
         TranscriptState, TranscriptTextPosition, Utc,
     };
 
@@ -1776,11 +1776,11 @@ mod transcript_paging_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 18,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -1902,14 +1902,14 @@ mod transcript_paging_tests {
 #[cfg(test)]
 mod transcript_activity_copy_tests {
     use super::super::{
-        ExecutionStatus, MessageResource, MessageRole, MessageStatus, TranscriptNodeKey,
+        ExecutionStatus, RunResource, RunRole, RunStatus, TranscriptNodeKey,
         TranscriptState, TranscriptTextPosition, TranscriptVisualSelectionMode, Utc,
     };
 
     fn reasoning_activity(
         message_id: i64,
         part_id: i64,
-    ) -> agena_api::message_part::MessagePartResource {
+    ) -> agena_api::part::PartResource {
         crate::TranscriptFixture::reasoning_part(
             part_id,
             message_id,
@@ -1923,20 +1923,20 @@ mod transcript_activity_copy_tests {
         )
     }
 
-    fn folded_run_parts() -> Vec<agena_api::message_part::MessagePartResource> {
+    fn folded_run_parts() -> Vec<agena_api::part::PartResource> {
         (51..59).map(|part| reasoning_activity(19, part)).collect()
     }
 
     fn folded_run_transcript(
-        parts: Vec<agena_api::message_part::MessagePartResource>,
+        parts: Vec<agena_api::part::PartResource>,
     ) -> TranscriptState {
         TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 19,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
                 metadata: Default::default(),
@@ -2070,7 +2070,7 @@ mod transcript_expansion_tests {
     use agena_domain::{ExecutionStatus, ReasoningPart};
 
     use super::super::{
-        MessageResource, MessageRole, MessageStatus, TranscriptMoveDirection, TranscriptNodeKey,
+        RunResource, RunRole, RunStatus, TranscriptMoveDirection, TranscriptNodeKey,
         TranscriptNodeKind, TranscriptState, TranscriptTextPosition, TranscriptTextSelection, Utc,
         transcript_text_selection_text,
     };
@@ -2197,11 +2197,11 @@ mod transcript_expansion_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: message_id,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2273,11 +2273,11 @@ mod transcript_expansion_tests {
         };
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: message_id,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2350,11 +2350,11 @@ mod transcript_expansion_tests {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![
-                MessageResource {
+                RunResource {
                     id: 17,
                     session_id: 7,
-                    role: MessageRole::User,
-                    state: MessageStatus::Completed,
+                    role: RunRole::User,
+                    state: RunStatus::Completed,
                     created_at: now,
                     updated_at: now,
                     metadata: Default::default(),
@@ -2362,11 +2362,11 @@ mod transcript_expansion_tests {
                     part_count: 1,
                     parts: Some(vec![preceding_part]),
                 },
-                MessageResource {
+                RunResource {
                     id: 18,
                     session_id: 7,
-                    role: MessageRole::Assistant,
-                    state: MessageStatus::Completed,
+                    role: RunRole::Assistant,
+                    state: RunStatus::Completed,
                     created_at: now,
                     updated_at: now,
                     metadata: Default::default(),
@@ -2412,11 +2412,11 @@ mod transcript_expansion_tests {
     #[test]
     fn vertical_navigation_stops_on_messages_and_blocks_before_entering_text() {
         let now = Utc::now();
-        let message = |id: i64, role: MessageRole, text: &str| MessageResource {
+        let message = |id: i64, role: RunRole, text: &str| RunResource {
             id,
             session_id: 7,
             role,
-            state: MessageStatus::Completed,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -2433,13 +2433,13 @@ mod transcript_expansion_tests {
         let mut transcript = TranscriptState {
             session_id: Some(7),
             messages: vec![
-                message(9, MessageRole::User, "before"),
+                message(9, RunRole::User, "before"),
                 message(
                     10,
-                    MessageRole::Assistant,
+                    RunRole::Assistant,
                     "a wrapped answer with several rendered rows that can be navigated independently",
                 ),
-                message(11, MessageRole::User, "after"),
+                message(11, RunRole::User, "after"),
             ],
             ..TranscriptState::default()
         };
@@ -2530,11 +2530,11 @@ mod transcript_expansion_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 10,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2670,11 +2670,11 @@ mod transcript_expansion_tests {
         let now = Utc::now();
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 10,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2784,11 +2784,11 @@ mod transcript_expansion_tests {
     #[test]
     fn single_formulas_remain_atomic_while_inline_formula_canvases_form_one_semantic_line() {
         let now = Utc::now();
-        let message = |id, text: &str| MessageResource {
+        let message = |id, text: &str| RunResource {
             id,
             session_id: 7,
-            role: MessageRole::Assistant,
-            state: MessageStatus::Completed,
+            role: RunRole::Assistant,
+            state: RunStatus::Completed,
             created_at: now,
             updated_at: now,
             metadata: Default::default(),
@@ -2897,11 +2897,11 @@ mod transcript_expansion_tests {
         );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 12,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -2977,11 +2977,11 @@ mod transcript_expansion_tests {
         );
         let mut transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 13,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -3055,11 +3055,11 @@ mod transcript_expansion_tests {
         let context = agena_tui_media::test_support::test_math_render_context(config);
         let mut native_transcript = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 14,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),
@@ -3105,11 +3105,11 @@ mod transcript_expansion_tests {
 
         let mut formula_only = TranscriptState {
             session_id: Some(7),
-            messages: vec![MessageResource {
+            messages: vec![RunResource {
                 id: 15,
                 session_id: 7,
-                role: MessageRole::Assistant,
-                state: MessageStatus::Completed,
+                role: RunRole::Assistant,
+                state: RunStatus::Completed,
                 created_at: now,
                 updated_at: now,
                 metadata: Default::default(),

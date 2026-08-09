@@ -7,10 +7,10 @@
 
 use crate::TranscriptActivityPresentation;
 use agena_api::{
-    message_part::{
-        MessageReasoningPartResource, MessageTextPartResource, PartExecutionStatusResource,
+    part::{
+        ReasoningPartResource, TextPartResource, PartExecutionStatusResource,
     },
-    resource::{MessageRole, MessageStatus},
+    resource::{RunRole, RunStatus},
 };
 use agena_domain::{
     ActivityNode, ActivityPayload, ActivityState, AssistantReplyStatus, ComposerDocument,
@@ -142,8 +142,8 @@ fn user_document_entry(
     }
     TranscriptEntry {
         id: TranscriptEntryId::TurnInput(turn_id),
-        role: Some(MessageRole::User),
-        state: MessageStatus::Completed,
+        role: Some(RunRole::User),
+        state: RunStatus::Completed,
         created_at: timestamp(created_at_ms),
         parts,
     }
@@ -151,7 +151,7 @@ fn user_document_entry(
 
 fn assistant_reply_document_entry<'a>(
     reply_id: agena_domain::AssistantReplyId,
-    state: MessageStatus,
+    state: RunStatus,
     created_at_ms: i64,
     document: &'a ContentDocument,
     failure: Option<agena_failure::UserProblem>,
@@ -178,7 +178,7 @@ fn assistant_reply_document_entry<'a>(
                 if matches!(activity.payload, ActivityPayload::Error(_))
         )
     });
-    let failure_shown_by_activity = matches!(state, MessageStatus::Failed) && has_error_activity;
+    let failure_shown_by_activity = matches!(state, RunStatus::Failed) && has_error_activity;
     if document.is_empty()
         || (assistant_reply_state_requires_outcome(state) && !failure_shown_by_activity)
         || (failure.is_some() && !has_error_activity)
@@ -187,7 +187,7 @@ fn assistant_reply_document_entry<'a>(
     }
     TranscriptEntry {
         id: TranscriptEntryId::AssistantReply(reply_id),
-        role: Some(MessageRole::Assistant),
+        role: Some(RunRole::Assistant),
         state,
         created_at: timestamp(created_at_ms),
         parts,
@@ -196,7 +196,7 @@ fn assistant_reply_document_entry<'a>(
 
 fn assistant_reply_document_parts<'a>(
     document: &'a ContentDocument,
-    state: MessageStatus,
+    state: RunStatus,
     mid_activities: &[&'a ActivityNode],
     reply_created_at_ms: i64,
     reply_finished_at_ms: Option<i64>,
@@ -220,7 +220,7 @@ fn assistant_reply_document_parts<'a>(
     //   the reply continues, so no body segment is final yet.
     // * In-progress replies that have not issued a tool call keep the live
     //   body segment inline so a plain question/answer still streams inline.
-    let final_text_index = if matches!(state, MessageStatus::Completed) {
+    let final_text_index = if matches!(state, RunStatus::Completed) {
         nodes.iter().rposition(is_body_text_node)
     } else if nodes.iter().any(is_tool_call_node) {
         None
@@ -237,7 +237,7 @@ fn assistant_reply_document_parts<'a>(
                     TranscriptEntryPart {
                         id,
                         status: PartExecutionStatusResource::Completed,
-                        content: TranscriptPartContent::Text(MessageTextPartResource {
+                        content: TranscriptPartContent::Text(TextPartResource {
                             text: segment.text.clone(),
                             synthetic: false,
                         }),
@@ -273,7 +273,7 @@ fn assistant_reply_document_parts<'a>(
                     TranscriptEntryPart {
                         id,
                         status: PartExecutionStatusResource::Completed,
-                        content: TranscriptPartContent::Text(MessageTextPartResource {
+                        content: TranscriptPartContent::Text(TextPartResource {
                             text,
                             synthetic: false,
                         }),
@@ -379,45 +379,45 @@ fn is_tool_call_node(node: &ContentNode) -> bool {
     )
 }
 
-const fn assistant_reply_state_requires_outcome(state: MessageStatus) -> bool {
+const fn assistant_reply_state_requires_outcome(state: RunStatus) -> bool {
     matches!(
         state,
-        MessageStatus::Failed
-            | MessageStatus::Cancelled
-            | MessageStatus::PolicyDenied
-            | MessageStatus::UserDeclined
-            | MessageStatus::CapabilityUnavailable
-            | MessageStatus::ToolUnavailable
+        RunStatus::Failed
+            | RunStatus::Cancelled
+            | RunStatus::PolicyDenied
+            | RunStatus::UserDeclined
+            | RunStatus::CapabilityUnavailable
+            | RunStatus::ToolUnavailable
     )
 }
 
 fn assistant_reply_lifecycle_part(
     response_id: agena_domain::AssistantReplyId,
-    state: MessageStatus,
+    state: RunStatus,
     failure: Option<agena_failure::UserProblem>,
 ) -> TranscriptEntryPart<'static> {
     let (status, lifecycle) = match state {
-        MessageStatus::Pending | MessageStatus::InProgress => (
+        RunStatus::Pending | RunStatus::InProgress => (
             PartExecutionStatusResource::InProgress,
             TranscriptAssistantReplyLifecycle::Running,
         ),
-        MessageStatus::Completed if failure.is_some() => (
+        RunStatus::Completed if failure.is_some() => (
             PartExecutionStatusResource::Failed,
             TranscriptAssistantReplyLifecycle::Failed { problem: failure },
         ),
-        MessageStatus::Completed => (
+        RunStatus::Completed => (
             PartExecutionStatusResource::Completed,
             TranscriptAssistantReplyLifecycle::Completed,
         ),
-        MessageStatus::Cancelled => (
+        RunStatus::Cancelled => (
             PartExecutionStatusResource::Cancelled,
             TranscriptAssistantReplyLifecycle::Cancelled,
         ),
-        MessageStatus::Failed
-        | MessageStatus::PolicyDenied
-        | MessageStatus::UserDeclined
-        | MessageStatus::CapabilityUnavailable
-        | MessageStatus::ToolUnavailable => (
+        RunStatus::Failed
+        | RunStatus::PolicyDenied
+        | RunStatus::UserDeclined
+        | RunStatus::CapabilityUnavailable
+        | RunStatus::ToolUnavailable => (
             PartExecutionStatusResource::Failed,
             TranscriptAssistantReplyLifecycle::Failed { problem: failure },
         ),
@@ -474,11 +474,11 @@ pub fn pending_user_entry<'a>(
     }
     TranscriptEntry {
         id: TranscriptEntryId::PendingTurn(pending_id),
-        role: Some(MessageRole::User),
+        role: Some(RunRole::User),
         state: if confirmed {
-            MessageStatus::Completed
+            RunStatus::Completed
         } else {
-            MessageStatus::InProgress
+            RunStatus::InProgress
         },
         created_at: DateTime::UNIX_EPOCH,
         parts,
@@ -531,7 +531,7 @@ fn activity_entry_part<'a>(activity: &'a ActivityNode) -> TranscriptEntryPart<'a
             id: TranscriptContentId::Activity(activity.id),
             status: activity_status(activity.state),
             content: TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
-                MessageReasoningPartResource {
+                ReasoningPartResource {
                     summary: reasoning.content.summary.clone(),
                     raw_content: reasoning.content.raw_content.clone(),
                     encrypted_content: reasoning.content.encrypted_content.clone(),
@@ -716,23 +716,23 @@ const fn activity_status(state: ActivityState) -> PartExecutionStatusResource {
     }
 }
 
-const fn activity_entry_status(state: ActivityState) -> MessageStatus {
+const fn activity_entry_status(state: ActivityState) -> RunStatus {
     match state {
-        ActivityState::Pending => MessageStatus::Pending,
-        ActivityState::InProgress => MessageStatus::InProgress,
-        ActivityState::Completed => MessageStatus::Completed,
-        ActivityState::Failed => MessageStatus::Failed,
-        ActivityState::Cancelled => MessageStatus::Cancelled,
+        ActivityState::Pending => RunStatus::Pending,
+        ActivityState::InProgress => RunStatus::InProgress,
+        ActivityState::Completed => RunStatus::Completed,
+        ActivityState::Failed => RunStatus::Failed,
+        ActivityState::Cancelled => RunStatus::Cancelled,
     }
 }
 
-const fn assistant_reply_status(status: AssistantReplyStatus) -> MessageStatus {
+const fn assistant_reply_status(status: AssistantReplyStatus) -> RunStatus {
     match status {
-        AssistantReplyStatus::Pending => MessageStatus::Pending,
-        AssistantReplyStatus::InProgress => MessageStatus::InProgress,
-        AssistantReplyStatus::Completed => MessageStatus::Completed,
-        AssistantReplyStatus::Failed => MessageStatus::Failed,
-        AssistantReplyStatus::Cancelled => MessageStatus::Cancelled,
+        AssistantReplyStatus::Pending => RunStatus::Pending,
+        AssistantReplyStatus::InProgress => RunStatus::InProgress,
+        AssistantReplyStatus::Completed => RunStatus::Completed,
+        AssistantReplyStatus::Failed => RunStatus::Failed,
+        AssistantReplyStatus::Cancelled => RunStatus::Cancelled,
     }
 }
 
@@ -902,7 +902,7 @@ mod tests {
         let document = ContentDocument::default();
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::InProgress,
+            RunStatus::InProgress,
             1,
             &document,
             None,
@@ -1219,7 +1219,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -1609,7 +1609,7 @@ mod tests {
         let m3_node = session_notice_activity(m3, 450);
         let parts = assistant_reply_document_parts(
             &document,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             &[&m1_node, &m2_node, &m3_node],
             100,
             Some(400),
@@ -1696,7 +1696,7 @@ mod tests {
         let m3_node = session_notice_activity(m3, 450);
         let parts = assistant_reply_document_parts(
             &document,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             &[&m1_node, &m2_node, &m3_node],
             100,
             Some(500),
@@ -1767,7 +1767,7 @@ mod tests {
         let notice_node = session_notice_activity(notice, 250);
         let parts = assistant_reply_document_parts(
             &document,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             &[&notice_node],
             100,
             Some(400),
@@ -1830,7 +1830,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -2011,7 +2011,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -2144,7 +2144,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -2353,7 +2353,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Failed,
+            RunStatus::Failed,
             1,
             &document,
             None,
@@ -2500,7 +2500,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Failed,
+            RunStatus::Failed,
             1,
             &document,
             None,
@@ -2577,7 +2577,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Failed,
+            RunStatus::Failed,
             1,
             &document,
             None,
@@ -2643,7 +2643,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -2736,7 +2736,7 @@ mod tests {
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -2836,7 +2836,7 @@ mod tests {
         let ordinary_document = operation_document("shell.run", &"PNG result details ".repeat(30));
         let ordinary = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &ordinary_document,
             None,
@@ -2866,7 +2866,7 @@ mod tests {
         let long_document = operation_document("shell.run", &"complete ".repeat(60));
         let long = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &long_document,
             None,
@@ -3231,7 +3231,7 @@ mod tests {
         let document = ContentDocument::default();
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Failed,
+            RunStatus::Failed,
             1,
             &document,
             Some(problem),
@@ -3339,7 +3339,7 @@ mod tests {
         // still render, and without a duplicate lifecycle row.
         let recovered = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             2,
             &document,
             None,
@@ -3370,7 +3370,7 @@ mod tests {
         // is the single representation of the failure.
         let failed = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Failed,
+            RunStatus::Failed,
             1,
             &document,
             Some(problem),
@@ -3423,7 +3423,7 @@ It has two lines.";
         ]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -3528,7 +3528,7 @@ It has two lines.";
         ]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::Completed,
+            RunStatus::Completed,
             1,
             &document,
             None,
@@ -3609,7 +3609,7 @@ It has two lines.";
         // does not flip from plain text to an Activity when the reply grows.
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::InProgress,
+            RunStatus::InProgress,
             1,
             &document,
             None,
@@ -3662,7 +3662,7 @@ It has two lines.";
         // text and must not collapse into an Activity while streaming.
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::InProgress,
+            RunStatus::InProgress,
             1,
             &document,
             None,
@@ -3707,7 +3707,7 @@ It has two lines.";
         })]);
         let entry = assistant_reply_document_entry(
             response_id,
-            MessageStatus::InProgress,
+            RunStatus::InProgress,
             1,
             &document,
             None,

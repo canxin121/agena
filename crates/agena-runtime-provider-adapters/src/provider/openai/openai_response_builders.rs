@@ -14,12 +14,12 @@ use super::{
 };
 use agena_domain::Model;
 use agena_provider::{
-    CompletionInputMessage, ProviderCompactionContext, ResponsesApiRequestMetadata,
+    CompletionInputRun, ProviderCompactionContext, ResponsesApiRequestMetadata,
 };
 
 impl OpenAiTransport {
     pub(super) fn is_vision_request(request: &CompletionRequest) -> bool {
-        request.messages.iter().any(|message| {
+        request.turns.iter().any(|message| {
             wire_message::project(message).iter().any(|part| {
                 matches!(
                     part,
@@ -31,7 +31,7 @@ impl OpenAiTransport {
     }
 
     pub(super) fn initiator(request: &CompletionRequest) -> &'static str {
-        match request.messages.last().map(|m| m.role) {
+        match request.turns.last().map(|m| m.role) {
             Some(Role::User) => "user",
             _ => "agent",
         }
@@ -218,20 +218,20 @@ impl OpenAiTransport {
             Self::push_responses_text_message(&mut input, "system", system.clone());
         }
 
-        for message in &request.messages {
-            Self::append_responses_items_for_message(&mut input, message);
+        for run in &request.turns {
+            Self::append_responses_items_for_message(&mut input, run);
         }
 
         validate_responses_input(input.as_slice())?;
         Ok(input)
     }
 
-    pub(super) fn realtime_conversation_items_for_messages(
-        messages: &[CompletionInputMessage],
+    pub(super) fn realtime_conversation_items_for_runs(
+        runs: &[CompletionInputRun],
     ) -> Result<Vec<OpenAiRealtimeConversationItem>, ProviderError> {
         let mut input = Vec::new();
-        for message in messages {
-            Self::append_responses_items_for_message(&mut input, message);
+        for run in runs {
+            Self::append_responses_items_for_message(&mut input, run);
         }
         validate_responses_input(input.as_slice())?;
         clear_responses_prompt_cache_hints(input.as_mut_slice());
@@ -397,18 +397,18 @@ impl OpenAiTransport {
 
     pub(super) fn append_responses_items_for_message(
         input: &mut Vec<OpenAiResponsesInputItem>,
-        message: &CompletionInputMessage,
+        run: &CompletionInputRun,
     ) {
-        let projected_parts = wire_message::project(message);
-        match message.role {
+        let projected_parts = wire_message::project(run);
+        match run.role {
             Role::System => Self::push_responses_text_message(
                 input,
                 "system",
-                session_text_lossy(message, projected_parts.as_slice()),
+                session_text_lossy(run, projected_parts.as_slice()),
             ),
             Role::User => {
                 if projected_parts.is_empty() {
-                    Self::push_responses_text_message(input, "user", message.as_text_lossy());
+                    Self::push_responses_text_message(input, "user", run.as_text_lossy());
                 } else {
                     Self::push_responses_message_from_parts(
                         input,
@@ -425,10 +425,10 @@ impl OpenAiTransport {
                     // (chat-style) instead of OpenAI's `encrypted_content`, so
                     // replay either carrier for those models. Other models keep
                     // the encrypted-content-only replay.
-                    let replay_content_reasoning = message.provider_state.assistant_reasoning_field
+                    let replay_content_reasoning = run.provider_state.assistant_reasoning_field
                         == Some(agena_domain::AssistantReasoningField::ReasoningContent);
                     input.extend(
-                        message
+                        run
                             .provider_state
                             .openai_reasoning_items
                             .iter()
@@ -455,7 +455,7 @@ impl OpenAiTransport {
                     );
                 }
                 if projected_parts.is_empty() {
-                    Self::push_responses_text_message(input, "assistant", message.as_text_lossy());
+                    Self::push_responses_text_message(input, "assistant", run.as_text_lossy());
                 } else {
                     let mut text_chunks = Vec::new();
                     let mut pending_output: Option<(String, String, Vec<wire_message::WirePart>)> =
@@ -879,7 +879,7 @@ mod tool_api_history_tests {
     use agena_domain::ToolOutput;
     use agena_domain::{StructuredObject, TimeRange};
     use agena_runtime_contracts::part::OperationPart;
-    use agena_runtime_contracts::provider_state::MessageProviderState;
+    use agena_runtime_contracts::provider_state::PartProviderState;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use serde_json::{Map, Value};
 
@@ -996,12 +996,12 @@ mod tool_api_history_tests {
             "help output",
             Some("call_legacy"),
         );
-        let provider_state = serde_json::to_value(MessageProviderState {
+        let provider_state = serde_json::to_value(PartProviderState {
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",
                 "encrypted_content": "encrypted"
             })],
-            ..MessageProviderState::default()
+            ..PartProviderState::default()
         })
         .expect("provider state is JSON serializable");
         let assistant_parts = vec![
@@ -1048,7 +1048,7 @@ mod tool_api_history_tests {
             "contents",
             Some("call_read"),
         );
-        let provider_state = serde_json::to_value(MessageProviderState {
+        let provider_state = serde_json::to_value(PartProviderState {
             assistant_reasoning_field: Some(
                 agena_domain::AssistantReasoningField::ReasoningContent,
             ),
@@ -1057,7 +1057,7 @@ mod tool_api_history_tests {
                 "summary": [{ "type": "summary_text", "text": "think" }],
                 "content": [{ "type": "reasoning_text", "text": "reasoned text" }]
             })],
-            ..MessageProviderState::default()
+            ..PartProviderState::default()
         })
         .expect("provider state is JSON serializable");
         let assistant_parts = vec![
@@ -1105,7 +1105,7 @@ mod tool_api_history_tests {
             "contents",
             None,
         );
-        let provider_state = serde_json::to_value(MessageProviderState {
+        let provider_state = serde_json::to_value(PartProviderState {
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",
                 "summary": [
@@ -1117,7 +1117,7 @@ mod tool_api_history_tests {
                 ],
                 "encrypted_content": "opaque-state"
             })],
-            ..MessageProviderState::default()
+            ..PartProviderState::default()
         })
         .expect("provider state is JSON serializable");
         let assistant_parts = vec![
@@ -1247,7 +1247,7 @@ mod tool_api_history_tests {
             ));
         }
         // Content-only reasoning item as persisted in the DB for message 12001.
-        let repair_state = serde_json::to_value(MessageProviderState {
+        let repair_state = serde_json::to_value(PartProviderState {
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",
                 "summary": [],
@@ -1257,13 +1257,13 @@ mod tool_api_history_tests {
                 }]
             })],
             response_id: Some("6f8566f1-0062-40a4-b3fa-87093636c0d7".to_owned()),
-            ..MessageProviderState::default()
+            ..PartProviderState::default()
         })
         .expect("provider state is JSON serializable");
         repair_parts.insert(0, run_marker(PartRole::Assistant, Some(repair_state)));
 
         // Replayed transcript: 11994(user) + 11995..11999(assistant) + 12001(repair).
-        let mut messages = vec![crate::provider::project_completion_input(&[part(
+        let mut turns = vec![crate::provider::project_completion_input(&[part(
             "text",
             PartRole::User,
             PartState::Completed,
@@ -1275,20 +1275,20 @@ mod tool_api_history_tests {
             "",
             "",
         ] {
-            messages.push(crate::provider::project_completion_input(&[part(
+            turns.push(crate::provider::project_completion_input(&[part(
                 "text",
                 PartRole::Assistant,
                 PartState::Completed,
                 serde_json::json!({ "text": text }),
             )]));
         }
-        messages.push(crate::provider::project_completion_input(&repair_parts));
+        turns.push(crate::provider::project_completion_input(&repair_parts));
 
         // The failing request had previous_response_id cleared (Restart).
         let mut request = CompletionRequest {
             model: agena_domain::ModelId::new("deepseek-v4-flash"),
             system: None,
-            messages,
+            turns,
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
             disable_tools: false,
@@ -1317,7 +1317,7 @@ mod tool_api_history_tests {
         );
 
         let repair = request
-            .messages
+            .turns
             .last()
             .expect("repair message must be present");
         assert_eq!(
@@ -1327,8 +1327,8 @@ mod tool_api_history_tests {
         );
 
         let mut input = Vec::new();
-        for message in &request.messages {
-            OpenAiTransport::append_responses_items_for_message(&mut input, message);
+        for run in &request.turns {
+            OpenAiTransport::append_responses_items_for_message(&mut input, run);
         }
         validate_responses_input(input.as_slice()).expect("provider-safe replay input");
 

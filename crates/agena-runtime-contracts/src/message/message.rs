@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::message::metadata::{MessageMetadata, MessageProviderState};
+use crate::message::metadata::{MessageMetadata, PartProviderState};
 use agena_domain::ExecutionStatus;
 
 use crate::message::part::MessagePart;
@@ -23,7 +23,7 @@ pub struct Message {
     #[serde(default)]
     pub metadata: MessageMetadata,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provider_state: Option<MessageProviderState>,
+    pub provider_state: Option<PartProviderState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<CompletionUsage>,
 }

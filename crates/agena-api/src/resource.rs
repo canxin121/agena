@@ -1325,7 +1325,7 @@ mod model_ref_contract_tests {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// Role of a message.
-pub enum MessageRole {
+pub enum RunRole {
     User,
     Assistant,
     System,
@@ -1336,7 +1336,7 @@ pub enum MessageRole {
 /// separate from the persistence-enabled runtime state enum.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
-pub enum MessageStatus {
+pub enum RunStatus {
     #[default]
     Pending,
     InProgress,
@@ -1354,7 +1354,7 @@ pub enum MessageStatus {
 /// The wire representation intentionally does not carry the runtime's
 /// database serialization implementation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct MessageUsage {
+pub struct RunUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub reasoning_tokens: u64,
@@ -1366,7 +1366,7 @@ pub struct MessageUsage {
 /// Origin of a message in the public conversation projection.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
-pub enum MessageSource {
+pub enum RunSource {
     User,
     Assistant,
     System,
@@ -1375,8 +1375,8 @@ pub enum MessageSource {
 /// Display and lineage metadata for a message. Provider-private replay state
 /// remains runtime-only and is intentionally absent from this wire contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MessageMetadata {
-    pub source: MessageSource,
+pub struct RunMetadata {
+    pub source: RunSource,
     /// Stable external delivery key, when this message was submitted by a
     /// retry-capable integration such as the scheduler.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1397,10 +1397,10 @@ pub struct MessageMetadata {
     pub model_speed_mode: Option<String>,
 }
 
-impl Default for MessageMetadata {
+impl Default for RunMetadata {
     fn default() -> Self {
         Self {
-            source: MessageSource::Assistant,
+            source: RunSource::Assistant,
             idempotency_key: None,
             model_turn_id: None,
             parent_message_id: None,
@@ -1416,12 +1416,12 @@ impl Default for MessageMetadata {
 
 #[cfg(test)]
 mod message_status_contract_tests {
-    use super::MessageStatus;
+    use super::RunStatus;
 
     #[test]
     fn message_status_has_a_stable_wire_name() {
         assert_eq!(
-            serde_json::to_string(&MessageStatus::InProgress).expect("serialize message status"),
+            serde_json::to_string(&RunStatus::InProgress).expect("serialize message status"),
             "\"in_progress\""
         );
     }
@@ -1439,25 +1439,25 @@ pub enum PartLoadMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// A message in a session transcript.
-pub struct MessageResource {
+pub struct RunResource {
     pub id: i64,
     pub session_id: i64,
-    pub role: MessageRole,
-    pub state: MessageStatus,
+    pub role: RunRole,
+    pub state: RunStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub metadata: MessageMetadata,
+    pub metadata: RunMetadata,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub usage: Option<MessageUsage>,
+    pub usage: Option<RunUsage>,
     pub part_count: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parts: Option<Vec<crate::message_part::MessagePartResource>>,
+    pub parts: Option<Vec<crate::part::PartResource>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 /// Reference to a skill attached to a message.
-pub struct MessageSkillReference {
+pub struct PartSkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
@@ -1470,11 +1470,11 @@ pub struct MessageSkillReference {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// An attachment of a message part.
-pub struct MessageAttachment {
-    pub kind: MessageAttachmentKind,
+pub struct PartAttachment {
+    pub kind: PartAttachmentKind,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub mime: String,
-    pub source: MessageAttachmentSource,
+    pub source: PartAttachmentSource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1496,7 +1496,7 @@ pub struct MessageAttachment {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// Kind of a message attachment.
-pub enum MessageAttachmentKind {
+pub enum PartAttachmentKind {
     Image,
     Audio,
     Video,
@@ -1507,7 +1507,7 @@ pub enum MessageAttachmentKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "source", rename_all = "snake_case")]
 /// Source of a message attachment.
-pub enum MessageAttachmentSource {
+pub enum PartAttachmentSource {
     Url { url: String },
     DataUrl { url: String },
     Base64 { data: String },

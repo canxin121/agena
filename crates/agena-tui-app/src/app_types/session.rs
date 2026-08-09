@@ -9,7 +9,7 @@ use super::{
     TranscriptTextPosition, TranscriptViewport,
 };
 #[cfg(test)]
-use agena_api::resource::MessageResource;
+use agena_api::resource::RunResource;
 pub(crate) use agena_tui_session::session_search::{SessionSearchItem, SessionSearchOverlay};
 
 /// App-owned concrete effect map for the TUI-owned generic selection picker.
@@ -243,7 +243,7 @@ pub(crate) struct TranscriptState {
     pub(crate) session_id: Option<i64>,
     pub(crate) session_title: String,
     #[cfg(test)]
-    pub(crate) messages: Vec<MessageResource>,
+    pub(crate) messages: Vec<RunResource>,
     /// The session's v2 part transcript (ordered parts, including `run`
     /// markers), mirroring `SessionExecutionResource.parts`. Replaces the v1
     /// `TranscriptSnapshot` aggregate.

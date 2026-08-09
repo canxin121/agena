@@ -14,16 +14,16 @@
 //! JSON and are decoded into the render model here, so entries are `'static`.
 
 use agena_api::{
-    message_part::{
-        MessageAttachmentPartResource, MessageErrorPartResource, MessageHookPartResource,
-        MessageReasoningPartResource, MessageRequestPartResource,
-        MessageSkillReferencePartResource, MessageTextPartResource, OperationPartResource,
+    part::{
+        AttachmentPartResource, ErrorPartResource, HookPartResource,
+        ReasoningPartResource, RequestPartResource,
+        SkillReferencePartResource, TextPartResource, OperationPartResource,
         PartExecutionStatusResource, StructuredFieldResource, StructuredObjectResource,
         StructuredValueResource, ToolInvocationResource,
     },
     resource::{
-        MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageRole,
-        MessageSkillReference, MessageStatus, SessionTranscriptPart,
+        PartAttachment, PartAttachmentKind, PartAttachmentSource, RunRole,
+        PartSkillReference, RunStatus, SessionTranscriptPart,
     },
 };
 use serde_json::Value;
@@ -148,7 +148,7 @@ fn finalize_run_entry(mut entry: TranscriptEntry<'static>) -> TranscriptEntry<'s
     // lifecycle row when it has no content yet (the active envelope) or when
     // it ended without a durable Error part carrying the outcome (failed,
     // cancelled, denied). A completed run with body content needs no row.
-    if entry.role == Some(MessageRole::Assistant) {
+    if entry.role == Some(RunRole::Assistant) {
         let state = entry.state;
         let has_error_part = entry.parts.iter().any(|part| {
             matches!(
@@ -197,12 +197,12 @@ fn entry_part(part: &SessionTranscriptPart) -> TranscriptEntryPart<'static> {
 fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> {
     let content = &part.content;
     match part.kind.as_str() {
-        "text" => TranscriptPartContent::Text(MessageTextPartResource {
+        "text" => TranscriptPartContent::Text(TextPartResource {
             text: string_field(content, "text").unwrap_or_default(),
             synthetic: bool_field(content, "synthetic").unwrap_or(false),
         }),
         "think" => TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(
-            MessageReasoningPartResource {
+            ReasoningPartResource {
                 summary: string_array_field(content, "summary"),
                 raw_content: string_array_field(content, "raw"),
                 encrypted_content: string_field(content, "encrypted_content"),
@@ -236,20 +236,20 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 },
             )))
         }
-        "tool_result" => TranscriptPartContent::Text(MessageTextPartResource {
+        "tool_result" => TranscriptPartContent::Text(TextPartResource {
             text: string_field(content, "output")
                 .or_else(|| string_field(content, "text"))
                 .unwrap_or_default(),
             synthetic: false,
         }),
         "file_ref" => TranscriptPartContent::Activity(TranscriptActivityContent::Attachment(
-            MessageAttachmentPartResource {
-                attachments: vec![MessageAttachment {
-                    kind: MessageAttachmentKind::File,
+            AttachmentPartResource {
+                attachments: vec![PartAttachment {
+                    kind: PartAttachmentKind::File,
                     mime: string_field(content, "mime").unwrap_or_default(),
                     source: string_field(content, "path")
-                        .map(|path| MessageAttachmentSource::LocalPath { path })
-                        .unwrap_or_else(|| MessageAttachmentSource::Url { url: String::new() }),
+                        .map(|path| PartAttachmentSource::LocalPath { path })
+                        .unwrap_or_else(|| PartAttachmentSource::Url { url: String::new() }),
                     filename: string_field(content, "name"),
                     title: None,
                     size_bytes: None,
@@ -261,13 +261,13 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
                 }],
             },
         )),
-        "paste_ref" => TranscriptPartContent::Text(MessageTextPartResource {
+        "paste_ref" => TranscriptPartContent::Text(TextPartResource {
             text: string_field(content, "text").unwrap_or_default(),
             synthetic: true,
         }),
         "skill_ref" => TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(
-            MessageSkillReferencePartResource {
-                skills: vec![MessageSkillReference {
+            SkillReferencePartResource {
+                skills: vec![PartSkillReference {
                     name: string_field(content, "skill").unwrap_or_default(),
                     description: string_field(content, "description").unwrap_or_default(),
                     instructions: string_field(content, "instructions").unwrap_or_default(),
@@ -278,7 +278,7 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             },
         )),
         "notice" | "hook" => TranscriptPartContent::Activity(TranscriptActivityContent::Hook(
-            Box::new(MessageHookPartResource {
+            Box::new(HookPartResource {
                 hook: string_field(content, "hook")
                     .or_else(|| string_field(content, "kind"))
                     .unwrap_or_else(|| part.kind.clone()),
@@ -288,16 +288,16 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             }),
         )),
         "compaction" => TranscriptPartContent::Activity(TranscriptActivityContent::Hook(Box::new(
-            MessageHookPartResource {
+            HookPartResource {
                 hook: "compaction".to_owned(),
                 plugin_id: None,
                 summary: string_field(content, "summary").unwrap_or_default(),
                 detail: content.get("window").map(|window| window.to_string()),
             },
         ))),
-        "error" => match serde_json::from_value::<MessageErrorPartResource>(part.content.clone()) {
+        "error" => match serde_json::from_value::<ErrorPartResource>(part.content.clone()) {
             Ok(error) => TranscriptPartContent::Activity(TranscriptActivityContent::Error(error)),
-            Err(_) => TranscriptPartContent::Text(MessageTextPartResource {
+            Err(_) => TranscriptPartContent::Text(TextPartResource {
                 text: string_field(content, "message")
                     .or_else(|| string_field(content, "summary"))
                     .unwrap_or_else(|| fallback_json_text(content)),
@@ -305,17 +305,17 @@ fn part_content(part: &SessionTranscriptPart) -> TranscriptPartContent<'static> 
             }),
         },
         "interaction" => {
-            match serde_json::from_value::<MessageRequestPartResource>(part.content.clone()) {
+            match serde_json::from_value::<RequestPartResource>(part.content.clone()) {
                 Ok(request) => TranscriptPartContent::Activity(TranscriptActivityContent::Request(
                     Box::new(request),
                 )),
-                Err(_) => TranscriptPartContent::Text(MessageTextPartResource {
+                Err(_) => TranscriptPartContent::Text(TextPartResource {
                     text: fallback_json_text(content),
                     synthetic: false,
                 }),
             }
         }
-        _ => TranscriptPartContent::Text(MessageTextPartResource {
+        _ => TranscriptPartContent::Text(TextPartResource {
             text: fallback_json_text(content),
             synthetic: false,
         }),
@@ -394,58 +394,58 @@ fn timestamp(created_at_ms: i64) -> chrono::DateTime<chrono::Utc> {
 /// Parse the wire role string. Roles beyond the render model's set (for
 /// example `runtime`) project to no role: such entries render as activity-like
 /// rows without a message header rather than as a user/assistant message.
-pub(crate) fn role_from_string(role: &str) -> Option<MessageRole> {
+pub(crate) fn role_from_string(role: &str) -> Option<RunRole> {
     match role {
-        "user" => Some(MessageRole::User),
-        "assistant" => Some(MessageRole::Assistant),
-        "tool" => Some(MessageRole::Tool),
-        "system" => Some(MessageRole::System),
+        "user" => Some(RunRole::User),
+        "assistant" => Some(RunRole::Assistant),
+        "tool" => Some(RunRole::Tool),
+        "system" => Some(RunRole::System),
         _ => None,
     }
 }
 
 /// Parse the wire part/run state string into the render model's message state.
-pub(crate) fn message_status_from_string(state: &str) -> MessageStatus {
+pub(crate) fn message_status_from_string(state: &str) -> RunStatus {
     match state {
-        "pending" => MessageStatus::Pending,
-        "in_progress" | "running" => MessageStatus::InProgress,
-        "completed" => MessageStatus::Completed,
-        "policy_denied" => MessageStatus::PolicyDenied,
-        "user_declined" => MessageStatus::UserDeclined,
-        "capability_unavailable" => MessageStatus::CapabilityUnavailable,
-        "tool_unavailable" => MessageStatus::ToolUnavailable,
-        "failed" => MessageStatus::Failed,
-        "cancelled" | "canceled" => MessageStatus::Cancelled,
-        _ => MessageStatus::Pending,
+        "pending" => RunStatus::Pending,
+        "in_progress" | "running" => RunStatus::InProgress,
+        "completed" => RunStatus::Completed,
+        "policy_denied" => RunStatus::PolicyDenied,
+        "user_declined" => RunStatus::UserDeclined,
+        "capability_unavailable" => RunStatus::CapabilityUnavailable,
+        "tool_unavailable" => RunStatus::ToolUnavailable,
+        "failed" => RunStatus::Failed,
+        "cancelled" | "canceled" => RunStatus::Cancelled,
+        _ => RunStatus::Pending,
     }
 }
 
 /// Parse the wire part state string into the render model's part state.
 pub(crate) fn part_status_from_string(state: &str) -> PartExecutionStatusResource {
     match message_status_from_string(state) {
-        MessageStatus::Pending => PartExecutionStatusResource::Pending,
-        MessageStatus::InProgress => PartExecutionStatusResource::InProgress,
-        MessageStatus::Completed => PartExecutionStatusResource::Completed,
-        MessageStatus::PolicyDenied => PartExecutionStatusResource::PolicyDenied,
-        MessageStatus::UserDeclined => PartExecutionStatusResource::UserDeclined,
-        MessageStatus::CapabilityUnavailable => PartExecutionStatusResource::CapabilityUnavailable,
-        MessageStatus::ToolUnavailable => PartExecutionStatusResource::ToolUnavailable,
-        MessageStatus::Failed => PartExecutionStatusResource::Failed,
-        MessageStatus::Cancelled => PartExecutionStatusResource::Cancelled,
+        RunStatus::Pending => PartExecutionStatusResource::Pending,
+        RunStatus::InProgress => PartExecutionStatusResource::InProgress,
+        RunStatus::Completed => PartExecutionStatusResource::Completed,
+        RunStatus::PolicyDenied => PartExecutionStatusResource::PolicyDenied,
+        RunStatus::UserDeclined => PartExecutionStatusResource::UserDeclined,
+        RunStatus::CapabilityUnavailable => PartExecutionStatusResource::CapabilityUnavailable,
+        RunStatus::ToolUnavailable => PartExecutionStatusResource::ToolUnavailable,
+        RunStatus::Failed => PartExecutionStatusResource::Failed,
+        RunStatus::Cancelled => PartExecutionStatusResource::Cancelled,
     }
 }
 
-fn part_status_from_state(state: MessageStatus) -> PartExecutionStatusResource {
+fn part_status_from_state(state: RunStatus) -> PartExecutionStatusResource {
     match state {
-        MessageStatus::Pending => PartExecutionStatusResource::Pending,
-        MessageStatus::InProgress => PartExecutionStatusResource::InProgress,
-        MessageStatus::Completed => PartExecutionStatusResource::Completed,
-        MessageStatus::PolicyDenied => PartExecutionStatusResource::PolicyDenied,
-        MessageStatus::UserDeclined => PartExecutionStatusResource::UserDeclined,
-        MessageStatus::CapabilityUnavailable => PartExecutionStatusResource::CapabilityUnavailable,
-        MessageStatus::ToolUnavailable => PartExecutionStatusResource::ToolUnavailable,
-        MessageStatus::Failed => PartExecutionStatusResource::Failed,
-        MessageStatus::Cancelled => PartExecutionStatusResource::Cancelled,
+        RunStatus::Pending => PartExecutionStatusResource::Pending,
+        RunStatus::InProgress => PartExecutionStatusResource::InProgress,
+        RunStatus::Completed => PartExecutionStatusResource::Completed,
+        RunStatus::PolicyDenied => PartExecutionStatusResource::PolicyDenied,
+        RunStatus::UserDeclined => PartExecutionStatusResource::UserDeclined,
+        RunStatus::CapabilityUnavailable => PartExecutionStatusResource::CapabilityUnavailable,
+        RunStatus::ToolUnavailable => PartExecutionStatusResource::ToolUnavailable,
+        RunStatus::Failed => PartExecutionStatusResource::Failed,
+        RunStatus::Cancelled => PartExecutionStatusResource::Cancelled,
     }
 }
 
@@ -455,44 +455,44 @@ pub fn part_state_is_terminal(state: &str) -> bool {
     message_status_is_terminal(message_status_from_string(state))
 }
 
-const fn message_status_is_terminal(state: MessageStatus) -> bool {
+const fn message_status_is_terminal(state: RunStatus) -> bool {
     matches!(
         state,
-        MessageStatus::Completed
-            | MessageStatus::PolicyDenied
-            | MessageStatus::UserDeclined
-            | MessageStatus::CapabilityUnavailable
-            | MessageStatus::ToolUnavailable
-            | MessageStatus::Failed
-            | MessageStatus::Cancelled
+        RunStatus::Completed
+            | RunStatus::PolicyDenied
+            | RunStatus::UserDeclined
+            | RunStatus::CapabilityUnavailable
+            | RunStatus::ToolUnavailable
+            | RunStatus::Failed
+            | RunStatus::Cancelled
     )
 }
 
-const fn assistant_reply_state_requires_outcome(state: MessageStatus) -> bool {
+const fn assistant_reply_state_requires_outcome(state: RunStatus) -> bool {
     matches!(
         state,
-        MessageStatus::Failed
-            | MessageStatus::Cancelled
-            | MessageStatus::PolicyDenied
-            | MessageStatus::UserDeclined
-            | MessageStatus::CapabilityUnavailable
-            | MessageStatus::ToolUnavailable
+        RunStatus::Failed
+            | RunStatus::Cancelled
+            | RunStatus::PolicyDenied
+            | RunStatus::UserDeclined
+            | RunStatus::CapabilityUnavailable
+            | RunStatus::ToolUnavailable
     )
 }
 
 fn assistant_reply_lifecycle(
-    state: MessageStatus,
+    state: RunStatus,
     problem: Option<agena_failure::UserProblem>,
 ) -> TranscriptAssistantReplyLifecycle {
     match state {
-        MessageStatus::Failed
-        | MessageStatus::PolicyDenied
-        | MessageStatus::UserDeclined
-        | MessageStatus::CapabilityUnavailable
-        | MessageStatus::ToolUnavailable => TranscriptAssistantReplyLifecycle::Failed { problem },
-        MessageStatus::Cancelled => TranscriptAssistantReplyLifecycle::Cancelled,
-        MessageStatus::Completed => TranscriptAssistantReplyLifecycle::Completed,
-        MessageStatus::Pending | MessageStatus::InProgress => {
+        RunStatus::Failed
+        | RunStatus::PolicyDenied
+        | RunStatus::UserDeclined
+        | RunStatus::CapabilityUnavailable
+        | RunStatus::ToolUnavailable => TranscriptAssistantReplyLifecycle::Failed { problem },
+        RunStatus::Cancelled => TranscriptAssistantReplyLifecycle::Cancelled,
+        RunStatus::Completed => TranscriptAssistantReplyLifecycle::Completed,
+        RunStatus::Pending | RunStatus::InProgress => {
             TranscriptAssistantReplyLifecycle::Running
         }
     }
@@ -553,14 +553,14 @@ mod tests {
         let entries = parts_entries(&parts);
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, TranscriptEntryId::StoredMessage(1));
-        assert_eq!(entries[0].role, Some(MessageRole::User));
-        assert_eq!(entries[0].state, MessageStatus::Completed);
+        assert_eq!(entries[0].role, Some(RunRole::User));
+        assert_eq!(entries[0].state, RunStatus::Completed);
         assert_eq!(entries[0].parts.len(), 1);
         assert!(matches!(
             entries[0].parts[0].content,
             TranscriptPartContent::Text(_)
         ));
-        assert_eq!(entries[1].role, Some(MessageRole::Assistant));
+        assert_eq!(entries[1].role, Some(RunRole::Assistant));
         assert_eq!(entries[1].parts.len(), 2);
         assert!(matches!(
             entries[1].parts[0].content,

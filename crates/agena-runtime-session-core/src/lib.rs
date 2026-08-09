@@ -7,7 +7,7 @@
 //! services, or provider adapters. It is the
 //! dependency root for the heavier [`agena_runtime_session`] crate.
 
-pub use agena_runtime_contracts::{authorization, message};
+pub use agena_runtime_contracts::{authorization, part, provider_state};
 pub mod model;
 pub use model::*;
 pub mod session {

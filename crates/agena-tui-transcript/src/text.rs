@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use agena_api::resource::{
-    MessageRole, MessageStatus, PendingInteractiveRequest, SessionExecutionResource,
+    RunRole, RunStatus, PendingInteractiveRequest, SessionExecutionResource,
 };
 use agena_domain::PermissionReplyKind;
 use agena_plugin_sdk::AttachmentKind;
@@ -132,26 +132,26 @@ pub fn format_relative_time(i18n: &I18n, timestamp: DateTime<Utc>) -> String {
     }
 }
 
-pub fn role_label(i18n: &I18n, role: MessageRole) -> String {
+pub fn role_label(i18n: &I18n, role: RunRole) -> String {
     match role {
-        MessageRole::User => t(i18n, "message-role-user"),
-        MessageRole::Assistant => t(i18n, "message-role-assistant"),
-        MessageRole::System => t(i18n, "message-role-system"),
-        MessageRole::Tool => "tool".to_string(),
+        RunRole::User => t(i18n, "message-role-user"),
+        RunRole::Assistant => t(i18n, "message-role-assistant"),
+        RunRole::System => t(i18n, "message-role-system"),
+        RunRole::Tool => "tool".to_string(),
     }
 }
 
-pub fn message_state_label(i18n: &I18n, state: MessageStatus) -> String {
+pub fn message_state_label(i18n: &I18n, state: RunStatus) -> String {
     match state {
-        MessageStatus::Pending => t(i18n, "message-state-pending"),
-        MessageStatus::InProgress => t(i18n, "message-state-in-progress"),
-        MessageStatus::Completed => t(i18n, "message-state-completed"),
-        MessageStatus::PolicyDenied => t(i18n, "message-state-policy-denied"),
-        MessageStatus::UserDeclined => t(i18n, "message-state-user-declined"),
-        MessageStatus::CapabilityUnavailable => t(i18n, "message-state-capability-unavailable"),
-        MessageStatus::ToolUnavailable => t(i18n, "message-state-tool-unavailable"),
-        MessageStatus::Failed => t(i18n, "message-state-failed"),
-        MessageStatus::Cancelled => t(i18n, "todo-status-cancelled"),
+        RunStatus::Pending => t(i18n, "message-state-pending"),
+        RunStatus::InProgress => t(i18n, "message-state-in-progress"),
+        RunStatus::Completed => t(i18n, "message-state-completed"),
+        RunStatus::PolicyDenied => t(i18n, "message-state-policy-denied"),
+        RunStatus::UserDeclined => t(i18n, "message-state-user-declined"),
+        RunStatus::CapabilityUnavailable => t(i18n, "message-state-capability-unavailable"),
+        RunStatus::ToolUnavailable => t(i18n, "message-state-tool-unavailable"),
+        RunStatus::Failed => t(i18n, "message-state-failed"),
+        RunStatus::Cancelled => t(i18n, "todo-status-cancelled"),
     }
 }
 
@@ -316,22 +316,22 @@ pub fn operation_diff_summary(
 pub fn operation_nested_task_summary(
     i18n: &I18n,
     title: &str,
-    status: agena_api::message_part::PartExecutionStatusResource,
+    status: agena_api::part::PartExecutionStatusResource,
 ) -> String {
     i18n.text_args(
         "operation-nested-task-summary",
         &fl_args!(
             "title" => title,
             "status" => match status {
-                agena_api::message_part::PartExecutionStatusResource::Pending => t(i18n, "message-state-pending"),
-                agena_api::message_part::PartExecutionStatusResource::InProgress => t(i18n, "message-state-in-progress"),
-                agena_api::message_part::PartExecutionStatusResource::Completed => t(i18n, "message-state-completed"),
-                agena_api::message_part::PartExecutionStatusResource::PolicyDenied => t(i18n, "message-state-policy-denied"),
-                agena_api::message_part::PartExecutionStatusResource::UserDeclined => t(i18n, "message-state-user-declined"),
-                agena_api::message_part::PartExecutionStatusResource::CapabilityUnavailable => t(i18n, "message-state-capability-unavailable"),
-                agena_api::message_part::PartExecutionStatusResource::ToolUnavailable => t(i18n, "message-state-tool-unavailable"),
-                agena_api::message_part::PartExecutionStatusResource::Failed => t(i18n, "message-state-failed"),
-                agena_api::message_part::PartExecutionStatusResource::Cancelled => t(i18n, "todo-status-cancelled"),
+                agena_api::part::PartExecutionStatusResource::Pending => t(i18n, "message-state-pending"),
+                agena_api::part::PartExecutionStatusResource::InProgress => t(i18n, "message-state-in-progress"),
+                agena_api::part::PartExecutionStatusResource::Completed => t(i18n, "message-state-completed"),
+                agena_api::part::PartExecutionStatusResource::PolicyDenied => t(i18n, "message-state-policy-denied"),
+                agena_api::part::PartExecutionStatusResource::UserDeclined => t(i18n, "message-state-user-declined"),
+                agena_api::part::PartExecutionStatusResource::CapabilityUnavailable => t(i18n, "message-state-capability-unavailable"),
+                agena_api::part::PartExecutionStatusResource::ToolUnavailable => t(i18n, "message-state-tool-unavailable"),
+                agena_api::part::PartExecutionStatusResource::Failed => t(i18n, "message-state-failed"),
+                agena_api::part::PartExecutionStatusResource::Cancelled => t(i18n, "todo-status-cancelled"),
             },
         ),
     )

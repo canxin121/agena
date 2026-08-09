@@ -1,6 +1,6 @@
 use super::super::transcript_ast::{MarkdownNode, markdown_inline_line, render_attachment_image};
 use super::super::{
-    I18n, Local, MessageStatus, Modifier, RenderedLine, RenderedTranscriptNode,
+    I18n, Local, RunStatus, Modifier, RenderedLine, RenderedTranscriptNode,
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
@@ -15,11 +15,11 @@ use super::request_render::{preview_for_part, render_user_input_request};
 use crate::snapshot::activity_presentation;
 use crate::ui_text;
 use crate::{
-    MessageRequestPartResource, TranscriptActivityContent, TranscriptActivitySection,
+    RequestPartResource, TranscriptActivityContent, TranscriptActivitySection,
     TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
 use agena_api::resource::{
-    MessageAttachment, MessageAttachmentKind, MessageAttachmentSource, MessageResource,
+    PartAttachment, PartAttachmentKind, PartAttachmentSource, RunResource,
 };
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
@@ -787,39 +787,39 @@ fn rendered_activity_section_node(
     })
 }
 
-fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> MessageAttachment {
+fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> PartAttachment {
     let kind = match resource.kind {
-        agena_domain::ResourceKind::Image => MessageAttachmentKind::Image,
-        agena_domain::ResourceKind::Audio => MessageAttachmentKind::Audio,
-        agena_domain::ResourceKind::Video => MessageAttachmentKind::Video,
-        agena_domain::ResourceKind::Pdf => MessageAttachmentKind::Pdf,
+        agena_domain::ResourceKind::Image => PartAttachmentKind::Image,
+        agena_domain::ResourceKind::Audio => PartAttachmentKind::Audio,
+        agena_domain::ResourceKind::Video => PartAttachmentKind::Video,
+        agena_domain::ResourceKind::Pdf => PartAttachmentKind::Pdf,
         agena_domain::ResourceKind::File
         | agena_domain::ResourceKind::Directory
         | agena_domain::ResourceKind::Url
-        | agena_domain::ResourceKind::Artifact => MessageAttachmentKind::File,
+        | agena_domain::ResourceKind::Artifact => PartAttachmentKind::File,
     };
     let (source, sha256) = match &resource.reference {
         agena_domain::ResourceReference::Artifact { sha256, uri } => (
-            MessageAttachmentSource::FileId {
+            PartAttachmentSource::FileId {
                 file_id: uri.clone(),
             },
             Some(sha256.clone()),
         ),
         agena_domain::ResourceReference::WorkspacePath { path } => (
-            MessageAttachmentSource::LocalPath { path: path.clone() },
+            PartAttachmentSource::LocalPath { path: path.clone() },
             None,
         ),
         agena_domain::ResourceReference::Url { url } => {
-            (MessageAttachmentSource::Url { url: url.clone() }, None)
+            (PartAttachmentSource::Url { url: url.clone() }, None)
         }
         agena_domain::ResourceReference::ProviderFile { file_id, .. } => (
-            MessageAttachmentSource::FileId {
+            PartAttachmentSource::FileId {
                 file_id: file_id.clone(),
             },
             None,
         ),
     };
-    MessageAttachment {
+    PartAttachment {
         kind,
         mime: resource.media_type.clone().unwrap_or_default(),
         source,
@@ -941,7 +941,7 @@ pub(crate) fn render_transcript_entries_export_markdown(
     out.join("\n")
 }
 
-pub fn rewind_message_preview(message: &MessageResource, i18n: &I18n) -> String {
+pub fn rewind_message_preview(message: &RunResource, i18n: &I18n) -> String {
     entry_preview(&TranscriptEntry::from(message), i18n)
 }
 
@@ -1080,16 +1080,16 @@ pub(crate) fn push_message_header(
         .map(|role| ui_text::role_label(i18n, role))
         .expect("only message entries render a role header");
     let header = match message.state {
-        MessageStatus::Completed => role,
-        MessageStatus::Pending => format!("{role} ○"),
-        MessageStatus::InProgress => format!("{role} {}", transcript_spinner_placeholder()),
-        MessageStatus::PolicyDenied => format!("{role} ⊘"),
-        MessageStatus::UserDeclined => format!("{role} –"),
-        MessageStatus::CapabilityUnavailable | MessageStatus::ToolUnavailable => {
+        RunStatus::Completed => role,
+        RunStatus::Pending => format!("{role} ○"),
+        RunStatus::InProgress => format!("{role} {}", transcript_spinner_placeholder()),
+        RunStatus::PolicyDenied => format!("{role} ⊘"),
+        RunStatus::UserDeclined => format!("{role} –"),
+        RunStatus::CapabilityUnavailable | RunStatus::ToolUnavailable => {
             format!("{role} ◇")
         }
-        MessageStatus::Failed => format!("{role} ×"),
-        MessageStatus::Cancelled => format!("{role} –"),
+        RunStatus::Failed => format!("{role} ×"),
+        RunStatus::Cancelled => format!("{role} –"),
     };
     let header_style =
         style_for_role(message.role.expect("message role")).add_modifier(Modifier::BOLD);
@@ -1455,7 +1455,7 @@ pub(crate) fn render_part_node(
         }
         TranscriptPartContent::Activity(TranscriptActivityContent::Request(request)) => {
             match request.as_ref() {
-                MessageRequestPartResource::UserInput { request, .. } => {
+                RequestPartResource::UserInput { request, .. } => {
                     render_user_input_request(request, out, width, i18n);
                     RenderedNodeDraft {
                         key: TranscriptNodeKey::Activity {
@@ -1781,7 +1781,7 @@ fn push_user_document_line(out: &mut Vec<RenderedLine>, tokens: Vec<UserDocument
 
 #[cfg(test)]
 pub(crate) fn thinking_collapsed_summary(
-    status: agena_api::message_part::PartExecutionStatusResource,
+    status: agena_api::part::PartExecutionStatusResource,
     text: &str,
 ) -> String {
     let normalized = trim_empty_line_edges(sanitize_terminal_text(text).as_str());

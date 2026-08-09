@@ -9,7 +9,7 @@
 //! ## Surface
 //!
 //! - `resource`: REST resource projections (`SessionResource`,
-//!   `MessageResource`, `WorkspaceResource`, …) — shared typed resources for
+//!   `RunResource`, `WorkspaceResource`, …) — shared typed resources for
 //!   the unified API surface so existing clients can be ported
 //!   variant-for-variant.
 //! - `commands`: Side-effectful operations the client can invoke
@@ -33,7 +33,7 @@
 pub mod commands;
 pub mod error;
 pub mod live;
-pub mod message_part;
+pub mod part;
 pub mod notifications;
 pub mod pagination;
 pub mod queries;

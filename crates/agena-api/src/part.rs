@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::resource::{MessageAttachment, MessageSkillReference, UserInputReply, UserInputRequest};
+use crate::resource::{PartAttachment, PartSkillReference, UserInputReply, UserInputRequest};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -18,12 +18,12 @@ fn is_false(value: &bool) -> bool {
 /// content resource once every runtime content variant has an explicit API
 /// projection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MessagePartResource {
+pub struct PartResource {
     pub id: i64,
     pub message_id: i64,
     pub part_index: i32,
     pub status: PartExecutionStatusResource,
-    pub kind: MessagePartKindResource,
+    pub kind: PartKindResource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -38,13 +38,13 @@ pub struct MessagePartResource {
     pub operation_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<MessagePartDetailResource>,
+    pub content: Option<PartDetailResource>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 /// Kind of a message part; pairs with [`agena_domain::PartKind`] and drives how the part is rendered.
-pub enum MessagePartKindResource {
+pub enum PartKindResource {
     Text,
     Activity,
 }
@@ -72,20 +72,20 @@ pub enum PartExecutionStatusResource {
 /// typed request and tool-result contracts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum MessagePartDetailResource {
-    Text(MessageTextPartResource),
-    Reasoning(MessageReasoningPartResource),
-    Attachment(MessageAttachmentPartResource),
-    SkillReference(MessageSkillReferencePartResource),
-    Error(MessageErrorPartResource),
+pub enum PartDetailResource {
+    Text(TextPartResource),
+    Reasoning(ReasoningPartResource),
+    Attachment(AttachmentPartResource),
+    SkillReference(SkillReferencePartResource),
+    Error(ErrorPartResource),
     Operation(Box<OperationPartResource>),
-    Request(Box<MessageRequestPartResource>),
-    Hook(MessageHookPartResource),
+    Request(Box<RequestPartResource>),
+    Hook(HookPartResource),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A plain text part of a message.
-pub struct MessageTextPartResource {
+pub struct TextPartResource {
     pub text: String,
     #[serde(default, skip_serializing_if = "is_false")]
     pub synthetic: bool,
@@ -93,7 +93,7 @@ pub struct MessageTextPartResource {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Model reasoning text attached to a message part.
-pub struct MessageReasoningPartResource {
+pub struct ReasoningPartResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub summary: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -102,7 +102,7 @@ pub struct MessageReasoningPartResource {
     pub encrypted_content: Option<String>,
 }
 
-impl MessageReasoningPartResource {
+impl ReasoningPartResource {
     pub fn summary_text(&self) -> String {
         self.summary.concat()
     }
@@ -119,21 +119,21 @@ impl MessageReasoningPartResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-/// A message part carrying [`MessageAttachment`]s.
-pub struct MessageAttachmentPartResource {
+/// A message part carrying [`PartAttachment`]s.
+pub struct AttachmentPartResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<MessageAttachment>,
+    pub attachments: Vec<PartAttachment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A message part that references skills used by the run.
-pub struct MessageSkillReferencePartResource {
-    pub skills: Vec<MessageSkillReference>,
+pub struct SkillReferencePartResource {
+    pub skills: Vec<PartSkillReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A message part representing a failure.
-pub struct MessageErrorPartResource {
+pub struct ErrorPartResource {
     pub problem: agena_failure::UserProblem,
 }
 
@@ -141,7 +141,7 @@ pub struct MessageErrorPartResource {
 /// Hook activity (for example the workflow plan's `agent.stop` autorun
 /// continuation) rides the same activity pipeline as tool calls.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MessageHookPartResource {
+pub struct HookPartResource {
     /// The hook identifier that ran, for example `agent.stop`.
     pub hook: String,
     /// The plugin that ran the hook, when known.
@@ -159,7 +159,7 @@ pub struct MessageHookPartResource {
 /// than re-declared for message history.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "request_type", rename_all = "snake_case")]
-pub enum MessageRequestPartResource {
+pub enum RequestPartResource {
     UserInput {
         request: UserInputRequest,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,7 +188,7 @@ pub struct OperationPartResource {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<ArtifactRefResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<MessageAttachment>,
+    pub attachments: Vec<PartAttachment>,
     #[serde(default, skip_serializing_if = "ToolOutputResource::is_empty")]
     pub details: ToolOutputResource,
     #[serde(default, skip_serializing_if = "ToolResultEnvelopeResource::is_empty")]
@@ -398,7 +398,7 @@ pub struct ModelVisibleOutputResource {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<MessageAttachment>,
+    pub attachments: Vec<PartAttachment>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub truncated: bool,
 }
@@ -468,7 +468,7 @@ pub struct ToolResultEnvelopeResource {
     #[serde(default, skip_serializing_if = "HumanToolResultResource::is_empty")]
     pub human: HumanToolResultResource,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<MessageAttachment>,
+    pub attachments: Vec<PartAttachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<OperationErrorResource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -713,7 +713,7 @@ pub enum TodoPriorityResource {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessagePartDetailResource, MessageReasoningPartResource, MessageTextPartResource,
+        PartDetailResource, ReasoningPartResource, TextPartResource,
         OperationBlockResource, StructuredFieldResource, StructuredObjectResource,
         StructuredValueResource,
     };
@@ -732,7 +732,7 @@ mod tests {
             serde_json::json!({"type": "command", "command": "git status", "exit_code": 0})
         );
         assert_eq!(
-            serde_json::to_value(MessagePartDetailResource::Text(MessageTextPartResource {
+            serde_json::to_value(PartDetailResource::Text(TextPartResource {
                 text: "hello".to_owned(),
                 synthetic: false,
             }))
@@ -742,8 +742,8 @@ mod tests {
     }
 
     #[test]
-    fn message_part_helpers_remain_protocol_owned() {
-        let reasoning = MessageReasoningPartResource {
+    fn part_helpers_remain_protocol_owned() {
+        let reasoning = ReasoningPartResource {
             summary: vec!["thinking ".to_owned(), "continues".to_owned()],
             raw_content: vec!["raw".to_owned()],
             encrypted_content: None,

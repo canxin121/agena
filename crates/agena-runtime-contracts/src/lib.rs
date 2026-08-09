@@ -22,7 +22,7 @@ pub mod permission;
 pub mod provider_state;
 
 pub use message::*;
-pub use provider_state::MessageProviderState;
+pub use provider_state::PartProviderState;
 
 /// Session state needed by tool execution, kept as a neutral port so neither
 /// the tool executor nor session core depends on the other's implementation.

@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 
 use agena_domain::MessageSource;
 
-// Migration shim (R6-T1): `MessageProviderState` now lives at the crate root
+// Migration shim (R6-T1): `PartProviderState` now lives at the crate root
 // in `provider_state.rs`. Re-exported here so the historical
-// `message::MessageProviderState` / `message::metadata::MessageProviderState`
+// `message::PartProviderState` / `message::metadata::PartProviderState`
 // paths keep resolving while consumers migrate (R6-T5/T6).
-pub use crate::provider_state::MessageProviderState;
+pub use crate::provider_state::PartProviderState;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
 /// Metadata attached to a message.

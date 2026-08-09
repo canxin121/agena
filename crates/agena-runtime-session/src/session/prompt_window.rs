@@ -2,21 +2,16 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use smol_str::SmolStr;
 
-use crate::{
-    provider::project_completion_input,
-    tool::ToolApiBinding,
-};
+use crate::{provider::project_completion_input, tool::ToolApiBinding};
 use agena_domain::{Role, ToolCallId};
 use agena_provider::{
-    CompletionInputAttachment, CompletionInputAttachmentSource, CompletionInputRun,
-    CompletionInputPart, PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionContext,
+    CompletionInputAttachment, CompletionInputAttachmentSource, CompletionInputPart,
+    CompletionInputRun, PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionContext,
 };
 use agena_storage::store::{Part, PartRole, PartState};
 
 use super::Session;
-use super::model::{
-    PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
-};
+use super::model::{PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime};
 use super::store::parts_into_runs;
 use super::transcript::{
     ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
@@ -202,9 +197,7 @@ fn project_window_items(
         }
         // Native provider checkpoints are not portable. A model switch must
         // replay canonical Agena history rather than interpreting opaque data.
-        PromptCompactionContent::OpenAiResponses { .. } => {
-            window_items_from_parts(parts)
-        }
+        PromptCompactionContent::OpenAiResponses { .. } => window_items_from_parts(parts),
     }
 }
 
@@ -313,9 +306,7 @@ pub(crate) fn provider_compaction_for_model(
     }
 }
 
-pub(crate) fn normalize_prompt_runs(
-    messages: &[CompletionInputRun],
-) -> Vec<CompletionInputRun> {
+pub(crate) fn normalize_prompt_runs(messages: &[CompletionInputRun]) -> Vec<CompletionInputRun> {
     messages
         .iter()
         .filter(|run| run_has_visible_prompt_payload(run))
@@ -595,7 +586,9 @@ fn attachment_to_transcript_block(item: &CompletionInputAttachment) -> Transcrip
             format!("base64:{}", digest_bytes(data.trim().as_bytes()))
         }
         CompletionInputAttachmentSource::FileId { id } => format!("file_id:{}", id.trim()),
-        CompletionInputAttachmentSource::LocalPath { path } => format!("local_path:{}", path.trim()),
+        CompletionInputAttachmentSource::LocalPath { path } => {
+            format!("local_path:{}", path.trim())
+        }
     };
     let kind_marker = match item.kind {
         agena_provider::CompletionInputAttachmentKind::Image => "image",
@@ -662,7 +655,8 @@ pub(crate) fn approximate_request_tokens_from_runs(
         .iter()
         .map(approximate_run_payload_chars)
         .sum::<usize>();
-    let total_chars = payload_chars.saturating_add(approximate_request_overhead_chars(system, tools));
+    let total_chars =
+        payload_chars.saturating_add(approximate_request_overhead_chars(system, tools));
     agena_runtime::estimate_prompt_tokens_from_chars(total_chars)
 }
 
@@ -753,10 +747,7 @@ pub(crate) fn build_prepared_prompt(
             delta_runs,
         } => (delta_runs, Some(previous_response_id), None),
         PromptContinuationOutcome::Restart { .. } => (
-            prompt_runs
-                .into_iter()
-                .map(|item| item.run)
-                .collect(),
+            prompt_runs.into_iter().map(|item| item.run).collect(),
             None,
             provider_compaction_for_model(
                 session,
@@ -865,8 +856,7 @@ fn evaluate_prompt_continuation(
     };
 
     if !anchor.transcript_digest.is_empty()
-        && prompt_prefix_transcript_digest(prompt_runs, anchor_index)
-            != anchor.transcript_digest
+        && prompt_prefix_transcript_digest(prompt_runs, anchor_index) != anchor.transcript_digest
     {
         return PromptContinuationOutcome::Restart {
             reason: PromptContinuationReason::TranscriptDigestMismatch,
@@ -980,8 +970,7 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 }
 
 fn approximate_run_payload_chars(run: &CompletionInputRun) -> usize {
-    run
-        .parts
+    run.parts
         .iter()
         .map(|part| match part {
             CompletionInputPart::Text { text } | CompletionInputPart::Reasoning { text } => {
@@ -1064,15 +1053,21 @@ mod compaction_tests {
     };
     use crate::session::store::{run_marker_content, text_content, typed_content_to_value};
     use agena_domain::{MessageSource, PromptCompactionStrategy, PromptCompactionTrigger};
-    use agena_runtime_contracts::part_content::TypedContent;
     use agena_provider::CompletionUsage;
+    use agena_runtime_contracts::part_content::TypedContent;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use chrono::{DateTime, Utc};
 
     /// Build one run marker part (`part_id` = the durable message id) plus its
     /// text content part, the v2 parts shape the prompt path projects onto
     /// provider input messages via `project_completion_input`.
-    fn run_parts(id: i64, role: PartRole, source: &str, text: &str, now: DateTime<Utc>) -> Vec<Part> {
+    fn run_parts(
+        id: i64,
+        role: PartRole,
+        source: &str,
+        text: &str,
+        now: DateTime<Utc>,
+    ) -> Vec<Part> {
         let mut content = run_marker_content("user_send", None, None, None, None);
         content["source"] = serde_json::json!(source);
         vec![
@@ -1100,10 +1095,8 @@ mod compaction_tests {
                 kind: "text".to_owned(),
                 role,
                 state: PartState::Completed,
-                content: typed_content_to_value(&TypedContent::Text(text_content(
-                    text.to_owned(),
-                )))
-                .expect("text content is always serializable"),
+                content: typed_content_to_value(&TypedContent::Text(text_content(text.to_owned())))
+                    .expect("text content is always serializable"),
                 summary: None,
                 visibility: PartVisibility::Both,
                 rendered_markdown: None,
@@ -1210,7 +1203,13 @@ mod compaction_tests {
         let now = Utc::now();
         let mut session = Session::new(7, 11, "test", now);
         let mut parts = run_parts(1, PartRole::User, "user", "old user", now);
-        parts.extend(run_parts(2, PartRole::Assistant, "tool", "old assistant", now));
+        parts.extend(run_parts(
+            2,
+            PartRole::Assistant,
+            "tool",
+            "old assistant",
+            now,
+        ));
         parts.push(compaction_marker(50, "durable state", now));
         parts.extend(run_parts(3, PartRole::User, "user", "future user", now));
         session.install_projected_parts(parts);
@@ -1251,7 +1250,9 @@ mod compaction_tests {
         assert_eq!(texts[1], "retained assistant");
         assert_eq!(texts[2], "future user");
         assert!(
-            texts.iter().all(|text| text != "old user" && text != "old assistant"),
+            texts
+                .iter()
+                .all(|text| text != "old user" && text != "old assistant"),
             "pre-checkpoint transcript must be excluded from the window; got {texts:?}"
         );
     }
@@ -1283,10 +1284,7 @@ mod compaction_tests {
         // hook-only assistant message and the checkpoint marker project to no
         // provider payload.
         assert_eq!(
-            prompt_runs
-                .iter()
-                .map(|item| item.id)
-                .collect::<Vec<_>>(),
+            prompt_runs.iter().map(|item| item.id).collect::<Vec<_>>(),
             vec![Some(1), Some(2), Some(3), Some(100)]
         );
     }
@@ -1348,22 +1346,12 @@ mod compaction_tests {
                 .is_none()
         );
 
-        let wrong_adapter = compactable_prompt_runs(
-            &session,
-            Some("openai"),
-            Some("chat"),
-            Some("gpt"),
-            true,
-        );
+        let wrong_adapter =
+            compactable_prompt_runs(&session, Some("openai"), Some("chat"), Some("gpt"), true);
         assert_eq!(wrong_adapter.len(), 1);
 
-        let switched = compactable_prompt_runs(
-            &session,
-            Some("anthropic"),
-            None,
-            Some("claude"),
-            true,
-        );
+        let switched =
+            compactable_prompt_runs(&session, Some("anthropic"), None, Some("claude"), true);
         assert_eq!(switched.len(), 1);
         assert!(
             provider_compaction_for_model(&session, "anthropic", None, "claude", true).is_none()
@@ -1398,7 +1386,13 @@ mod compaction_tests {
         let now = Utc::now();
         let mut session = Session::new(7, 11, "test", now);
         let mut parts = run_parts(1, PartRole::User, "user", "old user", now);
-        parts.extend(run_parts(2, PartRole::Assistant, "tool", "old assistant", now));
+        parts.extend(run_parts(
+            2,
+            PartRole::Assistant,
+            "tool",
+            "old assistant",
+            now,
+        ));
         session.install_projected_parts(parts);
         let window = session.parts().to_vec();
         let digest = prompt_transcript_digest(&window[..window.len()]);
@@ -1426,10 +1420,12 @@ mod compaction_tests {
         let window = session.active_window_parts();
         assert_eq!(window.len(), 2, "only the post-checkpoint run's parts");
         assert_eq!(
-            text_lossy_list(&window_items_from_parts(window)
-                .into_iter()
-                .map(|item| item.run)
-                .collect::<Vec<_>>()),
+            text_lossy_list(
+                &window_items_from_parts(window)
+                    .into_iter()
+                    .map(|item| item.run)
+                    .collect::<Vec<_>>()
+            ),
             vec!["future user".to_owned()]
         );
     }

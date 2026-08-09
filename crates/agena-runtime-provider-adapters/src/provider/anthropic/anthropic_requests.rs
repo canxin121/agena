@@ -12,8 +12,7 @@ impl AnthropicAdapter {
     pub(crate) fn thinking_blocks_from_message(
         run: &CompletionInputRun,
     ) -> Vec<AnthropicTextBlock> {
-        run
-            .provider_state
+        run.provider_state
             .anthropic_thinking_blocks
             .iter()
             .filter_map(|block| {
@@ -89,19 +88,14 @@ impl AnthropicAdapter {
         blocks
     }
 
-    pub(crate) fn assistant_messages_from_parts(
-        run: &CompletionInputRun,
-    ) -> Vec<AnthropicMessage> {
+    pub(crate) fn assistant_messages_from_parts(run: &CompletionInputRun) -> Vec<AnthropicMessage> {
         let projected = wire_message::project(run);
         if !projected
             .iter()
             .any(|part| matches!(part, wire_message::WirePart::ToolResult { .. }))
         {
             let mut content = Self::thinking_blocks_from_message(run);
-            content.extend(Self::blocks_from_projected_parts(
-                run,
-                projected.as_slice(),
-            ));
+            content.extend(Self::blocks_from_projected_parts(run, projected.as_slice()));
             return vec![AnthropicMessage {
                 role: "assistant".to_owned(),
                 content,
@@ -142,9 +136,7 @@ impl AnthropicAdapter {
         messages
     }
 
-    pub(crate) fn tool_messages_from_parts(
-        run: &CompletionInputRun,
-    ) -> Vec<AnthropicMessage> {
+    pub(crate) fn tool_messages_from_parts(run: &CompletionInputRun) -> Vec<AnthropicMessage> {
         let content = wire_message::project(run)
             .into_iter()
             .filter_map(|part| match part {

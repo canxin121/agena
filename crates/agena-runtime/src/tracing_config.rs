@@ -167,9 +167,7 @@ pub(crate) fn resolve_scheduler_database_url(
     database_url: Option<String>,
     database_path: Option<std::path::PathBuf>,
 ) -> Result<String, StorageConfigError> {
-    if let Some(url) = database_url.or_else(|| {
-        std::env::var("AGENA_SCHEDULER_DATABASE_URL").ok()
-    }) {
+    if let Some(url) = database_url.or_else(|| std::env::var("AGENA_SCHEDULER_DATABASE_URL").ok()) {
         return Ok(url);
     }
     let path = database_path
@@ -247,7 +245,8 @@ mod tests {
         use sea_orm::{ConnectionTrait, Statement};
         use std::path::PathBuf;
 
-        let dir = std::env::temp_dir().join(format!("agena-scheduler-db-test-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("agena-scheduler-db-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("create temp dir");
         let db_path = dir.join("scheduler.db");
         let _ = std::fs::remove_file(&db_path);

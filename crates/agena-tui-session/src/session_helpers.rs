@@ -6,9 +6,7 @@
 
 use std::ops::Range;
 
-use agena_api::resource::{
-    RunResource, RunRole, RunStatus, SessionExecutionContextResource,
-};
+use agena_api::resource::{RunResource, RunRole, RunStatus, SessionExecutionContextResource};
 use agena_domain::{ModelRef, UserInputQuestion};
 use agena_tui::user_input::UserInputAnswerDraft;
 use unicode_segmentation::UnicodeSegmentation;

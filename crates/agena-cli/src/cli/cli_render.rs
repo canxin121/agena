@@ -19,10 +19,10 @@ use super::{
     git_output, last_assistant_text_from_projection, latest_event_seq, list_all_session_summaries,
     list_permission_rules, memory_type_label, paginate_session_summaries,
     permission_reply_kind_from_arg, permission_rule_output,
-    permission_rule_write_command_from_args, permission_scope_from_arg,
-    projected_run_visible_text, render_serialized, resolve_continue_options,
-    resolve_run_options, review_prompt, selected_session_id, session_detail_from_presentation,
-    session_storage_error, title_from_prompt, usage_stats_query_from_args,
+    permission_rule_write_command_from_args, permission_scope_from_arg, projected_run_visible_text,
+    render_serialized, resolve_continue_options, resolve_run_options, review_prompt,
+    selected_session_id, session_detail_from_presentation, session_storage_error,
+    title_from_prompt, usage_stats_query_from_args,
 };
 
 impl AgenaCli {

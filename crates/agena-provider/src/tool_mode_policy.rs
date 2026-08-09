@@ -1,7 +1,7 @@
 use agena_domain::{ModelId, Role};
 
 use crate::{
-    AgenaToolMode, CompletionInputRun, CompletionInputPart, CompletionInputToolResultStatus,
+    AgenaToolMode, CompletionInputPart, CompletionInputRun, CompletionInputToolResultStatus,
     CompletionRequest, CompletionResponse, ProviderNativeToolsConfig,
 };
 

@@ -196,7 +196,9 @@ mod tests {
         let db = Database::connect("sqlite::memory:")
             .await
             .expect("connect in-memory SQLite");
-        initialize_schema(&db).await.expect("initialize scheduler schema");
+        initialize_schema(&db)
+            .await
+            .expect("initialize scheduler schema");
         assert_eq!(read_version(&db).await, CURRENT_SCHEMA_VERSION);
         for table in ["agena_scheduler_jobs", "agena_scheduler_history"] {
             let count: i64 = db

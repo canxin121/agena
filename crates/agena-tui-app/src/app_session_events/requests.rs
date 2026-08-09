@@ -486,11 +486,11 @@ fn rewind_targets_from_parts(
     let mut run_text = String::new();
     for part in parts {
         if part.kind == "run" {
-            if let Some(marker) = current_run.take() {
-                if marker.role == "user" {
-                    targets.push(crate::RewindTarget::from_run(marker, sequence, &run_text));
-                    sequence += 1;
-                }
+            if let Some(marker) = current_run.take()
+                && marker.role == "user"
+            {
+                targets.push(crate::RewindTarget::from_run(marker, sequence, &run_text));
+                sequence += 1;
             }
             current_run = Some(part);
             run_text = String::new();

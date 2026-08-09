@@ -476,8 +476,7 @@ impl AmazonBedrockAdapter {
     pub(super) fn anthropic_thinking_blocks_from_message(
         run: &agena_provider::CompletionInputRun,
     ) -> Vec<BedrockAnthropicTextBlock> {
-        run
-            .provider_state
+        run.provider_state
             .anthropic_thinking_blocks
             .iter()
             .filter_map(|block| {

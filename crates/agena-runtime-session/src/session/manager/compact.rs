@@ -6,12 +6,10 @@ use super::{
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
 use crate::session::prompt_window;
-use agena_domain::{
-    PromptCompactionStrategy, PromptCompactionTrigger, Role, ThinkingRequest,
-};
-use agena_provider::{CompletionInputRun, CompletionInputPart, CompletionRequest};
+use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger, Role, ThinkingRequest};
 use agena_provider::ProviderErrorKind;
 use agena_provider::{CompletionFinishReason, ProviderCompactionContext, ProviderCompactionOutput};
+use agena_provider::{CompletionInputPart, CompletionInputRun, CompletionRequest};
 use agena_runtime::{
     DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_RUN_CHARS,
     MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
@@ -339,13 +337,12 @@ impl SessionManager {
             options.model.model_id.as_ref(),
             native_compaction_enabled,
         );
-        let before_tokens =
-            prompt_window::approximate_request_tokens_from_runs_with_compaction(
-                turns.as_slice(),
-                options.system.as_deref(),
-                tools.as_slice(),
-                provider_compaction.as_ref(),
-            );
+        let before_tokens = prompt_window::approximate_request_tokens_from_runs_with_compaction(
+            turns.as_slice(),
+            options.system.as_deref(),
+            tools.as_slice(),
+            provider_compaction.as_ref(),
+        );
         let metadata = state
             .processor
             .model_metadata(&options.model)
@@ -736,10 +733,7 @@ fn bounded_compactor_history(
     selected
 }
 
-fn compaction_safe_message(
-    message: &CompletionInputRun,
-    max_chars: usize,
-) -> CompletionInputRun {
+fn compaction_safe_message(message: &CompletionInputRun, max_chars: usize) -> CompletionInputRun {
     let role = if message.role == Role::Tool {
         Role::User
     } else {

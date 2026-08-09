@@ -364,9 +364,7 @@ impl GeminiAdapter {
         Ok(request)
     }
 
-    pub(super) fn message_parts(
-        run: &agena_provider::CompletionInputRun,
-    ) -> Vec<GeminiPart> {
+    pub(super) fn message_parts(run: &agena_provider::CompletionInputRun) -> Vec<GeminiPart> {
         let projected_parts = wire_message::project(run);
         Self::parts_from_projected_parts(run, projected_parts.as_slice())
     }
@@ -495,9 +493,7 @@ impl GeminiAdapter {
         contents
     }
 
-    pub(super) fn tool_contents(
-        run: &agena_provider::CompletionInputRun,
-    ) -> Vec<GeminiContent> {
+    pub(super) fn tool_contents(run: &agena_provider::CompletionInputRun) -> Vec<GeminiContent> {
         wire_message::project(run)
             .into_iter()
             .filter_map(|part| match part {
@@ -928,9 +924,7 @@ mod tests {
             },
         ];
 
-        let input = crate::provider::project_completion_input(&assistant_run(Some(
-            provider_state,
-        )));
+        let input = crate::provider::project_completion_input(&assistant_run(Some(provider_state)));
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(
@@ -982,9 +976,7 @@ mod tests {
             text: "answer".to_owned(),
         }];
 
-        let input = crate::provider::project_completion_input(&assistant_run(Some(
-            provider_state,
-        )));
+        let input = crate::provider::project_completion_input(&assistant_run(Some(provider_state)));
         let parts = GeminiAdapter::parts_from_projected_parts(&input, &projected);
 
         assert_eq!(

@@ -93,8 +93,7 @@ pub async fn dispatch_command(
             options,
             document,
         }) => {
-            let request =
-                session_user_run_request(state, session_id, options, document).await?;
+            let request = session_user_run_request(state, session_id, options, document).await?;
             let outcome = session_services
                 .commands
                 .submit_user_run(request)

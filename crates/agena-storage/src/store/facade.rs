@@ -1164,8 +1164,11 @@ where
             .update_part(session_id, &owner, part_id, delta, self.now())
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory
-            .apply_committed(session_id, std::slice::from_ref(&updated), Some(meta.version));
+        self.memory.apply_committed(
+            session_id,
+            std::slice::from_ref(&updated),
+            Some(meta.version),
+        );
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
             part: updated.clone(),
@@ -1188,8 +1191,11 @@ where
             .complete_run(session_id, &owner, run_id, outcome, self.now())
             .await?;
         let meta = self.engine.session_meta(session_id).await?;
-        self.memory
-            .apply_committed(session_id, std::slice::from_ref(&marker), Some(meta.version));
+        self.memory.apply_committed(
+            session_id,
+            std::slice::from_ref(&marker),
+            Some(meta.version),
+        );
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
             part: marker.clone(),
@@ -1361,8 +1367,10 @@ where
             self.memory
                 .apply_committed(session_id, &updated_parts, Some(meta.version));
             for part in &updated_parts {
-                self.bus
-                    .emit(SessionChange::PartUpdated { session_id, part: part.clone() });
+                self.bus.emit(SessionChange::PartUpdated {
+                    session_id,
+                    part: part.clone(),
+                });
             }
             self.bus
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
@@ -2129,7 +2137,10 @@ mod tests {
         // The replay resolves to the same run but is not a re-creation: the
         // marker is not re-emitted (`created == false`) while the run id and
         // content parts match.
-        assert_eq!(first.run_id, second.run_id, "replay returns the same run id");
+        assert_eq!(
+            first.run_id, second.run_id,
+            "replay returns the same run id"
+        );
         assert!(!second.created, "replay is not a re-creation");
         let view = facade.load(session_id).await.expect("load");
         assert_eq!(view.parts.len(), 2, "no duplicate parts");
@@ -2922,10 +2933,7 @@ mod tests {
 
     #[async_trait]
     impl PersistenceEngine for CountingEngine {
-        async fn create_session(
-            &self,
-            new_session: NewSession,
-        ) -> Result<SessionMeta, StoreError> {
+        async fn create_session(&self, new_session: NewSession) -> Result<SessionMeta, StoreError> {
             self.inner.create_session(new_session).await
         }
 
@@ -3025,10 +3033,7 @@ mod tests {
             self.inner.session_counts_by_workspace(workspace_ids).await
         }
 
-        async fn list_session_tree(
-            &self,
-            root_id: i64,
-        ) -> Result<Vec<SessionSummary>, StoreError> {
+        async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, StoreError> {
             self.inner.list_session_tree(root_id).await
         }
 
@@ -3058,18 +3063,11 @@ mod tests {
                 .await
         }
 
-        async fn release_lease(
-            &self,
-            session_id: i64,
-            owner_id: &str,
-        ) -> Result<bool, StoreError> {
+        async fn release_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError> {
             self.inner.release_lease(session_id, owner_id).await
         }
 
-        async fn current_lease(
-            &self,
-            session_id: i64,
-        ) -> Result<Option<LeaseState>, StoreError> {
+        async fn current_lease(&self, session_id: i64) -> Result<Option<LeaseState>, StoreError> {
             self.inner.current_lease(session_id).await
         }
 
@@ -3248,7 +3246,10 @@ mod tests {
             1,
             "first load of an unwritten session goes to the engine"
         );
-        facade.engine().load_session_calls.store(0, Ordering::SeqCst);
+        facade
+            .engine()
+            .load_session_calls
+            .store(0, Ordering::SeqCst);
 
         // a. submit_user_run: apply_committed seeds the cache with the
         //    committed marker + parts, so the next load is a hit.

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use agena_api::resource::{
-    RunRole, RunStatus, PendingInteractiveRequest, SessionExecutionResource,
+    PendingInteractiveRequest, RunRole, RunStatus, SessionExecutionResource,
 };
 use agena_domain::PermissionReplyKind;
 use agena_plugin_sdk::AttachmentKind;

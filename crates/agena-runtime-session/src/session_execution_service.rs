@@ -6,8 +6,7 @@ use async_trait::async_trait;
 
 use crate::{
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
-    SessionUserRunRequest,
+    SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions, SessionUserRunRequest,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

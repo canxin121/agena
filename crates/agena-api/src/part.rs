@@ -713,9 +713,8 @@ pub enum TodoPriorityResource {
 #[cfg(test)]
 mod tests {
     use super::{
-        PartDetailResource, ReasoningPartResource, TextPartResource,
-        OperationBlockResource, StructuredFieldResource, StructuredObjectResource,
-        StructuredValueResource,
+        OperationBlockResource, PartDetailResource, ReasoningPartResource, StructuredFieldResource,
+        StructuredObjectResource, StructuredValueResource, TextPartResource,
     };
 
     #[test]

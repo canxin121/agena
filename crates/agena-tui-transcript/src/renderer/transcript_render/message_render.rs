@@ -1,6 +1,6 @@
 use super::super::transcript_ast::{MarkdownNode, markdown_inline_line, render_attachment_image};
 use super::super::{
-    I18n, Local, RunStatus, Modifier, RenderedLine, RenderedTranscriptNode,
+    I18n, Local, Modifier, RenderedLine, RenderedTranscriptNode, RunStatus,
     SessionExecutionResource, Style, TOOL_CARD_PREVIEW_CHARS, TOOL_CARD_PREVIEW_LINES,
     ToolOutputPreview, TranscriptDetailDefaults, TranscriptEntry, TranscriptNodeKey,
     TranscriptNodeKind, UnicodeWidthStr, concise_text, format_occurred_time, format_timestamp,
@@ -18,9 +18,7 @@ use crate::{
     RequestPartResource, TranscriptActivityContent, TranscriptActivitySection,
     TranscriptAssistantReplyLifecycle, TranscriptEntryPart, TranscriptPartContent,
 };
-use agena_api::resource::{
-    PartAttachment, PartAttachmentKind, PartAttachmentSource, RunResource,
-};
+use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource, RunResource};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -805,10 +803,9 @@ fn canonical_resource_attachment(resource: &agena_domain::ResourceActivity) -> P
             },
             Some(sha256.clone()),
         ),
-        agena_domain::ResourceReference::WorkspacePath { path } => (
-            PartAttachmentSource::LocalPath { path: path.clone() },
-            None,
-        ),
+        agena_domain::ResourceReference::WorkspacePath { path } => {
+            (PartAttachmentSource::LocalPath { path: path.clone() }, None)
+        }
         agena_domain::ResourceReference::Url { url } => {
             (PartAttachmentSource::Url { url: url.clone() }, None)
         }

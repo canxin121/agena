@@ -7,9 +7,7 @@
 
 use crate::TranscriptActivityPresentation;
 use agena_api::{
-    part::{
-        ReasoningPartResource, TextPartResource, PartExecutionStatusResource,
-    },
+    part::{PartExecutionStatusResource, ReasoningPartResource, TextPartResource},
     resource::{RunRole, RunStatus},
 };
 use agena_domain::{

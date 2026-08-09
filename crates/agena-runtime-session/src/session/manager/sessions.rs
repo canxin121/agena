@@ -2,11 +2,11 @@ use super::{
     AppError, SessionCreateRequest, SessionListRequest, SessionManager, SessionRunOptions,
     SessionSummary,
 };
-use crate::session::store::new_part_from_content;
 use crate::session::Session;
-use agena_runtime_contracts::part_content::TypedContent;
 use crate::session::prompt_window;
+use crate::session::store::new_part_from_content;
 use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{PartRole, PartState};
 use std::collections::HashMap;
 

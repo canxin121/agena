@@ -6,9 +6,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use agena_domain::{
-    AssistantReplyId, ModelId, ModelRef, ProviderId, Role, TurnId,
-};
+use agena_domain::{AssistantReplyId, ModelId, ModelRef, ProviderId, Role, TurnId};
 use agena_plugin_host::{PluginHost, PluginHostBuildConfig, PluginsConfig, ToolPresentationConfig};
 use agena_provider::{
     CompletionFinishReason, CompletionRequest, CompletionResponse, CompletionStreamEvent,
@@ -117,9 +115,7 @@ async fn append_message(
     };
     let new_parts = contents
         .iter()
-        .map(|content| {
-            new_part_from_content("text", part_role, content, PartState::Completed)
-        })
+        .map(|content| new_part_from_content("text", part_role, content, PartState::Completed))
         .collect::<Result<Vec<_>, _>>()
         .expect("build message parts");
     // A user append is one `user_send` run (marker + parts); any other role
@@ -198,7 +194,10 @@ async fn messages_are_run_markers_plus_ordered_parts() {
         &manager,
         session,
         Role::User,
-        vec![TypedContent::Text(text_content("first")), TypedContent::Text(text_content("second"))],
+        vec![
+            TypedContent::Text(text_content("first")),
+            TypedContent::Text(text_content("second")),
+        ],
     )
     .await;
     let session = append_message(
@@ -243,7 +242,10 @@ async fn one_checkpoint_updates_only_the_named_part_revision() {
         &manager,
         session,
         Role::Assistant,
-        vec![TypedContent::Text(text_content("left")), TypedContent::Text(text_content("right"))],
+        vec![
+            TypedContent::Text(text_content("left")),
+            TypedContent::Text(text_content("right")),
+        ],
     )
     .await;
     let before = manager
@@ -278,10 +280,9 @@ async fn one_checkpoint_updates_only_the_named_part_revision() {
                 part_id: changed_part_id,
             })
             .expect("changed part");
-        changed.content = typed_content_to_value(&TypedContent::Text(text_content(
-            "right updated",
-        )))
-        .expect("part content is JSON serializable");
+        changed.content =
+            typed_content_to_value(&TypedContent::Text(text_content("right updated")))
+                .expect("part content is JSON serializable");
     }
     manager
         .persist_session_changes(
@@ -458,8 +459,8 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
             vec![NewPart::pending(
                 "interaction",
                 PartRole::Runtime,
-                interaction_from_request(&RequestPart::UserInput(
-                    InteractiveRequestPart::pending(agena_domain::UserInputRequest {
+                interaction_from_request(&RequestPart::UserInput(InteractiveRequestPart::pending(
+                    agena_domain::UserInputRequest {
                         request_id: "ask-1".to_owned(),
                         session_id: Some(session.id),
                         title: "Choose a path".to_owned(),
@@ -468,8 +469,8 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
                         presented_at: None,
                         questions: Vec::new(),
                         created_at: chrono::Utc::now(),
-                    }),
-                ))
+                    },
+                )))
                 .as_value(),
             )],
         )
@@ -681,9 +682,7 @@ impl ModelRuntime for FakeProvider {
         &self.model
     }
 
-    async fn list_models(
-        &self,
-    ) -> Result<Vec<agena_domain::Model>, ProviderError> {
+    async fn list_models(&self) -> Result<Vec<agena_domain::Model>, ProviderError> {
         Ok(Vec::new())
     }
 
@@ -709,9 +708,8 @@ impl ModelRuntime for FakeProvider {
     ) -> Result<
         std::pin::Pin<
             Box<
-                dyn futures_util::Stream<
-                        Item = Result<CompletionStreamEvent, ProviderError>,
-                    > + Send,
+                dyn futures_util::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                    + Send,
             >,
         >,
         ProviderError,
@@ -866,7 +864,10 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
         .expect("stream one assistant turn through the parts-native processor");
 
     // Terminal Completed: the marker and every content part end terminal.
-    assert!(matches!(result.termination, SessionRunTermination::Completed));
+    assert!(matches!(
+        result.termination,
+        SessionRunTermination::Completed
+    ));
     assert_eq!(result.run_marker.part_id, run_id);
     assert_eq!(result.run_marker.kind, "run");
     assert_eq!(result.run_marker.state, PartState::Completed);
@@ -891,7 +892,11 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
         .iter()
         .filter(|part| part.kind == "think")
         .collect();
-    assert_eq!(think_parts.len(), 1, "thinking delta becomes one think part");
+    assert_eq!(
+        think_parts.len(),
+        1,
+        "thinking delta becomes one think part"
+    );
     assert_eq!(think_parts[0].state, PartState::Completed);
 
     // No v1 double-write: the facade holds exactly the marker plus the parts
@@ -915,7 +920,11 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
     // drives, amortized in the buffer rather than committed per token.
     let run2 = manager
         .store
-        .start_run(session.id, "continue", serde_json::json!({"run_kind": "continue"}))
+        .start_run(
+            session.id,
+            "continue",
+            serde_json::json!({"run_kind": "continue"}),
+        )
         .await
         .expect("start second marker");
     let created = manager

@@ -1,7 +1,4 @@
-//! The retained "everything is a part" model, now at contracts top level.
-//!
-//! `MessagePart` (the v1 transcript part) is not part of this surface; it
-//! lives at [`crate::message::part`] until its removal.
+//! The retained "everything is a part" model, at contracts top level.
 
 mod attachment;
 mod content;

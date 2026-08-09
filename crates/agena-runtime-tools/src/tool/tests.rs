@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     authorization::ExecutionPrincipal,
-    message::{EnterSnapshotToolInput, ExitSnapshotToolInput},
+    part::{EnterSnapshotToolInput, ExitSnapshotToolInput},
     permission::{PermissionPolicy, ToolPermissionPolicy},
     snapshot_registry,
 };
@@ -71,7 +71,7 @@ async fn empty_test_plugin_host(workspace_root: &std::path::Path) -> Arc<PluginH
 )]
 impl ExecutorBackedShellAdapter {
     #[tool(name = "run", summary = "Run a shell command.", mutating, shell)]
-    async fn run(&self, _input: &crate::message::ShellCommandInput) -> String {
+    async fn run(&self, _input: &crate::part::ShellCommandInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
 }
@@ -84,12 +84,12 @@ impl ExecutorBackedShellAdapter {
 )]
 impl ExecutorBackedFsAdapter {
     #[tool(name = "read", summary = "Read a file.", read_only)]
-    async fn read(&self, _input: &crate::message::ReadToolInput) -> String {
+    async fn read(&self, _input: &crate::part::ReadToolInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
 
     #[tool(name = "grep", summary = "Search file contents with regex.", read_only)]
-    async fn grep(&self, _input: &crate::message::GrepToolInput) -> String {
+    async fn grep(&self, _input: &crate::part::GrepToolInput) -> String {
         "plugin adapter must not execute".to_owned()
     }
 }
@@ -154,22 +154,22 @@ impl crate::ToolSessionContext for TestSessionContext {
 )]
 impl ToolApiFixture {
     #[tool(name = "list", summary = "List tools.")]
-    async fn list(&self, _input: &crate::message::AskUserToolInput) -> String {
+    async fn list(&self, _input: &crate::part::AskUserToolInput) -> String {
         String::new()
     }
 
     #[tool(name = "search", summary = "Search tools.")]
-    async fn search(&self, _input: &crate::message::AskUserToolInput) -> String {
+    async fn search(&self, _input: &crate::part::AskUserToolInput) -> String {
         String::new()
     }
 
     #[tool(name = "help", summary = "Describe a tool.")]
-    async fn help(&self, _input: &crate::message::AskUserToolInput) -> String {
+    async fn help(&self, _input: &crate::part::AskUserToolInput) -> String {
         String::new()
     }
 
     #[tool(name = "tags", summary = "List tool tags.")]
-    async fn tags(&self, _input: &crate::message::AskUserToolInput) -> String {
+    async fn tags(&self, _input: &crate::part::AskUserToolInput) -> String {
         String::new()
     }
 }

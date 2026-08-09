@@ -1031,10 +1031,10 @@ fn notification_from_session_change(
     let agena_storage::store::SessionChange::PartAdded { session_id, part } = change else {
         return None;
     };
-    let content: agena_runtime::message::PartContent =
+    let content: agena_runtime::part::PartContent =
         serde_json::from_value(part.content.clone()).ok()?;
-    let agena_runtime::message::PartContent::Activity(
-        agena_runtime::message::RuntimeActivity::Notice(notice),
+    let agena_runtime::part::PartContent::Activity(
+        agena_runtime::part::RuntimeActivity::Notice(notice),
     ) = content
     else {
         return None;
@@ -1050,7 +1050,7 @@ fn notification_from_session_change(
 mod notification_aggregator_tests {
     use super::*;
     use agena_notification::model::{NotificationKind, NotificationSurface};
-    use agena_runtime::message::{NoticePart, PartContent, RuntimeActivity};
+    use agena_runtime::part::{NoticePart, PartContent, RuntimeActivity};
     use agena_storage::store::{Part, PartRole, PartState, SessionChange};
 
     fn notice_part_change(kind: &str, summary: &str) -> SessionChange {

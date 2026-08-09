@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use crate::message::{AskUserToolInput, TaskAccess, TaskToolInput};
+use crate::part::{AskUserToolInput, TaskAccess, TaskToolInput};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     AskUserOption as HostAskUserOption, AskUserQuestion as HostAskUserQuestion, AskUserRequest,

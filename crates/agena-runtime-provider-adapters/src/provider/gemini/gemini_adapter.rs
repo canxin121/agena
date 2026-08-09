@@ -867,7 +867,7 @@ impl GeminiAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_runtime_contracts::message::MessageProviderState;
+    use agena_runtime_contracts::provider_state::MessageProviderState;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use serde_json::Value;
     use std::collections::BTreeMap;

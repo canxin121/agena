@@ -3,7 +3,7 @@
 //! Concrete Git/Rift snapshot operations are runtime-owned. This module only
 //! connects tool payloads, permission checks, and the session registry.
 
-use crate::message::{EnterSnapshotToolInput, ExitSnapshotToolInput};
+use crate::part::{EnterSnapshotToolInput, ExitSnapshotToolInput};
 use crate::{
     SnapshotCreation, SnapshotRegistry, SnapshotSession, attach_existing_snapshot,
     create_managed_snapshot, remove_managed_snapshot, snapshot_has_local_changes,

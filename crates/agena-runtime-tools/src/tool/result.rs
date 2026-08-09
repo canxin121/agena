@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::message::AttachmentItem;
+use crate::part::AttachmentItem;
 use agena_domain::ToolOutput;
 use agena_tool::ToolPresentationSection;
 
@@ -219,10 +219,10 @@ mod tests {
     #[test]
     fn view_projects_attachment_metadata_without_sdk_source_types() {
         let view = ToolExecutionView {
-            attachments: vec![crate::message::AttachmentItem {
-                kind: crate::message::AttachmentKind::File,
+            attachments: vec![crate::part::AttachmentItem {
+                kind: crate::part::AttachmentKind::File,
                 mime: "text/plain".to_owned(),
-                source: crate::message::AttachmentSource::LocalPath {
+                source: crate::part::AttachmentSource::LocalPath {
                     path: "README.md".to_owned(),
                 },
                 filename: Some("README.md".to_owned()),

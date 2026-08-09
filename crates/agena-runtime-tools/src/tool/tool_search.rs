@@ -1,4 +1,4 @@
-use crate::message::ToolSearchToolInput;
+use crate::part::ToolSearchToolInput;
 use agena_plugin_host::registry::RegisteredTool;
 use agena_plugin_host::sdk::ToolTag;
 use agena_tool::tool_search::{ToolSearchDocument, search_tools};

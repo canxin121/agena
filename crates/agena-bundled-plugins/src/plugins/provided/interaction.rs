@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::message::{AskUserToolInput, InteractionNotifyToolInput};
+use crate::part::{AskUserToolInput, InteractionNotifyToolInput};
 use crate::plugins::provided::workflow::{WorkflowPlugin, WorkflowPluginConfig};
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{InitContext, InitOutcome, Result as SdkResult, ToolInvokeOutput};
@@ -88,7 +88,7 @@ impl InteractionPlugin {
 
 #[cfg(test)]
 mod tests {
-    use crate::message::{AskUserToolInput, InteractionNotifyToolInput};
+    use crate::part::{AskUserToolInput, InteractionNotifyToolInput};
     use agena_plugin_host::sdk::Plugin;
 
     use super::InteractionPlugin;

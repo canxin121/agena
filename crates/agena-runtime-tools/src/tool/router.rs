@@ -6,7 +6,7 @@
 
 use serde_json::Value as JsonValue;
 
-use crate::message::{ApplyPatchToolInput, ShellToolInput};
+use crate::part::{ApplyPatchToolInput, ShellToolInput};
 use crate::tool::ToolPayloadOutput;
 use crate::tool::result::ToolPayloadExecution;
 use agena_plugin_host::PluginError;

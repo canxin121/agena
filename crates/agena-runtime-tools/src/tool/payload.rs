@@ -4,7 +4,7 @@ use agena_tool::{CronJobSummary, CronRunSummary};
 use serde::{Deserialize, Serialize};
 use strum::Display;
 
-use crate::message::{
+use crate::part::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
     CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
     CronUpdateToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput, GlobToolInput,
@@ -37,7 +37,7 @@ pub enum ToolPayloadInput {
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
     Grep(GrepToolInput),
-    Task(crate::message::TaskToolInput),
+    Task(crate::part::TaskToolInput),
     ToolSearch(ToolSearchToolInput),
     #[serde(rename = "ask_user")]
     AskUser(AskUserToolInput),

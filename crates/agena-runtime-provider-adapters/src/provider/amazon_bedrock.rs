@@ -28,7 +28,7 @@ use crate::{
 use agena_domain::ThinkingRequest;
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
-use agena_runtime_contracts::message::{AttachmentItem, AttachmentKind};
+use agena_runtime_contracts::part::{AttachmentItem, AttachmentKind};
 
 mod bedrock_adapter;
 

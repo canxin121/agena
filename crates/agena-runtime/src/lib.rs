@@ -23,7 +23,7 @@
 //!   search.
 //! - [`provider`] — provider-facing ports and wire types.
 //! - [`plugins`] — bundled plugin composition and registration.
-//! - `authorization`, `message`, `permission`, `identity` — the shared
+//! - `authorization`, `part`, `provider_state`, `permission`, `identity` — the shared
 //!   contracts from [`agena_runtime_contracts`].
 //!
 //! Internal modules (composition, model catalog, background tasks, policy,
@@ -34,7 +34,7 @@ extern crate self as agena_runtime;
 
 pub use agena_runtime_contracts::{authorization, identity};
 mod config;
-pub use agena_runtime_contracts::message;
+pub use agena_runtime_contracts::{part, provider_state};
 pub use agena_runtime_session::AppError;
 mod model_catalog;
 pub use agena_runtime_contracts::permission;

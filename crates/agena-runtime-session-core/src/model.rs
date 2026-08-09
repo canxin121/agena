@@ -1,20 +1,16 @@
 //! Core session data model types.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::message::{
-    InteractiveRequestPart, Message, MessagePart, PartContent, RequestPart, RuntimeActivity,
-};
 use agena_domain::{
-    ExecutionSelection, ExecutionStatus, ModelRef, PendingInteractiveRequest,
-    PendingInteractiveRequestKind, PromptCompactionActivity, PromptTokenUsageSnapshot, Role,
-    SessionLifecycleState, SessionRelationKind, SubtaskStatus, TimeRange, ToolInvocation,
-    UserInputRequest, WorkflowState,
+    ExecutionSelection, ModelRef, PromptCompactionActivity, PromptTokenUsageSnapshot, Role,
+    SessionLifecycleState, SessionRelationKind, SubtaskStatus, WorkflowState,
 };
+use agena_storage::store::{Part, PartRole, PartState};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Runtime state of a subtask.
@@ -38,23 +34,22 @@ impl SubtaskRuntimeState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-/// Reference to a part inside a session.
+/// Reference to a part inside a session's parts projection.
+///
+/// Parts are flat in v2 — there is no message nesting — so a part reference is
+/// a position into [`Session::parts`] plus the part's stable id. The index is
+/// not serialized; consumers resolve by `part_id` when the index is stale.
 pub struct SessionPartRef {
     #[serde(default, skip_serializing)]
-    pub message_index: usize,
-    #[serde(default, skip_serializing)]
     pub part_index: usize,
-    pub message_id: i64,
     pub part_id: i64,
 }
 
 impl SessionPartRef {
-    fn new(message_index: usize, message: &Message, part_index: usize, part: &MessagePart) -> Self {
+    fn new(part_index: usize, part: &Part) -> Self {
         Self {
-            message_index,
             part_index,
-            message_id: message.id,
-            part_id: part.id,
+            part_id: part.part_id,
         }
     }
 }
@@ -63,34 +58,6 @@ impl SessionPartRef {
 /// A pending tool operation inside a session.
 pub struct SessionPendingTool {
     pub part: SessionPartRef,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-/// State of a recorded tool call.
-pub enum ToolCallRecordState {
-    Queued,
-    Running,
-}
-
-impl ToolCallRecordState {
-    fn from_execution_status(status: ExecutionStatus) -> Option<Self> {
-        match status {
-            ExecutionStatus::Pending => Some(Self::Queued),
-            ExecutionStatus::InProgress => Some(Self::Running),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// Record of a tool call.
-pub struct ToolCallRecord {
-    pub operation_id: String,
-    pub call_id: i64,
-    pub invocation: ToolInvocation,
-    pub advertised_tool_identity: Option<String>,
-    pub lifecycle: TimeRange,
-    pub state: ToolCallRecordState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,20 +113,6 @@ impl SessionPendingOperation {
 
     fn is_blocking_request(&self) -> bool {
         matches!(self, Self::Permission { .. } | Self::UserInput { .. })
-    }
-
-    fn permission_request(&self) -> Option<&SessionPendingPermissionRequest> {
-        match self {
-            Self::Permission { pending } => Some(pending),
-            Self::Tool { .. } | Self::UserInput { .. } => None,
-        }
-    }
-
-    fn user_input_request(&self) -> Option<&SessionPendingInteractiveRequest> {
-        match self {
-            Self::UserInput { pending } => Some(pending),
-            Self::Tool { .. } | Self::Permission { .. } => None,
-        }
     }
 }
 
@@ -604,7 +557,6 @@ impl SessionRuntimeState {
         }
 
         let rewrite_ref = |part_ref: &mut SessionPartRef| {
-            rewrite_message(&mut part_ref.message_id);
             rewrite_part(&mut part_ref.part_id);
         };
         for operation in &mut self.workflow.pending_operations {
@@ -744,6 +696,14 @@ impl SessionRuntimeState {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// A session with its runtime state.
+///
+/// The transcript is carried as a **parts projection cache**
+/// ([`Session::parts`]): the full ordered list of v2 parts
+/// (`agena_storage::store::Part`) in `(created_at_ms, part_id)` order. The
+/// aggregate only reads this projection for execution; every write goes
+/// through the storage facade. Derived state (pending operations, workflow
+/// snapshot, approx bytes) is recomputed from the parts on
+/// [`Session::install_projected_parts`] / [`Session::refresh_derived`].
 pub struct Session {
     pub id: i64,
     pub parent_id: Option<i64>,
@@ -764,8 +724,9 @@ pub struct Session {
     pub task_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Parts projection cache, in `(created_at_ms, part_id)` order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub messages: Vec<Message>,
+    pub parts: Vec<Part>,
     #[serde(skip, default)]
     pub runtime: SessionRuntimeState,
     #[serde(skip, default)]
@@ -791,15 +752,17 @@ impl Session {
             task_id: None,
             created_at: now,
             updated_at: now,
-            messages: Vec::new(),
+            parts: Vec::new(),
             runtime: SessionRuntimeState::default(),
             approx_bytes: 0,
             pending_operations: Vec::new(),
         }
     }
 
-    pub fn install_projected_messages(&mut self, messages: Vec<Message>) {
-        self.messages = messages;
+    /// Install a fresh parts projection (the ordered transcript as loaded
+    /// from the facade) and recompute all derived state from it.
+    pub fn install_projected_parts(&mut self, parts: Vec<Part>) {
+        self.parts = parts;
         self.refresh_derived();
     }
 
@@ -834,13 +797,23 @@ impl Session {
             .iter()
             .filter_map(|pending| {
                 let tool = pending.tool();
-                let (call_id, invocation, _) = self.pending_tool_execution(tool)?;
                 let part = self.part(&tool.part)?;
-                let operation_id = part.operation_id.clone()?;
+                let operation_id = part
+                    .content
+                    .get("operation_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| part.part_id.to_string());
+                let tool_name = part
+                    .content
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 Some(PendingToolCallRuntime {
                     operation_id,
-                    call_id,
-                    tool_name: tool_invocation_name(invocation),
+                    call_id: part.part_id,
+                    tool_name,
                     part: tool.part.clone(),
                 })
             })
@@ -878,400 +851,151 @@ impl Session {
         self.runtime = persisted.runtime.clone();
     }
 
+    // --- Parts projection reads (the A6 execution contract) ----------------
+
+    /// The full ordered parts projection cache.
+    pub fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+
+    /// The last part in the projection (transcript tail).
+    pub fn last_part(&self) -> Option<&Part> {
+        self.parts.last()
+    }
+
+    /// The last run marker (`kind == "run"`).
+    pub fn last_run_marker(&self) -> Option<&Part> {
+        self.parts.iter().rev().find(|part| part.kind == "run")
+    }
+
+    /// The last user-authored content part (role `user`, excluding run
+    /// markers).
+    pub fn last_user_part(&self) -> Option<&Part> {
+        self.parts
+            .iter()
+            .rev()
+            .find(|part| part.role == PartRole::User && part.kind != "run")
+    }
+
+    /// Pending tool calls: `tool_call` parts still awaiting a result — not yet
+    /// `completed`/`cancelled` and without a `tool_result` referencing them.
+    pub fn pending_tool_calls(&self) -> impl Iterator<Item = &Part> {
+        self.parts.iter().filter(|part| self.pending_tool_call(part))
+    }
+
+    /// Pending interaction parts (`kind == "interaction"`, in-flight state).
+    pub fn pending_interactions(&self) -> impl Iterator<Item = &Part> {
+        self.parts
+            .iter()
+            .filter(|part| part.kind == "interaction" && part.state.is_in_flight())
+    }
+
+    /// The latest pending interaction part, if any.
+    pub fn pending_interaction(&self) -> Option<&Part> {
+        self.parts
+            .iter()
+            .rev()
+            .find(|part| part.kind == "interaction" && part.state.is_in_flight())
+    }
+
+    /// Every `tool_result` part in the projection.
+    pub fn tool_results(&self) -> impl Iterator<Item = &Part> {
+        self.parts.iter().filter(|part| part.kind == "tool_result")
+    }
+
+    /// Whether a `tool_result` part references `call` via `parent_part_id`.
+    pub fn tool_result_for(&self, call: &Part) -> Option<&Part> {
+        self.parts
+            .iter()
+            .find(|part| part.kind == "tool_result" && part.parent_part_id == Some(call.part_id))
+    }
+
+    /// Whether `part` is a tool call still awaiting its result (not
+    /// `completed`/`cancelled` and without a paired `tool_result`).
+    fn pending_tool_call(&self, part: &Part) -> bool {
+        part.kind == "tool_call"
+            && part.state != PartState::Completed
+            && part.state != PartState::Cancelled
+            && self.tool_result_for(part).is_none()
+    }
+
+    // --- Derived execution state over the parts projection -----------------
+
+    /// Whether the session is gated on a pending interaction (permission or
+    /// user input) that blocks further execution.
     pub fn blocked(&self) -> bool {
         self.pending_operations
             .iter()
             .any(SessionPendingOperation::is_blocking_request)
     }
 
+    /// The next tool-call id to allocate. In v2 the engine assigns call ids
+    /// from part ids, so this is the highest part id in the projection plus
+    /// one.
     pub fn next_call_id(&self) -> i64 {
-        self.messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .filter_map(extract_call_id)
-            .max()
-            .unwrap_or(0)
-            + 1
+        self.parts.iter().map(|part| part.part_id).max().unwrap_or(0) + 1
     }
 
     pub fn approx_bytes(&self) -> usize {
         self.approx_bytes
     }
 
-    fn find_pending_request_by_id<P: Clone>(
-        &self,
-        request_id: &str,
-        extract_pending: impl Fn(&SessionPendingOperation) -> Option<&P>,
-        request_matches: impl Fn(&Self, &P, &str) -> bool,
-    ) -> Option<P> {
-        self.pending_operations
-            .iter()
-            .find_map(|pending_operation| {
-                let pending = extract_pending(pending_operation)?;
-                request_matches(self, pending, request_id).then(|| pending.clone())
-            })
-    }
-
-    fn has_replied_request(
-        &self,
-        request_id: &str,
-        request_matches: impl Fn(&RequestPart, &str) -> bool,
-    ) -> bool {
-        self.messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .any(|part| match part.content.as_ref() {
-                Some(PartContent::Activity(RuntimeActivity::Interaction(request))) => {
-                    request_matches(request, request_id)
-                }
-                _ => false,
-            })
-    }
-
-    fn pending_request<'a, T>(
-        &'a self,
-        request_part: &SessionPartRef,
-        extract_request: impl FnOnce(&'a RequestPart) -> Option<&'a T>,
-    ) -> Option<&'a T> {
-        let part = self.part(request_part)?;
-        let PartContent::Activity(RuntimeActivity::Interaction(request)) = part.content.as_ref()?
-        else {
-            return None;
-        };
-        extract_request(request)
-    }
-
-    pub fn find_pending_user_input_by_request_id(
-        &self,
-        request_id: &str,
-    ) -> Option<SessionPendingInteractiveRequest> {
-        self.find_pending_request_by_id(
-            request_id,
-            SessionPendingOperation::user_input_request,
-            |session, pending, request_id| {
-                session
-                    .pending_user_input_request(pending)
-                    .is_some_and(|request| request.request_id == request_id)
-            },
-        )
-    }
-
-    pub fn has_replied_user_input_request(&self, request_id: &str) -> bool {
-        self.has_replied_request(request_id, |request, request_id| match request {
-            RequestPart::UserInput(request) => {
-                request.request.request_id == request_id && request.reply.is_some()
-            }
-        })
-    }
-
-    pub fn has_finished_operation(&self, operation_id: &str) -> bool {
-        self.messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .any(|part| {
-                part.operation_id.as_deref() == Some(operation_id)
-                    && matches!(
-                        part.content.as_ref(),
-                        Some(PartContent::Activity(RuntimeActivity::Operation(_)))
-                    )
-                    && matches!(
-                        part.status,
-                        ExecutionStatus::Completed
-                            | ExecutionStatus::PolicyDenied
-                            | ExecutionStatus::UserDeclined
-                            | ExecutionStatus::CapabilityUnavailable
-                            | ExecutionStatus::ToolUnavailable
-                            | ExecutionStatus::Failed
-                            | ExecutionStatus::Cancelled
-                    )
-            })
-    }
-
-    pub fn pending_interactive_requests(&self) -> Vec<PendingInteractiveRequest> {
-        let mut seen = HashSet::new();
-        let mut requests = Vec::new();
-
-        for pending in &self.pending_operations {
-            match pending {
-                SessionPendingOperation::Permission { pending } => {
-                    let Some(request) = self.pending_permission_request(pending).cloned() else {
-                        continue;
-                    };
-                    let key = format!(
-                        "{:?}:{}",
-                        PendingInteractiveRequestKind::Permission,
-                        request.request_id
-                    );
-                    if seen.insert(key) {
-                        requests.push(PendingInteractiveRequest::from(request));
-                    }
-                }
-                SessionPendingOperation::UserInput { pending } => {
-                    let Some(request) = self.pending_user_input_request(pending).cloned() else {
-                        continue;
-                    };
-                    let key = format!(
-                        "{:?}:{}",
-                        PendingInteractiveRequestKind::UserInput,
-                        request.request_id
-                    );
-                    if seen.insert(key) {
-                        requests.push(PendingInteractiveRequest::from(request));
-                    }
-                }
-                SessionPendingOperation::Tool { .. } => {}
-            }
-        }
-
-        requests
-    }
-
-    pub fn user_input_request_for_operation(
-        &self,
-        operation_id: &str,
-        sequence_index: usize,
-    ) -> Option<InteractiveRequestPart<UserInputRequest, agena_domain::UserInputReply>> {
-        self.messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .filter(|part| part.operation_id.as_deref() == Some(operation_id))
-            .filter_map(|part| match part.content.as_ref() {
-                Some(PartContent::Activity(RuntimeActivity::Interaction(
-                    RequestPart::UserInput(request),
-                ))) => Some(request.clone()),
-                _ => None,
-            })
-            .nth(sequence_index)
-    }
-
-    fn compute_approx_bytes(&self) -> usize {
-        let mut bytes = 160 + self.title.len();
-        bytes = bytes.saturating_add(self.messages.len().saturating_mul(96));
-        for message in &self.messages {
-            bytes = bytes
-                .saturating_add(message.as_text_lossy().len())
-                .saturating_add(message.parts.len().saturating_mul(64))
-                .saturating_add(message.metadata.model_provider_id.len())
-                .saturating_add(message.metadata.model_id.len());
-            for part in &message.parts {
-                bytes = bytes
-                    .saturating_add(part.name.as_ref().map_or(0, |value| value.len()))
-                    .saturating_add(part.summary.as_ref().map_or(0, |value| value.len()))
-                    .saturating_add(part.operation_id.as_ref().map_or(0, |value| value.len()));
-            }
-            if let Some(usage) = message.usage.as_ref() {
-                bytes = bytes.saturating_add(std::mem::size_of_val(usage));
-            }
-        }
-        bytes
-    }
-
-    pub fn last_conversation_message(&self) -> Option<&Message> {
-        self.messages.last()
-    }
-
-    pub fn last_assistant_text(&self) -> Option<String> {
-        self.last_assistant_text_after(None)
-    }
-
-    pub fn last_assistant_text_after(&self, message_id: Option<i64>) -> Option<String> {
-        self.messages
-            .iter()
-            .rev()
-            .find(|message| {
-                message.role == Role::Assistant
-                    && message_id.is_none_or(|message_id| message.id > message_id)
-            })
-            .map(Message::visible_text_lossy)
-            .filter(|text| !text.trim().is_empty())
-    }
-
+    /// Aggregate token usage mirrored into the parts projection.
+    ///
+    /// The authoritative v2 accounting lives in the separate `UsageRecord`
+    /// store (facade `usage_stats`); this projection sums any `usage` object
+    /// the engine embeds in part content (e.g. run markers) so the execution
+    /// aggregate reads the same window it is executing against. Returns zero
+    /// when no part carries a `usage` payload.
     pub fn aggregate_usage(&self) -> agena_provider::CompletionUsage {
         let mut total = agena_provider::CompletionUsage::default();
-        for usage in self
-            .messages
-            .iter()
-            .filter_map(|message| message.usage.as_ref())
-        {
-            total.add_assign(usage);
+        for part in &self.parts {
+            if let Some(usage) = usage_from_part_content(&part.content) {
+                total.add_assign(&usage);
+            }
         }
         total
     }
 
-    pub fn find_pending_permission_by_request_id(
-        &self,
-        request_id: &str,
-    ) -> Option<SessionPendingPermissionRequest> {
-        self.find_pending_request_by_id(
-            request_id,
-            SessionPendingOperation::permission_request,
-            |session, pending, request_id| {
-                session
-                    .pending_permission_request(pending)
-                    .is_some_and(|request| request.request_id == request_id)
-            },
-        )
-    }
-
-    pub fn has_replied_permission_request(&self, request_id: &str) -> bool {
-        self.messages
-            .iter()
-            .flat_map(|message| message.parts.iter())
-            .filter_map(|part| match part.content.as_ref() {
-                Some(PartContent::Activity(RuntimeActivity::Operation(operation))) => {
-                    Some(operation)
-                }
-                _ => None,
-            })
-            .any(|operation| {
-                operation
-                    .authorization
-                    .find(request_id)
-                    .is_some_and(|permission| permission.reply.is_some())
-            })
-    }
-
-    /// Permission actions durably approved for this exact message operation.
+    /// Derive the pending operations from the parts projection:
     ///
-    /// A provider call id alone is not an authorization identity: providers
-    /// may reuse one in a later turn. The owning assistant message therefore
-    /// participates in the lookup. Callers must still evaluate any current
-    /// permission checks whose actions are absent from this returned set; a
-    /// plugin/catalog change cannot widen an earlier user approval.
-    pub fn operation_permission_approved_actions(
-        &self,
-        assistant_message_id: i64,
-        operation_id: &str,
-    ) -> Vec<agena_domain::PermissionAction> {
-        self.messages
-            .iter()
-            .filter(|message| message.id == assistant_message_id)
-            .flat_map(|message| &message.parts)
-            .find_map(|part| {
-                if part.operation_id.as_deref() != Some(operation_id) {
-                    return None;
-                }
-                let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
-                    part.content.as_ref()
-                else {
-                    return None;
-                };
-                let mut approved = Vec::new();
-                for permission in &operation.authorization.permissions {
-                    let Some(reply) = permission.reply.as_ref() else {
-                        continue;
-                    };
-                    if !matches!(
-                        reply.kind,
-                        agena_domain::PermissionReplyKind::AllowOnce
-                            | agena_domain::PermissionReplyKind::AllowAlways
-                    ) {
-                        continue;
-                    }
-                    let actions = if permission.request.requested_actions.is_empty() {
-                        std::slice::from_ref(&permission.request.action)
-                    } else {
-                        permission.request.requested_actions.as_slice()
-                    };
-                    for action in actions {
-                        if !approved.contains(action) {
-                            approved.push(action.clone());
-                        }
-                    }
-                }
-                Some(approved)
-            })
-            .unwrap_or_default()
-    }
-
+    /// - `tool_call` parts not yet `completed`/`cancelled` and without a
+    ///   paired `tool_result` become [`SessionPendingOperation::Tool`];
+    /// - `interaction` parts in flight become
+    ///   [`SessionPendingOperation::Permission`] when their content
+    ///   `kind == "permission"`, otherwise [`SessionPendingOperation::UserInput`].
     fn derive_pending_operations(&self) -> Vec<SessionPendingOperation> {
-        #[derive(Default)]
-        struct PendingRequestParts {
-            user_input: Option<SessionPartRef>,
-        }
-
         let mut operations = Vec::new();
-        let completed_tool_operations = self.completed_tool_operations();
-
-        for (message_index, message) in self.messages.iter().enumerate() {
-            if message.role != Role::Assistant {
-                continue;
-            }
-
-            let mut request_parts_by_operation: HashMap<&str, PendingRequestParts> = HashMap::new();
-
-            for (part_index, part) in message.parts.iter().enumerate() {
-                if part.status != ExecutionStatus::Pending {
-                    continue;
-                }
-
-                let Some(operation_id) = part.operation_id.as_deref() else {
-                    continue;
-                };
-
-                if let Some(PartContent::Activity(RuntimeActivity::Interaction(
-                    RequestPart::UserInput(_),
-                ))) = part.content.as_ref()
-                {
-                    request_parts_by_operation
-                        .entry(operation_id)
-                        .or_default()
-                        .user_input = Some(SessionPartRef::new(
-                        message_index,
-                        message,
-                        part_index,
-                        part,
-                    ));
-                }
-            }
-
-            for (part_index, part) in message.parts.iter().enumerate() {
-                if part.status != ExecutionStatus::Pending {
-                    continue;
-                }
-
-                let Some(operation_id) = part.operation_id.as_deref() else {
-                    continue;
-                };
-                let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
-                    part.content.as_ref()
-                else {
-                    continue;
-                };
-                if completed_tool_operations.contains(operation_id) {
-                    continue;
-                }
-
-                let tool = SessionPendingTool {
-                    part: SessionPartRef::new(message_index, message, part_index, part),
-                };
-
-                if let Some(permission) = operation.authorization.awaiting().next() {
-                    operations.push(SessionPendingOperation::Permission {
-                        pending: SessionPendingPermissionRequest {
-                            request_id: permission.request.request_id.clone(),
-                            tool,
+        for (index, part) in self.parts.iter().enumerate() {
+            match part.kind.as_str() {
+                "tool_call" if self.pending_tool_call(part) => {
+                    operations.push(SessionPendingOperation::Tool {
+                        tool: SessionPendingTool {
+                            part: SessionPartRef::new(index, part),
                         },
                     });
-                    continue;
                 }
-
-                if let Some(request_parts) = request_parts_by_operation.get(operation_id)
-                    && let Some(request) = request_parts.user_input.as_ref()
-                {
-                    operations.push(SessionPendingOperation::UserInput {
-                        pending: SessionPendingInteractiveRequest {
-                            request: request.clone(),
-                            tool,
-                        },
-                    });
-                    continue;
+                "interaction" if part.state.is_in_flight() => {
+                    let part_ref = SessionPartRef::new(index, part);
+                    if interaction_kind(part) == Some("permission") {
+                        operations.push(SessionPendingOperation::Permission {
+                            pending: SessionPendingPermissionRequest {
+                                request_id: interaction_request_id(part),
+                                tool: SessionPendingTool { part: part_ref },
+                            },
+                        });
+                    } else {
+                        operations.push(SessionPendingOperation::UserInput {
+                            pending: SessionPendingInteractiveRequest {
+                                request: part_ref.clone(),
+                                tool: SessionPendingTool { part: part_ref },
+                            },
+                        });
+                    }
                 }
-
-                operations.push(SessionPendingOperation::Tool { tool });
+                _ => {}
             }
         }
-
         operations
     }
 
@@ -1288,191 +1012,379 @@ impl Session {
             .collect()
     }
 
-    /// Finds the tool part (Pending or InProgress) whose operation call id
-    /// matches `call_id`.
-    ///
-    /// `pending_tools()` only derives from `Pending` parts, but a tool is
-    /// moved to `InProgress` before it executes. Interactive host callbacks
-    /// that run during execution (`ask`, plan review) must therefore look up
-    /// the executing part directly by call id instead of relying on the
+    /// The pending tool whose part id matches `part_id` (call ids are part
+    /// ids in v2). Interactive host callbacks that run during execution look
+    /// up the executing part directly by id instead of relying on the
     /// pending-operation projection.
-    pub fn pending_tool_by_call_id(&self, call_id: i64) -> Option<SessionPendingTool> {
-        for (message_index, message) in self.messages.iter().enumerate() {
-            if message.role != Role::Assistant {
-                continue;
-            }
-            for (part_index, part) in message.parts.iter().enumerate() {
-                if !matches!(
-                    part.status,
-                    ExecutionStatus::Pending | ExecutionStatus::InProgress
-                ) {
-                    continue;
-                }
-                let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) =
-                    part.content.as_ref()
-                else {
-                    continue;
-                };
-                if operation.call_id != call_id {
-                    continue;
-                }
-                return Some(SessionPendingTool {
-                    part: SessionPartRef::new(message_index, message, part_index, part),
-                });
-            }
-        }
-        None
-    }
-
-    pub fn resolve_part_ref(&self, part_ref: &SessionPartRef) -> Option<SessionPartRef> {
-        if let Some(message) = self.messages.get(part_ref.message_index)
-            && message.id == part_ref.message_id
-            && let Some(part) = message.parts.get(part_ref.part_index)
-            && part.id == part_ref.part_id
-        {
-            return Some(SessionPartRef::new(
-                part_ref.message_index,
-                message,
-                part_ref.part_index,
-                part,
-            ));
-        }
-
-        self.messages
+    pub fn pending_tool_by_part_id(&self, part_id: i64) -> Option<SessionPendingTool> {
+        self.parts
             .iter()
             .enumerate()
-            .find(|(_, message)| message.id == part_ref.message_id)
-            .and_then(|(message_index, message)| {
-                message
-                    .parts
-                    .iter()
-                    .enumerate()
-                    .find(|(_, part)| part.id == part_ref.part_id)
-                    .map(|(part_index, part)| {
-                        SessionPartRef::new(message_index, message, part_index, part)
-                    })
+            .find(|(_, part)| part.part_id == part_id && self.pending_tool_call(part))
+            .map(|(index, part)| SessionPendingTool {
+                part: SessionPartRef::new(index, part),
             })
     }
 
-    pub fn part(&self, part_ref: &SessionPartRef) -> Option<&MessagePart> {
-        let resolved = self.resolve_part_ref(part_ref)?;
-        self.messages
-            .get(resolved.message_index)?
-            .parts
-            .get(resolved.part_index)
-    }
+    // --- Part references ---------------------------------------------------
 
-    pub fn part_mut(&mut self, part_ref: &SessionPartRef) -> Option<&mut MessagePart> {
-        let resolved = self.resolve_part_ref(part_ref)?;
-        self.messages
-            .get_mut(resolved.message_index)?
-            .parts
-            .get_mut(resolved.part_index)
-    }
-
-    pub fn pending_tool_execution(
-        &self,
-        pending: &SessionPendingTool,
-    ) -> Option<(i64, &ToolInvocation, &TimeRange)> {
-        let part = self.part(&pending.part)?;
-        if !matches!(
-            part.status,
-            ExecutionStatus::Pending | ExecutionStatus::InProgress
-        ) {
-            return None;
+    pub fn resolve_part_ref(&self, part_ref: &SessionPartRef) -> Option<SessionPartRef> {
+        if let Some(part) = self.parts.get(part_ref.part_index)
+            && part.part_id == part_ref.part_id
+        {
+            return Some(part_ref.clone());
         }
-        let operation = match part.content.as_ref()? {
-            PartContent::Activity(RuntimeActivity::Operation(operation)) => operation,
-            _ => return None,
-        };
-
-        Some((
-            operation.call_id,
-            &operation.invocation,
-            &operation.lifecycle,
-        ))
-    }
-
-    pub fn pending_tool_record(&self, pending: &SessionPendingTool) -> Option<ToolCallRecord> {
-        let part = self.part(&pending.part)?;
-        let state = ToolCallRecordState::from_execution_status(part.status)?;
-        let operation_id = part.operation_id.clone()?;
-        let operation = match part.content.as_ref()? {
-            PartContent::Activity(RuntimeActivity::Operation(operation)) => operation,
-            _ => return None,
-        };
-
-        Some(ToolCallRecord {
-            operation_id,
-            call_id: operation.call_id,
-            invocation: operation.invocation.clone(),
-            advertised_tool_identity: operation.advertised_tool_identity().map(ToOwned::to_owned),
-            lifecycle: operation.lifecycle.clone(),
-            state,
-        })
-    }
-
-    pub fn pending_permission_request(
-        &self,
-        pending: &SessionPendingPermissionRequest,
-    ) -> Option<&agena_domain::PermissionRequest> {
-        let part = self.part(&pending.tool.part)?;
-        let PartContent::Activity(RuntimeActivity::Operation(operation)) = part.content.as_ref()?
-        else {
-            return None;
-        };
-        operation
-            .authorization
-            .find(pending.request_id.as_str())
-            .filter(|permission| permission.reply.is_none())
-            .map(|permission| &permission.request)
-    }
-
-    pub fn pending_user_input_request(
-        &self,
-        pending: &SessionPendingInteractiveRequest,
-    ) -> Option<&UserInputRequest> {
-        self.pending_request(&pending.request, |request| match request {
-            RequestPart::UserInput(InteractiveRequestPart { request, .. }) => Some(request),
-        })
-    }
-
-    fn completed_tool_operations(&self) -> HashSet<&str> {
-        self.messages
+        self.parts
             .iter()
-            .flat_map(|message| message.parts.iter())
-            .filter(|part| {
-                matches!(
-                    part.status,
-                    ExecutionStatus::Completed
-                        | ExecutionStatus::PolicyDenied
-                        | ExecutionStatus::UserDeclined
-                        | ExecutionStatus::CapabilityUnavailable
-                        | ExecutionStatus::ToolUnavailable
-                        | ExecutionStatus::Failed
-                        | ExecutionStatus::Cancelled
-                ) && matches!(
-                    part.content.as_ref(),
-                    Some(PartContent::Activity(RuntimeActivity::Operation(_)))
+            .enumerate()
+            .find(|(_, part)| part.part_id == part_ref.part_id)
+            .map(|(index, part)| SessionPartRef::new(index, part))
+    }
+
+    pub fn part(&self, part_ref: &SessionPartRef) -> Option<&Part> {
+        let resolved = self.resolve_part_ref(part_ref)?;
+        self.parts.get(resolved.part_index)
+    }
+
+    /// Mutable access to a projected part. Call [`Session::refresh_derived`]
+    /// after mutating so derived state stays consistent.
+    pub fn part_mut(&mut self, part_ref: &SessionPartRef) -> Option<&mut Part> {
+        let resolved = self.resolve_part_ref(part_ref)?;
+        self.parts.get_mut(resolved.part_index)
+    }
+
+    // --- Text helpers ------------------------------------------------------
+
+    pub fn last_assistant_text(&self) -> Option<String> {
+        self.parts
+            .iter()
+            .rev()
+            .filter(|part| part.role == PartRole::Assistant)
+            .find_map(text_from_part)
+            .filter(|text| !text.trim().is_empty())
+    }
+
+    fn compute_approx_bytes(&self) -> usize {
+        let mut bytes = 160 + self.title.len();
+        bytes = bytes.saturating_add(self.parts.len().saturating_mul(96));
+        for part in &self.parts {
+            bytes = bytes
+                .saturating_add(part.summary.as_ref().map_or(0, |value| value.len()))
+                .saturating_add(
+                    part.rendered_markdown
+                        .as_ref()
+                        .map_or(0, |value| value.len()),
                 )
-            })
-            .filter_map(|part| part.operation_id.as_deref())
-            .collect()
+                .saturating_add(text_from_part(part).map_or(0, |text| text.len()));
+        }
+        bytes
     }
 }
 
-fn tool_invocation_name(invocation: &ToolInvocation) -> String {
-    let ToolInvocation { name, .. } = invocation;
-    name.clone()
+fn interaction_kind(part: &Part) -> Option<&str> {
+    part.content.get("kind").and_then(serde_json::Value::as_str)
 }
 
-fn extract_call_id(part: &MessagePart) -> Option<i64> {
-    part.content.as_ref().and_then(|content| match content {
-        PartContent::Activity(RuntimeActivity::Operation(tool)) => Some(tool.call_id),
-        _ => None,
-    })
+fn interaction_request_id(part: &Part) -> String {
+    part.content
+        .get("request_id")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| part.part_id.to_string())
 }
 
+/// Best-effort text rendering of a part for `last_assistant_text` /
+/// `compute_approx_bytes`: the `text` content field when present, else the
+/// summary.
+fn text_from_part(part: &Part) -> Option<String> {
+    part.content
+        .get("text")
+        .and_then(serde_json::Value::as_str)
+        .map(ToOwned::to_owned)
+        .filter(|text| !text.trim().is_empty())
+        .or_else(|| part.summary.clone())
+}
+
+/// Parse a `usage` object embedded in part content (run markers, assistant
+/// parts) into a provider `CompletionUsage`. Tolerant: any subset of fields
+/// parses (serde defaults fill the rest); empty objects are ignored.
+fn usage_from_part_content(
+    content: &serde_json::Value,
+) -> Option<agena_provider::CompletionUsage> {
+    let usage = content.get("usage")?;
+    let parsed: agena_provider::CompletionUsage = serde_json::from_value(usage.clone()).ok()?;
+    (parsed.requests > 0 || parsed.own_total_tokens() > 0).then_some(parsed)
+}
+
+#[cfg(test)]
+mod parts_projection_tests {
+    use super::*;
+    use agena_storage::store::PartVisibility;
+    use serde_json::json;
+
+    /// Build a v2 part. Content follows the 4.1.1 shapes: run markers carry
+    /// `{"run_kind": ...}`, text/think carry `{"text": ...}`, tool calls
+    /// `{"name", "input"}`, tool results `{"output", "ok"}`, interactions
+    /// `{"kind", "prompt", ...}`.
+    fn part(
+        part_id: i64,
+        kind: &str,
+        role: PartRole,
+        state: PartState,
+        content: serde_json::Value,
+    ) -> Part {
+        Part {
+            part_id,
+            kind: kind.to_owned(),
+            role,
+            state,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: (kind != "run").then_some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: part_id,
+            finished_at_ms: state.is_terminal().then_some(part_id),
+            created_at_ms: part_id,
+            updated_at_ms: part_id,
+            provider_state: None,
+        }
+    }
+
+    fn session_with(parts: Vec<Part>) -> Session {
+        let mut session = Session::new(1, 1, "t", chrono::Utc::now());
+        session.install_projected_parts(parts);
+        session
+    }
+
+    #[test]
+    fn install_projected_parts_replaces_projection_and_refreshes_derived() {
+        let mut session = Session::new(1, 1, "t", chrono::Utc::now());
+        assert!(session.parts().is_empty());
+        assert!(!session.blocked());
+        assert_eq!(session.workflow_state(), WorkflowState::Quiescent);
+
+        session.install_projected_parts(vec![part(
+            1,
+            "interaction",
+            PartRole::Runtime,
+            PartState::Pending,
+            json!({"kind": "ask_user", "prompt": "continue?"}),
+        )]);
+        assert_eq!(session.parts().len(), 1);
+        assert!(session.blocked());
+        assert_eq!(session.workflow_state(), WorkflowState::Blocked);
+    }
+
+    #[test]
+    fn run_marker_and_user_part_are_projections_over_kind_and_role() {
+        let session = session_with(vec![
+            part(1, "run", PartRole::Runtime, PartState::Completed, json!({"run_kind": "user_send"})),
+            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
+            part(3, "run", PartRole::Assistant, PartState::InProgress, json!({"run_kind": "continue"})),
+            part(4, "text", PartRole::Assistant, PartState::Completed, json!({"text": "hi"})),
+            part(5, "text", PartRole::User, PartState::Completed, json!({"text": "more"})),
+        ]);
+
+        assert_eq!(session.last_run_marker().map(|p| p.part_id), Some(3));
+        assert_eq!(session.last_user_part().map(|p| p.part_id), Some(5));
+        assert_eq!(session.last_part().map(|p| p.part_id), Some(5));
+        assert_eq!(session.parts().len(), 5);
+    }
+
+    #[test]
+    fn pending_tool_calls_exclude_paired_and_terminal_calls() {
+        let paired = part(
+            10,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::InProgress,
+            json!({"name": "fs.read", "input": {}}),
+        );
+        let unpaired = part(
+            11,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Pending,
+            json!({"name": "fs.write", "input": {}}),
+        );
+        let terminal = part(
+            12,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Completed,
+            json!({"name": "done", "input": {}}),
+        );
+        let mut result = part(
+            13,
+            "tool_result",
+            PartRole::Tool,
+            PartState::Completed,
+            json!({"output": "ok", "ok": true}),
+        );
+        result.parent_part_id = Some(paired.part_id);
+
+        let session = session_with(vec![paired, unpaired, terminal, result]);
+
+        let pending: Vec<i64> = session.pending_tool_calls().map(|p| p.part_id).collect();
+        assert_eq!(pending, vec![11]);
+        assert_eq!(
+            session.tool_result_for(&session.parts()[0]).map(|p| p.part_id),
+            Some(13),
+            "fs.read is paired with its tool_result"
+        );
+        assert_eq!(session.tool_results().count(), 1);
+        // Highest part id + 1 is the next call id (call ids are part ids).
+        assert_eq!(session.next_call_id(), 14);
+        assert_eq!(session.workflow_state(), WorkflowState::ToolPending);
+    }
+
+    #[test]
+    fn pending_interactions_gate_the_session_until_answered() {
+        let ask = part(
+            20,
+            "interaction",
+            PartRole::Runtime,
+            PartState::Pending,
+            json!({"kind": "ask_user", "prompt": "?"}),
+        );
+        let answered = part(
+            21,
+            "interaction",
+            PartRole::Runtime,
+            PartState::Completed,
+            json!({"kind": "plan_review", "prompt": "x", "reply": "yes"}),
+        );
+
+        let session = session_with(vec![ask, answered]);
+        let pending: Vec<i64> = session.pending_interactions().map(|p| p.part_id).collect();
+        assert_eq!(pending, vec![20]);
+        assert_eq!(session.pending_interaction().map(|p| p.part_id), Some(20));
+        assert!(session.blocked());
+    }
+
+    #[test]
+    fn derive_pending_operations_maps_parts_to_tool_permission_and_user_input() {
+        let tool = part(
+            30,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Pending,
+            json!({"name": "fs.write", "input": {}}),
+        );
+        let ask = part(
+            31,
+            "interaction",
+            PartRole::Runtime,
+            PartState::Pending,
+            json!({"kind": "ask_user", "prompt": "proceed?"}),
+        );
+        let permission = part(
+            32,
+            "interaction",
+            PartRole::Runtime,
+            PartState::Pending,
+            json!({"kind": "permission", "prompt": "allow?", "request_id": "req-1"}),
+        );
+
+        let session = session_with(vec![tool, ask, permission]);
+        let ops = &session.pending_operations;
+
+        assert_eq!(ops.len(), 3);
+        match &ops[0] {
+            SessionPendingOperation::Tool { tool } => assert_eq!(tool.part.part_id, 30),
+            _ => panic!("expected Tool op"),
+        }
+        match &ops[1] {
+            SessionPendingOperation::UserInput { pending } => assert_eq!(pending.request.part_id, 31),
+            _ => panic!("expected UserInput op"),
+        }
+        match &ops[2] {
+            SessionPendingOperation::Permission { pending } => {
+                assert_eq!(pending.request_id, "req-1");
+                assert_eq!(pending.tool.part.part_id, 32);
+            }
+            _ => panic!("expected Permission op"),
+        }
+
+        let tool_refs = session.pending_tools();
+        assert_eq!(tool_refs.len(), 1);
+        assert_eq!(session.next_pending_tool().map(|t| t.part.part_id), Some(30));
+        assert_eq!(
+            session.pending_tool_by_part_id(30).map(|t| t.part.part_id),
+            Some(30)
+        );
+        assert!(session.pending_tool_by_part_id(999).is_none());
+    }
+
+    #[test]
+    fn aggregate_usage_sums_usage_embedded_in_part_content() {
+        let with_usage = part(
+            50,
+            "run",
+            PartRole::Assistant,
+            PartState::Completed,
+            json!({
+                "run_kind": "continue",
+                "usage": {"requests": 1, "input_tokens": 100, "output_tokens": 20, "reasoning_tokens": 5}
+            }),
+        );
+        let plain = part(
+            51,
+            "text",
+            PartRole::Assistant,
+            PartState::Completed,
+            json!({"text": "no usage here"}),
+        );
+
+        let session = session_with(vec![with_usage, plain.clone()]);
+        let usage = session.aggregate_usage();
+        assert_eq!(usage.requests, 1);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 20);
+        assert_eq!(usage.reasoning_tokens, 5);
+
+        let empty = session_with(vec![plain]);
+        assert!(!empty.aggregate_usage().has_own_usage());
+    }
+
+    #[test]
+    fn part_refs_resolve_by_id_when_the_index_is_stale() {
+        let mut session = session_with(vec![
+            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "a"})),
+            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "b"})),
+        ]);
+
+        let current = SessionPartRef::new(0, &session.parts()[0]);
+        assert_eq!(session.part(&current).map(|p| p.part_id), Some(1));
+
+        let stale = SessionPartRef {
+            part_index: 99,
+            part_id: 2,
+        };
+        assert_eq!(session.part(&stale).map(|p| p.part_id), Some(2));
+        if let Some(mut_part) = session.part_mut(&stale) {
+            mut_part.summary = Some("updated".to_owned());
+        }
+        assert_eq!(
+            session.part(&stale).and_then(|p| p.summary.as_deref()),
+            Some("updated")
+        );
+    }
+
+    #[test]
+    fn last_assistant_text_takes_the_newest_assistant_text_part() {
+        let session = session_with(vec![
+            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
+            part(2, "think", PartRole::Assistant, PartState::Completed, json!({"text": "thinking"})),
+            part(3, "text", PartRole::Assistant, PartState::Completed, json!({"text": "hi there"})),
+        ]);
+        assert_eq!(session.last_assistant_text().as_deref(), Some("hi there"));
+    }
+}
 // NOTE: `SessionEventType` and `SessionEventRecord` have been removed. The
 // unified `crate::event::EventKind` and `crate::event::DomainEvent` types
 // are the only event shapes the system carries.

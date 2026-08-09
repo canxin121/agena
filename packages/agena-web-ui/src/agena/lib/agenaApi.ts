@@ -1085,55 +1085,60 @@ export type SessionUsageResource = {
   model_max_output_tokens?: number | null
 }
 
-export type TranscriptTextSegment = {
-  id: string
-  text: string
-  position: { index: number }
-  revision_seq: number
-}
+export type SessionPartKind =
+  | 'run'
+  | 'text'
+  | 'think'
+  | 'tool_call'
+  | 'tool_result'
+  | 'file_ref'
+  | 'paste_ref'
+  | 'skill_ref'
+  | 'notice'
+  | 'hook'
+  | 'compaction'
+  | 'error'
+  | 'interaction'
 
-export type TranscriptActivity = {
-  id: string
-  owner: Record<string, unknown>
-  actor: 'user' | 'assistant' | 'runtime' | 'tool' | 'plugin'
-  payload: Record<string, unknown> & { activity_type: string }
-  state: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
-  position: { index: number }
-  revision_seq: number
-  lifecycle: { started_at_ms: number; finished_at_ms?: number | null }
-  provenance?: Record<string, unknown>
-}
+export type SessionPartRole = 'user' | 'assistant' | 'system' | 'tool' | 'runtime'
 
-export type TranscriptContentNode =
-  { type: 'text'; segment: TranscriptTextSegment } | { type: 'activity'; activity: TranscriptActivity }
+export type SessionPartState = 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
 
-export type TranscriptTurn = {
-  id: string
-  session_id: number
-  sequence: number
-  input: TranscriptContentNode[]
-  reply: {
-    id: string
-    turn_id: string
-    status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'cancelled'
-    content: TranscriptContentNode[]
-    revision_seq: number
-    created_at_ms: number
-    finished_at_ms?: number | null
-  }
+/**
+ * A v2 session part (database-design-v2.md 4.1.1). `kind` is an open set
+ * (plugins may add kinds); the listed kinds are canonical. `content` is the
+ * typed payload per kind — exactly what the AI sees. `run_id` references the
+ * run-marker part of the batch; `parent_part_id` links a `tool_result` to its
+ * `tool_call` (or a reply to its `interaction`).
+ */
+export interface SessionPart {
+  part_id: number
+  kind: SessionPartKind
+  role: SessionPartRole
+  state: SessionPartState
+  content: Record<string, unknown>
+  summary?: string | null
   created_at_ms: number
+  parent_part_id?: number | null
+  run_id?: number | null
+  revision?: number
 }
 
-export type TranscriptSnapshot = {
-  session_id: number
-  seq_session: number
-  turns: TranscriptTurn[]
-  session_activities?: TranscriptActivity[]
-}
+/**
+ * A live session change notification (database-design-v2.md 14.1/14.3). This is
+ * the SSE wire form: never persisted, never replayed — observer notification,
+ * not an event log. `PartUpdated` carries the full updated part so clients can
+ * patch in place.
+ */
+export type SessionChange =
+  | { type: 'PartAdded'; part: SessionPart }
+  | { type: 'PartUpdated'; part_id: number; part: SessionPart }
+  | { type: 'PartRemoved'; part_id: number }
+  | { type: 'SessionMetaUpdated'; session_id: number }
 
 export type SessionExecutionResource = {
   session: SessionResource
-  transcript: TranscriptSnapshot
+  parts: SessionPart[]
   workflow_state: 'quiescent' | 'tool_pending' | 'blocked' | string
   active_execution: {
     execution_id: string
@@ -1230,10 +1235,6 @@ export type EventNotification =
         reason: string
       }
     }
-
-export type SessionEventStreamHandle = {
-  close: () => void
-}
 
 export type NotificationStreamHandle = {
   close: () => void
@@ -2251,24 +2252,28 @@ export async function listGlobalEvents(options?: {
   return response.items ?? []
 }
 
-export function streamSessionEvents(
+export type SessionChangeStreamHandle = {
+  close: () => void
+}
+
+/**
+ * Subscribe to a session's live `SessionChange` stream (database-design-v2.md
+ * 14.1/14.4). Each SSE frame carries one change; clients patch their local
+ * parts in place. There is no event sequence — late joiners resynchronize via a
+ * full state read (`onOpen`) and the polling fallback.
+ */
+export function streamSessionChanges(
   sessionId: number,
   options: {
-    afterSeq?: number | null
-    pollIntervalMs?: number
-    onEvent: (event: DomainEventRecord) => void
-    onDescendantEvent?: (event: DomainEventRecord) => void
-    onLagged?: (skipped: number) => void
-    onError?: (error: Error) => void
     onOpen?: () => void
+    onChange: (change: SessionChange) => void
+    onError?: (error: Error) => void
   },
-): SessionEventStreamHandle {
+): SessionChangeStreamHandle {
   const controller = new AbortController()
   const decoder = new TextDecoder()
-  const pollIntervalMs = Math.max(50, Math.trunc(options.pollIntervalMs ?? 250))
   let closed = false
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  let afterSeq = Math.max(0, Math.trunc(options.afterSeq ?? 0))
 
   const scheduleReconnect = (delayMs: number) => {
     if (closed || reconnectTimer) return
@@ -2296,34 +2301,23 @@ export function streamSessionEvents(
       return
     }
 
-    if (parsed.event === 'lagged') {
-      const skipped = Number(parsed.data)
-      options.onLagged?.(Number.isFinite(skipped) ? skipped : 0)
+    if (parsed.event !== 'session_change' && parsed.event !== 'message') return
+
+    let change: SessionChange
+    try {
+      change = JSON.parse(parsed.data) as SessionChange
+    } catch {
+      options.onError?.(new Error('Session change stream delivered an unparseable frame.'))
       return
     }
-
-    if (parsed.event !== 'session_event' && parsed.event !== 'descendant_session_event') return
-
-    const record = JSON.parse(parsed.data) as DomainEventRecord
-    if (typeof record.seq_global === 'number' && Number.isFinite(record.seq_global)) {
-      afterSeq = Math.max(afterSeq, record.seq_global)
-    } else if (parsed.id) {
-      const seq = Number(parsed.id)
-      if (Number.isFinite(seq)) {
-        afterSeq = Math.max(afterSeq, seq)
-      }
-    }
-    if (parsed.event === 'descendant_session_event') {
-      options.onDescendantEvent?.(record)
-      return
-    }
-    options.onEvent(record)
+    if (!change || typeof change !== 'object' || typeof change.type !== 'string') return
+    options.onChange(change)
   }
 
   const readResponseStream = async (response: Response) => {
     const reader = response.body?.getReader()
     if (!reader) {
-      throw new Error('Session event stream response body is unavailable')
+      throw new Error('Session change stream response body is unavailable')
     }
 
     let buffer = ''
@@ -2356,11 +2350,7 @@ export function streamSessionEvents(
 
     try {
       const authHeaders = buildActiveUiAuthHeaders()
-      const url = new URL(apiUrl(`/api/v1/sessions/${sessionId}/events/stream`))
-      if (afterSeq > 0) {
-        url.searchParams.set('after_seq', String(afterSeq))
-      }
-      url.searchParams.set('poll_interval_ms', String(pollIntervalMs))
+      const url = new URL(apiUrl(`/api/v1/sessions/${sessionId}/changes/stream`))
 
       const response = await fetch(url.toString(), {
         method: 'GET',

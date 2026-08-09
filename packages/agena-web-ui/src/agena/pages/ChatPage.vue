@@ -14,7 +14,7 @@ import { uploadWorkspaceFile } from '@/agena/lib/agenaApi'
 import { useNotifications } from '@/agena/lib/notifications/useNotifications'
 import ChatPageContent from './ChatPageContent.vue'
 import { createChatPageContentState } from './chatPageContentModel'
-import { messageBlocks, messageUsageFacts, readPayloadMessageId, readPayloadPartId } from './chatRenderModel'
+import { messageBlocks, messageUsageFacts } from './chatRenderModel'
 import { useChatCommandState } from './useChatCommandState'
 import { useChatDerivedState } from './useChatDerivedState'
 import { useChatSessionActions } from './useChatSessionActions'
@@ -50,9 +50,9 @@ const {
   inspectedMessageParts,
   inspectedPart,
   loading,
-  liveCommandEvents,
   messages,
   newSessionTitle,
+  parts,
   providerModels,
   providers,
   queueDraining,
@@ -80,7 +80,6 @@ const {
   skillPickerOpen,
   skillReferences,
   textArtifacts,
-  timelineEvents,
   userInputDrafts,
   workspacePath,
   workspaces,
@@ -253,20 +252,18 @@ const {
   loadRewindCheckpoints,
   loadSessionsForWorkspace,
   loadSessionTree,
-  loadSessionTimeline,
   loadSidebar,
   openSessionById,
   refreshConversation,
   selectSession,
   selectWorkspace,
   setSessionViewMode,
-  syncEventStream,
+  syncChangeStream,
 } = useChatSessionLifecycle({
   composer,
   loading,
-  liveCommandEvents,
   notify,
-  messages,
+  parts,
   providerModels,
   providers,
   rewindCheckpoints,
@@ -289,7 +286,6 @@ const {
   sessionState,
   sessions,
   sessionTree,
-  timelineEvents,
   workspaces,
 })
 
@@ -391,7 +387,7 @@ const {
   sessionImportJsonl,
   sessionState,
   sessions,
-  syncEventStream,
+  syncChangeStream,
   prompt: (message, defaultValue) => (typeof window === 'undefined' ? null : window.prompt(message, defaultValue)),
   userInputDrafts,
   workspacePath,
@@ -421,7 +417,6 @@ watch(
   sessions,
   messages,
   composerQueue,
-  timelineEvents,
   workspaces,
   sessionImportJsonl,
   sessionTreeRows,
@@ -471,7 +466,6 @@ watch(
     completeSessionGoalAction,
     clearSessionGoalAction,
     loadSessionTree,
-    loadSessionTimeline,
     loadRewindCheckpoints,
     refreshConversation,
     renameCurrentSession,
@@ -541,6 +535,7 @@ const pageContent = createChatPageContentState({
   openGlobalCommandPalette,
   openSkillPicker,
   parentSession,
+  parts,
   popComposerQueue,
   permissionActionView,
   permissionExplainability,
@@ -554,8 +549,6 @@ const pageContent = createChatPageContentState({
   modelVerbosityOptions,
   modelParallelToolCallsOptions,
   providers,
-  readPayloadMessageId,
-  readPayloadPartId,
   readUserAnswer,
   removeComposerAttachment,
   removeComposerSkill,
@@ -597,7 +590,6 @@ const pageContent = createChatPageContentState({
   textArtifacts,
   providerAdapterOptions,
   providerDefaultAdapter,
-  timelineEvents,
   updateUserAnswer,
 })
 </script>

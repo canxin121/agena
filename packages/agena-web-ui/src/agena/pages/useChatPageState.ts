@@ -1,7 +1,6 @@
-import { reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
 import type {
-  DomainEventRecord,
   MessagePart,
   MessageResource,
   ProviderModel,
@@ -9,6 +8,7 @@ import type {
   RewindCheckpointResource,
   RuntimeStatus,
   SessionExecutionResource,
+  SessionPart,
   SessionResource,
   SessionTreeResource,
   WorkspaceResource,
@@ -17,6 +17,7 @@ import type { ComposerAttachmentDraft } from './chatAttachmentModel'
 import type { ComposerQueueItem } from './chatQueueModel'
 import type { ComposerSkillDraft } from './chatSkillModel'
 import type { ComposerTextArtifactDraft } from './chatTextArtifactModel'
+import { partsToMessages } from './chatRenderModel'
 
 export function useChatPageState() {
   const runtime = ref<RuntimeStatus | null>(null)
@@ -24,13 +25,14 @@ export function useChatPageState() {
   const providerModels = reactive<Record<string, ProviderModel[]>>({})
   const workspaces = ref<WorkspaceResource[]>([])
   const sessions = ref<SessionResource[]>([])
-  const messages = ref<MessageResource[]>([])
-  const liveCommandEvents = ref<DomainEventRecord[]>([])
-  const timelineEvents = ref<DomainEventRecord[]>([])
   const inspectedMessage = ref<MessageResource | null>(null)
   const inspectedMessageParts = ref<MessagePart[]>([])
   const inspectedPart = ref<MessagePart | null>(null)
   const sessionState = ref<SessionExecutionResource | null>(null)
+  // v2 canonical conversation parts — the single source of truth for the
+  // transcript. The renderable message view is derived from it.
+  const parts = ref<SessionPart[]>([])
+  const messages = computed(() => partsToMessages(parts.value, sessionState.value?.session.id ?? 0))
   const sessionTree = ref<SessionTreeResource[]>([])
   const rewindCheckpoints = ref<RewindCheckpointResource[]>([])
 
@@ -74,12 +76,12 @@ export function useChatPageState() {
     continuing,
     interactiveRequestInFlight,
     loading,
-    liveCommandEvents,
     messages,
     newSessionTitle,
     inspectedMessage,
     inspectedMessageParts,
     inspectedPart,
+    parts,
     providerModels,
     providers,
     queueDraining,
@@ -107,7 +109,6 @@ export function useChatPageState() {
     skillPickerOpen,
     skillReferences,
     textArtifacts,
-    timelineEvents,
     userInputDrafts,
     workspacePath,
     workspaces,

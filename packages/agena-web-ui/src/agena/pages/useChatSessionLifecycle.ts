@@ -3,7 +3,6 @@ import { nextTick, onBeforeUnmount, onMounted, watch, type Ref } from 'vue'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 
 import {
-  type DomainEventRecord,
   fetchRuntimeStatus,
   getSessionState,
   getSessionTree,
@@ -11,17 +10,16 @@ import {
   listProviders,
   listProviderModelsForProviders,
   listRewindCheckpoints,
-  listSessionTimeline,
   listSessions,
   listWorkspaces,
   streamPluginToolRegistryChanges,
-  streamSessionEvents,
-  type MessageResource,
+  streamSessionChanges,
   type ProviderModel,
   type ProviderSummary,
   type RewindCheckpointResource,
   type RuntimeStatus,
   type SessionExecutionResource,
+  type SessionPart,
   type SessionResource,
   type SessionTreeResource,
   type WorkspaceResource,
@@ -29,15 +27,13 @@ import {
 import { usePluginToolRegistryRuntimeSync } from '../lib/usePluginToolRegistryRuntimeSync'
 import type { NotificationsHandle } from '../lib/notifications/types'
 import { readChatRouteSessionId, readChatRouteSlash, readChatRouteWorkspaceId } from './chatRouteState'
-import { applySessionEvent } from './chatPageModel'
+import { applySessionChange } from './chatPageModel'
 import { useChatConversationRuntime } from './useChatConversationRuntime'
 
 export type ChatSessionLifecycleInput = {
   composer: Ref<string>
   loading: Ref<boolean>
-  liveCommandEvents: Ref<DomainEventRecord[]>
   notify: NotificationsHandle
-  messages: Ref<MessageResource[]>
   providerModels: Record<string, ProviderModel[]>
   providers: Ref<ProviderSummary[]>
   rewindCheckpoints: Ref<RewindCheckpointResource[]>
@@ -60,12 +56,12 @@ export type ChatSessionLifecycleInput = {
   sessionState: Ref<SessionExecutionResource | null>
   sessions: Ref<SessionResource[]>
   sessionTree: Ref<SessionTreeResource[]>
-  timelineEvents: Ref<DomainEventRecord[]>
+  parts: Ref<SessionPart[]>
   workspaces: Ref<WorkspaceResource[]>
 }
 
 export type ChatSessionLifecycleDeps = {
-  applySessionEvent: typeof applySessionEvent
+  applySessionChange: typeof applySessionChange
   fetchRuntimeStatus: typeof fetchRuntimeStatus
   getSessionState: typeof getSessionState
   getSessionTree: typeof getSessionTree
@@ -73,15 +69,14 @@ export type ChatSessionLifecycleDeps = {
   listProviders: typeof listProviders
   listProviderModelsForProviders: typeof listProviderModelsForProviders
   listRewindCheckpoints: typeof listRewindCheckpoints
-  listSessionTimeline: typeof listSessionTimeline
   listSessions: typeof listSessions
   listWorkspaces: typeof listWorkspaces
   streamPluginToolRegistryChanges: typeof streamPluginToolRegistryChanges
-  streamSessionEvents: typeof streamSessionEvents
+  streamSessionChanges: typeof streamSessionChanges
 }
 
 const defaultDeps: ChatSessionLifecycleDeps = {
-  applySessionEvent,
+  applySessionChange,
   fetchRuntimeStatus,
   getSessionState,
   getSessionTree,
@@ -89,11 +84,10 @@ const defaultDeps: ChatSessionLifecycleDeps = {
   listProviders,
   listProviderModelsForProviders,
   listRewindCheckpoints,
-  listSessionTimeline,
   listSessions,
   listWorkspaces,
   streamPluginToolRegistryChanges,
-  streamSessionEvents,
+  streamSessionChanges,
 }
 
 export type ChatSessionLifecycleOptions = {
@@ -127,17 +121,14 @@ export function useChatSessionLifecycle(
     {
       notify: input.notify,
       loading: input.loading,
-      liveCommandEvents: input.liveCommandEvents,
-      messages: input.messages,
+      parts: input.parts,
       selectedSessionId: input.selectedSessionId,
       sessionState: input.sessionState,
-      timelineEvents: input.timelineEvents,
     },
     {
-      applySessionEvent: deps.applySessionEvent,
+      applySessionChange: deps.applySessionChange,
       getSessionState: deps.getSessionState,
-      listSessionTimeline: deps.listSessionTimeline,
-      streamSessionEvents: deps.streamSessionEvents,
+      streamSessionChanges: deps.streamSessionChanges,
     },
     {
       loadRewindCheckpoints,
@@ -180,7 +171,6 @@ export function useChatSessionLifecycle(
       if (!match) continue
       input.sessions.value = workspaceSessions
       input.selectedWorkspaceId.value = workspace.id
-      input.liveCommandEvents.value = []
       input.selectedSessionId.value = match.id
       await refreshSelectedConversation()
       return true
@@ -303,24 +293,9 @@ export function useChatSessionLifecycle(
     if (workspaceId) await loadSessionsForWorkspace(workspaceId, true)
   }
 
-  async function loadSessionTimeline(limit = 100) {
-    const sessionId = input.selectedSessionId.value
-    if (!sessionId) return
-    input.loading.value = true
-    input.notify.clearBanner()
-    try {
-      input.timelineEvents.value = await deps.listSessionTimeline(sessionId, { limit })
-    } catch (error) {
-      input.notify.error(userErrorMessage(error))
-    } finally {
-      input.loading.value = false
-    }
-  }
-
   async function selectSession(sessionId: number) {
-    stopEventStream()
+    stopChangeStream()
     clearScheduledConversationRefresh()
-    if (input.selectedSessionId.value !== sessionId) input.liveCommandEvents.value = []
     input.selectedSessionId.value = sessionId
     await refreshSelectedConversation()
   }
@@ -338,20 +313,18 @@ export function useChatSessionLifecycle(
     clearScheduledConversationRefresh,
     dispose,
     refreshConversation,
-    stopEventStream,
+    stopChangeStream,
     stopPolling,
-    syncEventStream,
+    syncChangeStream,
   } = conversationRuntime
 
   function clearConversationSelection() {
     input.selectedSessionId.value = null
-    input.liveCommandEvents.value = []
-    input.messages.value = []
-    input.timelineEvents.value = []
+    input.parts.value = []
     input.sessionState.value = null
     input.sessionTree.value = []
     input.rewindCheckpoints.value = []
-    stopEventStream()
+    stopChangeStream()
     clearScheduledConversationRefresh()
     stopPolling()
   }
@@ -365,7 +338,6 @@ export function useChatSessionLifecycle(
         return
       }
       if (routeSessionId === input.selectedSessionId.value) return
-      input.liveCommandEvents.value = []
       input.selectedSessionId.value = routeSessionId
       void loadSidebar().catch((err) => {
         input.notify.error(userErrorMessage(err))
@@ -411,13 +383,12 @@ export function useChatSessionLifecycle(
     loadRewindCheckpoints,
     loadSessionsForWorkspace,
     loadSessionTree,
-    loadSessionTimeline,
     loadSidebar,
     openSessionById,
     refreshConversation,
     selectSession,
     selectWorkspace,
     setSessionViewMode,
-    syncEventStream,
+    syncChangeStream,
   }
 }

@@ -12,9 +12,9 @@
 //! [`SessionChange`](super::SessionChange) notifications are derived from an
 //! operation, emitted **after commit**, and never persisted or replayed (14.3).
 //! The facade emits them through an in-process [`NotificationBus`] (15.5) so
-//! same-process subscribers see every committed change; cross-process live
-//! updates ride the notification stream plus version/cursor catch-up (14.4) —
-//! the facade hides the transport.
+//! same-process subscribers see every committed change. Cross-process
+//! reconnect is an explicit snapshot read validated by session version and
+//! member cursor; this store does not claim database-backed push delivery.
 //!
 //! ## Write path (commit-then-notify, 15.6)
 //!
@@ -24,7 +24,7 @@
 //! in the [`MemoryLayer`] and flushed after a bounded number of deltas or when
 //! the run ends (D10); ordinary semantic checkpoints remain commit-synchronous.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,8 +35,8 @@ use serde_json::{Value, json};
 use super::{
     LEASE_STALENESS_MS, LeaseAcquire, MaintenanceOutcome, NewPart, NewSession, Part, PartDelta,
     PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
-    SessionPresentation, SessionSummary, SessionView, StateInputs, StoreError, SubmitOutcome,
-    UsageQuery, UsageRecord, UsageStats, apply_part_transition, presentation,
+    SessionPresentation, SessionState, SessionSummary, SessionView, StateInputs, StoreError,
+    SubmitOutcome, UsageQuery, UsageRecord, UsageStats, apply_part_transition, presentation,
 };
 
 /// Default number of text deltas coalesced into one durable part update (D10).
@@ -45,24 +45,26 @@ pub const STREAMING_FLUSH_DELTA_COUNT: usize = 8;
 /// A session subscription handle. Dropping it unsubscribes (15.5).
 pub struct Subscription {
     session_id: i64,
+    observer_id: u64,
     bus: Arc<NotificationBus>,
 }
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        self.bus.unsubscribe(self.session_id);
+        self.bus.unsubscribe(self.session_id, self.observer_id);
     }
 }
 
-/// A global subscription handle. Dropping it unsubscribes from every session
-/// (15.5).
+/// A global subscription handle. Dropping it removes this observer from the
+/// all-session feed without affecting other observers (15.5).
 pub struct GlobalSubscription {
+    observer_id: u64,
     bus: Arc<NotificationBus>,
 }
 
 impl Drop for GlobalSubscription {
     fn drop(&mut self) {
-        self.bus.unsubscribe_all();
+        self.bus.unsubscribe_all(self.observer_id);
     }
 }
 
@@ -283,8 +285,9 @@ pub trait SessionStore: Send + Sync {
     /// reach the engine directly. Idempotent; safe to run from any process.
     async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError>;
 
-    /// Subscribe to [`SessionChange`] notifications for one session. The
-    /// returned [`Subscription`] unsubscribes on drop.
+    /// Subscribe to process-local [`SessionChange`] notifications for one
+    /// session. The returned [`Subscription`] unsubscribes only itself on
+    /// drop; reconnect/cross-process catch-up uses [`Self::load`].
     fn subscribe(&self, session_id: i64, observer: SessionObserver) -> Subscription;
 
     /// Subscribe to [`SessionChange`] notifications for every session. The
@@ -299,12 +302,11 @@ pub trait SessionStore: Send + Sync {
 #[derive(Debug, Clone)]
 struct CacheEntry {
     view: SessionView,
-    /// `sessions.version` at cache time; session-meta writes bump it, which
-    /// invalidates the entry on the next hit (15.3).
+    /// `sessions.version` at cache time; every session-visible mutation bumps
+    /// it, which invalidates the entry on the next hit (8.6 / 15.3).
     version: i64,
-    /// Newest member part cursor `(created_at_ms, part_id)` at cache time;
-    /// part additions move it, which catches cross-process writes that do not
-    /// touch `sessions.version` (14.4).
+    /// Newest member part cursor `(created_at_ms, part_id)` at cache time; an
+    /// additional membership-position check alongside the required version.
     newest_cursor: Option<(i64, i64)>,
 }
 
@@ -354,8 +356,8 @@ impl MemoryLayer {
     }
 
     /// Cache hit when the cached view still matches the persisted position:
-    /// `sessions.version` (session-meta writes) AND the newest member cursor
-    /// (part additions, cross-process writes). Either moving invalidates.
+    /// `sessions.version` (all session-visible writes) AND the newest member
+    /// cursor (membership position). Either moving invalidates.
     fn get(
         &self,
         session_id: i64,
@@ -438,8 +440,9 @@ impl MemoryLayer {
 /// log (14.3).
 #[derive(Default)]
 pub struct NotificationBus {
-    observers: Mutex<HashMap<i64, Vec<SessionObserver>>>,
-    global_observers: Mutex<Vec<SessionObserver>>,
+    next_observer_id: AtomicU64,
+    observers: Mutex<HashMap<i64, HashMap<u64, SessionObserver>>>,
+    global_observers: Mutex<HashMap<u64, SessionObserver>>,
 }
 
 impl NotificationBus {
@@ -447,34 +450,41 @@ impl NotificationBus {
         Self::default()
     }
 
-    fn subscribe(&self, session_id: i64, observer: SessionObserver) {
+    fn subscribe(&self, session_id: i64, observer: SessionObserver) -> u64 {
+        let observer_id = self.next_observer_id.fetch_add(1, Ordering::Relaxed) + 1;
         self.observers
             .lock()
             .expect("observers lock")
             .entry(session_id)
             .or_default()
-            .push(observer);
+            .insert(observer_id, observer);
+        observer_id
     }
 
-    fn unsubscribe(&self, session_id: i64) {
-        self.observers
-            .lock()
-            .expect("observers lock")
-            .remove(&session_id);
+    fn unsubscribe(&self, session_id: i64, observer_id: u64) {
+        let mut observers = self.observers.lock().expect("observers lock");
+        if let Some(session_observers) = observers.get_mut(&session_id) {
+            session_observers.remove(&observer_id);
+            if session_observers.is_empty() {
+                observers.remove(&session_id);
+            }
+        }
     }
 
-    fn subscribe_all(&self, observer: SessionObserver) {
+    fn subscribe_all(&self, observer: SessionObserver) -> u64 {
+        let observer_id = self.next_observer_id.fetch_add(1, Ordering::Relaxed) + 1;
         self.global_observers
             .lock()
             .expect("global observers lock")
-            .push(observer);
+            .insert(observer_id, observer);
+        observer_id
     }
 
-    fn unsubscribe_all(&self) {
+    fn unsubscribe_all(&self, observer_id: u64) {
         self.global_observers
             .lock()
             .expect("global observers lock")
-            .clear();
+            .remove(&observer_id);
     }
 
     /// Emit a change to every session subscriber plus the global observers.
@@ -486,7 +496,7 @@ impl NotificationBus {
             .lock()
             .expect("observers lock")
             .get(&change.session_id())
-            .cloned();
+            .map(|observers| observers.values().cloned().collect::<Vec<_>>());
         if let Some(observers) = observers {
             for observer in observers {
                 observer(change.clone());
@@ -496,7 +506,9 @@ impl NotificationBus {
             .global_observers
             .lock()
             .expect("global observers lock")
-            .clone();
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
         for observer in global_observers {
             observer(change.clone());
         }
@@ -625,15 +637,10 @@ where
         )
     }
 
-    /// Acquire the session lease (heartbeat on every commit). `reconcile` is
-    /// used when the previous holder's lease went stale: the residual
-    /// in-flight run is aborted and its children cancelled (17.4).
-    async fn ensure_lease(
-        &self,
-        session_id: i64,
-        owner: &str,
-        reconcile: bool,
-    ) -> Result<(), StoreError> {
+    /// Acquire the session lease (heartbeat on every commit). A stale-lease
+    /// acquisition atomically aborts the previous holder's residual run and
+    /// returns the committed rows for immediate live notification.
+    async fn ensure_lease(&self, session_id: i64, owner: &str) -> Result<(), StoreError> {
         let now = self.now();
         let fresh = match self.engine.current_lease(session_id).await? {
             Some(lease) => now - lease.heartbeat_at_ms <= LEASE_STALENESS_MS,
@@ -653,9 +660,17 @@ where
             .try_acquire_lease(session_id, owner, now)
             .await?
         {
-            LeaseAcquire::Acquired { reconciled_runs } => {
-                if reconcile && !reconciled_runs.is_empty() {
-                    self.reconcile(session_id).await?;
+            LeaseAcquire::Acquired { updated_parts, .. } => {
+                if !updated_parts.is_empty() {
+                    self.memory.clear_streaming_session(session_id);
+                    self.memory.invalidate(session_id);
+                    for part in updated_parts {
+                        self.bus
+                            .emit(SessionChange::PartUpdated { session_id, part });
+                    }
+                    let meta = self.engine.session_meta(session_id).await?;
+                    self.bus
+                        .emit(SessionChange::SessionMetaUpdated { session_id, meta });
                 }
                 Ok(())
             }
@@ -850,12 +865,22 @@ where
     /// mark in-flight run markers `failed` (`process_restart`) and their
     /// non-terminal children `cancelled`. Idempotent.
     async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
+        let presentation = self.derive_presentation(session_id).await?;
+        if presentation.state != SessionState::Interrupted {
+            // Running and AwaitingUser must be preserved; Ready/Failed have no
+            // crashed in-flight marker to reconcile. Recovery is idempotent.
+            return Ok(());
+        }
         // A process-restart reconciliation cannot safely commit a process-local
         // stream tail. Drop it before deriving/announcing the terminal rows.
         self.memory.clear_streaming_session(session_id);
         let outcome = self.engine.reconcile(session_id, self.now()).await?;
-        if !outcome.aborted_runs.is_empty() || outcome.cancelled_parts > 0 {
+        if !outcome.updated_parts.is_empty() {
             self.memory.invalidate(session_id);
+            for part in outcome.updated_parts {
+                self.bus
+                    .emit(SessionChange::PartUpdated { session_id, part });
+            }
             let meta = self.engine.session_meta(session_id).await?;
             self.bus
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
@@ -971,7 +996,7 @@ where
         idempotency_key: Option<String>,
     ) -> Result<i64, StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
+        self.ensure_lease(session_id, &owner).await?;
         let outcome: SubmitOutcome = self
             .engine
             .submit_user_message(session_id, &owner, parts, idempotency_key, self.now())
@@ -999,7 +1024,7 @@ where
         parts: Vec<NewPart>,
     ) -> Result<(), StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
+        self.ensure_lease(session_id, &owner).await?;
         let created = self
             .engine
             .append_parts(session_id, &owner, run_id, parts, self.now())
@@ -1028,7 +1053,7 @@ where
         if has_buffer {
             self.validate_buffered_lease(session_id, &owner).await?;
         } else {
-            self.ensure_lease(session_id, &owner, true).await?;
+            self.ensure_lease(session_id, &owner).await?;
         }
         let is_text_delta = delta.content.is_none() && delta.content_text_delta.is_some();
         if has_buffer || is_text_delta {
@@ -1064,7 +1089,7 @@ where
         outcome: RunOutcome,
     ) -> Result<(), StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
+        self.ensure_lease(session_id, &owner).await?;
         self.flush_streaming_run(session_id, &owner, run_id).await?;
         let marker = self
             .engine
@@ -1090,7 +1115,7 @@ where
         idempotency_key: Option<String>,
     ) -> Result<i64, StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
+        self.ensure_lease(session_id, &owner).await?;
         let outcome = self
             .engine
             .start_run(
@@ -1160,15 +1185,19 @@ where
         reply: NewPart,
     ) -> Result<(), StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
-        let reply_part = self
+        self.ensure_lease(session_id, &owner).await?;
+        let outcome = self
             .engine
             .answer_interaction(session_id, &owner, interaction_part_id, reply, self.now())
             .await?;
         self.memory.invalidate(session_id);
+        self.bus.emit(SessionChange::PartUpdated {
+            session_id,
+            part: outcome.interaction,
+        });
         self.bus.emit(SessionChange::PartAdded {
             session_id,
-            part: reply_part,
+            part: outcome.reply,
         });
         Ok(())
     }
@@ -1184,8 +1213,8 @@ where
             .fork_session(session_id, at_part_id, title.clone(), false, self.now())
             .await?;
         self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id,
-            meta: self.engine.session_meta(session_id).await?,
+            session_id: meta.id,
+            meta: meta.clone(),
         });
         Ok(meta.id)
     }
@@ -1201,8 +1230,8 @@ where
             .fork_session(session_id, at_part_id, title.clone(), true, self.now())
             .await?;
         self.bus.emit(SessionChange::SessionMetaUpdated {
-            session_id,
-            meta: self.engine.session_meta(session_id).await?,
+            session_id: meta.id,
+            meta: meta.clone(),
         });
         Ok(meta.id)
     }
@@ -1224,15 +1253,22 @@ where
         run_id: i64,
     ) -> Result<(), StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
+        self.ensure_lease(session_id, &owner).await?;
         self.flush_streaming_run(session_id, &owner, run_id).await?;
-        self.engine
+        let updated_parts = self
+            .engine
             .cancel_run(session_id, &owner, run_id, self.now())
             .await?;
-        self.memory.invalidate(session_id);
-        let meta = self.engine.session_meta(session_id).await?;
-        self.bus
-            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        if !updated_parts.is_empty() {
+            self.memory.invalidate(session_id);
+            for part in updated_parts {
+                self.bus
+                    .emit(SessionChange::PartUpdated { session_id, part });
+            }
+            let meta = self.engine.session_meta(session_id).await?;
+            self.bus
+                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        }
         Ok(())
     }
 
@@ -1242,7 +1278,7 @@ where
 
     async fn compact_session(&self, session_id: i64, owner_id: &str) -> Result<i64, StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
+        self.ensure_lease(session_id, &owner).await?;
         // A compaction run marker closes the preceding window (13.4); provider
         // anchors are cleared because compaction changes the prompt window
         // (13.3).
@@ -1269,13 +1305,46 @@ where
     }
 
     async fn delete(&self, session_id: i64) -> Result<(), StoreError> {
+        let target = self.engine.session_meta(session_id).await?;
+        let tree = self.engine.list_session_tree(target.root_id).await?;
+        let mut deleted_session_ids = HashSet::from([session_id]);
+        loop {
+            let before = deleted_session_ids.len();
+            for summary in &tree {
+                if summary
+                    .parent_id
+                    .is_some_and(|parent_id| deleted_session_ids.contains(&parent_id))
+                {
+                    deleted_session_ids.insert(summary.id);
+                }
+            }
+            if deleted_session_ids.len() == before {
+                break;
+            }
+        }
+        let mut removed_memberships = Vec::new();
+        for deleted_id in &deleted_session_ids {
+            let view = self.engine.load_session(*deleted_id).await?;
+            removed_memberships.push((
+                *deleted_id,
+                view.parts
+                    .into_iter()
+                    .map(|part| part.part_id)
+                    .collect::<Vec<_>>(),
+            ));
+        }
         self.engine.delete_session(session_id).await?;
-        self.memory.clear_streaming_session(session_id);
-        self.memory.invalidate(session_id);
-        self.bus.emit(SessionChange::PartRemoved {
-            session_id,
-            part_id: 0, // placeholder; deletion removes the whole session
-        });
+        removed_memberships.sort_by_key(|(deleted_id, _)| *deleted_id);
+        for (deleted_id, part_ids) in removed_memberships {
+            self.memory.clear_streaming_session(deleted_id);
+            self.memory.invalidate(deleted_id);
+            for part_id in part_ids {
+                self.bus.emit(SessionChange::PartRemoved {
+                    session_id: deleted_id,
+                    part_id,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -1288,9 +1357,19 @@ where
         workspace_id: i64,
         bundle: &str,
     ) -> Result<i64, StoreError> {
-        self.engine
+        let session_id = self
+            .engine
             .import_session_jsonl(workspace_id, bundle, self.now())
-            .await
+            .await?;
+        let view = self.engine.load_session(session_id).await?;
+        self.bus.emit(SessionChange::SessionMetaUpdated {
+            session_id,
+            meta: view.meta,
+        });
+        for part in view.parts {
+            self.bus.emit(SessionChange::PartAdded { session_id, part });
+        }
+        Ok(session_id)
     }
 
     async fn usage_stats(&self, query: UsageQuery) -> Result<UsageStats, StoreError> {
@@ -1302,21 +1381,28 @@ where
         for session_id in &outcome.reaped_sessions {
             self.memory.clear_streaming_session(*session_id);
             self.memory.invalidate(*session_id);
+            let meta = self.engine.session_meta(*session_id).await?;
+            self.bus.emit(SessionChange::SessionMetaUpdated {
+                session_id: *session_id,
+                meta,
+            });
         }
         Ok(outcome)
     }
 
     fn subscribe(&self, session_id: i64, observer: SessionObserver) -> Subscription {
-        self.bus.subscribe(session_id, observer);
+        let observer_id = self.bus.subscribe(session_id, observer);
         Subscription {
             session_id,
+            observer_id,
             bus: Arc::clone(&self.bus),
         }
     }
 
     fn subscribe_all(&self, observer: SessionObserver) -> GlobalSubscription {
-        self.bus.subscribe_all(observer);
+        let observer_id = self.bus.subscribe_all(observer);
         GlobalSubscription {
+            observer_id,
             bus: Arc::clone(&self.bus),
         }
     }
@@ -1902,6 +1988,27 @@ mod tests {
     async fn delete_removes_the_session_and_emits_removal() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
+        facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "delete me"}),
+                )],
+                None,
+            )
+            .await
+            .expect("submit before delete");
+        let removed_ids = facade
+            .load(session_id)
+            .await
+            .expect("load before delete")
+            .parts
+            .into_iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let observer: SessionObserver = {
             let seen = Arc::clone(&seen);
@@ -1909,15 +2016,82 @@ mod tests {
         };
         let _subscription = facade.subscribe(session_id, observer);
         facade.delete(session_id).await.expect("delete");
-        assert!(
-            seen.lock()
-                .unwrap()
+        let emitted_ids = {
+            let changes = seen.lock().unwrap();
+            changes
                 .iter()
-                .any(|c| matches!(c, SessionChange::PartRemoved { .. })),
-            "delete emits PartRemoved"
-        );
+                .filter_map(|change| match change {
+                    SessionChange::PartRemoved { part_id, .. } => Some(*part_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(emitted_ids, removed_ids, "one patch per removed membership");
+        assert!(emitted_ids.iter().all(|part_id| *part_id > 0));
         let err = facade.load(session_id).await.expect_err("gone");
         assert!(matches!(err, StoreError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn root_delete_emits_membership_removals_for_descendants() {
+        let (facade, _clock) = harness();
+        let root_id = ready_session(&facade, 1, "delete tree").await;
+        let run_id = facade
+            .submit_user_message(
+                root_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "shared"}),
+                )],
+                None,
+            )
+            .await
+            .expect("submit");
+        let root_part_ids = facade
+            .load(root_id)
+            .await
+            .expect("root view")
+            .parts
+            .into_iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
+        let child_id = facade
+            .fork(root_id, run_id, "child".to_owned())
+            .await
+            .expect("fork");
+        let child_part_ids = facade
+            .load(child_id)
+            .await
+            .expect("child view")
+            .parts
+            .into_iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe_all({
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        });
+
+        facade.delete(root_id).await.expect("delete tree");
+
+        let changes = seen.lock().expect("seen lock");
+        let removed_for = |expected_session_id| {
+            changes
+                .iter()
+                .filter_map(|change| match change {
+                    SessionChange::PartRemoved {
+                        session_id,
+                        part_id,
+                    } if *session_id == expected_session_id => Some(*part_id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(removed_for(root_id), root_part_ids);
+        assert_eq!(removed_for(child_id), child_part_ids);
     }
 
     #[tokio::test]
@@ -2197,5 +2371,378 @@ mod tests {
             .await
             .expect_err("duplicate subagent refused");
         assert!(matches!(err, StoreError::InvalidState(_)));
+    }
+
+    #[tokio::test]
+    async fn dropping_one_session_subscription_keeps_the_other_active() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "subscriptions").await;
+        let first_seen = Arc::new(Mutex::new(Vec::new()));
+        let second_seen = Arc::new(Mutex::new(Vec::new()));
+        let first = facade.subscribe(session_id, {
+            let seen = Arc::clone(&first_seen);
+            Arc::new(move |change| seen.lock().expect("first seen lock").push(change))
+        });
+        let _second = facade.subscribe(session_id, {
+            let seen = Arc::clone(&second_seen);
+            Arc::new(move |change| seen.lock().expect("second seen lock").push(change))
+        });
+
+        facade
+            .rename(session_id, "first rename".to_owned())
+            .await
+            .expect("first rename");
+        drop(first);
+        facade
+            .rename(session_id, "second rename".to_owned())
+            .await
+            .expect("second rename");
+
+        assert_eq!(first_seen.lock().expect("first seen lock").len(), 1);
+        assert_eq!(second_seen.lock().expect("second seen lock").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dropping_one_global_subscription_keeps_the_other_active() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "global subscriptions").await;
+        let first_seen = Arc::new(Mutex::new(Vec::new()));
+        let second_seen = Arc::new(Mutex::new(Vec::new()));
+        let first = facade.subscribe_all({
+            let seen = Arc::clone(&first_seen);
+            Arc::new(move |change| seen.lock().expect("first seen lock").push(change))
+        });
+        let _second = facade.subscribe_all({
+            let seen = Arc::clone(&second_seen);
+            Arc::new(move |change| seen.lock().expect("second seen lock").push(change))
+        });
+
+        facade
+            .rename(session_id, "first rename".to_owned())
+            .await
+            .expect("first rename");
+        drop(first);
+        facade
+            .rename(session_id, "second rename".to_owned())
+            .await
+            .expect("second rename");
+
+        assert_eq!(first_seen.lock().expect("first seen lock").len(), 1);
+        assert_eq!(second_seen.lock().expect("second seen lock").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn answer_interaction_emits_updated_interaction_before_added_reply() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "answer patches").await;
+        let run_id = facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "interaction",
+                    PartRole::Assistant,
+                    json!({"kind": "ask_user", "prompt": "Continue?"}),
+                )],
+                None,
+            )
+            .await
+            .expect("submit interaction");
+        let interaction_id = facade
+            .load(session_id)
+            .await
+            .expect("load interaction")
+            .parts[1]
+            .part_id;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe(session_id, {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        });
+
+        facade
+            .answer_interaction(
+                session_id,
+                "owner-a",
+                interaction_id,
+                NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
+            )
+            .await
+            .expect("answer interaction");
+
+        let changes = seen.lock().expect("seen lock");
+        assert_eq!(changes.len(), 2);
+        match &changes[0] {
+            SessionChange::PartUpdated { part, .. } => {
+                assert_eq!(part.part_id, interaction_id);
+                assert_eq!(part.state, PartState::Completed);
+                assert_eq!(part.revision, 2);
+            }
+            other => panic!("expected interaction update first, got {other:?}"),
+        }
+        match &changes[1] {
+            SessionChange::PartAdded { part, .. } => {
+                assert_eq!(part.parent_part_id, Some(interaction_id));
+                assert_eq!(part.run_id, Some(run_id));
+            }
+            other => panic!("expected reply addition second, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn cancel_emits_only_changed_marker_and_child_before_meta() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "cancel patches").await;
+        let run_id = facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![
+                    NewPart {
+                        kind: "text".to_owned(),
+                        role: PartRole::Assistant,
+                        content: json!({"text": "streaming"}),
+                        summary: None,
+                        visibility: crate::store::PartVisibility::Both,
+                        rendered_markdown: None,
+                        parent_part_id: None,
+                        state: PartState::InProgress,
+                    },
+                    NewPart {
+                        kind: "notice".to_owned(),
+                        role: PartRole::Runtime,
+                        content: json!({"message": "already done"}),
+                        summary: None,
+                        visibility: crate::store::PartVisibility::Both,
+                        rendered_markdown: None,
+                        parent_part_id: None,
+                        state: PartState::Completed,
+                    },
+                ],
+                None,
+            )
+            .await
+            .expect("submit run");
+        let child_id = facade.load(session_id).await.expect("load run").parts[1].part_id;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe(session_id, {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        });
+
+        facade
+            .cancel_run(session_id, "owner-a", run_id)
+            .await
+            .expect("cancel run");
+
+        let changes = seen.lock().expect("seen lock");
+        assert_eq!(changes.len(), 3, "two row patches followed by meta");
+        assert!(matches!(
+            &changes[0],
+            SessionChange::PartUpdated { part, .. }
+                if part.part_id == run_id && part.state == PartState::Cancelled
+        ));
+        assert!(matches!(
+            &changes[1],
+            SessionChange::PartUpdated { part, .. }
+                if part.part_id == child_id && part.state == PartState::Cancelled
+        ));
+        assert!(matches!(
+            &changes[2],
+            SessionChange::SessionMetaUpdated { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn reconcile_emits_committed_part_updates_and_preserves_live_or_paused_runs() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "reconcile patches").await;
+        let run_id = facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart {
+                    kind: "text".to_owned(),
+                    role: PartRole::Assistant,
+                    content: json!({"text": "partial"}),
+                    summary: None,
+                    visibility: crate::store::PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: None,
+                    state: PartState::InProgress,
+                }],
+                None,
+            )
+            .await
+            .expect("submit run");
+        let child_id = facade.load(session_id).await.expect("load run").parts[1].part_id;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe(session_id, {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        });
+
+        facade
+            .reconcile(session_id)
+            .await
+            .expect("fresh run is preserved");
+        assert!(seen.lock().expect("seen lock").is_empty());
+        facade
+            .engine()
+            .release_lease(session_id, "owner-a")
+            .await
+            .expect("release lease");
+        facade
+            .reconcile(session_id)
+            .await
+            .expect("reconcile interrupted run");
+
+        {
+            let changes = seen.lock().expect("seen lock");
+            assert_eq!(changes.len(), 3);
+            assert!(matches!(
+                &changes[0],
+                SessionChange::PartUpdated { part, .. }
+                    if part.part_id == run_id
+                        && part.state == PartState::Failed
+                        && part.content["abort_reason"] == "process_restart"
+            ));
+            assert!(matches!(
+                &changes[1],
+                SessionChange::PartUpdated { part, .. }
+                    if part.part_id == child_id && part.state == PartState::Cancelled
+            ));
+            assert!(matches!(
+                &changes[2],
+                SessionChange::SessionMetaUpdated { .. }
+            ));
+        }
+
+        facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "interaction",
+                    PartRole::Assistant,
+                    json!({"kind": "ask_user", "prompt": "paused?"}),
+                )],
+                None,
+            )
+            .await
+            .expect("start paused run");
+        facade
+            .engine()
+            .release_lease(session_id, "owner-a")
+            .await
+            .expect("release paused lease");
+        seen.lock().expect("seen lock").clear();
+        facade
+            .reconcile(session_id)
+            .await
+            .expect("paused run is preserved");
+        assert!(seen.lock().expect("seen lock").is_empty());
+        assert_eq!(
+            facade.session_state(session_id).await.expect("state").state,
+            SessionState::AwaitingUser
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_and_import_announce_the_new_session_to_global_subscribers() {
+        let (facade, _clock) = harness();
+        let session_id = ready_session(&facade, 1, "global creation patches").await;
+        facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "shared"}),
+                )],
+                None,
+            )
+            .await
+            .expect("submit");
+        let source = facade.load(session_id).await.expect("source view");
+        let cutoff = source.parts[0].part_id;
+        let bundle = facade
+            .export_session_jsonl(session_id)
+            .await
+            .expect("export");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe_all({
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        });
+
+        let fork_id = facade
+            .fork(session_id, cutoff, "fork".to_owned())
+            .await
+            .expect("fork");
+        {
+            let changes = seen.lock().expect("seen lock");
+            assert_eq!(changes.len(), 1);
+            assert!(matches!(
+                &changes[0],
+                SessionChange::SessionMetaUpdated { session_id, meta }
+                    if *session_id == fork_id && meta.id == fork_id
+            ));
+        }
+        seen.lock().expect("seen lock").clear();
+
+        let imported_id = facade
+            .import_session_jsonl(1, &bundle)
+            .await
+            .expect("import");
+        let changes = seen.lock().expect("seen lock");
+        assert_eq!(changes.len(), source.parts.len() + 1);
+        assert!(matches!(
+            &changes[0],
+            SessionChange::SessionMetaUpdated { session_id, meta }
+                if *session_id == imported_id && meta.id == imported_id
+        ));
+        assert!(changes[1..].iter().all(|change| matches!(
+            change,
+            SessionChange::PartAdded { session_id, part }
+                if *session_id == imported_id && part.origin_session_id == imported_id
+        )));
+    }
+
+    #[tokio::test]
+    async fn maintenance_notifies_reaped_sessions_to_refresh_derived_state() {
+        let (facade, clock) = harness();
+        let session_id = ready_session(&facade, 1, "maintenance patch").await;
+        facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::Assistant,
+                    json!({"text": "working"}),
+                )],
+                None,
+            )
+            .await
+            .expect("submit");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let _subscription = facade.subscribe(session_id, {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        });
+
+        clock.advance(LEASE_STALENESS_MS + 1);
+        let outcome = facade.maintenance(clock.get()).await.expect("maintenance");
+        assert_eq!(outcome.reaped_sessions, vec![session_id]);
+        assert!(matches!(
+            seen.lock().expect("seen lock").as_slice(),
+            [SessionChange::SessionMetaUpdated { session_id: changed, .. }] if *changed == session_id
+        ));
+        assert_eq!(
+            facade.session_state(session_id).await.expect("state").state,
+            SessionState::Interrupted
+        );
     }
 }

@@ -11,8 +11,8 @@ use agena_domain::SessionRelationKind;
 use agena_storage::{
     WorkspaceRepository,
     store::{
-        LeaseAcquire, NewPart, NewSession, PartRole, PartState, PartVisibility, PersistenceEngine,
-        RunOutcome, SessionFacade, SessionStore, SessionView,
+        LeaseAcquire, NewPart, NewSession, PartDelta, PartRole, PartState, PartVisibility,
+        PersistenceEngine, RunOutcome, SessionFacade, SessionStore, SessionView,
     },
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -48,7 +48,7 @@ async fn setup(db: Arc<sea_orm::DatabaseConnection>) -> (SqliteEngine, i64) {
         .await
         .expect("acquire lease");
     assert!(
-        matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty())
+        matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
     );
     (engine, session_id)
 }
@@ -158,7 +158,7 @@ async fn lease_steal_aborts_stale_run_atomically() {
         .expect("steal stale lease");
     assert!(matches!(
         acquire,
-        LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs == vec![run_id]
+        LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs == vec![run_id]
     ));
 
     let view = engine.load_session(session_id).await.expect("load");
@@ -1242,7 +1242,7 @@ async fn lease_steal_aborts_stale_run_across_processes() {
         .expect("proc-a acquires");
     assert!(matches!(
         acquire,
-        LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty()
+        LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty()
     ));
     let run_id = engine_a
         .submit_user_message(
@@ -1266,7 +1266,7 @@ async fn lease_steal_aborts_stale_run_across_processes() {
         .expect("proc-b steals");
     assert!(matches!(
         acquire,
-        LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs == vec![run_id]
+        LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs == vec![run_id]
     ));
 
     // Process A (now a reader) sees the aborted run.
@@ -1288,8 +1288,9 @@ async fn lease_steal_aborts_stale_run_across_processes() {
 
 /// A facade caches a session view, a second facade (separate connection pool,
 /// modeling another process) writes to the same file, and the first facade's
-/// cache is invalidated on the next read — cross-process catch-up through the
-/// facade via version + newest-member cursor (gate 5, 14.4).
+/// cache is invalidated on the next read for both append and in-place updates
+/// (including a shared fork prefix) — explicit snapshot catch-up through the
+/// facade via session version + newest-member cursor (gate 5, 14.4).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn facade_cross_process_cache_invalidation() {
     let directory = tempfile::tempdir().expect("temp directory");
@@ -1361,6 +1362,273 @@ async fn facade_cross_process_cache_invalidation() {
             .iter()
             .any(|part| part.content["text"] == "second"),
         "newest member cursor catch-up sees process B's part"
+    );
+
+    // Cache the three-part position, then update the existing newest part in
+    // place from process B. The cursor does not move; sessions.version must be
+    // what invalidates process A's cache.
+    let updated_part_id = refreshed
+        .parts
+        .iter()
+        .find(|part| part.content["text"] == "second")
+        .expect("second part")
+        .part_id;
+    facade_b
+        .update_part(
+            session_id,
+            "owner-a",
+            updated_part_id,
+            agena_storage::store::PartDelta {
+                state: Some(PartState::InProgress),
+                content: Some(json!({"text": "second, updated"})),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("process B updates existing part");
+    let refreshed_in_place = facade_a
+        .load(session_id)
+        .await
+        .expect("reload after in-place update");
+    assert_eq!(refreshed_in_place.parts.len(), 3);
+    let updated = refreshed_in_place
+        .parts
+        .iter()
+        .find(|part| part.part_id == updated_part_id)
+        .expect("updated part");
+    assert_eq!(updated.content["text"], "second, updated");
+    assert_eq!(updated.revision, 2);
+
+    // A fork caches the shared marker. Completing that marker through process
+    // B must advance the child session's version as well as the origin's.
+    let child_id = facade_a
+        .fork(session_id, run_id, "shared cache".to_owned())
+        .await
+        .expect("fork");
+    let child_cached = facade_a.load(child_id).await.expect("cache child");
+    assert_eq!(child_cached.parts[0].state, PartState::Pending);
+    facade_b
+        .complete_run(
+            session_id,
+            "owner-a",
+            run_id,
+            RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+        )
+        .await
+        .expect("complete shared marker");
+    let child_refreshed = facade_a.load(child_id).await.expect("reload child");
+    assert_eq!(child_refreshed.parts[0].state, PartState::Completed);
+    assert_eq!(child_refreshed.parts[0].revision, 2);
+}
+
+#[tokio::test]
+async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_not() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 1);
+
+    let submitted = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![text_part("hello")],
+            Some("send-1".to_owned()),
+            1_000_000,
+        )
+        .await
+        .expect("submit");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 2);
+    let replay = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![text_part("ignored")],
+            Some("send-1".to_owned()),
+            1_000_001,
+        )
+        .await
+        .expect("replay");
+    assert!(!replay.created);
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 2);
+
+    let appended = engine
+        .append_parts(
+            session_id,
+            "owner-a",
+            submitted.run_id,
+            vec![NewPart::pending(
+                "interaction",
+                PartRole::Assistant,
+                json!({"kind": "ask_user", "prompt": "Continue?"}),
+            )],
+            1_000_002,
+        )
+        .await
+        .expect("append interaction");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 3);
+
+    engine
+        .update_part(
+            session_id,
+            "owner-a",
+            submitted.parts[1].part_id,
+            PartDelta {
+                state: Some(PartState::InProgress),
+                ..Default::default()
+            },
+            1_000_003,
+        )
+        .await
+        .expect("update");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 4);
+
+    engine
+        .answer_interaction(
+            session_id,
+            "owner-a",
+            appended[0].part_id,
+            NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
+            1_000_004,
+        )
+        .await
+        .expect("answer");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 5);
+
+    engine
+        .complete_run(
+            session_id,
+            "owner-a",
+            submitted.run_id,
+            RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+            1_000_005,
+        )
+        .await
+        .expect("complete");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 6);
+
+    let cancelled = engine
+        .start_run(
+            session_id,
+            "owner-a",
+            "continue",
+            json!({}),
+            None,
+            1_000_006,
+        )
+        .await
+        .expect("start cancel run");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 7);
+    engine
+        .cancel_run(session_id, "owner-a", cancelled.run_id, 1_000_007)
+        .await
+        .expect("cancel");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 8);
+
+    engine
+        .start_run(
+            session_id,
+            "owner-a",
+            "continue",
+            json!({}),
+            None,
+            1_000_008,
+        )
+        .await
+        .expect("start interrupted run");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 9);
+    engine
+        .release_lease(session_id, "owner-a")
+        .await
+        .expect("release");
+    engine
+        .reconcile(session_id, 1_000_009)
+        .await
+        .expect("reconcile");
+    assert_eq!(engine.session_meta(session_id).await.unwrap().version, 10);
+
+    let workspace_id = engine
+        .session_meta(session_id)
+        .await
+        .expect("meta")
+        .workspace_id;
+    let bundle = engine
+        .export_session_jsonl(session_id)
+        .await
+        .expect("export");
+    let imported_id = engine
+        .import_session_jsonl(workspace_id, &bundle, 1_000_010)
+        .await
+        .expect("import");
+    assert_eq!(engine.session_meta(imported_id).await.unwrap().version, 2);
+}
+
+#[tokio::test]
+async fn sqlite_fork_cannot_answer_a_shared_interaction_in_place() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let outcome = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart::pending(
+                "interaction",
+                PartRole::Assistant,
+                json!({"kind": "ask_user", "prompt": "Continue?"}),
+            )],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("submit interaction");
+    let interaction_id = outcome.parts[1].part_id;
+    let child = engine
+        .fork_session(
+            session_id,
+            interaction_id,
+            "fork".to_owned(),
+            false,
+            1_000_000,
+        )
+        .await
+        .expect("fork");
+    engine
+        .try_acquire_lease(child.id, "child-owner", 1_000_000)
+        .await
+        .expect("child lease");
+
+    let error = engine
+        .answer_interaction(
+            child.id,
+            "child-owner",
+            interaction_id,
+            NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
+            1_000_000,
+        )
+        .await
+        .expect_err("shared interaction is origin-owned");
+    assert!(matches!(
+        error,
+        agena_storage::store::StoreError::InvalidState(_)
+    ));
+    let parent = engine.load_session(session_id).await.expect("parent");
+    assert_eq!(
+        parent
+            .parts
+            .iter()
+            .find(|part| part.part_id == interaction_id)
+            .expect("interaction")
+            .state,
+        PartState::Pending
     );
 }
 

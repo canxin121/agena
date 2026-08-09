@@ -21,10 +21,11 @@ use std::sync::Arc;
 
 use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use agena_storage::store::{
-    InFlightRun, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart, NewSession, Part,
-    PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine, ReconcileOutcome,
-    RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError,
-    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
+    InFlightRun, InteractionAnswerOutcome, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart,
+    NewSession, Part, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine,
+    ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView,
+    StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
+    apply_part_transition,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -219,6 +220,61 @@ async fn insert_membership_tx(
     .map(|_| ())
 }
 
+/// Advance one session's persisted position for a committed mutation (8.6).
+async fn bump_session_version_tx(
+    txn: &DatabaseTransaction,
+    session_id: i64,
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    let result = txn
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "UPDATE agena_sessions \
+             SET version = version + 1, updated_at_ms = ? WHERE id = ?",
+            [now_ms.into(), session_id.into()],
+        ))
+        .await
+        .map_err(map_db_err)?;
+    if result.rows_affected() != 1 {
+        return Err(StoreError::not_found(format!("session {session_id}")));
+    }
+    Ok(())
+}
+
+/// Advance every session whose view includes any changed part. Shared prefix
+/// parts therefore invalidate fork/rewind caches as well as their origin.
+async fn bump_member_session_versions_for_parts_tx(
+    txn: &DatabaseTransaction,
+    part_ids: &[i64],
+    now_ms: i64,
+) -> Result<(), StoreError> {
+    if part_ids.is_empty() {
+        return Ok(());
+    }
+    let part_list = comma_list(part_ids);
+    let result = txn
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            format!(
+                "UPDATE agena_sessions \
+                 SET version = version + 1, updated_at_ms = ? \
+                 WHERE id IN ( \
+                     SELECT DISTINCT session_id FROM agena_session_parts \
+                     WHERE part_id IN ({part_list}) \
+                 )"
+            ),
+            [now_ms.into()],
+        ))
+        .await
+        .map_err(map_db_err)?;
+    if result.rows_affected() == 0 {
+        return Err(StoreError::InvalidState(
+            "changed part has no session membership".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 /// In-flight run markers of a session (state `pending` | `in_progress`),
 /// newest first.
 async fn in_flight_runs_tx(
@@ -246,20 +302,25 @@ async fn in_flight_runs_tx(
     Ok(runs)
 }
 
-/// Abort a set of run markers (state -> failed, `abort_reason` set) and cancel
-/// their non-terminal children, in one transaction. Returns the aborted run ids
-/// and the number of cancelled children. Used by lease steals, user cancel,
-/// and reconcile.
+/// Terminalize a set of run markers (`cancelled` for user cancel, otherwise
+/// `failed`; `abort_reason` always set) and cancel their non-terminal children
+/// in one transaction. Returns every changed row so the facade can emit
+/// commit-derived patches. Used by lease steals, user cancel, and reconcile.
 async fn abort_runs_tx(
     txn: &DatabaseTransaction,
     session_id: i64,
     run_ids: &[i64],
     reason: &str,
     now_ms: i64,
-) -> Result<(Vec<i64>, usize), StoreError> {
+) -> Result<ReconcileOutcome, StoreError> {
     if run_ids.is_empty() {
-        return Ok((Vec::new(), 0));
+        return Ok(ReconcileOutcome::default());
     }
+    let marker_state = if reason == "user_cancelled" {
+        PartState::Cancelled
+    } else {
+        PartState::Failed
+    };
     let run_list = comma_list(run_ids);
     let aborted: Vec<i64> = {
         let rows = txn
@@ -267,7 +328,7 @@ async fn abort_runs_tx(
                 DatabaseBackend::Sqlite,
                 format!(
                     "UPDATE agena_parts \
-                     SET state = 'failed', finished_at_ms = ?, revision = revision + 1, \
+                     SET state = ?, finished_at_ms = ?, revision = revision + 1, \
                          updated_at_ms = ?, \
                          content = json_set(content, '$.abort_reason', ?) \
                      WHERE kind = 'run' AND origin_session_id = ? \
@@ -275,6 +336,7 @@ async fn abort_runs_tx(
                      RETURNING part_id"
                 ),
                 [
+                    marker_state.as_str().into(),
                     now_ms.into(),
                     now_ms.into(),
                     reason.into(),
@@ -289,26 +351,45 @@ async fn abort_runs_tx(
         }
         ids
     };
-    let mut cancelled = 0usize;
+    let mut cancelled_ids: Vec<i64> = Vec::new();
     if !aborted.is_empty() {
         let run_list = comma_list(&aborted);
-        let result = txn
-            .execute(Statement::from_sql_and_values(
+        let rows = txn
+            .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!(
                     "UPDATE agena_parts \
                      SET state = 'cancelled', finished_at_ms = ?, revision = revision + 1, \
                          updated_at_ms = ? \
                      WHERE origin_session_id = ? AND run_id IN ({run_list}) \
-                       AND state IN ('pending', 'in_progress')"
+                       AND state IN ('pending', 'in_progress') \
+                     RETURNING part_id"
                 ),
                 [now_ms.into(), now_ms.into(), session_id.into()],
             ))
             .await
             .map_err(map_db_err)?;
-        cancelled = result.rows_affected() as usize;
+        for row in rows {
+            cancelled_ids.push(row.try_get("", "part_id").map_err(map_db_err)?);
+        }
     }
-    Ok((aborted, cancelled))
+    let mut changed_ids = aborted.clone();
+    changed_ids.extend(cancelled_ids.iter().copied());
+    bump_member_session_versions_for_parts_tx(txn, &changed_ids, now_ms).await?;
+    let mut updated_parts = Vec::with_capacity(changed_ids.len());
+    for part_id in changed_ids {
+        updated_parts.push(
+            load_part_by_id(txn, part_id)
+                .await?
+                .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?,
+        );
+    }
+    updated_parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
+    Ok(ReconcileOutcome {
+        aborted_runs: aborted,
+        cancelled_parts: cancelled_ids.len(),
+        updated_parts,
+    })
 }
 
 fn comma_list(ids: &[i64]) -> String {
@@ -975,16 +1056,18 @@ impl PersistenceEngine for SqliteEngine {
                     // (invariant 2, section 7.2).
                     let runs = in_flight_runs_tx(txn, session_id).await?;
                     let run_ids: Vec<i64> = runs.iter().map(|run| run.part_id).collect();
-                    let (aborted, _cancelled) =
+                    let outcome =
                         abort_runs_tx(txn, session_id, &run_ids, "lease_stolen", now_ms).await?;
                     upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                     return Ok(LeaseAcquire::Acquired {
-                        reconciled_runs: aborted,
+                        reconciled_runs: outcome.aborted_runs,
+                        updated_parts: outcome.updated_parts,
                     });
                 }
                 upsert_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 Ok(LeaseAcquire::Acquired {
                     reconciled_runs: Vec::new(),
+                    updated_parts: Vec::new(),
                 })
             })
         })
@@ -1113,6 +1196,9 @@ impl PersistenceEngine for SqliteEngine {
                         .map_err(map_db_err)?;
                     created.push(part);
                 }
+                if !created.is_empty() {
+                    bump_session_version_tx(txn, session_id, now_ms).await?;
+                }
                 Ok(created)
             })
         })
@@ -1177,6 +1263,7 @@ impl PersistenceEngine for SqliteEngine {
                 ))
                 .await
                 .map_err(map_db_err)?;
+                bump_member_session_versions_for_parts_tx(txn, &[part_id], now_ms).await?;
                 Ok(part)
             })
         })
@@ -1268,6 +1355,7 @@ impl PersistenceEngine for SqliteEngine {
                 ))
                 .await
                 .map_err(map_db_err)?;
+                bump_member_session_versions_for_parts_tx(txn, &[run_id], now_ms).await?;
                 Ok(part)
             })
         })
@@ -1323,14 +1411,17 @@ impl PersistenceEngine for SqliteEngine {
         owner_id: &str,
         run_id: i64,
         now_ms: i64,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<Part>, StoreError> {
         let db = self.db();
         let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
             Box::pin(async move {
                 ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                abort_runs_tx(txn, session_id, &[run_id], "user_cancelled", now_ms).await?;
-                Ok(())
+                Ok(
+                    abort_runs_tx(txn, session_id, &[run_id], "user_cancelled", now_ms)
+                        .await?
+                        .updated_parts,
+                )
             })
         })
         .await
@@ -1343,7 +1434,7 @@ impl PersistenceEngine for SqliteEngine {
         interaction_part_id: i64,
         reply: NewPart,
         now_ms: i64,
-    ) -> Result<Part, StoreError> {
+    ) -> Result<InteractionAnswerOutcome, StoreError> {
         let db = self.db();
         let owner_id = owner_id.to_owned();
         run_write(db, move |txn| {
@@ -1359,10 +1450,16 @@ impl PersistenceEngine for SqliteEngine {
                         "part {interaction_part_id} is not a pending interaction"
                     )));
                 }
+                if interaction.origin_session_id != session_id {
+                    return Err(StoreError::InvalidState(format!(
+                        "interaction {interaction_part_id} is shared; only its origin session may answer it"
+                    )));
+                }
                 let owning_run = interaction.run_id;
                 interaction.state = PartState::Completed;
                 interaction.finished_at_ms = Some(now_ms);
                 interaction.updated_at_ms = now_ms;
+                interaction.revision += 1;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_parts \
@@ -1398,7 +1495,16 @@ impl PersistenceEngine for SqliteEngine {
                 insert_membership_tx(txn, session_id, reply_id, now_ms)
                     .await
                     .map_err(map_db_err)?;
-                Ok(reply_part)
+                bump_member_session_versions_for_parts_tx(
+                    txn,
+                    &[interaction_part_id, reply_id],
+                    now_ms,
+                )
+                .await?;
+                Ok(InteractionAnswerOutcome {
+                    interaction,
+                    reply: reply_part,
+                })
             })
         })
         .await
@@ -1487,12 +1593,7 @@ impl PersistenceEngine for SqliteEngine {
                 if run_ids.is_empty() {
                     return Ok(ReconcileOutcome::default());
                 }
-                let (aborted, cancelled_parts) =
-                    abort_runs_tx(txn, session_id, &run_ids, "process_restart", now_ms).await?;
-                Ok(ReconcileOutcome {
-                    aborted_runs: aborted,
-                    cancelled_parts,
-                })
+                abort_runs_tx(txn, session_id, &run_ids, "process_restart", now_ms).await
             })
         })
         .await
@@ -1674,6 +1775,9 @@ impl PersistenceEngine for SqliteEngine {
                     insert_membership_tx(txn, session_id, new_id, now_ms)
                         .await
                         .map_err(map_db_err)?;
+                }
+                if !parsed.parts.is_empty() {
+                    bump_session_version_tx(txn, session_id, now_ms).await?;
                 }
                 Ok(session_id)
             })
@@ -1947,6 +2051,7 @@ async fn submit_batch_tx(
         .await
         .map_err(map_db_err)?;
     }
+    bump_session_version_tx(txn, session_id, now_ms).await?;
     Ok(SubmitOutcome {
         run_id: marker_id,
         created: true,

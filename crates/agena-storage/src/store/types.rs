@@ -368,13 +368,16 @@ pub struct LeaseState {
 }
 
 /// Result of [`PersistenceEngine::try_acquire_lease`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LeaseAcquire {
     /// This caller now owns the lease. Any stale in-flight run markers were
     /// aborted atomically in the same transaction (invariant 2).
     Acquired {
         /// Run markers aborted by the steal (abort_reason = `lease_stolen`).
         reconciled_runs: Vec<i64>,
+        /// Every marker/child part changed by the atomic stale-lease abort.
+        /// The facade turns these committed rows directly into live patches.
+        updated_parts: Vec<Part>,
     },
     /// Another owner holds a fresh lease; acquisition refused.
     HeldBy {
@@ -384,12 +387,22 @@ pub enum LeaseAcquire {
 }
 
 /// Result of [`PersistenceEngine::reconcile`] (17.4 step 2c).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReconcileOutcome {
     /// Run markers marked `failed` (abort_reason = `process_restart`).
     pub aborted_runs: Vec<i64>,
     /// Non-terminal child parts of those runs marked `cancelled`.
     pub cancelled_parts: usize,
+    /// Every marker/child part changed by reconciliation, ordered by the
+    /// canonical `(created_at_ms, part_id)` position.
+    pub updated_parts: Vec<Part>,
+}
+
+/// Rows changed by the atomic answer-interaction transaction (17.5).
+#[derive(Debug, Clone, PartialEq)]
+pub struct InteractionAnswerOutcome {
+    pub interaction: Part,
+    pub reply: Part,
 }
 
 /// One provider model call (section 16). Append-only, immutable, one row per

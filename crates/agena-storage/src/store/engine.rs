@@ -12,9 +12,9 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 
 use super::{
-    LeaseAcquire, NewPart, NewSession, Part, PartDelta, ReconcileOutcome, RunOutcome,
-    SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError, SubmitOutcome,
-    UsageQuery, UsageRecord, UsageStats,
+    InteractionAnswerOutcome, LeaseAcquire, NewPart, NewSession, Part, PartDelta, ReconcileOutcome,
+    RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError,
+    SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
 };
 
 /// A live-update notification derived from an operation and emitted after
@@ -69,9 +69,10 @@ pub trait PersistenceEngine: Send + Sync {
 
     /// The newest member part's `(created_at_ms, part_id)` cursor, if the
     /// session has any parts. Used by the facade's memory layer for
-    /// cross-process catch-up: `sessions.version` catches session-meta writes,
-    /// and this cursor catches part additions (14.4). Both are compared on
-    /// cache hit; a change in either invalidates the cached view.
+    /// cross-process catch-up. `sessions.version` advances for every
+    /// session-visible mutation (including shared-part updates); this cursor is
+    /// an additional membership-position check (14.4). A change in either
+    /// invalidates the cached view.
     async fn newest_member_cursor(&self, session_id: i64)
     -> Result<Option<(i64, i64)>, StoreError>;
 
@@ -244,14 +245,15 @@ pub trait PersistenceEngine: Send + Sync {
         now_ms: i64,
     ) -> Result<SubmitOutcome, StoreError>;
 
-    /// Cancel a run marker and its non-terminal child parts (17.5 user cancel).
+    /// Cancel a run marker and its non-terminal child parts (17.5 user cancel),
+    /// returning every committed row that changed.
     async fn cancel_run(
         &self,
         session_id: i64,
         owner_id: &str,
         run_id: i64,
         now_ms: i64,
-    ) -> Result<(), StoreError>;
+    ) -> Result<Vec<Part>, StoreError>;
 
     /// Answer a pending interaction: mark it completed and append a user reply
     /// part bound to the interaction (17.5).
@@ -262,7 +264,7 @@ pub trait PersistenceEngine: Send + Sync {
         interaction_part_id: i64,
         reply: NewPart,
         now_ms: i64,
-    ) -> Result<Part, StoreError>;
+    ) -> Result<InteractionAnswerOutcome, StoreError>;
 
     // --- fork / rewind (eager edge copy, 7.3) ---
 

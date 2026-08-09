@@ -18,10 +18,10 @@ use serde_json::{Value, json};
 #[cfg(test)]
 use super::PendingInteraction;
 use super::{
-    InFlightRun, LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart,
-    NewSession, Part, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine,
-    ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView,
-    StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
+    InFlightRun, InteractionAnswerOutcome, LEASE_STALENESS_MS, LeaseAcquire, LeaseState,
+    MaintenanceOutcome, NewPart, NewSession, Part, PartDelta, PartRole, PartState, PartVisibility,
+    PersistenceEngine, ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary,
+    SessionView, StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
     apply_part_transition,
 };
 use crate::store::jsonl;
@@ -98,6 +98,52 @@ impl InMemoryEngine {
 
     fn next_session_id(&self) -> i64 {
         self.next_session_id.fetch_add(1, Ordering::SeqCst)
+    }
+
+    /// Advance the persisted position for one session mutation (8.6). Callers
+    /// invoke this only after releasing part/membership locks.
+    fn bump_session_version(&self, session_id: i64, now_ms: i64) -> Result<(), StoreError> {
+        let mut sessions = self.sessions.write().expect("sessions lock");
+        let meta = sessions
+            .get_mut(&session_id)
+            .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+        meta.version += 1;
+        meta.updated_at_ms = now_ms;
+        Ok(())
+    }
+
+    /// Advance every session whose view contains one of the changed parts.
+    /// This includes fork/rewind children that share an origin part.
+    fn bump_member_session_versions(
+        &self,
+        part_ids: &[i64],
+        now_ms: i64,
+    ) -> Result<(), StoreError> {
+        if part_ids.is_empty() {
+            return Ok(());
+        }
+        let session_ids = {
+            let membership = self.membership.read().expect("membership lock");
+            membership
+                .iter()
+                .filter(|(_, members)| part_ids.iter().any(|part_id| members.contains(part_id)))
+                .map(|(session_id, _)| *session_id)
+                .collect::<Vec<_>>()
+        };
+        if session_ids.is_empty() {
+            return Err(StoreError::InvalidState(
+                "changed part has no session membership".to_owned(),
+            ));
+        }
+        let mut sessions = self.sessions.write().expect("sessions lock");
+        for session_id in session_ids {
+            let meta = sessions
+                .get_mut(&session_id)
+                .ok_or_else(|| StoreError::not_found(format!("session {session_id}")))?;
+            meta.version += 1;
+            meta.updated_at_ms = now_ms;
+        }
+        Ok(())
     }
 
     /// Allocate a run marker + content parts (7.1). Shared by user send and
@@ -191,6 +237,7 @@ impl InMemoryEngine {
                 .expect("idempotency lock")
                 .insert((session_id, key), marker_id);
         }
+        self.bump_session_version(session_id, now_ms)?;
         Ok(SubmitOutcome {
             run_id: marker_id,
             created: true,
@@ -277,25 +324,38 @@ impl InMemoryEngine {
 
     /// Abort a set of run markers and cancel their in-flight children.
     /// Returns the aborted run ids. Runs `origin_session_id = session_id`.
-    fn abort_runs(&self, session_id: i64, run_ids: &[i64], reason: &str, now_ms: i64) {
+    fn abort_runs(
+        &self,
+        session_id: i64,
+        run_ids: &[i64],
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<ReconcileOutcome, StoreError> {
         if run_ids.is_empty() {
-            return;
+            return Ok(ReconcileOutcome::default());
         }
+        let marker_state = if reason == "user_cancelled" {
+            PartState::Cancelled
+        } else {
+            PartState::Failed
+        };
         let mut parts = self.parts.write().expect("parts lock");
-        let mut cancelled = 0usize;
+        let mut outcome = ReconcileOutcome::default();
         for part in parts.values_mut() {
             if part.origin_session_id != session_id {
                 continue;
             }
             if part.is_run_marker() && run_ids.contains(&part.part_id) && part.state.is_in_flight()
             {
-                part.state = PartState::Failed;
+                part.state = marker_state;
                 part.finished_at_ms = Some(now_ms);
                 part.updated_at_ms = now_ms;
                 part.revision += 1;
                 if let Value::Object(map) = &mut part.content {
                     map.insert("abort_reason".to_owned(), Value::String(reason.to_owned()));
                 }
+                outcome.aborted_runs.push(part.part_id);
+                outcome.updated_parts.push(part.clone());
             } else if part.run_id.is_some_and(|run| run_ids.contains(&run))
                 && part.state.is_in_flight()
             {
@@ -303,10 +363,21 @@ impl InMemoryEngine {
                 part.finished_at_ms = Some(now_ms);
                 part.updated_at_ms = now_ms;
                 part.revision += 1;
-                cancelled += 1;
+                outcome.cancelled_parts += 1;
+                outcome.updated_parts.push(part.clone());
             }
         }
-        let _ = cancelled;
+        drop(parts);
+        outcome
+            .updated_parts
+            .sort_by_key(|part| (part.created_at_ms, part.part_id));
+        let changed_ids = outcome
+            .updated_parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>();
+        self.bump_member_session_versions(&changed_ids, now_ms)?;
+        Ok(outcome)
     }
 }
 
@@ -808,7 +879,7 @@ impl PersistenceEngine for InMemoryEngine {
                 .iter()
                 .map(|run| run.part_id)
                 .collect::<Vec<_>>();
-            self.abort_runs(session_id, &aborted, "lease_stolen", now_ms);
+            let outcome = self.abort_runs(session_id, &aborted, "lease_stolen", now_ms)?;
             leases.insert(
                 session_id,
                 LeaseState {
@@ -820,7 +891,8 @@ impl PersistenceEngine for InMemoryEngine {
                 },
             );
             return Ok(LeaseAcquire::Acquired {
-                reconciled_runs: aborted,
+                reconciled_runs: outcome.aborted_runs,
+                updated_parts: outcome.updated_parts,
             });
         }
         leases.insert(
@@ -835,6 +907,7 @@ impl PersistenceEngine for InMemoryEngine {
         );
         Ok(LeaseAcquire::Acquired {
             reconciled_runs: Vec::new(),
+            updated_parts: Vec::new(),
         })
     }
 
@@ -961,6 +1034,9 @@ impl PersistenceEngine for InMemoryEngine {
                 created.push(part);
             }
         }
+        if !created.is_empty() {
+            self.bump_session_version(session_id, now_ms)?;
+        }
         Ok(created)
     }
 
@@ -973,46 +1049,50 @@ impl PersistenceEngine for InMemoryEngine {
         now_ms: i64,
     ) -> Result<Part, StoreError> {
         self.ensure_lease(session_id, owner_id, now_ms)?;
-        let mut parts = self.parts.write().expect("parts lock");
-        let part = parts
-            .get_mut(&part_id)
-            .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
-        // Shared-part rule (8.4): only the creating session updates in place.
-        if part.origin_session_id != session_id {
-            return Err(StoreError::InvalidState(format!(
-                "part {part_id} is shared; only its origin session {session_id} may update it in place"
-            )));
-        }
-        if let Some(to) = delta.state {
-            apply_part_transition(part, to, now_ms, true)?;
-        }
-        if let Some(content) = delta.content {
-            part.content = content;
-        } else if let Some(delta_text) = delta.content_text_delta {
-            append_text_delta(&mut part.content, &delta_text)?;
-        }
-        if let Some(summary) = delta.summary {
-            part.summary = Some(summary);
-        }
-        if let Some(rendered) = delta.rendered_markdown {
-            part.rendered_markdown = Some(rendered);
-        }
-        if let Some(provider_state) = delta.provider_state {
-            part.provider_state = Some(provider_state);
-        }
-        if let Some(finished) = delta.finished_at_ms {
-            part.finished_at_ms = Some(finished);
-        }
-        if part.state.is_terminal() && part.finished_at_ms.is_none() {
-            part.finished_at_ms = Some(now_ms);
-        }
-        if part.state == PartState::InProgress {
-            // Retry clears the finished timestamp.
-            part.finished_at_ms = None;
-        }
-        part.revision += 1;
-        part.updated_at_ms = now_ms;
-        Ok(part.clone())
+        let updated = {
+            let mut parts = self.parts.write().expect("parts lock");
+            let part = parts
+                .get_mut(&part_id)
+                .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?;
+            // Shared-part rule (8.4): only the creating session updates in place.
+            if part.origin_session_id != session_id {
+                return Err(StoreError::InvalidState(format!(
+                    "part {part_id} is shared; only its origin session {session_id} may update it in place"
+                )));
+            }
+            if let Some(to) = delta.state {
+                apply_part_transition(part, to, now_ms, true)?;
+            }
+            if let Some(content) = delta.content {
+                part.content = content;
+            } else if let Some(delta_text) = delta.content_text_delta {
+                append_text_delta(&mut part.content, &delta_text)?;
+            }
+            if let Some(summary) = delta.summary {
+                part.summary = Some(summary);
+            }
+            if let Some(rendered) = delta.rendered_markdown {
+                part.rendered_markdown = Some(rendered);
+            }
+            if let Some(provider_state) = delta.provider_state {
+                part.provider_state = Some(provider_state);
+            }
+            if let Some(finished) = delta.finished_at_ms {
+                part.finished_at_ms = Some(finished);
+            }
+            if part.state.is_terminal() && part.finished_at_ms.is_none() {
+                part.finished_at_ms = Some(now_ms);
+            }
+            if part.state == PartState::InProgress {
+                // Retry clears the finished timestamp.
+                part.finished_at_ms = None;
+            }
+            part.revision += 1;
+            part.updated_at_ms = now_ms;
+            part.clone()
+        };
+        self.bump_member_session_versions(&[part_id], now_ms)?;
+        Ok(updated)
     }
 
     async fn complete_run(
@@ -1036,39 +1116,43 @@ impl PersistenceEngine for InMemoryEngine {
                 "terminal run markers require an abort_reason".to_owned(),
             ));
         }
-        let mut parts = self.parts.write().expect("parts lock");
-        let part = parts
-            .get_mut(&run_id)
-            .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
-        if !part.is_run_marker() {
-            return Err(StoreError::InvalidState(format!(
-                "part {run_id} is not a run marker"
-            )));
-        }
-        if part.origin_session_id != session_id {
-            return Err(StoreError::InvalidState(format!(
-                "run marker {run_id} is shared; only its origin session may complete it"
-            )));
-        }
-        let mut content = outcome.content.unwrap_or_else(|| part.content.clone());
-        if let Value::Object(map) = &mut content {
-            map.insert(
-                "abort_reason".to_owned(),
-                match outcome.abort_reason {
-                    Some(reason) => Value::String(reason),
-                    None => Value::Null,
-                },
-            );
-        }
-        part.content = content;
-        part.state = outcome.status;
-        part.finished_at_ms = Some(now_ms);
-        if let Some(provider_state) = outcome.provider_state {
-            part.provider_state = Some(provider_state);
-        }
-        part.revision += 1;
-        part.updated_at_ms = now_ms;
-        Ok(part.clone())
+        let updated = {
+            let mut parts = self.parts.write().expect("parts lock");
+            let part = parts
+                .get_mut(&run_id)
+                .ok_or_else(|| StoreError::not_found(format!("run marker {run_id}")))?;
+            if !part.is_run_marker() {
+                return Err(StoreError::InvalidState(format!(
+                    "part {run_id} is not a run marker"
+                )));
+            }
+            if part.origin_session_id != session_id {
+                return Err(StoreError::InvalidState(format!(
+                    "run marker {run_id} is shared; only its origin session may complete it"
+                )));
+            }
+            let mut content = outcome.content.unwrap_or_else(|| part.content.clone());
+            if let Value::Object(map) = &mut content {
+                map.insert(
+                    "abort_reason".to_owned(),
+                    match outcome.abort_reason {
+                        Some(reason) => Value::String(reason),
+                        None => Value::Null,
+                    },
+                );
+            }
+            part.content = content;
+            part.state = outcome.status;
+            part.finished_at_ms = Some(now_ms);
+            if let Some(provider_state) = outcome.provider_state {
+                part.provider_state = Some(provider_state);
+            }
+            part.revision += 1;
+            part.updated_at_ms = now_ms;
+            part.clone()
+        };
+        self.bump_member_session_versions(&[run_id], now_ms)?;
+        Ok(updated)
     }
 
     async fn start_run(
@@ -1107,10 +1191,11 @@ impl PersistenceEngine for InMemoryEngine {
         owner_id: &str,
         run_id: i64,
         now_ms: i64,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<Part>, StoreError> {
         self.ensure_lease(session_id, owner_id, now_ms)?;
-        self.abort_runs(session_id, &[run_id], "user_cancelled", now_ms);
-        Ok(())
+        Ok(self
+            .abort_runs(session_id, &[run_id], "user_cancelled", now_ms)?
+            .updated_parts)
     }
 
     async fn answer_interaction(
@@ -1120,7 +1205,7 @@ impl PersistenceEngine for InMemoryEngine {
         interaction_part_id: i64,
         reply: NewPart,
         now_ms: i64,
-    ) -> Result<Part, StoreError> {
+    ) -> Result<InteractionAnswerOutcome, StoreError> {
         self.ensure_lease(session_id, owner_id, now_ms)?;
         let mut parts = self.parts.write().expect("parts lock");
         let interaction = parts.get_mut(&interaction_part_id).ok_or_else(|| {
@@ -1131,11 +1216,17 @@ impl PersistenceEngine for InMemoryEngine {
                 "part {interaction_part_id} is not a pending interaction"
             )));
         }
+        if interaction.origin_session_id != session_id {
+            return Err(StoreError::InvalidState(format!(
+                "interaction {interaction_part_id} is shared; only its origin session may answer it"
+            )));
+        }
         let owning_run = interaction.run_id;
         interaction.state = PartState::Completed;
         interaction.finished_at_ms = Some(now_ms);
         interaction.updated_at_ms = now_ms;
         interaction.revision += 1;
+        let interaction_part = interaction.clone();
 
         let reply_id = self.next_part_id();
         let reply_part = Part {
@@ -1165,7 +1256,11 @@ impl PersistenceEngine for InMemoryEngine {
             .entry(session_id)
             .or_default()
             .insert(reply_id);
-        Ok(reply_part)
+        self.bump_member_session_versions(&[interaction_part_id, reply_id], now_ms)?;
+        Ok(InteractionAnswerOutcome {
+            interaction: interaction_part,
+            reply: reply_part,
+        })
     }
 
     async fn fork_session(
@@ -1236,43 +1331,7 @@ impl PersistenceEngine for InMemoryEngine {
     ) -> Result<ReconcileOutcome, StoreError> {
         let in_flight = self.in_flight_runs(session_id);
         let run_ids: Vec<i64> = in_flight.iter().map(|run| run.part_id).collect();
-        let mut outcome = ReconcileOutcome::default();
-        if run_ids.is_empty() {
-            return Ok(outcome);
-        }
-        {
-            let mut parts = self.parts.write().expect("parts lock");
-            for part in parts.values_mut() {
-                if part.origin_session_id != session_id {
-                    continue;
-                }
-                if part.is_run_marker()
-                    && run_ids.contains(&part.part_id)
-                    && part.state.is_in_flight()
-                {
-                    part.state = PartState::Failed;
-                    part.finished_at_ms = Some(now_ms);
-                    part.revision += 1;
-                    part.updated_at_ms = now_ms;
-                    if let Value::Object(map) = &mut part.content {
-                        map.insert(
-                            "abort_reason".to_owned(),
-                            Value::String("process_restart".to_owned()),
-                        );
-                    }
-                    outcome.aborted_runs.push(part.part_id);
-                } else if part.run_id.is_some_and(|run| run_ids.contains(&run))
-                    && part.state.is_in_flight()
-                {
-                    part.state = PartState::Cancelled;
-                    part.finished_at_ms = Some(now_ms);
-                    part.revision += 1;
-                    part.updated_at_ms = now_ms;
-                    outcome.cancelled_parts += 1;
-                }
-            }
-        }
-        Ok(outcome)
+        self.abort_runs(session_id, &run_ids, "process_restart", now_ms)
     }
 
     async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
@@ -1376,7 +1435,7 @@ impl PersistenceEngine for InMemoryEngine {
         &self,
         workspace_id: i64,
         bundle: &str,
-        _now_ms: i64,
+        now_ms: i64,
     ) -> Result<i64, StoreError> {
         let parsed = jsonl::parse(bundle)?;
         let meta = self
@@ -1399,18 +1458,23 @@ impl PersistenceEngine for InMemoryEngine {
         for part in &parsed.parts {
             id_map.insert(part.part_id, self.next_part_id());
         }
-        let mut membership = self.membership.write().expect("membership lock");
-        let mut parts = self.parts.write().expect("parts lock");
-        let set = membership.entry(session_id).or_default();
-        for part in &parsed.parts {
-            let new_id = id_map[&part.part_id];
-            let mut remapped = part.clone();
-            remapped.part_id = new_id;
-            remapped.run_id = part.run_id.map(|run| id_map[&run]);
-            remapped.parent_part_id = part.parent_part_id.map(|parent| id_map[&parent]);
-            remapped.origin_session_id = session_id;
-            parts.insert(new_id, remapped);
-            set.insert(new_id);
+        {
+            let mut membership = self.membership.write().expect("membership lock");
+            let mut parts = self.parts.write().expect("parts lock");
+            let set = membership.entry(session_id).or_default();
+            for part in &parsed.parts {
+                let new_id = id_map[&part.part_id];
+                let mut remapped = part.clone();
+                remapped.part_id = new_id;
+                remapped.run_id = part.run_id.map(|run| id_map[&run]);
+                remapped.parent_part_id = part.parent_part_id.map(|parent| id_map[&parent]);
+                remapped.origin_session_id = session_id;
+                parts.insert(new_id, remapped);
+                set.insert(new_id);
+            }
+        }
+        if !parsed.parts.is_empty() {
+            self.bump_session_version(session_id, now_ms)?;
         }
         Ok(session_id)
     }
@@ -1554,7 +1618,7 @@ mod tests {
             .await
             .expect("acquire lease");
         assert!(
-            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty())
+            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
         );
         (engine, session_id)
     }
@@ -1662,7 +1726,9 @@ mod tests {
             .await
             .expect("steal");
         match stolen {
-            LeaseAcquire::Acquired { reconciled_runs } => {
+            LeaseAcquire::Acquired {
+                reconciled_runs, ..
+            } => {
                 assert_eq!(reconciled_runs.len(), 1);
             }
             LeaseAcquire::HeldBy { .. } => panic!("lease must be stale"),
@@ -2114,7 +2180,7 @@ mod tests {
             .await
             .expect("submit");
         let interaction_id = outcome.parts[1].part_id;
-        let reply = engine
+        let answer = engine
             .answer_interaction(
                 session_id,
                 "owner-a",
@@ -2124,8 +2190,10 @@ mod tests {
             )
             .await
             .expect("answer");
-        assert_eq!(reply.parent_part_id, Some(interaction_id));
-        assert_eq!(reply.run_id, Some(outcome.run_id));
+        assert_eq!(answer.reply.parent_part_id, Some(interaction_id));
+        assert_eq!(answer.reply.run_id, Some(outcome.run_id));
+        assert_eq!(answer.interaction.part_id, interaction_id);
+        assert_eq!(answer.interaction.state, PartState::Completed);
         let view = engine.load_session(session_id).await.expect("load");
         let interaction = view
             .parts
@@ -2133,6 +2201,62 @@ mod tests {
             .find(|part| part.part_id == interaction_id)
             .expect("interaction");
         assert_eq!(interaction.state, PartState::Completed);
+    }
+
+    #[tokio::test]
+    async fn fork_cannot_answer_a_shared_interaction_in_place() {
+        let (engine, session_id) = setup().await;
+        let outcome = engine
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart::pending(
+                    "interaction",
+                    PartRole::Assistant,
+                    json!({"kind": "ask_user", "prompt": "Continue?"}),
+                )],
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("submit interaction");
+        let interaction_id = outcome.parts[1].part_id;
+        let child = engine
+            .fork_session(
+                session_id,
+                interaction_id,
+                "fork".to_owned(),
+                false,
+                engine.now_ms(),
+            )
+            .await
+            .expect("fork");
+        engine
+            .try_acquire_lease(child.id, "child-owner", engine.now_ms())
+            .await
+            .expect("child lease");
+
+        let error = engine
+            .answer_interaction(
+                child.id,
+                "child-owner",
+                interaction_id,
+                NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
+                engine.now_ms(),
+            )
+            .await
+            .expect_err("shared interaction is origin-owned");
+        assert!(matches!(error, StoreError::InvalidState(_)));
+        let parent = engine.load_session(session_id).await.expect("parent");
+        assert_eq!(
+            parent
+                .parts
+                .iter()
+                .find(|part| part.part_id == interaction_id)
+                .expect("interaction")
+                .state,
+            PartState::Pending
+        );
     }
 
     #[tokio::test]
@@ -2171,7 +2295,7 @@ mod tests {
             .await
             .expect("re-acquire lease");
         assert!(
-            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty())
+            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty())
         );
 
         // Pending interaction -> AwaitingUser, even when the lease is gone.
@@ -2322,5 +2446,201 @@ mod tests {
         assert_eq!(stats.total_cost_micros, 4500);
         assert_eq!(stats.groups.len(), 1);
         assert_eq!(stats.groups[0].model_id, "claude-5");
+    }
+
+    #[tokio::test]
+    async fn every_part_mutation_bumps_version_but_idempotency_replay_does_not() {
+        let (engine, session_id) = setup().await;
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 1);
+
+        let submitted = engine
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![text_part("hello")],
+                Some("send-1".to_owned()),
+                engine.now_ms(),
+            )
+            .await
+            .expect("submit");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 2);
+        let replay = engine
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![text_part("ignored")],
+                Some("send-1".to_owned()),
+                engine.now_ms(),
+            )
+            .await
+            .expect("replay");
+        assert!(!replay.created);
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 2);
+
+        let appended = engine
+            .append_parts(
+                session_id,
+                "owner-a",
+                submitted.run_id,
+                vec![NewPart::pending(
+                    "interaction",
+                    PartRole::Assistant,
+                    json!({"kind": "ask_user", "prompt": "Continue?"}),
+                )],
+                engine.now_ms(),
+            )
+            .await
+            .expect("append interaction");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 3);
+
+        engine
+            .update_part(
+                session_id,
+                "owner-a",
+                submitted.parts[1].part_id,
+                PartDelta {
+                    state: Some(PartState::InProgress),
+                    ..Default::default()
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("update part");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 4);
+
+        engine
+            .answer_interaction(
+                session_id,
+                "owner-a",
+                appended[0].part_id,
+                NewPart::pending("text", PartRole::User, json!({"text": "yes"})),
+                engine.now_ms(),
+            )
+            .await
+            .expect("answer");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 5);
+
+        engine
+            .complete_run(
+                session_id,
+                "owner-a",
+                submitted.run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("complete");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 6);
+
+        let cancelled = engine
+            .start_run(
+                session_id,
+                "owner-a",
+                "continue",
+                json!({}),
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("start cancellation run");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 7);
+        engine
+            .cancel_run(session_id, "owner-a", cancelled.run_id, engine.now_ms())
+            .await
+            .expect("cancel");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 8);
+
+        engine
+            .start_run(
+                session_id,
+                "owner-a",
+                "continue",
+                json!({}),
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("start interrupted run");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 9);
+        engine
+            .release_lease(session_id, "owner-a")
+            .await
+            .expect("release lease");
+        engine
+            .reconcile(session_id, engine.now_ms())
+            .await
+            .expect("reconcile");
+        assert_eq!(engine.session_meta(session_id).await.unwrap().version, 10);
+
+        let bundle = engine
+            .export_session_jsonl(session_id)
+            .await
+            .expect("export");
+        let imported_id = engine
+            .import_session_jsonl(1, &bundle, engine.now_ms())
+            .await
+            .expect("import");
+        assert_eq!(
+            engine.session_meta(imported_id).await.unwrap().version,
+            2,
+            "imported membership advances the fresh session position"
+        );
+    }
+
+    #[tokio::test]
+    async fn updating_a_shared_part_bumps_every_member_session_version() {
+        let (engine, session_id) = setup().await;
+        let submitted = engine
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![text_part("shared")],
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("submit");
+        let child = engine
+            .fork_session(
+                session_id,
+                submitted.run_id,
+                "fork".to_owned(),
+                false,
+                engine.now_ms(),
+            )
+            .await
+            .expect("fork");
+        let parent_before = engine.session_meta(session_id).await.unwrap().version;
+        let child_before = engine.session_meta(child.id).await.unwrap().version;
+
+        engine
+            .complete_run(
+                session_id,
+                "owner-a",
+                submitted.run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("complete shared marker");
+
+        assert_eq!(
+            engine.session_meta(session_id).await.unwrap().version,
+            parent_before + 1
+        );
+        assert_eq!(
+            engine.session_meta(child.id).await.unwrap().version,
+            child_before + 1
+        );
     }
 }

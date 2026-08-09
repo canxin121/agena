@@ -16,8 +16,8 @@ Status legend:
 
 | # | Command | Status | Notes |
 |---|---|---|---|
-| 1.1 | `cargo check --workspace --all-targets` | **BLOCKED-on-T6** | ONLY `agena-runtime-session` fails (9 errors, all the known T5-left `project_*` call sites). No other crate fails. See §1a. |
-| 1.2 | `cargo test --workspace` | **PENDING** | After 1.1 green. |
+| 1.1 | `cargo check --workspace --all-targets` | **DONE** | 2026-08-10 — first tree-wide green after T9-B merge. |
+| 1.2 | `cargo test --workspace` | **DONE** | 2026-08-10, exit 0 (full tree, post T9-B). Key libs: contracts 22, session-core 15, session 106, provider 83, adapters 61, application 17, cli 9. |
 | 1.3 | `cargo clippy --workspace --all-targets -- -D warnings` | **PENDING** | After 1.1 green. |
 | 1.4 | `cargo fmt --all --check` | **PENDING** | |
 | 1.5 | `git diff --check` | **PENDING** | |
@@ -138,7 +138,7 @@ Per plan: send / stream / cancel / compact / fork over the v2 parts face, in all
 |---|---|---|
 | 7.1 | R6 identifier audit (§3 regex) returns zero | **PENDING** (today: residue only in session [T6] + contracts [T7] + `message::` part-type renames [T7 §2c]) |
 | 7.2 | Gate-10 sealed SQL audit still only hits `agena-storage-sqlite` | **DONE** (re-verified this tree, §2.5) |
-| 7.3 | `cargo test --workspace` green | **PENDING** |
+| 7.3 | `cargo test --workspace` green | **DONE** | 2026-08-10, exit 0 (see §1.2). |
 | 7.4 | clippy -D warnings / fmt / diff --check green | **PENDING** |
 | 7.5 | Bench `v2_store` no regression | **PENDING** |
 
@@ -151,9 +151,9 @@ Added 2026-08-10 per user directive ("PartContent彻底清除，以及message名
 | # | Item | Worktree / branch | Status |
 |---|---|---|---|
 | 8.1 | **T9-A** — api `MessageResource`→`RunResource` etc., `MessageProviderState`→`PartProviderState` (contracts provider_state.rs), `CompletionInputRun` + `turns` serde-rename | merged `2d91e4d2` | **DONE** |
-| 8.2 | **T9-B** — session projection contract rename (`SessionProjectedMessage*`→`SessionProjectedRun*`, `list_projected_messages`→`list_projected_runs`, consumers in application/execution.rs, cli cli_render/cli_runtime_helpers/mod) + `PartProviderState` session propagation (processor.rs/helpers.rs/parts.rs/store.rs) + `submit_user_message`→`submit_user_parts`-family + CLI `DebugMessageOutput` + `MAX_COMPACTOR_MESSAGE_CHARS` | `db-w3-t9b` (`parallel/r6-t9b`) | **IN-FLIGHT** (agent running) |
-| 8.3 | **T8 stage 1** — provider `wire_message.rs` PartContent→TypedContent, drop `decode_part_content`/`part_content_from_typed` from provider (enables stage-4 contracts deletion) | `db-w3-t8a` (`parallel/r6-t8a`) | **IN-FLIGHT** (agent running) |
-| 8.4 | **T8 stages 2-3** — application.rs:1034 latent notice-banner bug (decode via `decode(&part.kind,&part.content)`), session consumers (store/history/sessions/replies) PartContent→TypedContent | after T9-B merge | **PENDING** |
+| 8.2 | **T9-B** — session projection contract rename (`SessionProjectedMessage*`→`SessionProjectedRun*`, `list_projected_messages`→`list_projected_runs`, consumers in application/execution.rs, cli cli_render/cli_runtime_helpers/mod) + `PartProviderState` session propagation (processor.rs/helpers.rs/parts.rs/store.rs) + `submit_user_message`→`submit_user_run`-family + CLI `DebugMessageOutput`→`DebugRunOutput` + `MAX_COMPACTOR_MESSAGE_CHARS`→`MAX_COMPACTOR_RUN_CHARS` | merged (T9-B, 50 files pure rename 385/385) | **DONE** |
+| 8.3 | **T8 stage 1** — provider `wire_message.rs` PartContent→TypedContent, dropped `decode_part_content`/`part_content_from_typed` from provider (enables stage-4 contracts deletion) | merged (T8-stage1) | **DONE** |
+| 8.4 | **T8 stages 2-3** — application.rs:1034 latent notice-banner bug (decode via `decode(&part.kind,&part.content)`), session consumers (store/history/sessions/replies) PartContent→TypedContent | `db-w3-t8bc` (`parallel/r6-t8bc`) | **IN-FLIGHT** (agent running) |
 | 8.5 | **T8 stage 4** — contracts: delete `PartContent`/`RuntimeActivity` + `part_content_from_typed` fold | after 8.4 | **PENDING** |
 | 8.6 | **T8 stage 6** — zero-grep `PartContent`/`RuntimeActivity` workspace-wide + workspace check | final | **PENDING** |
 | 8.7 | T8/T9 KEEP list intact (wire shapes, REST routes, SSE/message/submit, serde `turns` key) | final | **PENDING** |

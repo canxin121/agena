@@ -23,5 +23,9 @@ uuid = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
+[[bench]]
+name = "v2_store"
+harness = false
+
 [lints]
 workspace = true

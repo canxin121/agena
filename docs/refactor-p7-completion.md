@@ -13,7 +13,7 @@ are parts; session state is derived from parts plus leases; old event-history,
 projection-state, and runtime snapshot persistence paths are absent. External
 chat-data consumers use `agena_storage::store::SessionStore`.
 
-The final P7 pass also fixed two correctness defects found during verification:
+The original P7 pass fixed two correctness defects found during verification:
 
 - Reconciliation-on-open now preserves both `Running` and `AwaitingUser`.
   A pending interaction wins even when the owning run has no lease, so opening
@@ -28,6 +28,29 @@ default, and flushed at run completion/cancellation. Ordinary semantic
 checkpoints remain commit-synchronous. The threshold is configurable for
 deterministic tests and benchmarks.
 
+A stricter post-P7 requirement audit then found and closed four additional
+contract gaps before this document was finalized:
+
+- `sessions.version` now advances once for every committed part/membership
+  mutation in both backends, while idempotency replay remains version-neutral.
+  Updating a shared prefix part advances every member session, so a cached fork
+  cannot retain a stale marker/content row.
+- Mutation outcomes now carry the exact committed rows. Interaction answers
+  emit the completed interaction before the added reply; cancel, reconcile,
+  and stale-lease steal emit every changed marker/child before metadata;
+  user-cancel correctly terminalizes its marker as `cancelled` rather than
+  `failed`.
+- Subscription handles own unique observer IDs. Dropping one session/global
+  subscription removes only that observer. Delete emits real nonzero
+  `PartRemoved` patches for every removed membership (including descendants),
+  fork/rewind and import announce the new session, and lease reaping announces
+  affected metadata so consumers refresh derived state.
+- The cross-process boundary is explicit and tested: live callbacks are
+  process-local best effort, while reconnect uses the ordered parts snapshot
+  and monotonic version. In-place updates whose newest-member cursor does not
+  move, plus updates to a shared fork marker, both invalidate another facade's
+  cache through version changes.
+
 ## Verification commands
 
 All of the following completed successfully in this worktree after the final
@@ -35,14 +58,16 @@ code changes:
 
 ```text
 cargo fmt --all --check
-cargo test -p agena-storage --lib                         # 36 passed
-cargo test -p agena-storage-sqlite --lib                  # 41 passed
+cargo test -p agena-storage --lib                         # 47 passed
+cargo test -p agena-storage-sqlite --lib                  # 43 passed
 cargo test -p agena-runtime-session --lib                 # 106 passed
 cargo test -p agena-application --lib                     # 17 passed
 cargo test -p agena-api-server --lib                      # 8 passed
 cargo test --workspace                                    # all unit/integration/trybuild/doc tests passed
 cargo build --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo bench -p agena-storage-sqlite --bench v2_store --no-run
+cargo bench -p agena-storage-sqlite --bench v2_store
 git diff --check
 ```
 
@@ -115,6 +140,11 @@ Direct evidence:
 - `fork_during_streaming_shares_completion_and_rejects_child_mutation`
 - `gc_deletes_only_refcount_orphans`
 - `facade_cross_process_cache_invalidation`
+- `updating_a_shared_part_bumps_every_member_session_version`
+- `fork_cannot_answer_a_shared_interaction_in_place`
+- `sqlite_fork_cannot_answer_a_shared_interaction_in_place`
+- `every_part_mutation_bumps_version_but_idempotency_replay_does_not`
+- `every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_not`
 - `second_process_reads_committed_parts`
 - `two_os_processes_share_one_database_without_locking`
 
@@ -122,6 +152,13 @@ The fork tests prove the complete D2/D8.4 sequence: fork while a parent-origin
 part is in progress, observe its parent-written completion from the child,
 reject a child in-place update as shared/read-only, then allow child divergence
 by appending a child-origin part under its independent lease.
+
+The cross-process facade test covers two distinct invalidation mechanisms. An
+append moves both the version and newest-member cursor. A subsequent in-place
+update leaves the cursor unchanged but still reloads through `sessions.version`;
+completing a marker shared with a cached fork also advances the child version.
+The REST `GET /sessions/{id}/parts` and session-change stream's initial
+`session_snapshot` expose that full ordered snapshot plus version for reconnect.
 
 ### Gate 6 — resume at every state
 
@@ -140,6 +177,10 @@ Direct evidence:
   and preserves the durable diagnostic error part.
 - Fresh lease: `open_session_leaves_another_process_fresh_run_intact` proves
   manager open returns `Running` without reconciliation.
+- Facade guard/patch contract:
+  `reconcile_emits_committed_part_updates_and_preserves_live_or_paused_runs`
+  proves direct reconciliation is a no-op for both a fresh running session and
+  an awaiting-user session, while an interrupted run emits exact terminal rows.
 
 ### Gate 7 — retry and durable errors
 
@@ -178,6 +219,22 @@ threshold of three and proves:
 
 The execution manager additionally bounds provider/tool streamed content in
 memory and writes terminal snapshots rather than cumulative per-chunk bodies.
+
+P7 also includes the executable production-SQLite benchmark target
+`crates/agena-storage-sqlite/benches/v2_store.rs` (`harness = false`). It uses
+the real `SqliteEngine` behind `SessionFacade`, asserts the D10 revision count,
+and measures all three prompt-mandated paths. The final run on this worktree
+reported:
+
+| Benchmark | Dataset / operation | Result |
+|---|---|---:|
+| `read/warm_facade` | cached 257-part view with persisted-position validation | 225,611 ns/op |
+| `usage/indexed_workspace_range` | indexed aggregate over a 1,500-row range | 946,805 ns/op |
+| `streaming/65_deltas_plus_completion` | threshold 8, including run-end tail flush | 21,039,540 ns/op |
+
+These numbers are evidence from one machine rather than stable pass/fail
+thresholds; correctness is enforced by the benchmark assertions and the
+`EXPLAIN QUERY PLAN`/amortization tests above.
 
 ### Gate 9 — JSONL round trip
 
@@ -219,6 +276,8 @@ test-only and crate-private. Production chat-data access is through
 - `a1430cc3 feat(db): move query and UI surfaces onto parts (P5)`
 - `ac8b1512 refactor(db): remove final legacy data paths (P6)`
 - P7: `test(db): verify v2 concurrency recovery and performance (P7)`
+- Post-P7 closure: `fix(db): complete v2 versioning and live change contracts`
+- Post-P7 evidence: `test(db): add v2 store benchmarks and final audit evidence`
 
 The protected paths `claude-reverse/`, `demo.md`, `demo.txt`, `hello.txt`, and
 `sample.txt` were not modified.

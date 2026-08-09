@@ -974,9 +974,7 @@ impl agena_runtime::SessionQueryService for SessionManager {
         let session = SessionManager::get_session(self, session_id)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        let messages = crate::session::store::messages_from_parts(session.parts())
-            .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))?;
-        Ok(crate::session::cost::summarize(&messages))
+        Ok(crate::session::cost::summarize(session.parts()))
     }
 
     async fn usage_stats(

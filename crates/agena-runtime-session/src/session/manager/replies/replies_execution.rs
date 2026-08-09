@@ -323,7 +323,7 @@ impl SessionManager {
             }
 
             if let Some(hit) = crate::session::doom_loop::detect(
-                messages_from_parts(session.parts())?.as_slice(),
+                session.active_window_parts(),
                 agena_domain::DoomLoopPolicy::default(),
             ) {
                 if doom_loop_recoveries < MAX_DOOM_LOOP_RECOVERIES {

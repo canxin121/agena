@@ -6,6 +6,13 @@
 //! (`model_catalog_*`, `scheduler_*`). There is no event log, no projection
 //! watermark: parts are the only chat-content entity and session state is
 //! derived from parts + leases.
+//!
+//! `agena_scheduler_jobs` mirrors the hot scheduling fields of `ScheduledJob`
+//! (`retry_at_ms`, `paused`, `completed`) as columns alongside
+//! `next_fire_at_ms` so the scheduler's due scan can filter in SQL instead of
+//! decoding every job JSON every tick. `delivery_key` / `claimed_at_ms` are the
+//! cross-process claim lock. `job_json` remains the source of truth for the
+//! full in-memory state; the columns are derived copies written together.
 
 use std::path::{Path, PathBuf};
 
@@ -173,7 +180,7 @@ const TABLES: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_idempotency (session_id INTEGER NOT NULL REFERENCES agena_sessions(id) ON UPDATE CASCADE ON DELETE CASCADE, idempotency_key TEXT NOT NULL, run_id INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, PRIMARY KEY (session_id, idempotency_key))",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, model_id TEXT NOT NULL, definition_json JSON NOT NULL, search_text TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_model_catalog_state (id INTEGER PRIMARY KEY, fetched_at_unix_ms INTEGER NULL, source TEXT NULL, last_error TEXT NULL, updated_at_ms INTEGER NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, updated_at_ms INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS agena_scheduler_jobs (id TEXT PRIMARY KEY, job_json JSON NOT NULL, next_fire_at_ms INTEGER NULL, retry_at_ms INTEGER NULL, delivery_key TEXT NULL, claimed_at_ms INTEGER NULL, paused INTEGER NOT NULL DEFAULT 0, completed INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS agena_scheduler_history (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, run_json JSON NOT NULL, finished_at_ms INTEGER NOT NULL)",
 ];
 

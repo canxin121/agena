@@ -210,9 +210,14 @@ impl Scheduler {
     async fn claim_due(&self) -> Vec<(ScheduledJob, JobDeliveryAttempt, Option<i64>, String)> {
         let now = Utc::now();
         let mut deliveries = Vec::new();
-        for mut job in self.store.list().await {
+        // The store filters to due candidates in SQL, so the hot loop decodes
+        // only the jobs that might fire this tick.
+        for mut job in self.store.list_due(now.timestamp_millis()).await {
             // Capture the pre-claim next_fire_at as the optimistic token.
             let token = job.next_fire_at.map(|value| value.timestamp_millis());
+            // In-memory re-check guards against any clock drift between the
+            // SQL filter and the state machine (a candidate that is no longer
+            // due is skipped exactly as before).
             if !job.due(now) {
                 continue;
             }

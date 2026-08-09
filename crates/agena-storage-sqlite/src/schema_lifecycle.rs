@@ -7,18 +7,24 @@
 
 /// Current SQLite schema version written to `PRAGMA user_version`.
 ///
-/// Version 5 is the v2 "everything is a part" schema (design
-/// `docs/database-design-v2.md`). It replaces the v1 event-log and projection
-/// model with nine chat tables — `agena_parts`, `agena_session_parts`,
-/// `agena_sessions`, `agena_execution_leases`, `agena_sequences`,
-/// `agena_workspaces`, `agena_permission_rules`, `agena_usage`,
-/// `agena_idempotency` — plus the unchanged model-catalog and scheduler
+/// Version 6 adds scheduler hot-state columns. It replaces the v1 event-log and
+/// projection model with nine chat tables — `agena_parts`,
+/// `agena_session_parts`, `agena_sessions`, `agena_execution_leases`,
+/// `agena_sequences`, `agena_workspaces`, `agena_permission_rules`,
+/// `agena_usage`, `agena_idempotency` — plus the model-catalog and scheduler
 /// infrastructure tables. Parts are the only chat-content entity; runs are
 /// `kind='run'` marker parts; session state is derived from parts + leases;
 /// there is no event log, no projection watermark, and no runtime-state JSON.
 /// v1 databases are NOT migrated: they are discarded (decision D3), so a
-/// database at any version other than 0 or 5 is rejected outright.
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+/// database at any version other than 0 or 6 is rejected outright.
+///
+/// Version history:
+/// - 5: the v2 "everything is a part" schema (design
+///   `docs/database-design-v2.md`).
+/// - 6: `agena_scheduler_jobs` gains `retry_at_ms`, `paused`, `completed`
+///   columns so the scheduler due scan filters in SQL (no full-table JSON
+///   decode every tick).
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 #[cfg(test)]
 mod tests {

@@ -23,7 +23,7 @@ use agena_api::{
         Command as ApiCommand, CommandResult, CompactSessionParams, ContinueRunParams,
         CreateSessionParams, ForkSessionParams, MarkInteractiveRequestPresentedParams,
         ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-        RewindSessionParams, SubmitMessageParams, UpdateSessionParams,
+        RewindSessionParams, SubmitRunParams, UpdateSessionParams,
         UpdateSessionSelectionParams, UpsertPermissionRuleParams,
     },
     pagination::PaginatedResponse,

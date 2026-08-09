@@ -112,7 +112,7 @@ pub(crate) async fn run_task_case(
             {
                 let messages = harness
                     .session_queries
-                    .list_projected_messages(child_id, true)
+                    .list_projected_runs(child_id, true)
                     .await
                     .context("load completed tasks.run child transcript")?;
                 return Ok::<_, anyhow::Error>(messages);
@@ -131,7 +131,7 @@ pub(crate) async fn run_task_case(
     Ok(())
 }
 
-fn projected_transcript_text(messages: &[agena_runtime::SessionProjectedMessage]) -> String {
+fn projected_transcript_text(messages: &[agena_runtime::SessionProjectedRun]) -> String {
     messages
         .iter()
         .flat_map(|message| message.parts.iter())

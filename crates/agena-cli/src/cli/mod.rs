@@ -32,7 +32,7 @@ use agena_domain::ToolInvocation;
 use agena_domain::{ModelMetadata, UsagePeriod};
 use agena_runtime::{
     OutputFormat, SessionCreateRequest, SessionExecutionRequest, SessionForkRequest,
-    SessionPermissionReplyRequest, SessionRunOptions, SessionUserMessageRequest,
+    SessionPermissionReplyRequest, SessionRunOptions, SessionUserRunRequest,
 };
 use agena_tool::ApplyPatchExecution;
 
@@ -1359,11 +1359,11 @@ struct ExecOutput {
 #[derive(Debug, Serialize)]
 struct DebugSessionOutput {
     session: SessionDetail,
-    messages: Vec<DebugMessageOutput>,
+    runs: Vec<DebugRunOutput>,
 }
 
 #[derive(Debug, Serialize)]
-struct DebugMessageOutput {
+struct DebugRunOutput {
     id: i64,
     role: Role,
     state: agena_domain::ExecutionStatus,

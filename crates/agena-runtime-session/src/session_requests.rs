@@ -57,7 +57,7 @@ impl<T> SessionExecutionReplyRequest<T> {
 
 #[derive(Debug, Clone)]
 /// Request to submit a user message to a session.
-pub struct SessionUserMessageRequest {
+pub struct SessionUserRunRequest {
     pub run: SessionExecutionRequest,
     pub document: agena_domain::ComposerDocument,
     /// An opaque, stable delivery key supplied by an external scheduler or
@@ -87,7 +87,7 @@ impl SessionPermissionReplyRequest {
     }
 }
 
-impl SessionUserMessageRequest {
+impl SessionUserRunRequest {
     pub fn new(
         session_id: i64,
         options: SessionRunOptions,

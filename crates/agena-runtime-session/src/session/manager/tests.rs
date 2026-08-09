@@ -126,7 +126,7 @@ async fn append_message(
     let outcome = if role == Role::User {
         manager
             .store
-            .submit_user_message(session.id, new_parts, None)
+            .submit_user_run(session.id, new_parts, None)
             .await
             .expect("submit user message through facade")
     } else {
@@ -602,7 +602,7 @@ async fn query_projection_is_derived_from_persisted_parts() {
     )
     .await;
     let projected = manager
-        .list_projected_messages(session.id, true)
+        .list_projected_runs(session.id, true)
         .await
         .expect("list projected messages");
     assert_eq!(projected.len(), 1);
@@ -828,7 +828,7 @@ async fn processor_run_turn_streams_parts_through_the_facade_without_v1_double_w
         completion: CompletionRequest {
             model: ModelId::new("fake-model"),
             system: None,
-            messages: Vec::new(),
+            turns: Vec::new(),
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
             disable_tools: false,

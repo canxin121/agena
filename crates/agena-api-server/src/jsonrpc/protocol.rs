@@ -109,7 +109,7 @@ pub struct CreateSessionResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Params of the submit-message method.
-pub struct SubmitMessageParams {
+pub struct SubmitRunParams {
     pub session_id: i64,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -128,7 +128,7 @@ pub struct SubmitMessageParams {
 /// `SubmitOutcome{run_id, created, parts}` contract. The run marker's `state`
 /// conveys the run status that v1 reported as `status`; the v1 `text` field is
 /// replaced by reading the assistant `text` parts from `parts`.
-pub struct SubmitMessageResult {
+pub struct SubmitRunResult {
     pub session_id: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<i64>,
@@ -198,13 +198,13 @@ pub struct ListSessionsResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Params of the read-messages method.
-pub struct ReadMessagesParams {
+pub struct ReadPartsParams {
     pub session_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Result of the read-messages method: the session's v2 part transcript.
-pub struct ReadMessagesResult {
+pub struct ReadPartsResult {
     pub parts: Vec<agena_api::resource::SessionTranscriptPart>,
 }
 

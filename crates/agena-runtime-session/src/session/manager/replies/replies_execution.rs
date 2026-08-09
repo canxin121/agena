@@ -812,7 +812,7 @@ impl SessionManager {
         )?];
         let outcome = self
             .store
-            .submit_user_message(session.id, new_parts, None)
+            .submit_user_run(session.id, new_parts, None)
             .await?;
         if outcome.created {
             let mut projected = session.parts().to_vec();
@@ -995,7 +995,7 @@ impl SessionManager {
                     .continuation_diagnostic
                     .provider_shape_changed(),
                 provider_request_shape_change_keys = ?provider_shape_change_keys,
-                prompt_message_count = prepared.messages.len(),
+                prompt_message_count = prepared.turns.len(),
                 system_included = prepared.system.is_some(),
                 "prepared prompt for session run"
             );
@@ -1009,7 +1009,7 @@ impl SessionManager {
             let mut completion = super::super::completion_request(
                 options,
                 prepared.system.clone(),
-                prepared.messages.clone(),
+                prepared.turns.clone(),
                 tool_api_functions,
                 Some(prepared.prompt_cache_key.clone()),
                 prepared.previous_response_id.clone(),

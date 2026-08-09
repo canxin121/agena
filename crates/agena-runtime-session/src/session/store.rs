@@ -210,14 +210,14 @@ impl StoreAdapter {
     /// in one transaction. The facade returns the full outcome — the run
     /// marker plus the committed, engine-id'd parts — so callers remap
     /// placeholders without reloading.
-    pub(crate) async fn submit_user_message(
+    pub(crate) async fn submit_user_run(
         &self,
         session_id: i64,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, AppError> {
         self.facade
-            .submit_user_message(session_id, &self.owner_id, parts, idempotency_key)
+            .submit_user_run(session_id, &self.owner_id, parts, idempotency_key)
             .await
             .map_err(store_error)
     }

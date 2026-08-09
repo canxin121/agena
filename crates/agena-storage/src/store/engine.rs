@@ -194,7 +194,7 @@ pub trait PersistenceEngine: Send + Sync {
     /// User send (7.1): create the run marker + content parts + membership
     /// edges + optional idempotency row in one transaction. The marker's
     /// `run_kind` is taken from `content.run_kind`.
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
         session_id: i64,
         owner_id: &str,

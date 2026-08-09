@@ -85,7 +85,7 @@ async fn seed_read_session(
         })
         .collect();
     let run_id = facade
-        .submit_user_message(session_id, "bench-owner", parts, None)
+        .submit_user_run(session_id, "bench-owner", parts, None)
         .await?
         .run_id;
     facade
@@ -189,7 +189,7 @@ async fn benchmark_streaming(
     let mut measured = Duration::ZERO;
     for _ in 0..STREAM_SAMPLES {
         let run_id = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "bench-owner",
                 vec![NewPart {

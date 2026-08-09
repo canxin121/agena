@@ -1,7 +1,7 @@
 use super::{
     AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, PartContent,
     SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
-    SessionUserMessageRequest, StableRunContext, UserInputPart, mpsc,
+    SessionUserRunRequest, StableRunContext, UserInputPart, mpsc,
 };
 use crate::session::store::{new_part_from_content, part_content_from_value};
 use crate::session::Session;
@@ -207,7 +207,7 @@ impl SessionManager {
     #[tracing::instrument(skip(self, request), fields(session_id = request.run.session_id))]
     pub(in crate::session::manager) async fn start_user_message_parts(
         &self,
-        request: SessionUserMessageRequest,
+        request: SessionUserRunRequest,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
         let session_id = request.run.session_id;
         self.start_registered(
@@ -217,16 +217,16 @@ impl SessionManager {
             "user execution",
             move |manager, control, steer_rx| async move {
                 manager
-                    .submit_user_message_inner(request, control, steer_rx, None)
+                    .submit_user_run_inner(request, control, steer_rx, None)
                     .await
             },
         )
         .await
     }
 
-    async fn submit_user_message_inner(
+    async fn submit_user_run_inner(
         &self,
-        mut request: SessionUserMessageRequest,
+        mut request: SessionUserRunRequest,
         control: Arc<ExecutionControl>,
         steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
         usage_budget: Option<super::SubtaskUsageBudget>,
@@ -302,7 +302,7 @@ impl SessionManager {
             .collect::<Result<Vec<_>, _>>()?;
         let outcome = self
             .store
-            .submit_user_message(
+            .submit_user_run(
                 session.id,
                 user_parts,
                 request.idempotency_key.clone(),
@@ -401,7 +401,7 @@ impl SessionManager {
     /// inherit a task's accounting boundary.
     pub(in crate::session::manager) async fn submit_subtask_user_message(
         &self,
-        request: SessionUserMessageRequest,
+        request: SessionUserRunRequest,
         usage_budget: Option<super::SubtaskUsageBudget>,
     ) -> Result<Session, AppError> {
         let session_id = request.run.session_id;
@@ -412,7 +412,7 @@ impl SessionManager {
             "subtask execution",
             move |manager, control, steer_rx| async move {
                 manager
-                    .submit_user_message_inner(request, control, steer_rx, usage_budget)
+                    .submit_user_run_inner(request, control, steer_rx, usage_budget)
                     .await
             },
         )
@@ -650,7 +650,7 @@ impl SessionManager {
             }
             manager
                 .submit_subtask_user_message(
-                    SessionUserMessageRequest::new(child_id, run_options, parts),
+                    SessionUserRunRequest::new(child_id, run_options, parts),
                     usage_budget,
                 )
                 .await

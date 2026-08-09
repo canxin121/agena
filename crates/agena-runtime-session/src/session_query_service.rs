@@ -31,8 +31,8 @@ pub struct SessionPresentation {
 }
 
 #[derive(Debug, Clone)]
-/// Header of a projected message.
-pub struct SessionProjectedMessageHeader {
+/// Header of a projected run.
+pub struct SessionProjectedRunHeader {
     pub id: i64,
     pub role: agena_domain::Role,
     pub state: agena_domain::ExecutionStatus,
@@ -59,26 +59,26 @@ pub struct OperationDetail {
     pub streaming: bool,
 }
 
-/// Stable transcript projection for presentation paths that need message-part
-/// summaries without depending on private message aggregates. Detail payloads
+/// Stable transcript projection for presentation paths that need run-part
+/// summaries without depending on private run aggregates. Detail payloads
 /// remain opaque JSON until the full transcript detail contract moves.
 #[derive(Debug, Clone)]
-/// A projected session message.
-pub struct SessionProjectedMessage {
+/// A projected session run.
+pub struct SessionProjectedRun {
     pub id: i64,
     pub role: agena_domain::Role,
     pub state: agena_domain::ExecutionStatus,
     pub created_at: DateTime<Utc>,
     pub metadata: serde_json::Value,
     pub usage: Option<serde_json::Value>,
-    pub parts: Vec<SessionProjectedMessagePart>,
+    pub parts: Vec<SessionProjectedPart>,
 }
 
 #[derive(Debug, Clone)]
-/// A projected message part.
-pub struct SessionProjectedMessagePart {
+/// A projected run part.
+pub struct SessionProjectedPart {
     pub id: i64,
-    pub message_id: i64,
+    pub run_id: i64,
     pub part_index: i32,
     pub status: agena_domain::ExecutionStatus,
     pub kind: agena_domain::PartKind,
@@ -366,11 +366,11 @@ pub trait SessionQueryService: Send + Sync {
         Ok(None)
     }
 
-    async fn list_projected_messages(
+    async fn list_projected_runs(
         &self,
         session_id: i64,
         include_content: bool,
-    ) -> Result<Vec<SessionProjectedMessage>, SessionQueryError>;
+    ) -> Result<Vec<SessionProjectedRun>, SessionQueryError>;
     async fn list_session_tree(
         &self,
         root_id: i64,
@@ -440,11 +440,11 @@ mod tests {
             })
         }
 
-        async fn list_projected_messages(
+        async fn list_projected_runs(
             &self,
             _session_id: i64,
             _include_content: bool,
-        ) -> Result<Vec<super::SessionProjectedMessage>, SessionQueryError> {
+        ) -> Result<Vec<super::SessionProjectedRun>, SessionQueryError> {
             Ok(Vec::new())
         }
         async fn list_session_tree(

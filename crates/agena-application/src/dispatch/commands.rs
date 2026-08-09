@@ -2,7 +2,7 @@ use crate::dto::{SessionCreateRequest, SessionHierarchyRequest, SessionUpdateReq
 use crate::session::{
     resolve_session_run_options, session_execution_request, session_execution_resource,
     session_permission_reply_request, session_resource_from_summary,
-    session_user_input_reply_request, session_user_message_request,
+    session_user_input_reply_request, session_user_run_request,
 };
 use crate::{
     application::ApplicationSessionServices,
@@ -88,16 +88,16 @@ pub async fn dispatch_command(
                 .application()?;
             Ok(CommandResult::Session(session))
         }
-        Command::SubmitMessage(SubmitMessageParams {
+        Command::SubmitMessage(SubmitRunParams {
             session_id,
             options,
             document,
         }) => {
             let request =
-                session_user_message_request(state, session_id, options, document).await?;
+                session_user_run_request(state, session_id, options, document).await?;
             let outcome = session_services
                 .commands
-                .submit_user_message(request)
+                .submit_user_run(request)
                 .await
                 .map_err(|error| ApplicationError::from_failure(error.failure))?;
             execution_command_result(state, &session_services, outcome.session_id).await
@@ -401,7 +401,7 @@ use super::{
     ForkSessionParams, ImportSessionParams, ListSessionTreeParams,
     MarkInteractiveRequestPresentedParams, PermissionRuleWriteRequest, ReplacePermissionRuleParams,
     ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-    RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitMessageParams,
+    RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
     UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
     UpsertPermissionRuleParams, WorkspacePathRequest, WorkspaceResolveRequest,
 };

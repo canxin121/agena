@@ -1,12 +1,12 @@
 use agena_domain::{ModelId, ModelSpeedModeRequestOverride, ThinkingRequest};
-use agena_provider::{CompletionInputMessage, CompletionRequest, ToolApiDefinition};
+use agena_provider::{CompletionInputRun, CompletionRequest, ToolApiDefinition};
 
-/// Runtime-neutral inputs assembled after core has projected persisted messages
+/// Runtime-neutral inputs assembled after core has projected persisted runs
 /// and the five fixed Tool API functions into provider contracts.
 pub struct CompletionRequestInputs {
     pub model: ModelId,
     pub system: Option<String>,
-    pub messages: Vec<CompletionInputMessage>,
+    pub turns: Vec<CompletionInputRun>,
     pub tool_api_functions: Vec<ToolApiDefinition>,
     pub temperature: Option<f32>,
     pub max_output_tokens: Option<u32>,
@@ -22,7 +22,7 @@ pub fn build_completion_request(inputs: CompletionRequestInputs) -> CompletionRe
     CompletionRequest {
         model: inputs.model,
         system: inputs.system,
-        messages: inputs.messages,
+        turns: inputs.turns,
         tool_api_functions: inputs.tool_api_functions,
         provider_native_tools: Default::default(),
         disable_tools: false,

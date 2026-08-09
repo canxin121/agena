@@ -11,7 +11,7 @@ use agena_domain::{
 };
 use agena_runtime::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionPermissionReplyRequest,
-    SessionRunOptions, SessionUserMessageRequest,
+    SessionRunOptions, SessionUserRunRequest,
 };
 use agena_storage::store::{PartState, SessionChange};
 use anyhow::{Context, bail, ensure};
@@ -25,7 +25,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub(super) struct SuiteTranscript {
     pub(super) workflow_state: agena_domain::WorkflowState,
-    pub(super) messages: Vec<agena_runtime::SessionProjectedMessage>,
+    pub(super) messages: Vec<agena_runtime::SessionProjectedRun>,
 }
 
 #[derive(Debug, Clone)]
@@ -155,7 +155,7 @@ impl Harness {
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
             let start_message_count = self
                 .session_queries
-                .list_projected_messages(session_id, true)
+                .list_projected_runs(session_id, true)
                 .await?
                 .len();
             let retry_notice = (attempt > 1).then_some(
@@ -211,7 +211,7 @@ impl Harness {
         for attempt in 1..=MAX_EXACT_INVOCATION_ATTEMPTS {
             let start_message_count = self
                 .session_queries
-                .list_projected_messages(session_id, true)
+                .list_projected_runs(session_id, true)
                 .await?
                 .len();
             let retry_notice = (attempt > 1).then_some(
@@ -281,7 +281,7 @@ impl Harness {
         let commands = Arc::clone(&self.execution_commands);
         let mut run = tokio::spawn(async move {
             commands
-                .submit_user_message(SessionUserMessageRequest::new(
+                .submit_user_run(SessionUserRunRequest::new(
                     session_id,
                     options,
                     agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
@@ -394,7 +394,7 @@ impl Harness {
             .context("load completed model session")?;
         let messages = self
             .session_queries
-            .list_projected_messages(session_id, true)
+            .list_projected_runs(session_id, true)
             .await
             .context("load completed model transcript")?;
         Ok(SuiteTranscript {

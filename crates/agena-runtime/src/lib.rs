@@ -187,15 +187,15 @@ pub(crate) use agena_runtime_session::{
 pub(crate) use agena_runtime_session::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub(crate) use agena_runtime_session::{CompletionRequestInputs, build_completion_request};
 pub(crate) use agena_runtime_session::{
-    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_MESSAGE_CHARS,
+    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_RUN_CHARS,
     MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
 };
 pub(crate) use agena_runtime_session::{
     ExecutionControl, ExecutionControlError, ExecutionRegistry,
 };
 pub use agena_runtime_session::{
-    OperationDetail, SessionExecutionContext, SessionPresentation, SessionProjectedMessage,
-    SessionProjectedMessageHeader, SessionProjectedMessagePart, SessionProjectedModelVisibleOutput,
+    OperationDetail, SessionExecutionContext, SessionPresentation, SessionProjectedRun,
+    SessionProjectedRunHeader, SessionProjectedPart, SessionProjectedModelVisibleOutput,
     SessionProjectedOperationBlock, SessionProjectedOperationPart, SessionProjectedPartDetail,
     SessionProjectedToolResult, SessionQueryError, SessionQueryService,
 };
@@ -210,7 +210,7 @@ pub use agena_runtime_session::{
 pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
-    SessionUserMessageRequest,
+    SessionUserRunRequest,
 };
 pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,

@@ -9,11 +9,11 @@ use crate::session::prompt_window;
 use agena_domain::{
     PromptCompactionStrategy, PromptCompactionTrigger, Role, ThinkingRequest,
 };
-use agena_provider::{CompletionInputMessage, CompletionInputPart, CompletionRequest};
+use agena_provider::{CompletionInputRun, CompletionInputPart, CompletionRequest};
 use agena_provider::ProviderErrorKind;
 use agena_provider::{CompletionFinishReason, ProviderCompactionContext, ProviderCompactionOutput};
 use agena_runtime::{
-    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_MESSAGE_CHARS,
+    DEFAULT_COMPACTION_OUTPUT_TOKENS, MAX_COMPACTION_FAILURES, MAX_COMPACTOR_RUN_CHARS,
     MAX_RECENT_CONTEXT_CHARS, MAX_RECENT_USER_TURNS,
 };
 
@@ -34,7 +34,7 @@ const COMPACTION_USER_PROMPT: &str = "Create the durable continuation record fro
 
 #[derive(Debug)]
 struct PromptInputs {
-    messages: Vec<CompletionInputMessage>,
+    turns: Vec<CompletionInputRun>,
     tools: Vec<crate::tool::ToolApiBinding>,
     provider_compaction: Option<ProviderCompactionContext>,
     before_tokens: u64,
@@ -205,7 +205,7 @@ impl SessionManager {
             Ok(inputs) => inputs,
             Err(error) => return Err((session, error)),
         };
-        if prompt_inputs.messages.len() < 2 && prompt_inputs.provider_compaction.is_none() {
+        if prompt_inputs.turns.len() < 2 && prompt_inputs.provider_compaction.is_none() {
             return Err((
                 session,
                 AppError::Config("conversation is too small to compact safely".to_owned()),
@@ -325,7 +325,7 @@ impl SessionManager {
         } else {
             scoped_executor.available_tool_api_bindings()
         };
-        let messages = prompt_window::compactable_prompt_messages(
+        let turns = prompt_window::compactable_prompt_runs(
             session,
             Some(options.model.provider_id.as_ref()),
             options.model.adapter_id.as_ref().map(AsRef::as_ref),
@@ -340,8 +340,8 @@ impl SessionManager {
             native_compaction_enabled,
         );
         let before_tokens =
-            prompt_window::approximate_request_tokens_from_messages_with_compaction(
-                messages.as_slice(),
+            prompt_window::approximate_request_tokens_from_runs_with_compaction(
+                turns.as_slice(),
                 options.system.as_deref(),
                 tools.as_slice(),
                 provider_compaction.as_ref(),
@@ -363,7 +363,7 @@ impl SessionManager {
             agena_runtime::estimate_prompt_tokens_from_chars(state.processor.max_prompt_chars())
         });
         Ok(PromptInputs {
-            messages,
+            turns,
             tools,
             provider_compaction,
             before_tokens,
@@ -384,7 +384,7 @@ impl SessionManager {
         let mut request = super::completion_request(
             options,
             options.system.clone(),
-            inputs.messages.clone(),
+            inputs.turns.clone(),
             inputs.tools.clone(),
             Some(prompt_window::prompt_cache_key_for_session(session)),
             None,
@@ -419,8 +419,8 @@ impl SessionManager {
         // installed TextSummary checkpoint injection, so a re-compaction
         // re-summarizes the durable checkpoint too — minus assistant runs that
         // failed or were cancelled.
-        let source = prompt_window::normalize_prompt_messages(
-            prompt_window::compactable_prompt_messages(session, None, None, None, false).as_slice(),
+        let source = prompt_window::normalize_prompt_runs(
+            prompt_window::compactable_prompt_runs(session, None, None, None, false).as_slice(),
         );
         let recent_start = select_recent_start(source.as_slice());
 
@@ -439,12 +439,12 @@ impl SessionManager {
         }
         .saturating_sub(COMPACTION_SYSTEM_PROMPT.len())
         .saturating_sub(COMPACTION_USER_PROMPT.len())
-        .max(MAX_COMPACTOR_MESSAGE_CHARS);
+        .max(MAX_COMPACTOR_RUN_CHARS);
         // Summarize the complete active source, including the suffix. The suffix
         // is retained for fidelity, but candidate validation may need to shrink
         // it; the checkpoint must remain semantically complete in that case.
-        let historical_messages = bounded_compactor_history(source.as_slice(), max_input_chars);
-        if historical_messages.is_empty() {
+        let historical_turns = bounded_compactor_history(source.as_slice(), max_input_chars);
+        if historical_turns.is_empty() {
             return Err(AppError::Config(
                 "conversation history cannot be represented safely for compaction".to_owned(),
             ));
@@ -462,7 +462,7 @@ impl SessionManager {
         let mut request = CompletionRequest {
             model: options.model.model_id.clone(),
             system: Some(COMPACTION_SYSTEM_PROMPT.to_owned()),
-            messages: historical_messages,
+            turns: historical_turns,
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
             disable_tools: true,
@@ -482,7 +482,7 @@ impl SessionManager {
             responses_api_metadata: None,
             request_override: Default::default(),
         };
-        request.messages.push(CompletionInputMessage {
+        request.turns.push(CompletionInputRun {
             role: Role::User,
             parts: vec![CompletionInputPart::Text {
                 text: COMPACTION_USER_PROMPT.to_owned(),
@@ -521,7 +521,7 @@ impl SessionManager {
 
         let mut candidate_messages = vec![checkpoint_message(session, summary.as_str())];
         candidate_messages.extend(recent_messages.iter().cloned());
-        let mut after_tokens = prompt_window::approximate_request_tokens_from_messages(
+        let mut after_tokens = prompt_window::approximate_request_tokens_from_runs(
             candidate_messages.as_slice(),
             options.system.as_deref(),
             inputs.tools.as_slice(),
@@ -547,7 +547,7 @@ impl SessionManager {
             recent_messages.remove(remove_index);
             candidate_messages = vec![checkpoint_message(session, summary.as_str())];
             candidate_messages.extend(recent_messages.iter().cloned());
-            after_tokens = prompt_window::approximate_request_tokens_from_messages(
+            after_tokens = prompt_window::approximate_request_tokens_from_runs(
                 candidate_messages.as_slice(),
                 options.system.as_deref(),
                 inputs.tools.as_slice(),
@@ -628,7 +628,7 @@ impl SessionManager {
     }
 }
 
-fn select_recent_start(messages: &[CompletionInputMessage]) -> usize {
+fn select_recent_start(messages: &[CompletionInputRun]) -> usize {
     let mut user_turns = 0usize;
     let mut chars = 0usize;
     let mut start = messages.len();
@@ -652,7 +652,7 @@ fn select_recent_start(messages: &[CompletionInputMessage]) -> usize {
     start
 }
 
-fn bound_recent_messages(messages: &mut Vec<CompletionInputMessage>) {
+fn bound_recent_messages(messages: &mut Vec<CompletionInputRun>) {
     // The newest user turn is preserved by value (the earliest duplicate is
     // removed first, keeping the newest) — projected messages carry no id.
     let newest_user = messages
@@ -677,15 +677,15 @@ fn bound_recent_messages(messages: &mut Vec<CompletionInputMessage>) {
 }
 
 fn bounded_compactor_history(
-    messages: &[CompletionInputMessage],
+    messages: &[CompletionInputRun],
     max_chars: usize,
-) -> Vec<CompletionInputMessage> {
+) -> Vec<CompletionInputRun> {
     if messages.is_empty() {
         return Vec::new();
     }
     let initial = messages
         .iter()
-        .map(|message| compaction_safe_message(message, MAX_COMPACTOR_MESSAGE_CHARS))
+        .map(|message| compaction_safe_message(message, MAX_COMPACTOR_RUN_CHARS))
         .collect::<Vec<_>>();
     let initial_chars = initial
         .iter()
@@ -702,7 +702,7 @@ fn bounded_compactor_history(
     let per_message = max_chars
         .checked_div(messages.len())
         .unwrap_or_default()
-        .clamp(128, MAX_COMPACTOR_MESSAGE_CHARS);
+        .clamp(128, MAX_COMPACTOR_RUN_CHARS);
     let mut selected = messages
         .iter()
         .map(|message| compaction_safe_message(message, per_message))
@@ -724,7 +724,7 @@ fn bounded_compactor_history(
     if selected.len() < messages.len() {
         selected.insert(
             selected.len() / 2,
-            CompletionInputMessage {
+            CompletionInputRun {
                 role: Role::System,
                 parts: vec![CompletionInputPart::Text {
                     text: "[A middle span of an exceptionally dense transcript could not fit after per-message hardening. Do not invent omitted details.]".to_owned(),
@@ -737,9 +737,9 @@ fn bounded_compactor_history(
 }
 
 fn compaction_safe_message(
-    message: &CompletionInputMessage,
+    message: &CompletionInputRun,
     max_chars: usize,
-) -> CompletionInputMessage {
+) -> CompletionInputRun {
     let role = if message.role == Role::Tool {
         Role::User
     } else {
@@ -756,7 +756,7 @@ fn compaction_safe_message(
         );
     }
     let text = truncate_middle(text.as_str(), max_chars);
-    CompletionInputMessage {
+    CompletionInputRun {
         role,
         parts: vec![CompletionInputPart::Text { text }],
         provider_state: Default::default(),
@@ -784,11 +784,11 @@ fn truncate_middle(value: &str, max_chars: usize) -> String {
     format!("{prefix}{marker}{suffix}")
 }
 
-fn checkpoint_message(session: &Session, summary: &str) -> CompletionInputMessage {
+fn checkpoint_message(session: &Session, summary: &str) -> CompletionInputRun {
     // Token-estimation proxy for the checkpoint summary that prompt assembly
     // will materialize from the compaction part (R4b). The generation mirrors
     // what `install_compaction_runtime` will bump to before the next request.
-    CompletionInputMessage {
+    CompletionInputRun {
         role: Role::User,
         parts: vec![CompletionInputPart::Text {
             text: format!(
@@ -879,8 +879,8 @@ fn remote_compaction_is_permanently_unavailable(error: &AppError) -> bool {
 mod tests {
     use super::*;
 
-    fn projected_message(role: Role, text: &str) -> CompletionInputMessage {
-        CompletionInputMessage {
+    fn projected_message(role: Role, text: &str) -> CompletionInputRun {
+        CompletionInputRun {
             role,
             parts: vec![CompletionInputPart::Text {
                 text: text.to_owned(),

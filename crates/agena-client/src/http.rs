@@ -8,7 +8,7 @@ use agena_api::{
         DeleteWorkspaceParams, DismissActivityParams, ExportSessionParams, ForkSessionParams,
         ImportSessionParams, ListSessionTreeParams, ReplacePermissionRuleParams,
         ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitMessageParams,
+        RevokePermissionRuleParams, RewindSessionParams, StopActivityParams, SubmitRunParams,
         UpdateSessionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
     notifications::Notification,
@@ -273,7 +273,7 @@ impl AgenaClient {
 
     pub async fn submit_message(
         &self,
-        params: SubmitMessageParams,
+        params: SubmitRunParams,
     ) -> Result<SessionExecutionResource, ClientError> {
         let mut body = serde_json::to_value(params.options)?;
         if let serde_json::Value::Object(ref mut object) = body {

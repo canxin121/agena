@@ -1,7 +1,7 @@
 use super::{ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
-    message::PartContent,
+    part::PartContent,
     session::{
         store::{
             execution_status_from_part_state, part_content_from_value, parts_into_runs,
@@ -502,11 +502,11 @@ fn more_terminal_status(
 /// The failure of a canonical turn, when any part reports one.
 fn part_failure(part: &DecodedPart) -> Option<agena_failure::UserProblem> {
     match part.content.as_ref()? {
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => operation
+        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => operation
             .error
             .as_ref()
             .map(|error| (&error.failure).into()),
-        PartContent::Activity(crate::message::RuntimeActivity::Error(error)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Error(error)) => {
             Some(error.problem.clone())
         }
         _ => None,
@@ -662,12 +662,12 @@ fn activity_payload_from_part(
                 label: part.summary.clone(),
             })),
         },
-        Some(PartContent::Activity(crate::message::RuntimeActivity::Reasoning(reasoning))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::Reasoning(reasoning))) => {
             Some(ActivityPayload::Reasoning(ReasoningActivity {
                 content: reasoning.clone(),
             }))
         }
-        Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(operation))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::Operation(operation))) => {
             // The compact `ToolResult` payload is the only durable tool data.
             // The human-facing detail Markdown is derived from it at render
             // time and is never persisted.
@@ -697,35 +697,35 @@ fn activity_payload_from_part(
                     }),
             }))
         }
-        Some(PartContent::Activity(crate::message::RuntimeActivity::Resource(attachment))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::Resource(attachment))) => {
             let Some(item) = attachment.attachments.first() else {
                 return Ok(None);
             };
             let kind = match item.kind {
-                crate::message::AttachmentKind::Image => ResourceKind::Image,
-                crate::message::AttachmentKind::Audio => ResourceKind::Audio,
-                crate::message::AttachmentKind::Video => ResourceKind::Video,
-                crate::message::AttachmentKind::Pdf => ResourceKind::Pdf,
-                crate::message::AttachmentKind::File if item.mime == "inode/directory" => {
+                crate::part::AttachmentKind::Image => ResourceKind::Image,
+                crate::part::AttachmentKind::Audio => ResourceKind::Audio,
+                crate::part::AttachmentKind::Video => ResourceKind::Video,
+                crate::part::AttachmentKind::Pdf => ResourceKind::Pdf,
+                crate::part::AttachmentKind::File if item.mime == "inode/directory" => {
                     ResourceKind::Directory
                 }
-                crate::message::AttachmentKind::File => ResourceKind::File,
+                crate::part::AttachmentKind::File => ResourceKind::File,
             };
             let reference = match &item.source {
-                crate::message::AttachmentSource::Url { url } => {
+                crate::part::AttachmentSource::Url { url } => {
                     Some(ResourceReference::Url { url: url.clone() })
                 }
-                crate::message::AttachmentSource::FileId { file_id } => {
+                crate::part::AttachmentSource::FileId { file_id } => {
                     Some(ResourceReference::ProviderFile {
                         provider_id: "provider".to_owned(),
                         file_id: file_id.clone(),
                     })
                 }
-                crate::message::AttachmentSource::LocalPath { path } => {
+                crate::part::AttachmentSource::LocalPath { path } => {
                     Some(ResourceReference::WorkspacePath { path: path.clone() })
                 }
-                crate::message::AttachmentSource::DataUrl { .. }
-                | crate::message::AttachmentSource::Base64 { .. } => None,
+                crate::part::AttachmentSource::DataUrl { .. }
+                | crate::part::AttachmentSource::Base64 { .. } => None,
             };
             let Some(reference) = reference else {
                 return Ok(None);
@@ -742,7 +742,7 @@ fn activity_payload_from_part(
                 page_count: item.page_count,
             }))
         }
-        Some(PartContent::Activity(crate::message::RuntimeActivity::SkillReference(skills))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::SkillReference(skills))) => {
             let Some(skill) = skills.skills.first() else {
                 return Ok(None);
             };
@@ -755,20 +755,20 @@ fn activity_payload_from_part(
                 aliases: skill.aliases.clone(),
             }))
         }
-        Some(PartContent::Activity(crate::message::RuntimeActivity::Interaction(request))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::Interaction(request))) => {
             Some(ActivityPayload::Interaction(match request {
-                crate::message::RequestPart::UserInput(value) => InteractionActivity::UserInput {
+                crate::part::RequestPart::UserInput(value) => InteractionActivity::UserInput {
                     request: value.request.clone(),
                     reply: value.reply.clone(),
                 },
             }))
         }
-        Some(PartContent::Activity(crate::message::RuntimeActivity::Error(error))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::Error(error))) => {
             Some(ActivityPayload::Error(ErrorActivity {
                 problem: error.problem.clone(),
             }))
         }
-        Some(PartContent::Activity(crate::message::RuntimeActivity::Hook(hook))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::Hook(hook))) => {
             Some(ActivityPayload::Notice(NoticeActivity {
                 kind: "hook".to_owned(),
                 summary: hook.summary.clone(),
@@ -777,7 +777,7 @@ fn activity_payload_from_part(
                 title: None,
             }))
         }
-        Some(PartContent::Activity(crate::message::RuntimeActivity::Notice(notice))) => {
+        Some(PartContent::Activity(crate::part::RuntimeActivity::Notice(notice))) => {
             Some(ActivityPayload::Notice(NoticeActivity {
                 kind: notice.kind.clone(),
                 summary: notice.summary.clone(),
@@ -1224,18 +1224,18 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
     // The coarse state column carries the lifecycle; the fine-grained status
     // (including denial outcomes) is reconstructed from the rich content.
     let status = match &content {
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => {
             operation.status()
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
-            crate::message::RequestPart::UserInput(request),
+        PartContent::Activity(crate::part::RuntimeActivity::Interaction(
+            crate::part::RequestPart::UserInput(request),
         )) => request.status(),
         _ => execution_status_from_part_state(part.state),
     };
     // Recover the provider operation id stashed by `serialize_part_content` so
     // pending-tool correlation and prompt assembly survive a reload.
     let operation_id = match &content {
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => operation
+        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => operation
             .metadata
             .get(OPERATION_ID_METADATA_KEY)
             .and_then(serde_json::Value::as_str)
@@ -1266,10 +1266,10 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
 fn part_name_from_content(content: &PartContent) -> Option<String> {
     match content {
         PartContent::Text(_) => Some("text".to_string()),
-        PartContent::Activity(crate::message::RuntimeActivity::Reasoning(_)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Reasoning(_)) => {
             Some("reasoning".to_string())
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => {
             let title = operation.title.trim();
             Some(if title.is_empty() {
                 operation.invocation.name.clone()
@@ -1277,22 +1277,22 @@ fn part_name_from_content(content: &PartContent) -> Option<String> {
                 title.to_owned()
             })
         }
-        PartContent::Activity(crate::message::RuntimeActivity::SkillReference(_)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::SkillReference(_)) => {
             Some("skill_reference".to_string())
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Error(error)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Error(error)) => {
             Some(error.problem.code.to_string())
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Resource(_)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Resource(_)) => {
             Some("resource".to_string())
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
-            crate::message::RequestPart::UserInput(_),
+        PartContent::Activity(crate::part::RuntimeActivity::Interaction(
+            crate::part::RequestPart::UserInput(_),
         )) => Some("user_input".to_string()),
-        PartContent::Activity(crate::message::RuntimeActivity::Hook(hook)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Hook(hook)) => {
             Some(format!("hook:{}", hook.hook))
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Notice(_)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Notice(_)) => {
             Some("notice".to_string())
         }
     }
@@ -1335,36 +1335,36 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
             text: value.text.clone(),
             synthetic: value.synthetic,
         },
-        PartContent::Activity(crate::message::RuntimeActivity::Reasoning(value)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Reasoning(value)) => {
             agena_runtime::SessionProjectedPartDetail::Reasoning {
                 summary: value.summary.clone(),
                 raw_content: value.raw_content.clone(),
                 encrypted_content: value.encrypted_content.clone(),
             }
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Error(value)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Error(value)) => {
             agena_runtime::SessionProjectedPartDetail::Error {
                 problem: value.problem.clone(),
             }
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Resource(value)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Resource(value)) => {
             agena_runtime::SessionProjectedPartDetail::Attachment(value.clone())
         }
-        PartContent::Activity(crate::message::RuntimeActivity::SkillReference(value)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::SkillReference(value)) => {
             agena_runtime::SessionProjectedPartDetail::SkillReference(value.clone())
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Interaction(
-            crate::message::RequestPart::UserInput(value),
+        PartContent::Activity(crate::part::RuntimeActivity::Interaction(
+            crate::part::RequestPart::UserInput(value),
         )) => agena_runtime::SessionProjectedPartDetail::UserInputRequest {
             request: value.request.clone(),
             reply: value.reply.clone(),
         },
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(value)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Operation(value)) => {
             agena_runtime::SessionProjectedPartDetail::Operation(Box::new(project_operation_part(
                 value,
             )))
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Hook(value)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Hook(value)) => {
             agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
                 agena_runtime::SessionProjectedHookPart {
                     hook: value.hook.clone(),
@@ -1374,7 +1374,7 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
                 },
             ))
         }
-        PartContent::Activity(crate::message::RuntimeActivity::Notice(value)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Notice(value)) => {
             agena_runtime::SessionProjectedPartDetail::Notice {
                 summary: value.summary.clone(),
                 detail: value.detail.clone(),
@@ -1384,7 +1384,7 @@ fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjected
 }
 
 fn project_operation_part(
-    value: &crate::message::OperationPart,
+    value: &crate::part::OperationPart,
 ) -> agena_runtime::SessionProjectedOperationPart {
     let details = value.details.clone();
     agena_runtime::SessionProjectedOperationPart {
@@ -1429,7 +1429,7 @@ fn project_operation_part(
 }
 
 fn project_model_visible_output(
-    value: &crate::message::ModelVisibleOutput,
+    value: &crate::part::ModelVisibleOutput,
 ) -> agena_runtime::SessionProjectedModelVisibleOutput {
     agena_runtime::SessionProjectedModelVisibleOutput {
         text: value.text.clone(),

@@ -30,7 +30,7 @@ use crate::session::store::{
 use crate::{
     RuntimeSessionManagerConfig,
     authorization::ExecutionPrincipal,
-    message::{InteractiveRequestPart, PartContent, RequestPart},
+    part::{InteractiveRequestPart, PartContent, RequestPart},
     permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::ProviderRegistry,
     session::{ContextGovernor, Session, SessionProcessor},

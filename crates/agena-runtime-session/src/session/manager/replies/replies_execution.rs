@@ -12,7 +12,7 @@ use super::{
     should_execute_pending_tools_concurrently, terminal_operation_title, tool_name,
     update_resolved_tool_message,
 };
-use crate::message::{InteractiveRequestPart, RequestPart};
+use crate::part::{InteractiveRequestPart, RequestPart};
 use crate::session::Session;
 use crate::session::prompt_window;
 use crate::session::store::{
@@ -853,7 +853,7 @@ impl SessionManager {
                 new_part_from_content(
                     "hook",
                     PartRole::Assistant,
-                    &PartContent::hook(crate::message::HookPart {
+                    &PartContent::hook(crate::part::HookPart {
                         hook: run.hook.clone(),
                         plugin_id: Some(run.plugin_id.clone()),
                         summary: run.summary.clone(),
@@ -1522,7 +1522,7 @@ impl SessionManager {
                 .part(&resolved.pending.part)
                 .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
             {
-                Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                Some(PartContent::Activity(crate::part::RuntimeActivity::Operation(
                     operation,
                 ))) => operation.title.clone(),
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
@@ -1697,7 +1697,7 @@ impl SessionManager {
                 .part(&resolved.pending.part)
                 .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
             {
-                Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+                Some(PartContent::Activity(crate::part::RuntimeActivity::Operation(
                     operation,
                 ))) => operation.title.clone(),
                 _ => format!("Tool {}", tool_name(&resolved.invocation)),
@@ -2380,7 +2380,7 @@ impl SessionManager {
             .part(&resolved.pending.part)
             .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
             .and_then(|content| match content {
-                PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+                PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => {
                     operation
                         .authorization
                         .find(request_id.as_str())
@@ -2416,7 +2416,7 @@ impl SessionManager {
         };
 
         update_resolved_tool_message(&mut session, &resolved, |tool_part| {
-            let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+            let Ok(PartContent::Activity(crate::part::RuntimeActivity::Operation(
                 mut operation,
             ))) = part_content_from_value(&tool_part.kind, &tool_part.content)
             else {
@@ -2442,7 +2442,7 @@ impl SessionManager {
         &self,
         session: Session,
         pending_tool: &SessionPendingTool,
-        input: crate::message::AskUserToolInput,
+        input: crate::part::AskUserToolInput,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let request_id = resolve_pending_tool(&session, pending_tool)?.operation_id;
@@ -2454,7 +2454,7 @@ impl SessionManager {
         &self,
         mut session: Session,
         pending_tool: &SessionPendingTool,
-        input: crate::message::AskUserToolInput,
+        input: crate::part::AskUserToolInput,
         request_id: String,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
@@ -2498,7 +2498,7 @@ impl SessionManager {
         // content is the canonical `interaction` shape, which carries the
         // request id under `content["request"]["request_id"]`.
         let interaction_content = part_content_to_value(&PartContent::Activity(
-            crate::message::RuntimeActivity::Interaction(RequestPart::UserInput(
+            crate::part::RuntimeActivity::Interaction(RequestPart::UserInput(
                 InteractiveRequestPart::pending(request.clone()),
             )),
         ))?;
@@ -2537,7 +2537,7 @@ impl SessionManager {
             let new_part = new_part_from_content(
                 "interaction",
                 PartRole::Assistant,
-                &PartContent::Activity(crate::message::RuntimeActivity::Interaction(
+                &PartContent::Activity(crate::part::RuntimeActivity::Interaction(
                     RequestPart::UserInput(InteractiveRequestPart::pending(request.clone())),
                 )),
                 PartState::Pending,
@@ -2584,8 +2584,8 @@ impl SessionManager {
             .part(&pending_tool.part)
             .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
             .and_then(|content| match content {
-                crate::message::PartContent::Activity(
-                    crate::message::RuntimeActivity::Operation(operation),
+                crate::part::PartContent::Activity(
+                    crate::part::RuntimeActivity::Operation(operation),
                 ) if !operation.title.is_empty() => Some(operation.title.clone()),
                 _ => None,
             })
@@ -2599,8 +2599,8 @@ impl SessionManager {
                     .part(&pending_tool.part)
                     .and_then(|part| part_content_from_value(&part.kind, &part.content).ok())
                     .and_then(|content| match content {
-                        crate::message::PartContent::Activity(
-                            crate::message::RuntimeActivity::Operation(operation),
+                        crate::part::PartContent::Activity(
+                            crate::part::RuntimeActivity::Operation(operation),
                         ) => Some(operation.invocation),
                         _ => None,
                     });
@@ -2806,7 +2806,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
         let _run_marker_id = update_resolved_tool_message(&mut session, &resolved, |part| {
-            if let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+            if let Ok(PartContent::Activity(crate::part::RuntimeActivity::Operation(
                 operation,
             ))) = part_content_from_value(&part.kind, &part.content)
             {
@@ -2869,7 +2869,7 @@ impl SessionManager {
             ) {
                 tool_part.state = PartState::InProgress;
             }
-            if let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+            if let Ok(PartContent::Activity(crate::part::RuntimeActivity::Operation(
                 mut operation,
             ))) = part_content_from_value(&tool_part.kind, &tool_part.content)
             {
@@ -2937,7 +2937,7 @@ impl SessionManager {
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
             // `append_tool_output_delta` becomes a decode → mutate → re-encode
             // cycle on the part's canonical operation content.
-            let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(
+            let Ok(PartContent::Activity(crate::part::RuntimeActivity::Operation(
                 mut operation,
             ))) = part_content_from_value(&tool_part.kind, &tool_part.content)
             else {
@@ -3047,7 +3047,7 @@ impl SessionManager {
             let mut operation = OperationPart::completed(
                 resolved.call_id,
                 resolved.invocation.clone(),
-                crate::message::OperationCompletion::new(
+                crate::part::OperationCompletion::new(
                     completion_title.clone(),
                     presentation_summary.clone(),
                     output_text.clone(),

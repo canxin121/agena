@@ -5,8 +5,9 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::error::AppError;
-use crate::message::{MessageProviderState, OperationPart, PartContent};
+use crate::part::{OperationPart, PartContent};
 use crate::provider::ProviderRegistry;
+use crate::provider_state::MessageProviderState;
 use agena_domain::ModelRef;
 use agena_domain::{
     AssistantReasoningField, FinishReason, StructuredObject, TimeRange, ToolInvocation,
@@ -42,7 +43,7 @@ pub(crate) struct SessionRunRequest {
 
 /// Result of one processor model turn (R2). The turn's durable state is
 /// carried as persisted parts — the run marker plus every content part under
-/// it — never as a v1 [`crate::message::Message`].
+/// it — never as a v1 `Message`.
 #[derive(Debug)]
 pub(crate) struct SessionRunResult {
     /// The run marker part id — the durable identity of this assistant message.

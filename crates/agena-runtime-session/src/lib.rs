@@ -18,12 +18,13 @@
 //! - [`activity`] — activity model shared with the transcript.
 //!
 //! The crate also re-exports [`config`], [`provider`], [`plugins`], and the
-//! shared contracts (`authorization`, `identity`, `message`, `permission`).
+//! shared contracts (`authorization`, `identity`, `part`, `permission`,
+//! `provider_state`).
 
 extern crate self as agena_runtime;
 
 pub use agena_runtime_config as config;
-pub use agena_runtime_contracts::{authorization, identity, message, permission};
+pub use agena_runtime_contracts::{authorization, identity, part, permission, provider_state};
 pub use agena_runtime_plugins as plugins;
 pub use agena_runtime_provider as provider;
 pub mod activity;

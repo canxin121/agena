@@ -1059,7 +1059,7 @@ fn digest_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod compaction_tests {
     use super::*;
-    use crate::message::PartContent;
+    use crate::part::PartContent;
     use crate::session::model::{
         PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
     };
@@ -1148,7 +1148,7 @@ mod compaction_tests {
                 kind: "hook".to_owned(),
                 role: PartRole::Assistant,
                 state: PartState::Completed,
-                content: part_content_to_value(&PartContent::hook(crate::message::HookPart {
+                content: part_content_to_value(&PartContent::hook(crate::part::HookPart {
                     hook: "agent.stop".to_owned(),
                     plugin_id: Some("agena.plan".to_owned()),
                     summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),

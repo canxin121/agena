@@ -11,7 +11,7 @@ use chrono::Utc;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
-use crate::message::{AttachmentItem, OperationPart, PartContent};
+use crate::part::{AttachmentItem, OperationPart, PartContent};
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
@@ -761,27 +761,27 @@ fn part_contents_from_composer_document(
             ComposerNode::Activity { activity } => match activity.payload {
                 ActivityPayload::Resource(resource) => {
                     let kind = match resource.kind {
-                        ResourceKind::Image => crate::message::AttachmentKind::Image,
-                        ResourceKind::Audio => crate::message::AttachmentKind::Audio,
-                        ResourceKind::Video => crate::message::AttachmentKind::Video,
-                        ResourceKind::Pdf => crate::message::AttachmentKind::Pdf,
+                        ResourceKind::Image => crate::part::AttachmentKind::Image,
+                        ResourceKind::Audio => crate::part::AttachmentKind::Audio,
+                        ResourceKind::Video => crate::part::AttachmentKind::Video,
+                        ResourceKind::Pdf => crate::part::AttachmentKind::Pdf,
                         ResourceKind::File
                         | ResourceKind::Directory
                         | ResourceKind::Url
-                        | ResourceKind::Artifact => crate::message::AttachmentKind::File,
+                        | ResourceKind::Artifact => crate::part::AttachmentKind::File,
                     };
                     let source = match resource.reference {
                         ResourceReference::Artifact { uri, .. } => {
-                            crate::message::AttachmentSource::FileId { file_id: uri }
+                            crate::part::AttachmentSource::FileId { file_id: uri }
                         }
                         ResourceReference::WorkspacePath { path } => {
-                            crate::message::AttachmentSource::LocalPath { path }
+                            crate::part::AttachmentSource::LocalPath { path }
                         }
                         ResourceReference::Url { url } => {
-                            crate::message::AttachmentSource::Url { url }
+                            crate::part::AttachmentSource::Url { url }
                         }
                         ResourceReference::ProviderFile { file_id, .. } => {
-                            crate::message::AttachmentSource::FileId { file_id }
+                            crate::part::AttachmentSource::FileId { file_id }
                         }
                     };
                     Ok(UserInputPart {
@@ -809,9 +809,9 @@ fn part_contents_from_composer_document(
                 ActivityPayload::SkillReference(skill) => {
                     Ok(UserInputPart {
                         content: PartContent::Activity(
-                            crate::message::RuntimeActivity::SkillReference(
-                                crate::message::SkillReferencePart {
-                                    skills: vec![crate::message::SkillReference {
+                            crate::part::RuntimeActivity::SkillReference(
+                                crate::part::SkillReferencePart {
+                                    skills: vec![crate::part::SkillReference {
                             name: skill.name,
                             description: skill.description,
                             instructions: skill.instructions,
@@ -1321,7 +1321,7 @@ impl SessionManager {
         &self,
         session_id: i64,
         call_id: i64,
-        request: crate::message::AskUserToolInput,
+        request: crate::part::AskUserToolInput,
     ) -> Result<agena_plugin_host::sdk::host_api::AskUserResponse, AppError> {
         let state = self.execution_state();
         let session = self.store.load_session(session_id).await?;

@@ -197,7 +197,7 @@ fn operation_authorization(
 /// content. Returns `None` for non-tool parts or undecodable payloads.
 pub(super) fn operation_from_part(part: &Part) -> Option<OperationPart> {
     part_content_from_value(&part.kind, &part.content).ok().and_then(|content| match content {
-        PartContent::Activity(crate::message::RuntimeActivity::Operation(operation)) => {
+        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => {
             Some(operation)
         }
         _ => None,
@@ -625,7 +625,7 @@ pub(super) fn user_input_request_for_operation(
     session: &Session,
     operation_id: &str,
     sequence_index: usize,
-) -> Option<crate::message::InteractiveRequestPart<agena_domain::UserInputRequest, agena_domain::UserInputReply>>
+) -> Option<crate::part::InteractiveRequestPart<agena_domain::UserInputRequest, agena_domain::UserInputReply>>
 {
     session
         .parts()
@@ -638,7 +638,7 @@ pub(super) fn user_input_request_for_operation(
                 .content
                 .get("response")
                 .and_then(|value| serde_json::from_value(value.clone()).ok());
-            Some(crate::message::InteractiveRequestPart { request, reply })
+            Some(crate::part::InteractiveRequestPart { request, reply })
         })
         .nth(sequence_index)
 }
@@ -1397,7 +1397,7 @@ impl SessionManager {
                 }
                 UserInputReplyKind::Timeout => {
                     let execution = crate::tool::ask_user::execution_from_timeout(
-                        &crate::message::AskUserToolInput {
+                        &crate::part::AskUserToolInput {
                             title: user_input_request.title.clone(),
                             kind: user_input_request.kind.clone(),
                             auto_resolution_ms: user_input_request.auto_resolution_ms,

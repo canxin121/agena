@@ -9,7 +9,7 @@ use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
-use agena_runtime_contracts::message::{SkillReference, SkillReferencePart};
+use agena_runtime_contracts::part::{SkillReference, SkillReferencePart};
 use agena_storage::store::{Part, PartRole, PartState};
 use std::path::Path;
 
@@ -25,13 +25,13 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
             match part_content_from_value(&part.kind, &part.content) {
                 Ok(PartContent::Text(text)) => Some(text.text.clone()),
                 Ok(PartContent::Activity(
-                    agena_runtime_contracts::message::RuntimeActivity::SkillReference(skill),
+                    agena_runtime_contracts::part::RuntimeActivity::SkillReference(skill),
                 )) => Some(skill.summary()),
                 Ok(PartContent::Activity(
-                    agena_runtime_contracts::message::RuntimeActivity::Operation(tool),
+                    agena_runtime_contracts::part::RuntimeActivity::Operation(tool),
                 )) => tool_visible_text_lossy(&tool),
                 Ok(PartContent::Activity(
-                    agena_runtime_contracts::message::RuntimeActivity::Reasoning(_),
+                    agena_runtime_contracts::part::RuntimeActivity::Reasoning(_),
                 )) => None,
                 _ => part.summary.clone(),
             }
@@ -44,7 +44,7 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
 /// Best-effort textual rendering of an operation part, mirroring the v1
 /// `Message::tool_text_lossy` (private in contracts): first non-empty of
 /// output text, error message, title, or summary.
-fn tool_visible_text_lossy(tool: &agena_runtime_contracts::message::OperationPart) -> Option<String> {
+fn tool_visible_text_lossy(tool: &agena_runtime_contracts::part::OperationPart) -> Option<String> {
     let candidates = [
         tool.output_text(),
         tool.error_message(),
@@ -802,7 +802,7 @@ pub(in crate::session::manager) fn non_recursive_subtask_capability_denials()
 #[cfg(test)]
 mod tests {
     use super::{non_recursive_subtask_capability_denials, resolve_subtask_skill_references};
-    use agena_runtime_contracts::message::SkillReference;
+    use agena_runtime_contracts::part::SkillReference;
 
     #[test]
     fn delegated_instances_cannot_recursively_run_tasks() {

@@ -5,7 +5,7 @@ use super::{
     provider_native_tool_execution_title, tool_api_definition_identity, tool_execution_title,
     tool_execution_title_for_invocation,
 };
-use crate::message::RuntimeActivity;
+use crate::part::RuntimeActivity;
 use crate::session::store::{
     OPERATION_ID_METADATA_KEY, part_content_from_value, part_content_to_value,
 };
@@ -323,7 +323,7 @@ impl SessionProcessor {
         let mut operation = OperationPart::completed(
             pending.call_id.unwrap_or_default(),
             invocation.clone(),
-            crate::message::OperationCompletion::new(
+            crate::part::OperationCompletion::new(
                 title,
                 summary,
                 output_text,

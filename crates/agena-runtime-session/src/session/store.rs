@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::AppError;
-use crate::message::{
+use crate::part::{
     OperationPart, PartContent, RequestPart, RuntimeActivity, SkillReferencePart,
 };
 use crate::session::Session;

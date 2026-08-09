@@ -9,7 +9,7 @@
 use agena_domain::{DoomLoopHit, DoomLoopPolicy, ToolInvocation};
 use agena_storage::store::{Part, PartRole};
 
-use crate::message::PartContent;
+use crate::part::PartContent;
 use crate::session::store::part_content_from_value;
 
 /// Walk `parts` from the tail forward and detect a run of identical
@@ -39,7 +39,7 @@ pub fn detect(parts: &[Part], policy: DoomLoopPolicy) -> Option<DoomLoopHit> {
             saw_tool_in_run = false;
             continue;
         }
-        let Ok(PartContent::Activity(crate::message::RuntimeActivity::Operation(exec))) =
+        let Ok(PartContent::Activity(crate::part::RuntimeActivity::Operation(exec))) =
             part_content_from_value(&part.kind, &part.content)
         else {
             if latest_signature.is_some() {

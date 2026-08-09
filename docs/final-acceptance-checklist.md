@@ -18,10 +18,10 @@ Status legend:
 |---|---|---|---|
 | 1.1 | `cargo check --workspace --all-targets` | **DONE** | 2026-08-10 — first tree-wide green after T9-B merge. |
 | 1.2 | `cargo test --workspace` | **DONE** | 2026-08-10, exit 0 (full tree, post T9-B). Key libs: contracts 22, session-core 15, session 106, provider 83, adapters 61, application 17, cli 9. |
-| 1.3 | `cargo clippy --workspace --all-targets -- -D warnings` | **PENDING** | After 1.1 green. |
-| 1.4 | `cargo fmt --all --check` | **PENDING** | |
-| 1.5 | `git diff --check` | **PENDING** | |
-| 1.6 | `cargo bench -p agena-storage-sqlite --bench v2_store` | **PENDING** | Bench target exists: `crates/agena-storage-sqlite/Cargo.toml:26-28`, `benches/v2_store.rs`. No performance regression expected. |
+| 1.3 | `cargo clippy --workspace --all-targets -- -D warnings` | **DONE** | 2026-08-10, exit 0. |
+| 1.4 | `cargo fmt --all --check` | **DONE** | 2026-08-10, exit 0. |
+| 1.5 | `git diff --check` | **DONE** | 2026-08-10, exit 0. |
+| 1.6 | `cargo bench -p agena-storage-sqlite --bench v2_store` | **DONE** | 2026-08-10 — **improved** vs P7 baseline: read/warm_facade 161.6µs (was 221.7µs), usage/indexed 561.0µs (was 845.6µs), streaming 12.2ms (was 21.1ms). No regression. |
 
 ### 1a. Baseline failure detail (captured 2026-08-10)
 
@@ -139,8 +139,8 @@ Per plan: send / stream / cancel / compact / fork over the v2 parts face, in all
 | 7.1 | R6 identifier audit (§3 regex) returns zero | **PENDING** (today: residue only in session [T6] + contracts [T7] + `message::` part-type renames [T7 §2c]) |
 | 7.2 | Gate-10 sealed SQL audit still only hits `agena-storage-sqlite` | **DONE** (re-verified this tree, §2.5) |
 | 7.3 | `cargo test --workspace` green | **DONE** | 2026-08-10, exit 0 (see §1.2). |
-| 7.4 | clippy -D warnings / fmt / diff --check green | **PENDING** |
-| 7.5 | Bench `v2_store` no regression | **PENDING** |
+| 7.4 | clippy -D warnings / fmt / diff --check green | **DONE** | 2026-08-10 (§1.3-1.5). |
+| 7.5 | Bench `v2_store` no regression | **DONE** | 2026-08-10 — improved (§1.6). |
 
 ---
 
@@ -155,9 +155,9 @@ Added 2026-08-10 per user directive ("PartContent彻底清除，以及message名
 | 8.3 | **T8 stage 1** — provider `wire_message.rs` PartContent→TypedContent, dropped `decode_part_content`/`part_content_from_typed` from provider (enables stage-4 contracts deletion) | merged (T8-stage1) | **DONE** |
 | 8.4 | **T8 stages 2-3** — application.rs:1034 latent notice-banner bug (decode via `decode(&part.kind,&part.content)`), session consumers (store/history/sessions/replies) PartContent→TypedContent | merged (T8 stage2/3) | **DONE** |
 | 8.5 | **T8 stage 4** — contracts: delete `PartContent`/`RuntimeActivity`/`decode_part_content`/`part_content_from_typed`, `*_from_*` helpers pub + mirror consolidation, `ExecutionControl<T>`→TypedContent, tree-wide fmt/clippy | merged (T8 stage4) | **DONE** |
-| 8.6 | **T8 stage 6** — zero-grep `PartContent`/`RuntimeActivity` workspace-wide + workspace check | final | **PENDING** |
-| 8.7 | T8/T9 KEEP list intact (wire shapes, REST routes, SSE/message/submit, serde `turns` key) | final | **PENDING** |
-| 8.8 | `ExecutionControl<T>` carrier (`session/mod.rs:23`) → `TypedContent` once contracts free | final | **PENDING** |
+| 8.6 | **T8 stage 6** — zero-grep `PartContent`/`RuntimeActivity` workspace-wide + workspace check | **DONE** | 2026-08-10 — `PartContent`/`RuntimeActivity`/`decode_part_content`/`part_content_from_typed` → 0 hits workspace-wide (independently re-verified); check/test/clippy/fmt all green. |
+| 8.7 | T8/T9 KEEP list intact (wire shapes, REST routes, SSE/message/submit, serde `turns` key) | **DONE** | JSON-RPC `"message/submit"`+`"messages/list"` (protocol.rs:84/87), REST `/api/v1/sessions/{session_id}/messages` (lib.rs:279), `#[serde(rename="messages")]` turns (contract.rs:1846) — all verified live. |
+| 8.8 | `ExecutionControl<T>` carrier (`session/mod.rs:23`) → `TypedContent` once contracts free | **DONE** | Now `agena_runtime_contracts::part_content::TypedContent` (T8 stage 3). |
 
 ---
 

@@ -63,6 +63,8 @@ Status legend:
 
 R6 gate: `rg -n 'Message\b|MessagePart|PartContent|RuntimeActivity|MessageMetadata|TranscriptSnapshot|TranscriptPatch|TurnSnapshot|ExecutionStatus|PartKind\b|reserve_message_ids|reserve_processor_ids|OPERATION_ID_METADATA_KEY' crates apps tools --glob '*.rs'` → expected **zero** after T6+T7.
 
+**T8/T9 add-on tokens** (added 2026-08-10, tracked in §8): T9 name kills — `SessionProjectedMessage`, `list_projected_messages`, `submit_user_message`, `SessionUserMessageRequest`, `MessageProviderState`, `MessageResource`, `MessagePartResource`, `DebugMessageOutput`, `MAX_COMPACTOR_MESSAGE_CHARS`; T8 PartContent kills — `PartContent`, `RuntimeActivity`, `decode_part_content`, `part_content_from_typed` (contracts deletion), `PartContent::Activity` construction sites. Wire names that MUST SURVIVE (do not report): `ChatMessage`, `InboundMessage`/`ClientMessage`/`ServerMessage`, SSE `message` event, MCP/LSP terms, `MessageSubtaskRequest`, domain `MessageSource`, DB `message_count`/`last_message_at`/`source_message_id`, wire `message/submit`+`messages/list`, REST `/api/v1/sessions/{id}/messages`, `turns` JSON key (serde-renamed `messages`), `PromptCompactionMessage`/`recent_messages`.
+
 | Crate | `message::` path files | v1 `Message*` struct hits | Verdict / notes |
 |---|---|---|---|
 | `agena-runtime-session` | 17 | 18 | **Transitional (T6 in flight)** — the whole v1 bridge. Expected; do NOT report as new. |
@@ -139,6 +141,23 @@ Per plan: send / stream / cancel / compact / fork over the v2 parts face, in all
 | 7.3 | `cargo test --workspace` green | **PENDING** |
 | 7.4 | clippy -D warnings / fmt / diff --check green | **PENDING** |
 | 7.5 | Bench `v2_store` no regression | **PENDING** |
+
+---
+
+## 8. T8 / T9 — PartContent elimination + message-name elimination (R6 add-ons)
+
+Added 2026-08-10 per user directive ("PartContent彻底清除，以及message名字消灭…全部完成"). Specs: `docs/t8-partcontent-elimination.md`, `docs/t9-message-name-elimination.md`.
+
+| # | Item | Worktree / branch | Status |
+|---|---|---|---|
+| 8.1 | **T9-A** — api `MessageResource`→`RunResource` etc., `MessageProviderState`→`PartProviderState` (contracts provider_state.rs), `CompletionInputRun` + `turns` serde-rename | merged `2d91e4d2` | **DONE** |
+| 8.2 | **T9-B** — session projection contract rename (`SessionProjectedMessage*`→`SessionProjectedRun*`, `list_projected_messages`→`list_projected_runs`, consumers in application/execution.rs, cli cli_render/cli_runtime_helpers/mod) + `PartProviderState` session propagation (processor.rs/helpers.rs/parts.rs/store.rs) + `submit_user_message`→`submit_user_parts`-family + CLI `DebugMessageOutput` + `MAX_COMPACTOR_MESSAGE_CHARS` | `db-w3-t9b` (`parallel/r6-t9b`) | **IN-FLIGHT** (agent running) |
+| 8.3 | **T8 stage 1** — provider `wire_message.rs` PartContent→TypedContent, drop `decode_part_content`/`part_content_from_typed` from provider (enables stage-4 contracts deletion) | `db-w3-t8a` (`parallel/r6-t8a`) | **IN-FLIGHT** (agent running) |
+| 8.4 | **T8 stages 2-3** — application.rs:1034 latent notice-banner bug (decode via `decode(&part.kind,&part.content)`), session consumers (store/history/sessions/replies) PartContent→TypedContent | after T9-B merge | **PENDING** |
+| 8.5 | **T8 stage 4** — contracts: delete `PartContent`/`RuntimeActivity` + `part_content_from_typed` fold | after 8.4 | **PENDING** |
+| 8.6 | **T8 stage 6** — zero-grep `PartContent`/`RuntimeActivity` workspace-wide + workspace check | final | **PENDING** |
+| 8.7 | T8/T9 KEEP list intact (wire shapes, REST routes, SSE/message/submit, serde `turns` key) | final | **PENDING** |
+| 8.8 | `ExecutionControl<T>` carrier (`session/mod.rs:23`) → `TypedContent` once contracts free | final | **PENDING** |
 
 ---
 

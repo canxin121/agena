@@ -858,6 +858,18 @@ impl Session {
         &self.parts
     }
 
+    /// The active model window: parts strictly after the last compaction
+    /// checkpoint part (`kind == "compaction"`). The compaction part itself
+    /// marks the boundary and is excluded; with no compaction part the window
+    /// is the full projection. Cheap slice view — parts are already ordered,
+    /// so the window is a contiguous suffix (13.4).
+    pub fn active_window_parts(&self) -> &[Part] {
+        match self.parts.iter().rposition(|part| part.kind == "compaction") {
+            Some(index) => &self.parts[index + 1..],
+            None => &self.parts[..],
+        }
+    }
+
     /// The last part in the projection (transcript tail).
     pub fn last_part(&self) -> Option<&Part> {
         self.parts.last()
@@ -1383,6 +1395,60 @@ mod parts_projection_tests {
             part(3, "text", PartRole::Assistant, PartState::Completed, json!({"text": "hi there"})),
         ]);
         assert_eq!(session.last_assistant_text().as_deref(), Some("hi there"));
+    }
+
+    #[test]
+    fn active_window_parts_without_compaction_returns_all_parts() {
+        let session = session_with(vec![
+            part(1, "run", PartRole::Runtime, PartState::Completed, json!({"run_kind": "user_send"})),
+            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
+            part(3, "text", PartRole::Assistant, PartState::Completed, json!({"text": "hi"})),
+        ]);
+
+        let window = session.active_window_parts();
+        assert_eq!(window.len(), 3);
+        assert_eq!(window[0].part_id, 1);
+        assert_eq!(window[2].part_id, 3);
+    }
+
+    #[test]
+    fn active_window_parts_with_one_compaction_returns_only_parts_after_it() {
+        let session = session_with(vec![
+            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old 1"})),
+            part(2, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp"})),
+            part(3, "text", PartRole::User, PartState::Completed, json!({"text": "new 1"})),
+            part(4, "text", PartRole::Assistant, PartState::Completed, json!({"text": "new 2"})),
+        ]);
+
+        let window = session.active_window_parts();
+        assert_eq!(window.len(), 2);
+        assert_eq!(window[0].part_id, 3);
+        assert_eq!(window[1].part_id, 4);
+    }
+
+    #[test]
+    fn active_window_parts_with_two_compactions_returns_parts_after_the_last() {
+        let session = session_with(vec![
+            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old 1"})),
+            part(2, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp1"})),
+            part(3, "text", PartRole::User, PartState::Completed, json!({"text": "mid"})),
+            part(4, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp2"})),
+            part(5, "text", PartRole::User, PartState::Completed, json!({"text": "new"})),
+        ]);
+
+        let window = session.active_window_parts();
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].part_id, 5);
+    }
+
+    #[test]
+    fn active_window_parts_with_compaction_at_the_end_is_empty() {
+        let session = session_with(vec![
+            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old"})),
+            part(2, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp"})),
+        ]);
+
+        assert!(session.active_window_parts().is_empty());
     }
 }
 // NOTE: `SessionEventType` and `SessionEventRecord` have been removed. The

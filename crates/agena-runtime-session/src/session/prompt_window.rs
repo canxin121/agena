@@ -122,13 +122,18 @@ pub(crate) struct PromptTokenEstimate {
     pub delta_chars: u64,
 }
 
-/// Project the session's parts back onto the v1 [`Message`] window the prompt
-/// path consumes (v2 has no in-memory message list). A part that fails to
+/// Project the session's active model window back onto the v1 [`Message`] form
+/// the prompt path consumes (v2 has no in-memory message list). The window is
+/// parts-native: [`Session::active_window_parts`] — the parts strictly after
+/// the last compaction checkpoint part (`kind == "compaction"`), 13.4. The
+/// interim v1 `compacted_through_message_id` filter in
+/// `active_prompt_messages_for_model` is now redundant against this window and
+/// is left in place until T6 deletes the v1 bridge. A part that fails to
 /// decode is logged and dropped from the window rather than taking down
 /// prompt assembly; the store is the durable source and already produced this
 /// projection once at load, so failures here are degenerate.
 fn projected_messages(session: &Session) -> Vec<Message> {
-    messages_from_parts(session.parts()).unwrap_or_else(|error| {
+    messages_from_parts(session.active_window_parts()).unwrap_or_else(|error| {
         tracing::warn!(
             session_id = session.id,
             "failed to project parts for prompt window: {error}"

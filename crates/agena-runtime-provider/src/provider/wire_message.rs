@@ -17,16 +17,22 @@ use base64::Engine as _;
 use serde::Deserialize;
 
 use crate::ProviderError;
-use agena_domain::{ExecutionStatus, Role, ToolApiFunction, ToolInvocation};
+use agena_domain::{
+    ExecutionStatus, ReasoningPart, Role, StructuredObject, TimeRange, ToolApiFunction,
+    ToolInvocation,
+};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
     CompletionInputRun, CompletionInputPart, CompletionInputProviderState, ModelToolFunction,
 };
 use agena_runtime_contracts::part::{
-    AttachmentItem, AttachmentKind, AttachmentSource, OperationPart, PartContent, RuntimeActivity,
+    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, OperationPart,
+    SkillReference, SkillReferencePart,
+};
+use agena_runtime_contracts::part_content::{
+    TypedContent, decode, FileRefContent, SkillRefContent, ThinkContent, ToolCallContent,
 };
 use agena_runtime_contracts::provider_state::PartProviderState;
-use agena_runtime_contracts::part_content::decode_part_content;
 use agena_storage::store::{Part, PartRole};
 
 // ─── Runtime-private type ─────────────────────────────────────────────────────
@@ -89,12 +95,12 @@ pub fn project(run: &CompletionInputRun) -> Vec<WirePart> {
         .collect()
 }
 
-/// Decode a storage [`Part`] into the rich [`PartContent`] the projection
+/// Decode a storage [`Part`] into the typed [`TypedContent`] the projection
 /// operates on. A part that fails to decode (unknown kind or non-object
 /// payload) projects to nothing — the same "reload 宁缺勿崩" principle the
 /// session reload path applies.
-fn projected_content(part: &Part) -> Option<PartContent> {
-    decode_part_content(&part.kind, &part.content).ok()
+fn projected_content(part: &Part) -> Option<TypedContent> {
+    decode(&part.kind, &part.content).ok()
 }
 
 /// Resolve the stable provider-visible call id for a stored tool part.
@@ -113,13 +119,168 @@ fn project_operation_call_id(exec: &OperationPart) -> String {
         .unwrap_or_else(|| exec.call_id().to_string())
 }
 
+// ─── Rich-content recovery (v1 payloads from typed shapes) ────────────────────
+//
+// The v1 payload structs (`OperationPart`, `AttachmentPart`, `SkillReferencePart`,
+// `ReasoningPart`) survive the T8 migration — they ride losslessly in the typed
+// content's `extra` bucket and are recovered here. The contracts equivalents in
+// the contracts `part_content` module are private until T8 stage 4 (which
+// re-signs them `pub` and `&`-taking); these local mirrors keep the provider
+// independent of the v1 two-arm content enum and its typed fold, so stage 4 can
+// delete those unhindered.
+
+/// Rebuild a v1 [`OperationPart`] from the canonical `tool_call` shape,
+/// restoring the full payload from `extra["operation"]` and falling back to a
+/// pending operation built from the canonical invocation identity.
+fn operation_from_tool_call(part: &ToolCallContent) -> OperationPart {
+    if let Some(operation) = part
+        .extra
+        .get("operation")
+        .and_then(|value| serde_json::from_value::<OperationPart>(value.clone()).ok())
+    {
+        return operation;
+    }
+    let invocation = ToolInvocation {
+        tool_api_call: part
+            .extra
+            .get("tool_api_call")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        name: part.name.clone(),
+        plugin_name: part.plugin.clone(),
+        input: StructuredObject::try_from(part.input.clone()).unwrap_or_default(),
+    };
+    let call_id = part
+        .extra
+        .get("call_id")
+        .and_then(serde_json::Value::as_i64)
+        .unwrap_or(0);
+    OperationPart::pending(call_id, invocation, "", TimeRange::default())
+}
+
+/// Rebuild a v1 [`AttachmentPart`] from the canonical `file_ref` shape,
+/// preferring the lossless `extra["attachments"]` list and otherwise
+/// reconstructing a single item from the named keys + extended keys.
+fn attachment_from_file_ref(part: &FileRefContent) -> AttachmentPart {
+    if let Some(items) = part
+        .extra
+        .get("attachments")
+        .and_then(|value| serde_json::from_value::<Vec<AttachmentItem>>(value.clone()).ok())
+    {
+        return AttachmentPart { attachments: items };
+    }
+    let kind = part
+        .extra
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| {
+            serde_json::from_value::<AttachmentKind>(serde_json::Value::String(value.to_owned()))
+                .ok()
+        })
+        .unwrap_or(AttachmentKind::File);
+    let source = attachment_source_from_file_ref(part);
+    AttachmentPart {
+        attachments: vec![AttachmentItem {
+            kind,
+            mime: part.mime.clone().unwrap_or_default(),
+            source,
+            filename: part.name.clone(),
+            title: part
+                .extra
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            size_bytes: part.extra.get("size_bytes").and_then(serde_json::Value::as_u64),
+            sha256: part.sha.clone(),
+            width: part
+                .extra
+                .get("width")
+                .and_then(serde_json::Value::as_u64)
+                .map(|v| v as u32),
+            height: part
+                .extra
+                .get("height")
+                .and_then(serde_json::Value::as_u64)
+                .map(|v| v as u32),
+            duration_ms: part.extra.get("duration_ms").and_then(serde_json::Value::as_u64),
+            page_count: part
+                .extra
+                .get("page_count")
+                .and_then(serde_json::Value::as_u64)
+                .map(|v| v as u32),
+        }],
+    }
+}
+
+/// Rebuild an [`AttachmentSource`] from the canonical `file_ref` named keys
+/// and extended keys (`url`, `data_url`, `base64`, `file_id`, `path`).
+fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSource {
+    let extra = &part.extra;
+    if let Some(url) = extra.get("url").and_then(serde_json::Value::as_str) {
+        return AttachmentSource::Url {
+            url: url.to_owned(),
+        };
+    }
+    if let Some(url) = extra.get("data_url").and_then(serde_json::Value::as_str) {
+        return AttachmentSource::DataUrl {
+            url: url.to_owned(),
+        };
+    }
+    if let Some(data) = extra.get("base64").and_then(serde_json::Value::as_str) {
+        return AttachmentSource::Base64 {
+            data: data.to_owned(),
+        };
+    }
+    if let Some(file_id) = extra.get("file_id").and_then(serde_json::Value::as_str) {
+        return AttachmentSource::FileId {
+            file_id: file_id.to_owned(),
+        };
+    }
+    if let Some(path) = part.path.as_deref() {
+        return AttachmentSource::LocalPath {
+            path: path.to_owned(),
+        };
+    }
+    if let Some(source) = extra
+        .get("source")
+        .and_then(|value| serde_json::from_value::<AttachmentSource>(value.clone()).ok())
+    {
+        return source;
+    }
+    AttachmentSource::LocalPath {
+        path: String::new(),
+    }
+}
+
+/// Rebuild a v1 [`SkillReferencePart`] from `extra["skills"]` (empty when the
+/// snapshot is missing or does not match the v1 shape).
+fn skill_reference_from_skill_ref(part: &SkillRefContent) -> SkillReferencePart {
+    let skills = part
+        .extra
+        .get("skills")
+        .and_then(|value| serde_json::from_value::<Vec<SkillReference>>(value.clone()).ok())
+        .unwrap_or_default();
+    SkillReferencePart { skills }
+}
+
+/// Rebuild the reasoning text the v1 [`ReasoningPart`] prefers from the
+/// canonical `think` shape (summary wins, raw content otherwise).
+fn reasoning_preferred_text(think: &ThinkContent) -> String {
+    ReasoningPart {
+        summary: think.summary.clone(),
+        raw_content: think.raw.clone(),
+        encrypted_content: think.encrypted_content.clone(),
+    }
+    .preferred_text()
+}
+
 /// Project a persisted part slice at the session/core boundary.
 ///
 /// Consumes storage [`Part`]s directly (R6-T5); each part is decoded to its
-/// v1 [`PartContent`] and projected exactly as the legacy message projection
-/// did, so the wire output is unchanged. Run markers and provider-only
-/// operations are skipped; the coarse `state` column drives result emission
-/// with the fine-grained denial outcomes recovered from the rich content.
+/// typed [`TypedContent`] and projected exactly as the legacy message
+/// projection did, so the wire output is unchanged. Run markers and
+/// provider-only operations are skipped; the coarse `state` column drives
+/// result emission with the fine-grained denial outcomes recovered from the
+/// rich content.
 pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
     let mut wire: Vec<WirePart> = Vec::new();
 
@@ -133,55 +294,66 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
         let role = role_from_part_role(part.role);
 
         match content {
-            PartContent::Text(text) => {
+            TypedContent::Text(text) => {
                 if !text.text.is_empty() {
                     wire.push(WirePart::Text {
                         text: text.text.clone(),
                     });
                 }
             }
-            PartContent::Activity(activity) => match activity {
-                RuntimeActivity::Resource(resource) => {
-                    for item in &resource.attachments {
-                        wire.push(WirePart::Attachment { item: item.clone() });
-                    }
-                }
-                RuntimeActivity::SkillReference(skill_reference) => {
-                    if !skill_reference.skills.is_empty() {
-                        wire.push(WirePart::Text {
-                            text: skill_reference.model_context_text(),
-                        });
-                    }
-                }
-                RuntimeActivity::Operation(exec) => {
-                    if exec.is_provider_only() {
-                        continue;
-                    }
-                    let call_id = project_operation_call_id(&exec);
-                    let status = operation_status(&exec);
-
-                    let Some((function, arguments_json)) = invocation_name_and_args(exec.invocation())
-                    else {
-                        continue;
-                    };
-                    if matches!(role, Role::Tool) {
-                        if is_terminal_result_status(status) {
-                            wire.push(WirePart::ToolResult {
-                                tool_call_id: call_id,
-                                function,
-                                arguments_json,
-                                status: completion_input_result_status(status),
-                                output_json: project_operation_output(status, &exec),
-                            });
-                        }
-                        continue;
-                    }
-                    wire.push(WirePart::ToolCall {
-                        id: call_id.clone(),
-                        function: function.clone(),
-                        arguments_json: arguments_json.clone(),
+            // The v1 fold degraded Run/PasteRef/ToolResult/Compaction to plain
+            // text, which the Text arm then projected as text when non-empty —
+            // preserve that wire output exactly.
+            TypedContent::PasteRef(paste) => {
+                if !paste.text.is_empty() {
+                    wire.push(WirePart::Text {
+                        text: paste.text.clone(),
                     });
+                }
+            }
+            TypedContent::ToolResult(tool_result) => {
+                if !tool_result.output.is_empty() {
+                    wire.push(WirePart::Text {
+                        text: tool_result.output.clone(),
+                    });
+                }
+            }
+            TypedContent::Compaction(compaction) => {
+                if let Some(summary) = compaction.summary.as_deref().filter(|s| !s.is_empty()) {
+                    wire.push(WirePart::Text {
+                        text: summary.to_owned(),
+                    });
+                }
+            }
+            // Run markers are filtered above; the fold degraded Run to empty
+            // text, so nothing projects here.
+            TypedContent::Run(_) => {}
+            TypedContent::FileRef(file_ref) => {
+                for item in &attachment_from_file_ref(&file_ref).attachments {
+                    wire.push(WirePart::Attachment { item: item.clone() });
+                }
+            }
+            TypedContent::SkillRef(skill_ref) => {
+                let skill_reference = skill_reference_from_skill_ref(&skill_ref);
+                if !skill_reference.skills.is_empty() {
+                    wire.push(WirePart::Text {
+                        text: skill_reference.model_context_text(),
+                    });
+                }
+            }
+            TypedContent::ToolCall(tool_call) => {
+                let exec = operation_from_tool_call(&tool_call);
+                if exec.is_provider_only() {
+                    continue;
+                }
+                let call_id = project_operation_call_id(&exec);
+                let status = operation_status(&exec);
 
+                let Some((function, arguments_json)) = invocation_name_and_args(exec.invocation())
+                else {
+                    continue;
+                };
+                if matches!(role, Role::Tool) {
                     if is_terminal_result_status(status) {
                         wire.push(WirePart::ToolResult {
                             tool_call_id: call_id,
@@ -191,18 +363,34 @@ pub fn project_persisted(parts: &[Part]) -> Vec<WirePart> {
                             output_json: project_operation_output(status, &exec),
                         });
                     }
+                    continue;
                 }
-                RuntimeActivity::Reasoning(reasoning) => {
-                    let text = reasoning.preferred_text();
-                    if !text.is_empty() {
-                        wire.push(WirePart::Reasoning { text });
-                    }
+                wire.push(WirePart::ToolCall {
+                    id: call_id.clone(),
+                    function: function.clone(),
+                    arguments_json: arguments_json.clone(),
+                });
+
+                if is_terminal_result_status(status) {
+                    wire.push(WirePart::ToolResult {
+                        tool_call_id: call_id,
+                        function,
+                        arguments_json,
+                        status: completion_input_result_status(status),
+                        output_json: project_operation_output(status, &exec),
+                    });
                 }
-                RuntimeActivity::Interaction(_)
-                | RuntimeActivity::Error(_)
-                | RuntimeActivity::Hook(_)
-                | RuntimeActivity::Notice(_) => {}
-            },
+            }
+            TypedContent::Think(think) => {
+                let text = reasoning_preferred_text(&think);
+                if !text.is_empty() {
+                    wire.push(WirePart::Reasoning { text });
+                }
+            }
+            TypedContent::Notice(_)
+            | TypedContent::Hook(_)
+            | TypedContent::Interaction(_)
+            | TypedContent::Error(_) => {}
         }
     }
 
@@ -388,10 +576,10 @@ pub fn validate_provider_native_tool_history(parts: &[Part]) -> Result<(), Provi
         let Some(content) = projected_content(part) else {
             continue;
         };
-        let Some(PartContent::Activity(RuntimeActivity::Operation(operation))) = Some(&content)
-        else {
+        let TypedContent::ToolCall(tool_call) = &content else {
             continue;
         };
+        let operation = operation_from_tool_call(tool_call);
         if operation.is_provider_only() {
             continue;
         }
@@ -474,18 +662,30 @@ fn parts_as_text_lossy(parts: &[Part]) -> String {
             continue;
         };
         let text = match content {
-            PartContent::Text(text) => Some(text.text.clone()),
-            PartContent::Activity(RuntimeActivity::Reasoning(reasoning)) => {
-                let text = reasoning.preferred_text();
+            TypedContent::Text(text) => Some(text.text.clone()),
+            // The v1 fold degraded these kinds to plain text, which the Text
+            // arm then rendered — preserve that output exactly.
+            TypedContent::PasteRef(paste) => Some(paste.text.clone()),
+            TypedContent::ToolResult(tool_result) => Some(tool_result.output.clone()),
+            TypedContent::Compaction(compaction) => {
+                Some(compaction.summary.clone().unwrap_or_default())
+            }
+            TypedContent::Run(_) => None,
+            TypedContent::Think(think) => {
+                let text = reasoning_preferred_text(&think);
                 (!text.is_empty()).then_some(text)
             }
-            PartContent::Activity(RuntimeActivity::SkillReference(skill_reference)) => {
-                Some(skill_reference.model_context_text())
+            TypedContent::SkillRef(skill_ref) => {
+                Some(skill_reference_from_skill_ref(&skill_ref).model_context_text())
             }
-            PartContent::Activity(RuntimeActivity::Operation(operation)) => {
-                operation_text_lossy(&operation)
+            TypedContent::ToolCall(tool_call) => {
+                operation_text_lossy(&operation_from_tool_call(&tool_call))
             }
-            _ => part.summary.clone(),
+            TypedContent::FileRef(_)
+            | TypedContent::Notice(_)
+            | TypedContent::Hook(_)
+            | TypedContent::Interaction(_)
+            | TypedContent::Error(_) => part.summary.clone(),
         };
         if let Some(text) = text.filter(|text| !text.trim().is_empty()) {
             out.push(text);

@@ -1,5 +1,11 @@
 //! Generic per-owner execution registry: exclusive ownership, cancel, and
 //! steer. Concrete session code supplies its own steer payload type.
+//!
+//! The registry is purely in-memory execution coordination. Cross-process
+//! session exclusivity is no longer its job: in v2 the data facade owns
+//! `execution_leases` and validates them on every write (design 14.2, 15.6),
+//! so the manager never holds a lease outside a facade call. `register` here
+//! only guarantees that one process does not run the same session twice.
 
 use std::{
     collections::HashMap,
@@ -134,29 +140,10 @@ impl<T> ExecutionControl<T> {
     }
 }
 
-/// How often an executing process refreshes its session lease.
-pub const LEASE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-
-/// Lease binding for an execution registry: the shared database and the
-/// per-process owner id that identifies this process's leases.
-#[derive(Debug, Clone)]
-pub struct LeaseConfig {
-    pub db: Arc<sea_orm::DatabaseConnection>,
-    pub owner_id: String,
-}
-
-/// Per-session lease bookkeeping: the cancel token for the heartbeat task.
-#[derive(Debug)]
-struct LeaseHandle {
-    stop: CancellationToken,
-}
-
 #[derive(Debug)]
 /// Registry of active executions.
 pub struct ExecutionRegistry<T> {
     inner: Mutex<HashMap<i64, Arc<ExecutionControl<T>>>>,
-    lease: Option<LeaseConfig>,
-    lease_handles: Mutex<HashMap<i64, LeaseHandle>>,
 }
 
 impl<T: Send + 'static> Default for ExecutionRegistry<T> {
@@ -166,33 +153,13 @@ impl<T: Send + 'static> Default for ExecutionRegistry<T> {
 }
 
 impl<T: Send + 'static> ExecutionRegistry<T> {
-    /// A registry without a database binding: single-process semantics only
-    /// (no cross-process lease). Used by tests.
+    /// A registry with no database binding: in-process execution coordination
+    /// only. Cross-process session exclusivity is enforced by the v2 facade's
+    /// lease validation on every write, not here.
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(HashMap::new()),
-            lease: None,
-            lease_handles: Mutex::new(HashMap::new()),
         }
-    }
-
-    /// A registry bound to a shared database: `register` also acquires the
-    /// cross-process execution lease, so two processes cannot run the same
-    /// session at once.
-    pub fn with_lease(db: Arc<sea_orm::DatabaseConnection>, owner_id: String) -> Self {
-        Self {
-            inner: Mutex::new(HashMap::new()),
-            lease: Some(LeaseConfig { db, owner_id }),
-            lease_handles: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// The owner id this registry uses for cross-process leases, if bound.
-    pub fn owner_id(&self) -> String {
-        self.lease
-            .as_ref()
-            .map(|config| config.owner_id.clone())
-            .unwrap_or_default()
     }
 
     pub async fn register(
@@ -202,33 +169,13 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         reply_id: agena_domain::AssistantReplyId,
     ) -> Result<(Arc<ExecutionControl<T>>, mpsc::UnboundedReceiver<Vec<T>>), ExecutionControlError>
     {
-        // Local exclusivity first: this process must not run the session twice.
+        // Local exclusivity: this process must not run the session twice. The
+        // cross-process lease is taken atomically by the facade on the first
+        // write of the run (design 15.6 step 1).
         {
             let guard = self.inner.lock().await;
             if guard.contains_key(&session_id) {
                 return Err(ExecutionControlError::AlreadyActive(session_id));
-            }
-        }
-
-        // Cross-process exclusivity: take the database lease before any
-        // ExecutionStarted event is emitted, so reconcile never mistakes an
-        // actively-executing session for an interrupted one.
-        if let Some(LeaseConfig { db, owner_id }) = &self.lease {
-            let now = agena_runtime_session_core::db::leases::lease_now_ms();
-            match agena_runtime_session_core::db::leases::try_acquire_lease(
-                db.as_ref(),
-                session_id,
-                owner_id,
-                None,
-                now,
-            )
-            .await
-            .map_err(|error| ExecutionControlError::InvalidTransition(error.to_string()))?
-            {
-                agena_runtime_session_core::db::leases::LeaseAcquireOutcome::Acquired => {}
-                agena_runtime_session_core::db::leases::LeaseAcquireOutcome::HeldBy { .. } => {
-                    return Err(ExecutionControlError::AlreadyActive(session_id));
-                }
             }
         }
 
@@ -237,34 +184,6 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
         let mut guard = self.inner.lock().await;
         guard.insert(session_id, Arc::clone(&control));
         drop(guard);
-
-        // Refresh the lease heartbeat periodically so a reconciling process
-        // sees this execution as live.
-        if let Some(LeaseConfig { db, owner_id }) = &self.lease {
-            let stop = CancellationToken::new();
-            let stop_task = stop.clone();
-            let db = Arc::clone(db);
-            let owner_id = owner_id.clone();
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(LEASE_HEARTBEAT_INTERVAL);
-                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                loop {
-                    tokio::select! {
-                        _ = stop_task.cancelled() => break,
-                        _ = ticker.tick() => {
-                            let now = agena_runtime_session_core::db::leases::lease_now_ms();
-                            let _ = agena_runtime_session_core::db::leases::heartbeat(
-                                db.as_ref(), session_id, &owner_id, now,
-                            ).await;
-                        }
-                    }
-                }
-            });
-            self.lease_handles
-                .lock()
-                .await
-                .insert(session_id, LeaseHandle { stop });
-        }
 
         Ok((control, rx))
     }
@@ -281,19 +200,6 @@ impl<T: Send + 'static> ExecutionRegistry<T> {
             {
                 guard.remove(&session_id);
             }
-        }
-
-        // Stop the heartbeat and release the cross-process lease.
-        if let Some(handle) = self.lease_handles.lock().await.remove(&session_id) {
-            handle.stop.cancel();
-        }
-        if let Some(LeaseConfig { db, owner_id }) = &self.lease {
-            let _ = agena_runtime_session_core::db::leases::release_lease(
-                db.as_ref(),
-                session_id,
-                owner_id,
-            )
-            .await;
         }
     }
 

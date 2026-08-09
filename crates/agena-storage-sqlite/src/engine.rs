@@ -14,16 +14,17 @@
 //! (invariants 1-2, section 7.2). Part ids come from the `agena_sequences`
 //! row, matching the in-memory allocator (first part id = 1).
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use agena_storage::store::{
-    InFlightRun, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart, NewSession, Part, PartDelta,
-    PartRole, PartState, PartVisibility, PersistenceEngine, ReconcileOutcome, RunOutcome,
-    SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError, SubmitOutcome,
-    UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
+    InFlightRun, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart, NewSession, Part,
+    PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine, ReconcileOutcome,
+    RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView, StoreError,
+    SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats, apply_part_transition,
 };
 use async_trait::async_trait;
 use sea_orm::{
@@ -76,7 +77,9 @@ impl SqliteEngine {
 /// through [`map_db_err`].
 async fn run_write<T>(
     db: &DatabaseConnection,
-    op: impl for<'a> FnOnce(&'a DatabaseTransaction) -> Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>,
+    op: impl for<'a> FnOnce(
+        &'a DatabaseTransaction,
+    ) -> Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send + 'a>>,
 ) -> Result<T, StoreError> {
     let txn = begin_with_write_lock(db).await.map_err(map_db_err)?;
     match op(&txn).await {
@@ -142,7 +145,10 @@ async fn ensure_lease_tx(
     Ok(())
 }
 
-async fn lease_tx(txn: &DatabaseTransaction, session_id: i64) -> Result<Option<LeaseState>, StoreError> {
+async fn lease_tx(
+    txn: &DatabaseTransaction,
+    session_id: i64,
+) -> Result<Option<LeaseState>, StoreError> {
     txn.query_one(Statement::from_sql_and_values(
         DatabaseBackend::Sqlite,
         "SELECT session_id, owner_id, run_id, lease_started_at_ms, heartbeat_at_ms \
@@ -268,7 +274,12 @@ async fn abort_runs_tx(
                        AND part_id IN ({run_list}) AND state IN ('pending', 'in_progress') \
                      RETURNING part_id"
                 ),
-                [now_ms.into(), now_ms.into(), reason.into(), session_id.into()],
+                [
+                    now_ms.into(),
+                    now_ms.into(),
+                    reason.into(),
+                    session_id.into(),
+                ],
             ))
             .await
             .map_err(map_db_err)?;
@@ -416,6 +427,9 @@ fn summary_from_row(row: sea_orm::QueryResult) -> Result<SessionSummary, DbErr> 
         title: row.try_get("", "title")?,
         relation_kind,
         lifecycle_state,
+        version: row.try_get("", "version")?,
+        task_id: row.try_get("", "task_id")?,
+        subtask_status: row.try_get("", "subtask_status")?,
         message_count: row.try_get("", "message_count")?,
         child_session_count: row.try_get("", "child_session_count")?,
         last_message_at_ms: row.try_get("", "last_message_at_ms")?,
@@ -473,13 +487,7 @@ fn marker_part(
 }
 
 /// Build a content `Part` bound to `run_id`, ready for insertion.
-fn content_part(
-    id: i64,
-    session_id: i64,
-    run_id: i64,
-    new_part: NewPart,
-    now_ms: i64,
-) -> Part {
+fn content_part(id: i64, session_id: i64, run_id: i64, new_part: NewPart, now_ms: i64) -> Part {
     Part {
         part_id: id,
         kind: new_part.kind,
@@ -606,7 +614,9 @@ impl PersistenceEngine for SqliteEngine {
                     .as_ref()
                     .map(serde_json::to_string)
                     .transpose()
-                    .map_err(|error| StoreError::Serialization(format!("encode anchors: {error}")))?;
+                    .map_err(|error| {
+                        StoreError::Serialization(format!("encode anchors: {error}"))
+                    })?;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_sessions \
@@ -635,7 +645,9 @@ impl PersistenceEngine for SqliteEngine {
                     .as_ref()
                     .map(serde_json::to_string)
                     .transpose()
-                    .map_err(|error| StoreError::Serialization(format!("encode config: {error}")))?;
+                    .map_err(|error| {
+                        StoreError::Serialization(format!("encode config: {error}"))
+                    })?;
                 txn.execute(Statement::from_sql_and_values(
                     DatabaseBackend::Sqlite,
                     "UPDATE agena_sessions \
@@ -774,6 +786,23 @@ impl PersistenceEngine for SqliteEngine {
             where_clauses.push("s.workspace_id = ?".to_owned());
             values.push(workspace_id.into());
         }
+        if let Some(parent_id) = query.parent_id {
+            where_clauses.push("s.parent_id = ?".to_owned());
+            values.push(parent_id.into());
+        } else if query.roots_only {
+            where_clauses.push("s.parent_id IS NULL".to_owned());
+        }
+        if let Some(search) = query.search.as_deref() {
+            if !search.trim().is_empty() {
+                where_clauses.push("s.title LIKE ? ESCAPE '\\'".to_owned());
+                // Escape `%`/`_` so user input is a literal substring match.
+                let escaped = search
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                values.push(Value::String(Some(Box::new(format!("%{escaped}%")))));
+            }
+        }
         if let Some(before) = query.before {
             where_clauses.push("(s.updated_at_ms, s.id) < (?, ?)".to_owned());
             values.push(before.updated_at_ms.into());
@@ -786,7 +815,8 @@ impl PersistenceEngine for SqliteEngine {
         };
         let mut sql = format!(
             "SELECT s.id, s.workspace_id, s.parent_id, s.depth, s.root_id, s.title, \
-                    s.relation_kind, s.lifecycle_state, s.created_at_ms, s.updated_at_ms, \
+                    s.relation_kind, s.lifecycle_state, s.version, s.task_id, s.subtask_status, \
+                    s.created_at_ms, s.updated_at_ms, \
              (SELECT COUNT(*) FROM agena_session_parts sp \
                JOIN agena_parts p ON p.part_id = sp.part_id \
                WHERE sp.session_id = s.id AND p.kind = 'run') AS message_count, \
@@ -802,7 +832,11 @@ impl PersistenceEngine for SqliteEngine {
             sql.push_str(&format!(" LIMIT {}", limit.max(0)));
         }
         self.db()
-            .query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values))
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                sql,
+                values,
+            ))
             .await
             .map_err(map_db_err)?
             .into_iter()
@@ -811,12 +845,74 @@ impl PersistenceEngine for SqliteEngine {
             .map_err(map_db_err)
     }
 
+    async fn get_session_summary(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<SessionSummary>, StoreError> {
+        let rows = self
+            .db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT s.id, s.workspace_id, s.parent_id, s.depth, s.root_id, s.title, \
+                        s.relation_kind, s.lifecycle_state, s.version, s.task_id, s.subtask_status, \
+                        s.created_at_ms, s.updated_at_ms, \
+                 (SELECT COUNT(*) FROM agena_session_parts sp \
+                   JOIN agena_parts p ON p.part_id = sp.part_id \
+                   WHERE sp.session_id = s.id AND p.kind = 'run') AS message_count, \
+                 (SELECT COUNT(*) FROM agena_sessions c WHERE c.parent_id = s.id) \
+                   AS child_session_count, \
+                 (SELECT MAX(p.created_at_ms) FROM agena_session_parts sp \
+                   JOIN agena_parts p ON p.part_id = sp.part_id \
+                   WHERE sp.session_id = s.id) AS last_message_at_ms \
+                 FROM agena_sessions s WHERE s.id = ?",
+                [session_id.into()],
+            ))
+            .await
+            .map_err(map_db_err)?;
+        let mut iter = rows.into_iter();
+        let Some(row) = iter.next() else {
+            return Ok(None);
+        };
+        Ok(Some(summary_from_row(row).map_err(map_db_err)?))
+    }
+
+    async fn session_counts_by_workspace(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, i64>, StoreError> {
+        if workspace_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let placeholders = vec!["?"; workspace_ids.len()].join(", ");
+        let values: Vec<Value> = workspace_ids.iter().map(|id| Value::from(*id)).collect();
+        let rows = self
+            .db()
+            .query_all(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                format!(
+                    "SELECT workspace_id, COUNT(*) AS count FROM agena_sessions \
+                     WHERE workspace_id IN ({placeholders}) GROUP BY workspace_id"
+                ),
+                values,
+            ))
+            .await
+            .map_err(map_db_err)?;
+        let mut counts = HashMap::with_capacity(workspace_ids.len());
+        for row in rows {
+            let workspace_id: i64 = row.try_get("", "workspace_id").map_err(map_db_err)?;
+            let count: i64 = row.try_get("", "count").map_err(map_db_err)?;
+            counts.insert(workspace_id, count);
+        }
+        Ok(counts)
+    }
+
     async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, StoreError> {
         self.db()
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT s.id, s.workspace_id, s.parent_id, s.depth, s.root_id, s.title, \
-                        s.relation_kind, s.lifecycle_state, s.created_at_ms, s.updated_at_ms, \
+                        s.relation_kind, s.lifecycle_state, s.version, s.task_id, s.subtask_status, \
+                        s.created_at_ms, s.updated_at_ms, \
                  (SELECT COUNT(*) FROM agena_session_parts sp \
                    JOIN agena_parts p ON p.part_id = sp.part_id \
                    WHERE sp.session_id = s.id AND p.kind = 'run') AS message_count, \
@@ -927,10 +1023,7 @@ impl PersistenceEngine for SqliteEngine {
         Ok(result.rows_affected() > 0)
     }
 
-    async fn current_lease(
-        &self,
-        session_id: i64,
-    ) -> Result<Option<LeaseState>, StoreError> {
+    async fn current_lease(&self, session_id: i64) -> Result<Option<LeaseState>, StoreError> {
         self.db()
             .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
@@ -1059,11 +1152,11 @@ impl PersistenceEngine for SqliteEngine {
                      WHERE part_id = ?",
                     [
                         part.state.as_str().into(),
-                        text_value(Some(
-                            serde_json::to_string(&part.content).map_err(|error| {
+                        text_value(Some(serde_json::to_string(&part.content).map_err(
+                            |error| {
                                 StoreError::Serialization(format!("encode part content: {error}"))
-                            })?,
-                        )),
+                            },
+                        )?)),
                         text_value(part.summary.clone()),
                         text_value(part.rendered_markdown.clone()),
                         text_value(
@@ -1072,7 +1165,9 @@ impl PersistenceEngine for SqliteEngine {
                                 .map(serde_json::to_string)
                                 .transpose()
                                 .map_err(|error| {
-                                    StoreError::Serialization(format!("encode provider state: {error}"))
+                                    StoreError::Serialization(format!(
+                                        "encode provider state: {error}"
+                                    ))
                                 })?,
                         ),
                         Value::BigInt(part.finished_at_ms),
@@ -1150,18 +1245,20 @@ impl PersistenceEngine for SqliteEngine {
                      WHERE part_id = ?",
                     [
                         part.state.as_str().into(),
-                        text_value(Some(
-                            serde_json::to_string(&part.content).map_err(|error| {
+                        text_value(Some(serde_json::to_string(&part.content).map_err(
+                            |error| {
                                 StoreError::Serialization(format!("encode part content: {error}"))
-                            })?,
-                        )),
+                            },
+                        )?)),
                         text_value(
                             part.provider_state
                                 .as_ref()
                                 .map(serde_json::to_string)
                                 .transpose()
                                 .map_err(|error| {
-                                    StoreError::Serialization(format!("encode provider state: {error}"))
+                                    StoreError::Serialization(format!(
+                                        "encode provider state: {error}"
+                                    ))
                                 })?,
                         ),
                         part.finished_at_ms.into(),
@@ -1199,7 +1296,10 @@ impl PersistenceEngine for SqliteEngine {
                 };
                 let mut marker_content = content;
                 if let serde_json::Value::Object(map) = &mut marker_content {
-                    map.insert("run_kind".to_owned(), serde_json::Value::String(run_kind.clone()));
+                    map.insert(
+                        "run_kind".to_owned(),
+                        serde_json::Value::String(run_kind.clone()),
+                    );
                 }
                 submit_batch_tx(
                     txn,
@@ -1229,8 +1329,7 @@ impl PersistenceEngine for SqliteEngine {
         run_write(db, move |txn| {
             Box::pin(async move {
                 ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
-                abort_runs_tx(txn, session_id, &[run_id], "user_cancelled", now_ms)
-                    .await?;
+                abort_runs_tx(txn, session_id, &[run_id], "user_cancelled", now_ms).await?;
                 Ok(())
             })
         })
@@ -1252,7 +1351,9 @@ impl PersistenceEngine for SqliteEngine {
                 ensure_lease_tx(txn, session_id, &owner_id, now_ms).await?;
                 let mut interaction = load_part_by_id(txn, interaction_part_id)
                     .await?
-                    .ok_or_else(|| StoreError::not_found(format!("interaction part {interaction_part_id}")))?;
+                    .ok_or_else(|| {
+                        StoreError::not_found(format!("interaction part {interaction_part_id}"))
+                    })?;
                 if interaction.kind != "interaction" || !interaction.state.is_in_flight() {
                     return Err(StoreError::InvalidState(format!(
                         "part {interaction_part_id} is not a pending interaction"
@@ -1373,7 +1474,11 @@ impl PersistenceEngine for SqliteEngine {
         .await
     }
 
-    async fn reconcile(&self, session_id: i64, now_ms: i64) -> Result<ReconcileOutcome, StoreError> {
+    async fn reconcile(
+        &self,
+        session_id: i64,
+        now_ms: i64,
+    ) -> Result<ReconcileOutcome, StoreError> {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
@@ -1397,8 +1502,9 @@ impl PersistenceEngine for SqliteEngine {
         let db = self.db();
         run_write(db, move |txn| {
             Box::pin(async move {
-                let reaped = reap_stale_leases_tx(txn, now_ms - agena_storage::store::LEASE_STALENESS_MS)
-                    .await?;
+                let reaped =
+                    reap_stale_leases_tx(txn, now_ms - agena_storage::store::LEASE_STALENESS_MS)
+                        .await?;
                 let gc_deleted_parts = gc_orphan_parts_tx(txn).await?;
                 Ok(MaintenanceOutcome {
                     reaped_sessions: reaped,
@@ -1552,7 +1658,10 @@ impl PersistenceEngine for SqliteEngine {
                 // valid even if the exported ids collide with existing parts.
                 let mut id_map: std::collections::HashMap<i64, i64> = Default::default();
                 for part in &parsed.parts {
-                    id_map.insert(part.part_id, next_part_id_tx(txn).await.map_err(map_db_err)?);
+                    id_map.insert(
+                        part.part_id,
+                        next_part_id_tx(txn).await.map_err(map_db_err)?,
+                    );
                 }
                 for part in &parsed.parts {
                     let new_id = id_map[&part.part_id];
@@ -1601,13 +1710,20 @@ async fn create_session_tx(
             "child session cannot have relation_kind = root".to_owned(),
         ));
     }
-    let is_branch = matches!(relation_kind, SessionRelationKind::Fork | SessionRelationKind::Rewind);
+    let is_branch = matches!(
+        relation_kind,
+        SessionRelationKind::Fork | SessionRelationKind::Rewind
+    );
     if is_branch != cutoff_part_id.is_some() {
         return Err(StoreError::InvalidState(
             "fork/rewind sessions require a cutoff_part_id".to_owned(),
         ));
     }
-    if cutoff_part_id.is_some() && load_part_by_id(txn, cutoff_part_id.unwrap()).await?.is_none() {
+    if cutoff_part_id.is_some()
+        && load_part_by_id(txn, cutoff_part_id.unwrap())
+            .await?
+            .is_none()
+    {
         return Err(StoreError::not_found("cutoff part"));
     }
     let (depth, root_id) = match parent_id {
@@ -1792,7 +1908,14 @@ async fn submit_batch_tx(
     }
 
     let marker_id = next_part_id_tx(txn).await.map_err(map_db_err)?;
-    let marker = marker_part(marker_id, session_id, marker_role, marker_state, marker_content, now_ms);
+    let marker = marker_part(
+        marker_id,
+        session_id,
+        marker_role,
+        marker_state,
+        marker_content,
+        now_ms,
+    );
     insert_part_tx(txn, &marker).await.map_err(map_db_err)?;
     insert_membership_tx(txn, session_id, marker_id, now_ms)
         .await
@@ -1814,7 +1937,12 @@ async fn submit_batch_tx(
             DatabaseBackend::Sqlite,
             "INSERT INTO agena_idempotency (session_id, idempotency_key, run_id, created_at_ms) \
              VALUES (?, ?, ?, ?)",
-            [session_id.into(), key.into(), marker_id.into(), now_ms.into()],
+            [
+                session_id.into(),
+                key.into(),
+                marker_id.into(),
+                now_ms.into(),
+            ],
         ))
         .await
         .map_err(map_db_err)?;
@@ -1885,7 +2013,12 @@ fn append_text_delta(content: &mut serde_json::Value, delta: &str) -> Result<(),
             text.push_str(delta);
             Ok(())
         }
-        serde_json::Value::Object(map) if map.get("text").and_then(serde_json::Value::as_str).is_some() => {
+        serde_json::Value::Object(map)
+            if map
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .is_some() =>
+        {
             if let Some(serde_json::Value::String(text)) = map.get_mut("text") {
                 text.push_str(delta);
             }

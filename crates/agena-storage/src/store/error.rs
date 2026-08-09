@@ -14,9 +14,7 @@ pub enum StoreError {
     NotFound(String),
     /// A write required holding the session lease, but this caller does not
     /// own a fresh lease for it.
-    LeaseNotHeld {
-        session_id: i64,
-    },
+    LeaseNotHeld { session_id: i64 },
     /// The lease is held by another owner (fresh heartbeat), so the write or
     /// acquisition was refused.
     LeaseHeldByOther {

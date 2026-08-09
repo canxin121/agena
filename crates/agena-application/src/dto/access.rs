@@ -188,17 +188,5 @@ pub struct PermissionRuleRevokeRequest {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
-/// Query for a session event stream.
-pub struct SessionEventStreamQuery {
-    #[serde(default)]
-    pub after_seq: Option<i64>,
-    #[serde(default)]
-    pub limit: Option<u64>,
-    #[serde(default)]
-    pub poll_interval_ms: Option<u64>,
-    #[serde(default)]
-    pub idle_timeout_ms: Option<u64>,
-}
 use super::{DateTime, Deserialize, Serialize, Utc};
 use agena_api::resource::PermissionMode as ApiPermissionMode;

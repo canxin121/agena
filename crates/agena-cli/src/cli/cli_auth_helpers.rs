@@ -90,6 +90,7 @@ pub(super) async fn list_all_session_summaries(
                 offset,
                 limit: Some(page_size),
                 include_subagents: false,
+                ..Default::default()
             })
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;

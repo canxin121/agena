@@ -22,6 +22,7 @@ path = "src/bin/dsv4f_tool_api_suite.rs"
 
 [dependencies]
 agena-runtime = { workspace = true }
+agena-storage = { workspace = true }
 agena-domain = { workspace = true }
 agena-mcp-client = { workspace = true }
 agena-mcp-server = { workspace = true }

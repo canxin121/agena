@@ -1,11 +1,10 @@
 use super::{
-    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor, EventKind,
-    ExecutionStatus, FinishReason, FixedAssistantId, Message, MessageMetadata, MessageSource,
-    ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall, ProviderRegistry,
-    REASONING_PLACEHOLDER, Role, RunBuffer, SessionProcessor, SessionRunRequest, SessionRunResult,
-    SessionRunTermination, StreamErrorEvent, Utc, cancel_nonterminal_parts, complete_part_status,
-    fail_nonterminal_parts, map_finish_reason, message_provider_state_from_provider_metadata,
-    pending_tool_call_stream_key, sync_assistant_completion_event,
+    AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor,
+    ExecutionStatus, FinishReason, Message, MessageMetadata, MessageSource, ModelRef, PathBuf,
+    PendingProviderNativeToolCall, PendingToolCall, ProviderRegistry, REASONING_PLACEHOLDER, Role,
+    SessionProcessor, SessionRunRequest, SessionRunResult, SessionRunTermination, Utc,
+    cancel_nonterminal_parts, complete_part_status, fail_nonterminal_parts, map_finish_reason,
+    message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
 };
 use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
 use futures_util::StreamExt;
@@ -94,7 +93,6 @@ impl SessionProcessor {
             provider_id = %run.model.provider_id,
             model_id = %run.model.model_id,
         );
-        let mut client_events = Vec::new();
         // Provider-visible prompt content is append-only for prompt-cache
         // affinity. Mutating chat hooks can rewrite/drop/reorder system and
         // message content, so they are not applied on the provider request path.
@@ -139,6 +137,8 @@ impl SessionProcessor {
             source: MessageSource::Assistant,
             idempotency_key: None,
             model_turn_id: Some(model_turn_id),
+            conversation_turn_id: Some(run.turn_id),
+            conversation_reply_id: Some(run.reply_id),
             parent_message_id: run.completion_parent_message_id,
             generated_by_call_id: None,
             externally_initiated_tool: false,
@@ -161,14 +161,6 @@ impl SessionProcessor {
             usage: None,
         };
 
-        let run_id = run.run_id;
-        let mut run_buffer = RunBuffer::new(run.execution_id, run_id);
-        let mut id_provider = FixedAssistantId::new(assistant_message_id);
-        run_buffer.begin_assistant(&mut id_provider, started_at);
-        if let Err(err) = run_buffer.set_metadata(assistant_metadata.clone()) {
-            return Err(AppError::Internal(err.to_string()));
-        }
-
         let mut active_text_part: Option<i64> = None;
         let mut active_reasoning_part: Option<i64> = None;
         let mut pending_calls: BTreeMap<String, PendingToolCall> = BTreeMap::new();
@@ -184,7 +176,6 @@ impl SessionProcessor {
         let mut reasoning_text = String::new();
         let mut saw_tool_call = false;
         let mut saw_provider_native_tool_call = false;
-        let mut saw_provider_retry = false;
         let mut follow_up_requested = false;
 
         let cancel = run.cancel.clone();
@@ -205,29 +196,22 @@ impl SessionProcessor {
                     visible_text.push_str(delta.as_str());
                     if let Some(part_id) = active_reasoning_part.take() {
                         // A thinking segment is complete the moment the model
-                        // starts producing text. Publish its Completed state
-                        // immediately so the terminal stops showing the
-                        // spinner instead of waiting for the stream end.
+                        // starts producing text. Terminalize it immediately so
+                        // the terminal stops showing the spinner instead of
+                        // waiting for the stream end.
                         complete_part_status(&mut assistant, part_id)?;
-                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
                     let part_id = match active_text_part {
                         Some(part_id) => part_id,
                         None => {
                             let part_id = run.part_ids.reserve().await?;
                             self.start_text_part(&mut assistant, part_id, Utc::now())?;
-                            self.checkpoint_part(&run, &assistant, part_id).await?;
                             active_text_part = Some(part_id);
                             part_id
                         }
                     };
 
                     self.append_text_delta(&mut assistant, part_id, delta.as_str())?;
-                    run_buffer
-                        .push_text_delta(delta.as_str())
-                        .map_err(|err| AppError::Internal(err.to_string()))?;
-
-                    self.publish_live_part(&run, &assistant, part_id).await?;
                 }
                 Ok(CompletionStreamEvent::ToolCallDelta {
                     stream_key,
@@ -242,7 +226,6 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
-                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let stream_key =
@@ -255,20 +238,8 @@ impl SessionProcessor {
                         pending.name = Some(name);
                     }
                     pending.arguments_json.push_str(arguments_delta.as_str());
-                    self.ensure_pending_tool_call_part(
-                        &mut run,
-                        &mut assistant,
-                        &mut run_buffer,
-                        pending,
-                    )
-                    .await?;
-                    if !arguments_delta.is_empty()
-                        && let Some(history_call_id) = pending.history_call_id.as_ref()
-                    {
-                        run_buffer
-                            .append_tool_arguments(history_call_id, arguments_delta.as_str())
-                            .map_err(|err| AppError::Internal(err.to_string()))?;
-                    }
+                    self.ensure_pending_tool_call_part(&mut run, &mut assistant, pending)
+                        .await?;
                 }
                 Ok(CompletionStreamEvent::ToolCallSnapshot {
                     stream_key,
@@ -283,7 +254,6 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
-                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let stream_key =
@@ -305,20 +275,8 @@ impl SessionProcessor {
                     if !snapshot_is_degenerate {
                         pending.arguments_json = arguments_json.clone();
                     }
-                    self.ensure_pending_tool_call_part(
-                        &mut run,
-                        &mut assistant,
-                        &mut run_buffer,
-                        pending,
-                    )
-                    .await?;
-                    if !snapshot_is_degenerate
-                        && let Some(history_call_id) = pending.history_call_id.as_ref()
-                    {
-                        run_buffer
-                            .replace_tool_arguments(history_call_id, arguments_json)
-                            .map_err(|err| AppError::Internal(err.to_string()))?;
-                    }
+                    self.ensure_pending_tool_call_part(&mut run, &mut assistant, pending)
+                        .await?;
                 }
                 Ok(CompletionStreamEvent::ProviderNativeToolCallStarted {
                     stream_key,
@@ -334,7 +292,6 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
-                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let pending = pending_provider_native_tool_calls
@@ -365,7 +322,6 @@ impl SessionProcessor {
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut assistant, part_id)?;
-                        self.publish_live_part(&run, &assistant, part_id).await?;
                     }
 
                     let pending = pending_provider_native_tool_calls
@@ -410,30 +366,14 @@ impl SessionProcessor {
                         None => {
                             let part_id = run.part_ids.reserve().await?;
                             self.start_reasoning_part(&mut assistant, part_id, Utc::now())?;
-                            self.checkpoint_part(&run, &assistant, part_id).await?;
                             active_reasoning_part = Some(part_id);
                             part_id
                         }
                     };
 
                     self.append_reasoning_delta(&mut assistant, part_id, delta.as_str())?;
-                    run_buffer
-                        .push_reasoning_delta(delta.as_str())
-                        .map_err(|err| AppError::Internal(err.to_string()))?;
-
-                    self.publish_live_part(&run, &assistant, part_id).await?;
                 }
-                Ok(CompletionStreamEvent::ProviderRetry {
-                    message,
-                    retry_index,
-                    attempt,
-                    max_retries,
-                    ..
-                }) => {
-                    saw_provider_retry = true;
-                    self.publish_retry_progress(&run, retry_index, attempt, max_retries, message)
-                        .await?;
-                }
+                Ok(CompletionStreamEvent::ProviderRetry { .. }) => {}
                 Err(err) => {
                     provider_err = Some(err.into());
                     break;
@@ -453,23 +393,12 @@ impl SessionProcessor {
             provider_err = Some(AppError::Cancelled);
         }
 
-        // A retry sequence that ended with a successful run is now resolved.
-        // The live retry-progress node is removed (never persisted); a final
-        // failure is persisted through the durable ExecutionFinished error
-        // activity instead, so no resolved event is published there.
-        if provider_err.is_none() && saw_provider_retry {
-            self.publish_retry_resolved(&run, true).await?;
-        }
-
         if provider_err.is_some() {
             if cancelled {
                 cancel_nonterminal_parts(&mut assistant)?;
             } else {
                 fail_nonterminal_parts(&mut assistant)?;
             }
-            run_buffer
-                .discard_incomplete_tool_calls()
-                .map_err(|err| AppError::Internal(err.to_string()))?;
             // Mirror `discard_incomplete_tool_calls` on the message parts:
             // drop operation parts that never reached a terminal execution
             // outcome. A pending tool-call placeholder (e.g. streamed in a
@@ -508,13 +437,7 @@ impl SessionProcessor {
         {
             let part_id = run.part_ids.reserve().await?;
             self.start_text_part(&mut assistant, part_id, Utc::now())?;
-            self.checkpoint_part(&run, &assistant, part_id).await?;
             self.append_text_delta(&mut assistant, part_id, reasoning_text.as_str())?;
-            run_buffer
-                .push_text_delta(reasoning_text.as_str())
-                .map_err(|err| AppError::Internal(err.to_string()))?;
-
-            self.publish_live_part(&run, &assistant, part_id).await?;
             complete_part_status(&mut assistant, part_id)?;
         }
 
@@ -534,13 +457,8 @@ impl SessionProcessor {
         }
 
         if provider_err.is_none() {
-            self.finalize_pending_tool_calls(
-                &mut run,
-                &mut assistant,
-                &mut run_buffer,
-                pending_calls,
-            )
-            .await?;
+            self.finalize_pending_tool_calls(&mut run, &mut assistant, pending_calls)
+                .await?;
         }
 
         if let Some(err) = provider_err {
@@ -552,9 +470,6 @@ impl SessionProcessor {
             assistant
                 .transition_state(terminal_status)
                 .map_err(|err| AppError::Internal(err.to_string()))?;
-            run_buffer
-                .set_terminal_status(assistant.state)
-                .map_err(|err| AppError::Internal(err.to_string()))?;
 
             if !cancelled {
                 let failure = err.failure();
@@ -564,39 +479,22 @@ impl SessionProcessor {
                     diagnostic = %err,
                     "provider stream failed"
                 );
-                client_events.push(EventKind::StreamError(StreamErrorEvent {
-                    session_id: run.session_id,
-                    problem: failure.into(),
-                    ts_ms: Utc::now().timestamp_millis(),
-                }));
             }
-            // Even on failure the buffer has accumulated state we can still
-            // commit; downstream callers may inspect it for diagnostics.
-            let mut history_items = run_buffer
-                .commit(&mut agena_storage::SequentialIdAllocator::starting_at(
-                    run.next_message_id.saturating_add(1),
-                ))
-                .map_err(|error| AppError::Internal(error.to_string()))?;
-            sync_assistant_completion_event(history_items.as_mut_slice(), &assistant);
             return Ok(SessionRunResult {
                 assistant_message_id,
                 state: vec![assistant],
-                client_events,
                 provider_metadata,
                 termination: if cancelled {
                     SessionRunTermination::Cancelled
                 } else {
                     SessionRunTermination::Failed(err)
                 },
-                history_items,
-                run_id,
                 follow_up_requested: false,
                 finish_reason: FinishReason::Stop,
             });
         }
 
-        // Successful run: drive terminal state on the message snapshot and
-        // reflect the same finish/usage on the run buffer for history.
+        // Successful run: drive terminal state on the message snapshot.
         if assistant.state == ExecutionStatus::Pending {
             assistant
                 .transition_state(ExecutionStatus::InProgress)
@@ -605,41 +503,16 @@ impl SessionProcessor {
         assistant
             .transition_state(ExecutionStatus::Completed)
             .map_err(|err| AppError::Internal(err.to_string()))?;
-        run_buffer
-            .set_terminal_status(assistant.state)
-            .map_err(|err| AppError::Internal(err.to_string()))?;
         assistant.usage = usage.clone();
         assistant.provider_state = provider_metadata
             .as_ref()
             .and_then(message_provider_state_from_provider_metadata);
-        run_buffer
-            .set_provider_state(assistant.provider_state.clone())
-            .map_err(|err| AppError::Internal(err.to_string()))?;
-
-        if let Some(usage_ref) = usage {
-            run_buffer
-                .set_usage(usage_ref)
-                .map_err(|err| AppError::Internal(err.to_string()))?;
-        }
-        run_buffer
-            .set_finish_reason(finish_reason_enum)
-            .map_err(|err| AppError::Internal(err.to_string()))?;
-
-        let mut history_items = run_buffer
-            .commit(&mut agena_storage::SequentialIdAllocator::starting_at(
-                run.next_message_id.saturating_add(1),
-            ))
-            .map_err(|err| AppError::Internal(err.to_string()))?;
-        sync_assistant_completion_event(history_items.as_mut_slice(), &assistant);
 
         Ok(SessionRunResult {
             assistant_message_id,
             state: vec![assistant],
-            client_events,
             provider_metadata,
             termination: SessionRunTermination::Completed,
-            history_items,
-            run_id,
             follow_up_requested,
             finish_reason: finish_reason_enum,
         })

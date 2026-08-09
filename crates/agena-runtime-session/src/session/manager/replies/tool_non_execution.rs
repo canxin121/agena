@@ -9,7 +9,6 @@ use agena_domain::{
     CapabilityUnavailableResult, PolicyDeniedResult, ToolOutput, ToolUnavailableResult,
     UserDeclinedResult,
 };
-use chrono::Utc;
 
 impl SessionManager {
     pub(in crate::session::manager) async fn apply_tool_capability_unavailable(
@@ -35,7 +34,7 @@ impl SessionManager {
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
         let blocks = text_result_blocks(output_text.as_str());
-        let assistant_message =
+        let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::capability_unavailable(
                     resolved.call_id,
@@ -50,15 +49,8 @@ impl SessionManager {
                 tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::CapabilityUnavailable;
             })?;
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            Vec::new(),
-            Vec::new(),
-            state,
-        )
-        .await
+        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_unavailable(
@@ -84,7 +76,7 @@ impl SessionManager {
         });
         let details = ToolOutput::from_json_payload(Some(&payload)).map_err(AppError::Internal)?;
         let blocks = text_result_blocks(output_text.as_str());
-        let assistant_message =
+        let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::tool_unavailable(
                     resolved.call_id,
@@ -99,15 +91,8 @@ impl SessionManager {
                 tool_part.set_content(PartContent::operation(operation));
                 tool_part.status = ExecutionStatus::ToolUnavailable;
             })?;
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            Vec::new(),
-            Vec::new(),
-            state,
-        )
-        .await
+        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_policy_denied(
@@ -124,7 +109,6 @@ impl SessionManager {
             "The operation was not executed because it is blocked by the effective permission policy: {}. Do not retry the same operation unless the permission rule changes.",
             denial.reason
         );
-        let event_denial = denial.clone();
         let payload = serde_json::json!({
             "status": "policy_denied",
             "code": "permission_policy_denied",
@@ -135,7 +119,7 @@ impl SessionManager {
         let blocks = text_result_blocks(output_text.as_str());
         let title = terminal_operation_title(&resolved.invocation);
 
-        let assistant_message =
+        let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::policy_denied(
                     resolved.call_id,
@@ -151,23 +135,8 @@ impl SessionManager {
                 tool_part.status = ExecutionStatus::PolicyDenied;
             })?;
 
-        let terminal_events = vec![crate::event::EventKind::ToolPolicyDenied(
-            agena_domain::ToolPolicyDeniedEvent {
-                session_id: session.id,
-                call_id: resolved.call_id,
-                denial: event_denial,
-                ts_ms: Utc::now().timestamp_millis(),
-            },
-        )];
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            Vec::new(),
-            terminal_events,
-            state,
-        )
-        .await
+        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_user_declined(
@@ -190,7 +159,6 @@ impl SessionManager {
         let output_text = format!(
             "The operation was not executed because the user declined the permission request{explanation}. Do not retry the same operation in this turn."
         );
-        let event_decline = decline.clone();
         let payload = serde_json::json!({
             "status": "user_declined",
             "code": "permission_request_declined",
@@ -201,7 +169,7 @@ impl SessionManager {
         let blocks = text_result_blocks(output_text.as_str());
         let title = terminal_operation_title(&resolved.invocation);
 
-        let assistant_message =
+        let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::user_declined(
                     resolved.call_id,
@@ -217,22 +185,7 @@ impl SessionManager {
                 tool_part.status = ExecutionStatus::UserDeclined;
             })?;
 
-        let terminal_events = vec![crate::event::EventKind::ToolUserDeclined(
-            agena_domain::ToolUserDeclinedEvent {
-                session_id: session.id,
-                call_id: resolved.call_id,
-                decline: event_decline,
-                ts_ms: Utc::now().timestamp_millis(),
-            },
-        )];
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            persisted_rules,
-            terminal_events,
-            state,
-        )
-        .await
+        self.persist_tool_completion(session, &resolved, persisted_rules, state)
+            .await
     }
 }

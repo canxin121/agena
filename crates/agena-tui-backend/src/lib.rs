@@ -42,7 +42,6 @@ use agena_domain::ActivityId;
 use agena_domain::Model as ProviderModel;
 use agena_domain::PermissionScope;
 use agena_domain::ToolInvocation;
-use agena_domain::{EventFilter, EventScope as Scope};
 use agena_domain::{ModelRef, ProviderId};
 use agena_domain::{PermissionReplyKind, UserInputReply};
 use agena_provider::{
@@ -93,6 +92,24 @@ pub struct LiveEvent {
     /// True when the UI should ignore incremental assumptions and force a
     /// replay from persisted state (for example after bus lag).
     pub force_refresh: bool,
+}
+
+/// One human-visible v2 part in the session timeline. The terminal consumes
+/// this presentation value instead of a persisted runtime-event envelope.
+#[derive(Debug, Clone)]
+pub struct SessionTimelineEntry {
+    pub part_id: i64,
+    pub kind: String,
+    pub role: String,
+    pub state: String,
+    pub summary: Option<String>,
+    pub content: serde_json::Value,
+    pub rendered_markdown: Option<String>,
+    pub parent_part_id: Option<i64>,
+    pub run_id: Option<i64>,
+    pub revision: i64,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
 }
 
 #[derive(Clone)]

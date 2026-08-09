@@ -1,13 +1,10 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
-    ExecutionStatus, FinishReason, HistoryMessageId, HistoryRunId, MessageCheckpoint,
-    MessageMetadata, MessageSource, PartContent, Role, RunCompleted, RunStarted,
-    SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
-    SessionUserMessageRequest, StableRunContext, TranscriptContent, UserInputPart,
-    UserMessageAppended, build_message, mpsc,
+    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, ExecutionStatus,
+    MessageCheckpoint, MessageMetadata, MessageSource, PartContent, Role, SessionExecutionRequest,
+    SessionManager, SessionSubtaskRequest, SessionSubtaskResponse, SessionUserMessageRequest,
+    StableRunContext, UserInputPart, build_message, mpsc,
 };
 use crate::session::Session;
-use agena_domain::SubtaskStatusChangedEvent;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
@@ -74,18 +71,16 @@ impl SessionManager {
                 "subtask task_id must not be empty".to_string(),
             ));
         }
-        self.store
-            .find_subagent_by_task_id(
-                parent_session_id,
-                task_id,
-                self.execution_state().cache_policy(),
-            )
+        let child_id = self
+            .store
+            .find_subagent_by_task_id(parent_session_id, task_id)
             .await?
             .ok_or_else(|| {
                 AppError::Config(format!(
                     "subtask '{task_id}' does not exist under session {parent_session_id}"
                 ))
-            })
+            })?;
+        self.store.load_session(child_id).await
     }
 
     pub async fn cancel_subtask(
@@ -235,10 +230,7 @@ impl SessionManager {
             }
         }
 
-        let mut session = self
-            .store
-            .load_session(request.run.session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(request.run.session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.run.options)?;
         self.apply_run_selection_to_session(&mut session, &options);
@@ -258,6 +250,8 @@ impl SessionManager {
                 source: MessageSource::User,
                 idempotency_key: request.idempotency_key.clone(),
                 model_turn_id: Some(user_model_turn_id),
+                conversation_turn_id: Some(control.turn_id()),
+                conversation_reply_id: Some(control.reply_id()),
                 parent_message_id: session
                     .last_conversation_message()
                     .map(|message| message.id),
@@ -278,39 +272,7 @@ impl SessionManager {
         session.messages.push(user_message.clone());
         let checkpoint = MessageCheckpoint::all(&user_message);
         session = self
-            .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state.clone())
-            .await?;
-
-        // Append-only history: persist the user-authored message as its own
-        // closed run batch so it remains addressable in fork/rewind flows.
-        let user_run_id = HistoryRunId::new();
-        let user_history_items = vec![
-            EventKind::RunStarted(RunStarted {
-                execution_id: control.execution_id(),
-                run_id: user_run_id,
-                source: ExecutionSource::User,
-                model_id: options.model.model_id.as_ref().into(),
-                provider_id: options.model.provider_id.as_ref().into(),
-                request_digest: None,
-            }),
-            EventKind::UserMessageAppended(UserMessageAppended {
-                execution_id: control.execution_id(),
-                message_id: HistoryMessageId(user_message.id),
-                run_id: user_run_id,
-                created_at: user_message.created_at,
-                content: TranscriptContent::from_message_lossy(&user_message),
-                parts: user_message.parts.clone(),
-                metadata: user_message.metadata.clone(),
-                provider_state: user_message.provider_state.clone(),
-            }),
-            EventKind::RunCompleted(RunCompleted {
-                run_id: user_run_id,
-                finish_reason: FinishReason::Stop,
-            }),
-        ];
-        session = self
-            .store
-            .append_history_items(session, user_history_items, state.cache_policy())
+            .persist_session_changes(session, vec![checkpoint], None, state.clone())
             .await?;
 
         // Record the user.prompt.submit hook runs observed during this
@@ -369,11 +331,7 @@ impl SessionManager {
                     .plugin_manager()
                     .drain_hook_runs(session_id);
                 if !hook_runs.is_empty() {
-                    match self
-                        .store
-                        .load_session(session_id, state.cache_policy())
-                        .await
-                    {
+                    match self.store.load_session(session_id).await {
                         Ok(reloaded) => {
                             if let Err(record_err) = self
                                 .record_hook_runs(reloaded, hook_runs, state.clone())
@@ -469,15 +427,12 @@ impl SessionManager {
         steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(request.session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(request.session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
-                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .persist_session_changes(session, Vec::new(), None, state.clone())
                 .await?;
         }
         self.run_until_stable(
@@ -540,10 +495,7 @@ impl SessionManager {
                 "subtask max_cost_microusd must be greater than zero".to_string(),
             ));
         }
-        let parent = self
-            .store
-            .load_session(request.parent_session_id, state.cache_policy())
-            .await?;
+        let parent = self.store.load_session(request.parent_session_id).await?;
         if parent.is_subagent() {
             return Err(AppError::Config(
                 "delegated subtasks cannot create nested subtasks".to_string(),
@@ -573,25 +525,22 @@ impl SessionManager {
         let preparation_guard = preparation_lock.lock().await;
         let existing = self
             .store
-            .find_subagent_by_task_id(parent.id, task_id.as_str(), state.cache_policy())
+            .find_subagent_by_task_id(parent.id, task_id.as_str())
             .await?;
         let resumed = existing.is_some();
         let mut child = match existing {
-            Some(existing) => {
-                if self.execution_registry.is_active(existing.id).await {
-                    return Err(AppError::ExecutionAlreadyActive(existing.id));
+            Some(existing_id) => {
+                if self.execution_registry.is_active(existing_id).await {
+                    return Err(AppError::ExecutionAlreadyActive(existing_id));
                 }
-                existing
+                self.store.load_session(existing_id).await?
             }
             None => {
-                self.store
-                    .create_subagent_session(
-                        description.to_string(),
-                        parent.id,
-                        task_id.clone(),
-                        state.cache_policy(),
-                    )
-                    .await?
+                let child_id = self
+                    .store
+                    .create_subagent_session(parent.id, task_id.clone(), description.to_string())
+                    .await?;
+                self.store.load_session(child_id).await?
             }
         };
 
@@ -636,36 +585,14 @@ impl SessionManager {
             .store
             .update_subtask_state(
                 child,
-                crate::session::SubtaskRuntimeState {
-                    status: agena_domain::SubtaskStatus::Running,
-                    started_at_ms: Some(started_at_ms),
-                    finished_at_ms: None,
-                    failure: None,
-                },
-                state.cache_policy(),
+                Some(agena_domain::SubtaskStatus::Running.as_ref().to_string()),
+                Some(started_at_ms),
+                None,
+                None,
             )
             .await?;
+        child = self.store.persist_execution_config(child).await?;
         let child_id = child.id;
-        let child_access = child.runtime.execution.access;
-        self.persist_session_changes(
-            child,
-            Vec::new(),
-            vec![EventKind::SubtaskStatusChanged(SubtaskStatusChangedEvent {
-                session_id: child_id,
-                parent_session_id: parent.id,
-                task_id: task_id.clone(),
-                access: child_access,
-                status: agena_domain::SubtaskStatus::Running,
-                resumed,
-                started_at_ms: Some(started_at_ms),
-                finished_at_ms: None,
-                failure: None,
-                ts_ms: started_at_ms,
-            })],
-            None,
-            state.clone(),
-        )
-        .await?;
         drop(preparation_guard);
 
         let manager = self.background_handle();
@@ -755,10 +682,7 @@ impl SessionManager {
                 };
                 let budget_exceeded = matches!(&error, AppError::SubtaskBudgetExceeded(_));
                 let failure = (!matches!(&error, AppError::Cancelled)).then(|| error.failure());
-                let session = self
-                    .store
-                    .load_session(child_id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(child_id).await?;
                 (status, failure, budget_exceeded, session)
             }
         };
@@ -767,38 +691,20 @@ impl SessionManager {
         session.runtime.subtask.finished_at_ms = Some(finished_at_ms);
         session.runtime.subtask.failure = failure.clone();
         let subtask_started_at_ms = session.runtime.subtask.started_at_ms;
-        let subtask_access = session.runtime.execution.access;
         session = self
             .store
             .update_subtask_state(
                 session,
-                crate::session::SubtaskRuntimeState {
-                    status,
-                    started_at_ms: subtask_started_at_ms,
-                    finished_at_ms: Some(finished_at_ms),
-                    failure: failure.clone(),
-                },
-                state.cache_policy(),
-            )
-            .await?;
-        session = self
-            .persist_session_changes(
-                session,
-                Vec::new(),
-                vec![EventKind::SubtaskStatusChanged(SubtaskStatusChangedEvent {
-                    session_id: child_id,
-                    parent_session_id: parent.id,
-                    task_id: task_id.clone(),
-                    access: subtask_access,
-                    status,
-                    resumed,
-                    started_at_ms: subtask_started_at_ms,
-                    finished_at_ms: Some(finished_at_ms),
-                    failure: failure.as_ref().map(Into::into),
-                    ts_ms: finished_at_ms,
-                })],
-                None,
-                state,
+                Some(status.as_ref().to_string()),
+                subtask_started_at_ms,
+                Some(finished_at_ms),
+                failure
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        AppError::Internal(format!("serialize subtask failure: {error}"))
+                    })?,
             )
             .await?;
         let usage = session.aggregate_usage().saturating_sub(&baseline_usage);

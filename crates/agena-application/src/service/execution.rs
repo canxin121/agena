@@ -30,32 +30,6 @@ impl ApplicationService {
             .map_err(session_query_error)
     }
 
-    pub async fn list_session_events_after(
-        &self,
-        events: &dyn agena_runtime::RuntimeEventQueryService,
-        session_id: i64,
-        after_seq: i64,
-        limit: Option<u64>,
-    ) -> ApplicationResult<Vec<agena_runtime::RuntimeEvent>> {
-        self.ensure_session_exists(session_id).await?;
-        let limit = normalize_limit(limit) as usize;
-        let events = events
-            .list_events(
-                &agena_domain::EventFilter {
-                    scope: agena_domain::EventScope::Session { session_id },
-                    kinds: None,
-                    since_seq_global: None,
-                },
-                agena_runtime::RuntimeEventRange {
-                    after_seq_global: after_seq,
-                    limit,
-                },
-            )
-            .await
-            .map_err(runtime_event_query_error)?;
-        Ok(events)
-    }
-
     pub async fn resolve_run_options(
         &self,
         provider_catalog: &dyn ProviderCatalog,
@@ -524,10 +498,6 @@ fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationEr
     ApplicationError::from_failure(*error.failure)
 }
 
-fn runtime_event_query_error(error: agena_runtime::RuntimeEventQueryError) -> ApplicationError {
-    ApplicationError::from_failure(*error.failure)
-}
-
 fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {
     ApplicationError::from_failure(error.failure)
 }
@@ -817,7 +787,7 @@ use super::{
     ModelRef, ModelSpeedModeRequestOverride, PendingInteractiveRequestResource,
     ScheduledJobResource, ScheduledJobRunResource, SessionAutomationResource,
     SessionExecutionContextResource, SessionExecutionResource, SessionRunOptionsRequest,
-    SessionUsageResource, non_empty, normalize_limit, sessions::subtask_status_from_domain,
+    SessionUsageResource, non_empty, sessions::subtask_status_from_domain,
 };
 use agena_provider::{ProviderCatalog, ProviderCatalogError};
 

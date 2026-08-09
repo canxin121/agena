@@ -161,7 +161,6 @@ impl AgenaCli {
         Ok(AgenaMcpBackend {
             runtime,
             tools: services.tools,
-            event_publisher: services.event_publisher,
             next_call_id: Arc::new(AtomicI64::new(1)),
         })
     }

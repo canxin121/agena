@@ -78,29 +78,13 @@ async fn publish_tool_registry_changed_event(
     runtime: Arc<AgenaRuntime>,
     event: agena_plugin_host::sdk::host_api::ToolRegistryChangedEvent,
 ) {
-    let snapshot = runtime.current_snapshot();
-    let Some(manager) = snapshot.session_manager() else {
-        tracing::debug!(
-            target: "agena_plugin_host::events",
-            generation = event.generation,
-            tool = %event.tool_key,
-            "skipping tool-registry event publish: no session manager"
-        );
-        return;
-    };
-    if let Err(err) = manager
-        .event_publisher()
-        .publish(
-            crate::event::PublishContext::default(),
-            crate::event::EventKind::PluginToolRegistryChanged(event),
-        )
-        .await
-    {
-        tracing::warn!(
-            target: "agena_plugin_host::events",
-            "failed to publish tool-registry change event: {err}"
-        );
-    }
+    // v2 has no event log (14.3): tool-registry changes are ephemeral live
+    // signals for in-process presentation consumers, never persisted.
+    runtime
+        .live_signals
+        .emit(agena_runtime::RuntimeLiveSignal::ToolRegistryChanged(
+            Box::new(event),
+        ));
 }
 
 fn plugin_error(error: impl ToString) -> PluginError {
@@ -373,34 +357,22 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn publish_event(&self, env: EventEnvelope) -> Result<(), PluginError> {
-        let snapshot = self.runtime.current_snapshot();
-        let Some(manager) = snapshot.session_manager() else {
-            tracing::debug!(
-                target: "plugin",
-                "publish_event ignored: no session manager"
-            );
-            return Ok(());
-        };
-        let publisher = manager.event_publisher();
         let plugin_id = current_host_callback_context()
             .and_then(|context| context.plugin_id)
             .unwrap_or_else(|| "<unknown>".into());
         let plugin_id = plugin_id.parse().unwrap_or_else(|_| {
             agena_plugin_host::PluginKey::new("unknown", "unknown").expect("static plugin key")
         });
-        let kind = crate::event::EventKind::PluginEvent(crate::event::PluginEventPayload {
-            plugin_id,
-            kind_label: env.kind,
-            payload: env.payload,
-        });
-        let ctx = match env.session_id {
-            Some(id) => crate::event::PublishContext::for_session(id),
-            None => crate::event::PublishContext::default(),
-        };
-        publisher
-            .publish(ctx, kind)
-            .await
-            .map_err(|e| PluginError::internal(format!("event publish failed: {e}")))?;
+        // v2 has no event log (14.3): plugin events are ephemeral live
+        // signals for in-process presentation consumers, never persisted.
+        self.runtime
+            .live_signals
+            .emit(agena_runtime::RuntimeLiveSignal::Plugin {
+                session_id: env.session_id,
+                plugin_id,
+                kind_label: env.kind,
+                payload: env.payload,
+            });
         Ok(())
     }
 

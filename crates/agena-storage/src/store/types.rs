@@ -320,6 +320,10 @@ pub struct SessionSummary {
     pub title: String,
     pub relation_kind: SessionRelationKind,
     pub lifecycle_state: SessionLifecycleState,
+    /// Optimistic-lock counter, bumped on every session mutation.
+    pub version: i64,
+    pub task_id: Option<String>,
+    pub subtask_status: Option<String>,
     /// Number of run markers in the session (D9: message_count = run markers).
     pub message_count: i64,
     pub child_session_count: i64,
@@ -336,9 +340,19 @@ pub struct SessionCursor {
 }
 
 /// Query for [`PersistenceEngine::list_session_summaries`].
+///
+/// The listing surface (13.1 / 14.1) filters by workspace, optional parent,
+/// optional roots-only, optional title search, and pages newest-first by the
+/// `(updated_at_ms, id)` cursor.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SessionListQuery {
     pub workspace_id: Option<i64>,
+    /// Restrict to direct children of this session.
+    pub parent_id: Option<i64>,
+    /// Restrict to root sessions (`parent_id IS NULL`).
+    pub roots_only: bool,
+    /// Case-insensitive `title LIKE %search%` filter.
+    pub search: Option<String>,
     pub limit: Option<i64>,
     pub before: Option<SessionCursor>,
 }

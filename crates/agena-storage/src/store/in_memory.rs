@@ -8,22 +8,22 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::RwLock;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use agena_domain::{SessionLifecycleState, SessionRelationKind};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
+#[cfg(test)]
+use super::PendingInteraction;
 use super::{
-    LEASE_STALENESS_MS, InFlightRun, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart,
+    InFlightRun, LEASE_STALENESS_MS, LeaseAcquire, LeaseState, MaintenanceOutcome, NewPart,
     NewSession, Part, PartDelta, PartRole, PartState, PartVisibility, PersistenceEngine,
     ReconcileOutcome, RunOutcome, SessionListQuery, SessionMeta, SessionSummary, SessionView,
     StoreError, SubmitOutcome, UsageGroup, UsageQuery, UsageRecord, UsageStats,
     apply_part_transition,
 };
-#[cfg(test)]
-use super::PendingInteraction;
 use crate::store::jsonl;
 
 /// Configuration for the in-memory engine. Kept minimal; streaming-throttle
@@ -156,10 +156,7 @@ impl InMemoryEngine {
             let mut parts = self.parts.write().expect("parts lock");
             let mut membership = self.membership.write().expect("membership lock");
             parts.insert(marker_id, marker);
-            membership
-                .entry(session_id)
-                .or_default()
-                .insert(marker_id);
+            membership.entry(session_id).or_default().insert(marker_id);
 
             for new_part in content_parts {
                 let id = self.next_part_id();
@@ -183,10 +180,7 @@ impl InMemoryEngine {
                     provider_state: None,
                 };
                 parts.insert(id, part.clone());
-                membership
-                    .entry(session_id)
-                    .or_default()
-                    .insert(id);
+                membership.entry(session_id).or_default().insert(id);
                 created.push(part);
             }
         }
@@ -293,19 +287,14 @@ impl InMemoryEngine {
             if part.origin_session_id != session_id {
                 continue;
             }
-            if part.is_run_marker()
-                && run_ids.contains(&part.part_id)
-                && part.state.is_in_flight()
+            if part.is_run_marker() && run_ids.contains(&part.part_id) && part.state.is_in_flight()
             {
                 part.state = PartState::Failed;
                 part.finished_at_ms = Some(now_ms);
                 part.updated_at_ms = now_ms;
                 part.revision += 1;
                 if let Value::Object(map) = &mut part.content {
-                    map.insert(
-                        "abort_reason".to_owned(),
-                        Value::String(reason.to_owned()),
-                    );
+                    map.insert("abort_reason".to_owned(), Value::String(reason.to_owned()));
                 }
             } else if part.run_id.is_some_and(|run| run_ids.contains(&run))
                 && part.state.is_in_flight()
@@ -344,13 +333,22 @@ impl PersistenceEngine for InMemoryEngine {
                 "child session cannot have relation_kind = root".to_owned(),
             ));
         }
-        let is_branch = matches!(relation_kind, SessionRelationKind::Fork | SessionRelationKind::Rewind);
+        let is_branch = matches!(
+            relation_kind,
+            SessionRelationKind::Fork | SessionRelationKind::Rewind
+        );
         if is_branch != cutoff_part_id.is_some() {
             return Err(StoreError::InvalidState(
                 "fork/rewind sessions require a cutoff_part_id".to_owned(),
             ));
         }
-        if cutoff_part_id.is_some() && !self.parts.read().expect("parts lock").contains_key(&cutoff_part_id.unwrap()) {
+        if cutoff_part_id.is_some()
+            && !self
+                .parts
+                .read()
+                .expect("parts lock")
+                .contains_key(&cutoff_part_id.unwrap())
+        {
             return Err(StoreError::not_found("cutoff part"));
         }
         let (depth, root_id) = self.parent_lineage(parent_id)?;
@@ -575,17 +573,32 @@ impl PersistenceEngine for InMemoryEngine {
         let membership = self.membership.read().expect("membership lock");
         let parts = self.parts.read().expect("parts lock");
 
+        let search = query
+            .search
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_lowercase);
         let mut summaries: Vec<SessionSummary> = sessions
             .values()
             .filter(|meta| query.workspace_id.is_none_or(|ws| meta.workspace_id == ws))
+            .filter(|meta| {
+                query
+                    .parent_id
+                    .is_none_or(|parent_id| meta.parent_id == Some(parent_id))
+            })
+            .filter(|meta| !query.roots_only || meta.parent_id.is_none())
+            .filter(|meta| {
+                search
+                    .as_ref()
+                    .is_none_or(|needle| meta.title.to_lowercase().contains(needle))
+            })
             .map(|meta| {
                 let message_count = membership
                     .get(&meta.id)
                     .into_iter()
                     .flat_map(|ids| ids.iter())
-                    .filter(|id| {
-                        parts.get(id).is_some_and(|part| part.is_run_marker())
-                    })
+                    .filter(|id| parts.get(id).is_some_and(|part| part.is_run_marker()))
                     .count() as i64;
                 let child_session_count = sessions
                     .values()
@@ -606,6 +619,9 @@ impl PersistenceEngine for InMemoryEngine {
                     title: meta.title.clone(),
                     relation_kind: meta.relation_kind,
                     lifecycle_state: meta.lifecycle_state,
+                    version: meta.version,
+                    task_id: meta.task_id.clone(),
+                    subtask_status: meta.subtask_status.clone(),
                     message_count,
                     child_session_count,
                     last_message_at_ms,
@@ -622,6 +638,71 @@ impl PersistenceEngine for InMemoryEngine {
             summaries.truncate(limit.max(0) as usize);
         }
         Ok(summaries)
+    }
+
+    async fn get_session_summary(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<SessionSummary>, StoreError> {
+        // Build a summary for the single session (mirrors the row projection).
+        let sessions = self.sessions.read().expect("sessions lock");
+        let membership = self.membership.read().expect("membership lock");
+        let parts = self.parts.read().expect("parts lock");
+        let Some(meta) = sessions.get(&session_id) else {
+            return Ok(None);
+        };
+        let message_count = membership
+            .get(&meta.id)
+            .into_iter()
+            .flat_map(|ids| ids.iter())
+            .filter(|id| parts.get(id).is_some_and(|part| part.is_run_marker()))
+            .count() as i64;
+        let child_session_count = sessions
+            .values()
+            .filter(|other| other.parent_id == Some(meta.id))
+            .count() as i64;
+        let last_message_at_ms = membership
+            .get(&meta.id)
+            .into_iter()
+            .flat_map(|ids| ids.iter().filter_map(|id| parts.get(id)))
+            .map(|part| part.created_at_ms)
+            .max();
+        Ok(Some(SessionSummary {
+            id: meta.id,
+            workspace_id: meta.workspace_id,
+            parent_id: meta.parent_id,
+            depth: meta.depth,
+            root_id: meta.root_id,
+            title: meta.title.clone(),
+            relation_kind: meta.relation_kind,
+            lifecycle_state: meta.lifecycle_state,
+            version: meta.version,
+            task_id: meta.task_id.clone(),
+            subtask_status: meta.subtask_status.clone(),
+            message_count,
+            child_session_count,
+            last_message_at_ms,
+            created_at_ms: meta.created_at_ms,
+            updated_at_ms: meta.updated_at_ms,
+        }))
+    }
+
+    async fn session_counts_by_workspace(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, i64>, StoreError> {
+        let sessions = self.sessions.read().expect("sessions lock");
+        let wanted = workspace_ids.iter().copied().collect::<BTreeSet<_>>();
+        let mut counts = HashMap::with_capacity(workspace_ids.len());
+        for workspace_id in &wanted {
+            counts.insert(*workspace_id, 0);
+        }
+        for meta in sessions.values() {
+            if let Some(count) = counts.get_mut(&meta.workspace_id) {
+                *count += 1;
+            }
+        }
+        Ok(counts)
     }
 
     async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, StoreError> {
@@ -657,6 +738,9 @@ impl PersistenceEngine for InMemoryEngine {
                     title: meta.title.clone(),
                     relation_kind: meta.relation_kind,
                     lifecycle_state: meta.lifecycle_state,
+                    version: meta.version,
+                    task_id: meta.task_id.clone(),
+                    subtask_status: meta.subtask_status.clone(),
                     message_count,
                     child_session_count,
                     last_message_at_ms,
@@ -701,7 +785,12 @@ impl PersistenceEngine for InMemoryEngine {
         owner_id: &str,
         now_ms: i64,
     ) -> Result<LeaseAcquire, StoreError> {
-        if !self.sessions.read().expect("sessions lock").contains_key(&session_id) {
+        if !self
+            .sessions
+            .read()
+            .expect("sessions lock")
+            .contains_key(&session_id)
+        {
             return Err(StoreError::not_found(format!("session {session_id}")));
         }
         let mut leases = self.leases.write().expect("leases lock");
@@ -768,7 +857,10 @@ impl PersistenceEngine for InMemoryEngine {
 
     async fn release_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError> {
         let mut leases = self.leases.write().expect("leases lock");
-        if leases.get(&session_id).is_some_and(|lease| lease.owner_id == owner_id) {
+        if leases
+            .get(&session_id)
+            .is_some_and(|lease| lease.owner_id == owner_id)
+        {
             leases.remove(&session_id);
             Ok(true)
         } else {
@@ -777,7 +869,12 @@ impl PersistenceEngine for InMemoryEngine {
     }
 
     async fn current_lease(&self, session_id: i64) -> Result<Option<LeaseState>, StoreError> {
-        Ok(self.leases.read().expect("leases lock").get(&session_id).cloned())
+        Ok(self
+            .leases
+            .read()
+            .expect("leases lock")
+            .get(&session_id)
+            .cloned())
     }
 
     async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError> {
@@ -1026,9 +1123,9 @@ impl PersistenceEngine for InMemoryEngine {
     ) -> Result<Part, StoreError> {
         self.ensure_lease(session_id, owner_id, now_ms)?;
         let mut parts = self.parts.write().expect("parts lock");
-        let interaction = parts
-            .get_mut(&interaction_part_id)
-            .ok_or_else(|| StoreError::not_found(format!("interaction part {interaction_part_id}")))?;
+        let interaction = parts.get_mut(&interaction_part_id).ok_or_else(|| {
+            StoreError::not_found(format!("interaction part {interaction_part_id}"))
+        })?;
         if interaction.kind != "interaction" || !interaction.state.is_in_flight() {
             return Err(StoreError::InvalidState(format!(
                 "part {interaction_part_id} is not a pending interaction"
@@ -1132,7 +1229,11 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(child_meta)
     }
 
-    async fn reconcile(&self, session_id: i64, now_ms: i64) -> Result<ReconcileOutcome, StoreError> {
+    async fn reconcile(
+        &self,
+        session_id: i64,
+        now_ms: i64,
+    ) -> Result<ReconcileOutcome, StoreError> {
         let in_flight = self.in_flight_runs(session_id);
         let run_ids: Vec<i64> = in_flight.iter().map(|run| run.part_id).collect();
         let mut outcome = ReconcileOutcome::default();
@@ -1191,9 +1292,7 @@ impl PersistenceEngine for InMemoryEngine {
             let mut candidates: Vec<i64> = parts
                 .iter()
                 .filter(|(id, part)| {
-                    let has_membership = membership
-                        .values()
-                        .any(|set| set.contains(id));
+                    let has_membership = membership.values().any(|set| set.contains(id));
                     if has_membership {
                         return false;
                     }
@@ -1377,8 +1476,18 @@ fn derive_state(
     engine: &InMemoryEngine,
     session_id: i64,
 ) -> Result<super::SessionPresentation, StoreError> {
-    let meta = engine.sessions.read().expect("sessions lock").get(&session_id).cloned();
-    let lease = engine.leases.read().expect("leases lock").get(&session_id).cloned();
+    let meta = engine
+        .sessions
+        .read()
+        .expect("sessions lock")
+        .get(&session_id)
+        .cloned();
+    let lease = engine
+        .leases
+        .read()
+        .expect("leases lock")
+        .get(&session_id)
+        .cloned();
     let now_ms = engine.now_ms();
     let mut parts = engine.ordered_parts(session_id);
     parts.sort_by_key(|part| (part.created_at_ms, part.part_id));
@@ -1444,7 +1553,9 @@ mod tests {
             .try_acquire_lease(session_id, "owner-a", engine.now_ms())
             .await
             .expect("acquire lease");
-        assert!(matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty()));
+        assert!(
+            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty())
+        );
         (engine, session_id)
     }
 
@@ -1595,7 +1706,7 @@ mod tests {
                 engine.now_ms(),
             )
             .await
-                .expect("second send");
+            .expect("second send");
         let view = engine.load_session(session_id).await.expect("load");
         // Cut off after the second run's marker: only run 1 + its text.
         let cutoff = view
@@ -1605,18 +1716,25 @@ mod tests {
             .expect("first text")
             .part_id;
         let child = engine
-            .fork_session(session_id, cutoff, "forked".to_owned(), false, engine.now_ms())
+            .fork_session(
+                session_id,
+                cutoff,
+                "forked".to_owned(),
+                false,
+                engine.now_ms(),
+            )
             .await
             .expect("fork");
         let child_view = engine.load_session(child.id).await.expect("child view");
         assert_eq!(child_view.parts.len(), 2);
-        assert!(child_view.parts.iter().all(|part| part.content["text"] != "two"));
+        assert!(
+            child_view
+                .parts
+                .iter()
+                .all(|part| part.content["text"] != "two")
+        );
         // The text part is SHARED: same part_id in parent and child.
-        assert!(engine
-            .session_meta(session_id)
-            .await
-            .expect("parent")
-            .id > 0);
+        assert!(engine.session_meta(session_id).await.expect("parent").id > 0);
         assert_eq!(child_view.parts[1].part_id, cutoff);
     }
 
@@ -1822,14 +1940,19 @@ mod tests {
 
         // Reconcile -> Ready. The stale lease row remains; the process
         // re-acquires a fresh lease before running again (17.4).
-        engine.reconcile(session_id, engine.now_ms()).await.expect("reconcile");
+        engine
+            .reconcile(session_id, engine.now_ms())
+            .await
+            .expect("reconcile");
         let ready = derive_state(&engine, session_id).expect("presentation");
         assert_eq!(ready.state, SessionState::Ready);
         let acquire = engine
             .try_acquire_lease(session_id, "owner-a", engine.now_ms())
             .await
             .expect("re-acquire lease");
-        assert!(matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty()));
+        assert!(
+            matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty())
+        );
 
         // Pending interaction -> AwaitingUser.
         engine

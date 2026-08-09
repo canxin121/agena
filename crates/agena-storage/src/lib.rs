@@ -572,4 +572,3 @@ pub struct NewMemory {
     pub body: String,
     pub index_line: Option<String>,
 }
-

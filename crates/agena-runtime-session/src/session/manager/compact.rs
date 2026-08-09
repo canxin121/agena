@@ -1,15 +1,12 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionControl, ExecutionConversationTarget, ExecutionSource,
-    ExecutionStatus, Message, MessageSource, PromptCompactionRuntime, Role,
-    SessionExecutionRequest, SessionManager, SessionManagerState, SessionRunOptions, Utc,
+    AppError, Arc, ExecutionControl, ExecutionConversationTarget, ExecutionSource, ExecutionStatus,
+    Message, MessageSource, PromptCompactionRuntime, Role, SessionExecutionRequest, SessionManager,
+    SessionManagerState, SessionRunOptions, Utc,
 };
 use crate::session::Session;
 use crate::session::model::PromptCompactionContent;
 use crate::session::prompt_window;
-use agena_domain::{
-    PromptCompactionCompletedEvent, PromptCompactionStrategy, PromptCompactionTrigger,
-    ThinkingRequest,
-};
+use agena_domain::{PromptCompactionStrategy, PromptCompactionTrigger, ThinkingRequest};
 use agena_provider::CompletionRequest;
 use agena_provider::ProviderErrorKind;
 use agena_provider::{CompletionFinishReason, ProviderCompactionContext, ProviderCompactionOutput};
@@ -86,10 +83,7 @@ impl SessionManager {
     ) -> Result<Session, AppError> {
         let session_id = request.session_id;
         let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         self.refresh_execution_policy(&mut session, &state);
         let options = self.apply_execution_context_to_run_options(&session, request.options)?;
         match self
@@ -106,7 +100,7 @@ impl SessionManager {
             Err((mut session, error)) => {
                 session.runtime.prompt_window.record_compaction_failure();
                 let _ = self
-                    .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+                    .persist_session_changes(session, Vec::new(), None, state)
                     .await?;
                 Err(error)
             }
@@ -172,7 +166,7 @@ impl SessionManager {
                     .consecutive_compaction_failures;
                 let disabled = failures >= MAX_COMPACTION_FAILURES;
                 let session = self
-                    .persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+                    .persist_session_changes(session, Vec::new(), None, state)
                     .await?;
                 tracing::warn!(
                     target: "agena::session::compact",
@@ -593,33 +587,22 @@ impl SessionManager {
         &self,
         mut session: Session,
         runtime: PromptCompactionRuntime,
-        execution_id: agena_domain::ExecutionId,
-        state: Arc<SessionManagerState>,
+        _execution_id: agena_domain::ExecutionId,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let generation = session.runtime.prompt_window.generation.saturating_add(1);
-        let activity = runtime.activity(generation);
-        let created_at = Utc::now();
-        let completed = PromptCompactionCompletedEvent {
-            session_id: session.id,
-            execution_id,
-            activity_id: agena_domain::ActivityId::new(),
-            activity,
-            ts_ms: created_at.timestamp_millis(),
-        };
-
         session.runtime.prompt_window.generation = generation;
         session.runtime.prompt_window.compaction = Some(runtime);
         session.runtime.prompt_window.record_compaction_success();
         session.runtime.clear_provider_anchors();
         session.runtime.clear_prompt_tokens();
-        self.persist_session_changes(
-            session,
-            Vec::new(),
-            vec![EventKind::CompactionCompleted(completed)],
-            None,
-            state,
-        )
-        .await
+
+        // Durable compaction boundary (13.3 / 13.4): a `compaction` run marker
+        // closes the preceding window and the engine clears the persisted
+        // provider anchors. Prompt-window state itself is derived from parts
+        // and deliberately not stored per session (D5).
+        let _compaction_run_id = self.store.compact_session(session.id).await?;
+        Ok(session)
     }
 }
 

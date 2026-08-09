@@ -741,7 +741,7 @@ impl App {
     pub(crate) fn handle_timeline_loaded(
         &mut self,
         session_id: i64,
-        result: UiResult<Vec<agena_runtime::RuntimeTimelineEvent>>,
+        result: UiResult<Vec<agena_tui_backend::SessionTimelineEntry>>,
     ) {
         let Some((host, mut dialog)) = self.take_timeline_dialog() else {
             return;

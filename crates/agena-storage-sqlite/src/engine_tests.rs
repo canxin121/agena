@@ -8,10 +8,13 @@
 use std::sync::Arc;
 
 use agena_domain::SessionRelationKind;
-use agena_storage::{WorkspaceRepository, store::{
-    LeaseAcquire, NewPart, NewSession, PartRole, PartState, PartVisibility, PersistenceEngine,
-    RunOutcome, SessionFacade, SessionStore, SessionView,
-}};
+use agena_storage::{
+    WorkspaceRepository,
+    store::{
+        LeaseAcquire, NewPart, NewSession, PartRole, PartState, PartVisibility, PersistenceEngine,
+        RunOutcome, SessionFacade, SessionStore, SessionView,
+    },
+};
 use serde_json::json;
 
 use crate::{SeaWorkspaceRepository, SqliteEngine, initialize_schema};
@@ -63,7 +66,13 @@ fn text_part(text: &str) -> NewPart {
 
 async fn submit_hello(engine: &SqliteEngine, session_id: i64) -> (i64, SessionView) {
     let outcome = engine
-        .submit_user_message(session_id, "owner-a", vec![text_part("hello")], None, 1_000_000)
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![text_part("hello")],
+            None,
+            1_000_000,
+        )
         .await
         .expect("submit");
     let view = engine.load_session(session_id).await.expect("load");
@@ -80,7 +89,10 @@ async fn user_send_creates_marker_and_parts_with_membership() {
     let marker = &view.parts[0];
     assert!(marker.is_run_marker());
     assert_eq!(marker.content["run_kind"], "user_send");
-    assert_eq!(run_id, marker.part_id, "marker is the first allocated part (id 1)");
+    assert_eq!(
+        run_id, marker.part_id,
+        "marker is the first allocated part (id 1)"
+    );
     let text = &view.parts[1];
     assert_eq!(text.kind, "text");
     assert_eq!(text.run_id, Some(marker.part_id));
@@ -94,7 +106,13 @@ async fn writes_without_a_fresh_lease_are_refused() {
 
     // A different owner is refused outright.
     let held = engine
-        .submit_user_message(session_id, "owner-b", vec![text_part("nope")], None, 1_000_000)
+        .submit_user_message(
+            session_id,
+            "owner-b",
+            vec![text_part("nope")],
+            None,
+            1_000_000,
+        )
         .await
         .expect_err("other owner cannot write");
     assert!(matches!(
@@ -103,9 +121,20 @@ async fn writes_without_a_fresh_lease_are_refused() {
     ));
 
     // Releasing the lease makes the original owner a non-holder too.
-    assert!(engine.release_lease(session_id, "owner-a").await.expect("release"));
+    assert!(
+        engine
+            .release_lease(session_id, "owner-a")
+            .await
+            .expect("release")
+    );
     let missing = engine
-        .submit_user_message(session_id, "owner-a", vec![text_part("nope")], None, 1_000_000)
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![text_part("nope")],
+            None,
+            1_000_000,
+        )
         .await
         .expect_err("no lease");
     assert!(matches!(
@@ -140,7 +169,11 @@ async fn lease_steal_aborts_stale_run_atomically() {
     assert_eq!(marker.state, PartState::Failed);
     assert_eq!(marker.content["abort_reason"], "lease_stolen");
     // The child of the aborted run is cancelled.
-    let text = view.parts.iter().find(|part| part.kind == "text").expect("text");
+    let text = view
+        .parts
+        .iter()
+        .find(|part| part.kind == "text")
+        .expect("text");
     assert_eq!(text.state, PartState::Cancelled);
 }
 
@@ -537,7 +570,13 @@ async fn lease_steal_aborts_stale_run_across_processes() {
         LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty()
     ));
     let run_id = engine_a
-        .submit_user_message(session_id, "proc-a", vec![text_part("hello")], None, 1_000_000)
+        .submit_user_message(
+            session_id,
+            "proc-a",
+            vec![text_part("hello")],
+            None,
+            1_000_000,
+        )
         .await
         .expect("proc-a submits")
         .run_id;
@@ -564,7 +603,11 @@ async fn lease_steal_aborts_stale_run_across_processes() {
         .expect("marker");
     assert_eq!(marker.state, PartState::Failed);
     assert_eq!(marker.content["abort_reason"], "lease_stolen");
-    let text = view.parts.iter().find(|part| part.kind == "text").expect("text");
+    let text = view
+        .parts
+        .iter()
+        .find(|part| part.kind == "text")
+        .expect("text");
     assert_eq!(text.state, PartState::Cancelled);
 }
 
@@ -603,7 +646,11 @@ async fn facade_cross_process_cache_invalidation() {
         .submit_user_message(
             session_id,
             "owner-a",
-            vec![NewPart::pending("text", PartRole::User, json!({"text": "first"}))],
+            vec![NewPart::pending(
+                "text",
+                PartRole::User,
+                json!({"text": "first"}),
+            )],
             None,
         )
         .await
@@ -675,7 +722,13 @@ async fn second_process_reads_committed_parts() {
         .await
         .expect("acquire");
     let run_id = engine_a
-        .submit_user_message(session_id, "proc-a", vec![text_part("hello")], None, 1_000_000)
+        .submit_user_message(
+            session_id,
+            "proc-a",
+            vec![text_part("hello")],
+            None,
+            1_000_000,
+        )
         .await
         .expect("submit")
         .run_id;

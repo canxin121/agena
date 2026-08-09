@@ -140,7 +140,9 @@ where
 
 /// Begin a transaction and acquire the write lock immediately, retrying a busy
 /// lock with backoff. Returns a transaction that already holds the write lock.
-pub(crate) async fn begin_with_write_lock(db: &DatabaseConnection) -> Result<DatabaseTransaction, DbErr> {
+pub(crate) async fn begin_with_write_lock(
+    db: &DatabaseConnection,
+) -> Result<DatabaseTransaction, DbErr> {
     let mut attempt = 0usize;
     loop {
         let transaction = db.begin().await?;

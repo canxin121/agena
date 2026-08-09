@@ -6,8 +6,7 @@ use std::{convert::Infallible, future::Future};
 
 use agena_api::{
     queries::{
-        ListEventsParams, ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams,
-        Query, QueryResult,
+        ListProviderAdapterModelsParams, ListSavedProviderAdapterModelsParams, Query, QueryResult,
     },
     resource::{
         PermissionReply, ProviderAdapterModelsRequest, SavedProviderAdapterModelsRequest,
@@ -26,8 +25,8 @@ use agena_application::dto::{
     PermissionRuleWriteRequest, PluginInspectResponse, PluginLogListQuery, PluginLogListResponse,
     PluginUiCatalogResponse, PluginUiInvokeToolRequest, PluginUiRequestContext,
     RuntimeBackgroundTaskCancelResponse, RuntimeBackgroundTaskStartResponse, SearchPaginationQuery,
-    SessionCreateRequest, SessionEventStreamQuery, SessionListQuery, SessionMessageRequest,
-    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
+    SessionCreateRequest, SessionListQuery, SessionMessageRequest, SessionReplyRequestBody,
+    SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
     WorkspaceFileDownloadQuery, WorkspaceFileTreeQuery, WorkspaceFileUploadRequest,
     WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
 };
@@ -60,7 +59,6 @@ pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerEr
 
 mod activities;
 mod auth;
-mod events;
 mod git;
 mod marketplace;
 mod memory;
@@ -73,7 +71,6 @@ mod sessions;
 mod settings;
 mod workspaces;
 
-pub use events::*;
 pub use permissions::*;
 pub use sessions::*;
 pub use settings::*;
@@ -91,14 +88,17 @@ pub use providers::*;
 pub use model_catalog::*;
 
 #[derive(Debug, Clone, Deserialize, Default)]
-/// Compatibility query for the session event list.
-pub struct SessionEventListCompatQuery {
-    #[serde(default)]
-    pub cursor: Option<String>,
+/// Query for the ordered session-parts snapshot.
+pub struct SessionPartListQuery {
     #[serde(default)]
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+/// Reconnect cursor for the live session-change stream.
+pub struct SessionChangeStreamQuery {
     #[serde(default)]
-    pub after_seq: Option<i64>,
+    pub since_version: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

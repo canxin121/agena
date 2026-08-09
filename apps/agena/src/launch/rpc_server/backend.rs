@@ -203,6 +203,9 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                 offset: params.offset,
                 limit: params.limit,
                 include_subagents: false,
+                parent_id: None,
+                roots_only: false,
+                search: None,
             })
             .await
             .map_err(app_backend_error)?;

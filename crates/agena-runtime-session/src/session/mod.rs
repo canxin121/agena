@@ -6,6 +6,8 @@ mod manager;
 pub use agena_runtime_session_core::model;
 mod processor;
 mod prompt_window;
+mod store;
+mod transcript;
 
 pub(crate) use agena_runtime::ContextGovernor;
 pub use agena_runtime_session_core::model::Session;

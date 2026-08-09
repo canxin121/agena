@@ -16,19 +16,17 @@ use agena_domain::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use agena_domain::PermissionRuleEvent;
 use agena_storage::{
     MemoryError, MemoryRecord, NewMemory, PermissionRuleRepository, PersistedPermissionRule,
-    SessionMutationRepository, SessionStatsRepository, SessionSummaryRepository,
     WorkspaceRepository,
 };
 
 use crate::{
     ApplicationError,
     dto::{
-        ActiveExecutionResource, ActiveSnapshotResource, CursorPaginationQuery, GitCommitRequest,
-        GitCommitResource, GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest,
-        GitStatusResource, ManagedSnapshotResource, MemoryResource, MemoryWriteRequest,
+        ActiveExecutionResource, ActiveSnapshotResource, GitCommitRequest, GitCommitResource,
+        GitPullRequestCreateRequest, GitPullRequestResource, GitStageRequest, GitStatusResource,
+        ManagedSnapshotResource, MemoryResource, MemoryWriteRequest,
         PendingInteractiveRequestResource, PermissionRuleResource, PermissionRuleWriteRequest,
         ScheduledJobResource, ScheduledJobRunResource, SearchPaginationQuery,
         SessionAutomationResource, SessionCreateRequest, SessionExecutionContextResource,
@@ -79,13 +77,23 @@ pub struct PermissionRuleWriteCommand {
 /// Application service implementing the runtime API surface on top of domain and storage layers.
 pub struct ApplicationService {
     workspace_root: String,
-    publisher: Option<Arc<dyn agena_runtime::RuntimeEventPublishService>>,
     memory_repository: Arc<dyn agena_storage::MemoryRepository>,
     workspace_repository: Arc<dyn WorkspaceRepository>,
     permission_rule_repository: Arc<dyn PermissionRuleRepository>,
-    session_stats_repository: Arc<dyn SessionStatsRepository>,
-    session_summary_repository: Arc<dyn SessionSummaryRepository>,
-    session_mutation_repository: Arc<dyn SessionMutationRepository>,
+    /// Sealed session store facade (14.1) — the only path application session
+    /// reads/writes take. v1 session repos and the runtime event publisher are
+    /// gone; session data lives in parts, surfaced through this facade.
+    session_store: Arc<dyn agena_storage::store::SessionStore>,
+}
+
+impl ApplicationService {
+    /// The sealed session store facade backing this service. The notification
+    /// aggregator subscribes through it for `SessionChange` live updates (14.3).
+    pub(crate) fn session_store_facade(
+        &self,
+    ) -> Option<Arc<dyn agena_storage::store::SessionStore>> {
+        Some(Arc::clone(&self.session_store))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -101,12 +109,6 @@ struct SessionCursor {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct EventCursor {
-    seq: i64,
-    id: i64,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct PermissionRuleCursor {
     updated_at_ms: i64,
     id: i64,
@@ -115,23 +117,17 @@ struct PermissionRuleCursor {
 impl ApplicationService {
     pub fn new(
         workspace_root: impl Into<String>,
-        publisher: Option<Arc<dyn agena_runtime::RuntimeEventPublishService>>,
         memory_repository: Arc<dyn agena_storage::MemoryRepository>,
         workspace_repository: Arc<dyn WorkspaceRepository>,
         permission_rule_repository: Arc<dyn PermissionRuleRepository>,
-        session_stats_repository: Arc<dyn SessionStatsRepository>,
-        session_summary_repository: Arc<dyn SessionSummaryRepository>,
-        session_mutation_repository: Arc<dyn SessionMutationRepository>,
+        session_store: Arc<dyn agena_storage::store::SessionStore>,
     ) -> Self {
         Self {
             workspace_root: workspace_root.into(),
-            publisher,
             memory_repository,
             workspace_repository,
             permission_rule_repository,
-            session_stats_repository,
-            session_summary_repository,
-            session_mutation_repository,
+            session_store,
         }
     }
 
@@ -159,10 +155,10 @@ impl ApplicationService {
     async fn ensure_session_model(
         &self,
         session_id: i64,
-    ) -> ApplicationResult<agena_storage::SessionSummaryRecord> {
-        let record = self
-            .session_summary_repository
-            .get(session_id)
+    ) -> ApplicationResult<agena_storage::store::SessionSummary> {
+        let summary = self
+            .session_store
+            .get_session_summary(session_id)
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
             .ok_or_else(|| {
@@ -171,13 +167,13 @@ impl ApplicationService {
                     format!("session not found: {session_id}"),
                 )
             })?;
-        if record.lifecycle_state != agena_domain::SessionLifecycleState::Ready {
+        if summary.lifecycle_state != agena_domain::SessionLifecycleState::Ready {
             return Err(ApplicationError::not_found_with_diagnostic(
                 "The session was not found.",
                 format!("session not found: {session_id}"),
             ));
         }
-        Ok(record)
+        Ok(summary)
     }
 
     async fn workspace_id_by_path(&self, path: &str) -> ApplicationResult<Option<i64>> {
@@ -191,8 +187,8 @@ impl ApplicationService {
         &self,
         workspace_ids: &[i64],
     ) -> ApplicationResult<HashMap<i64, u64>> {
-        self.session_stats_repository
-            .workspace_counts(workspace_ids)
+        self.session_store
+            .session_counts_by_workspace(workspace_ids)
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
             .into_iter()

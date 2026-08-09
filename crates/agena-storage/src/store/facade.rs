@@ -25,17 +25,17 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{
-    LEASE_STALENESS_MS, LeaseAcquire, NewPart, NewSession, PartDelta, PersistenceEngine,
-    RunOutcome, SessionChange, SessionListQuery, SessionMeta, SessionPresentation, SessionSummary,
-    SessionView, StateInputs, StoreError, SubmitOutcome, UsageQuery, UsageRecord, UsageStats,
-    presentation,
+    LEASE_STALENESS_MS, LeaseAcquire, MaintenanceOutcome, NewPart, NewSession, PartDelta,
+    PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
+    SessionPresentation, SessionSummary, SessionView, StateInputs, StoreError, SubmitOutcome,
+    UsageQuery, UsageRecord, UsageStats, presentation,
 };
 
 /// A session subscription handle. Dropping it unsubscribes (15.5).
@@ -47,6 +47,18 @@ pub struct Subscription {
 impl Drop for Subscription {
     fn drop(&mut self) {
         self.bus.unsubscribe(self.session_id);
+    }
+}
+
+/// A global subscription handle. Dropping it unsubscribes from every session
+/// (15.5).
+pub struct GlobalSubscription {
+    bus: Arc<NotificationBus>,
+}
+
+impl Drop for GlobalSubscription {
+    fn drop(&mut self) {
+        self.bus.unsubscribe_all();
     }
 }
 
@@ -106,6 +118,21 @@ pub trait SessionStore: Send + Sync {
         &self,
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError>;
+
+    /// Fetch one session's summary row, or `None` when it does not exist.
+    /// A cheap single-row projection (13.1) for existence/lifecycle/version
+    /// checks on the application path.
+    async fn get_session_summary(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<SessionSummary>, StoreError>;
+
+    /// Session counts per workspace (13.5 `workspace_counts`), for the
+    /// workspaces listing surface.
+    async fn session_counts_by_workspace(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, i64>, StoreError>;
 
     /// List every session in one root's subtree, newest first.
     async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, StoreError>;
@@ -213,7 +240,17 @@ pub trait SessionStore: Send + Sync {
     async fn rename(&self, session_id: i64, title: String) -> Result<SessionMeta, StoreError>;
 
     /// Cancel a run marker and its non-terminal children (17.5 user cancel).
-    async fn cancel_run(&self, session_id: i64, owner_id: &str, run_id: i64) -> Result<(), StoreError>;
+    async fn cancel_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+    ) -> Result<(), StoreError>;
+
+    /// Reconcile a session whose in-flight run lost its lease (17.4 step 2c):
+    /// mark in-flight run markers `failed` (`process_restart`) and their
+    /// non-terminal children `cancelled`. Idempotent.
+    async fn reconcile(&self, session_id: i64) -> Result<(), StoreError>;
 
     /// Compact the session: a `compaction` run marker closes the preceding
     /// window; provider anchors are cleared (13.3). Returns the compaction
@@ -237,9 +274,21 @@ pub trait SessionStore: Send + Sync {
     /// Aggregated usage stats (section 16).
     async fn usage_stats(&self, query: UsageQuery) -> Result<UsageStats, StoreError>;
 
+    /// Maintenance internals (14.2): reap stale leases and GC orphan parts.
+    /// Exposed through the sealed facade so recovery/maintenance callers never
+    /// reach the engine directly. Idempotent; safe to run from any process.
+    async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError>;
+
     /// Subscribe to [`SessionChange`] notifications for one session. The
     /// returned [`Subscription`] unsubscribes on drop.
     fn subscribe(&self, session_id: i64, observer: SessionObserver) -> Subscription;
+
+    /// Subscribe to [`SessionChange`] notifications for every session. The
+    /// returned [`GlobalSubscription`] unsubscribes on drop (15.5). Used by
+    /// same-process presentation consumers (SSE, TUI) that fan out by session
+    /// themselves; cross-process catch-up is by `sessions.version` /
+    /// `(created_at_ms, part_id)` (14.4).
+    fn subscribe_all(&self, observer: SessionObserver) -> GlobalSubscription;
 }
 
 /// A session's cached view plus the position it was read at.
@@ -310,7 +359,13 @@ impl MemoryLayer {
         Some(entry.view.clone())
     }
 
-    fn insert(&self, session_id: i64, view: SessionView, version: i64, newest_cursor: Option<(i64, i64)>) {
+    fn insert(
+        &self,
+        session_id: i64,
+        view: SessionView,
+        version: i64,
+        newest_cursor: Option<(i64, i64)>,
+    ) {
         let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
         let mut lru = self.lru.lock().expect("lru lock");
         lru.insert(session_id, stamp);
@@ -349,6 +404,7 @@ impl MemoryLayer {
 #[derive(Default)]
 pub struct NotificationBus {
     observers: Mutex<HashMap<i64, Vec<SessionObserver>>>,
+    global_observers: Mutex<Vec<SessionObserver>>,
 }
 
 impl NotificationBus {
@@ -366,11 +422,29 @@ impl NotificationBus {
     }
 
     fn unsubscribe(&self, session_id: i64) {
-        self.observers.lock().expect("observers lock").remove(&session_id);
+        self.observers
+            .lock()
+            .expect("observers lock")
+            .remove(&session_id);
     }
 
-    /// Emit a change to every session subscriber. Never persisted, never
-    /// replayed; an observer must not rely on receiving every change.
+    fn subscribe_all(&self, observer: SessionObserver) {
+        self.global_observers
+            .lock()
+            .expect("global observers lock")
+            .push(observer);
+    }
+
+    fn unsubscribe_all(&self) {
+        self.global_observers
+            .lock()
+            .expect("global observers lock")
+            .clear();
+    }
+
+    /// Emit a change to every session subscriber plus the global observers.
+    /// Never persisted, never replayed; an observer must not rely on
+    /// receiving every change.
     fn emit(&self, change: SessionChange) {
         let observers = self
             .observers
@@ -382,6 +456,14 @@ impl NotificationBus {
             for observer in observers {
                 observer(change.clone());
             }
+        }
+        let global_observers = self
+            .global_observers
+            .lock()
+            .expect("global observers lock")
+            .clone();
+        for observer in global_observers {
+            observer(change.clone());
         }
     }
 }
@@ -472,12 +554,16 @@ where
             return Ok(view);
         }
         let view = self.engine.load_session(session_id).await?;
-        self.memory.insert(session_id, view.clone(), version, cursor);
+        self.memory
+            .insert(session_id, view.clone(), version, cursor);
         Ok(view)
     }
 
     /// Derive the session presentation (17.6) from the persisted rows.
-    async fn derive_presentation(&self, session_id: i64) -> Result<SessionPresentation, StoreError> {
+    async fn derive_presentation(
+        &self,
+        session_id: i64,
+    ) -> Result<SessionPresentation, StoreError> {
         let meta = self.engine.session_meta(session_id).await?;
         let view = self.engine.load_session(session_id).await?;
         let inputs = StateInputs::from_view(&view);
@@ -541,10 +627,8 @@ where
         let outcome = self.engine.reconcile(session_id, self.now()).await?;
         if !outcome.aborted_runs.is_empty() || outcome.cancelled_parts > 0 {
             let meta = self.engine.session_meta(session_id).await?;
-            self.bus.emit(SessionChange::SessionMetaUpdated {
-                session_id,
-                meta,
-            });
+            self.bus
+                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
         Ok(())
     }
@@ -576,7 +660,9 @@ where
         parent_session_id: i64,
         task_id: &str,
     ) -> Result<Option<SessionMeta>, StoreError> {
-        self.engine.find_subagent_by_task_id(parent_session_id, task_id).await
+        self.engine
+            .find_subagent_by_task_id(parent_session_id, task_id)
+            .await
     }
 
     async fn create_subagent_session(
@@ -623,6 +709,20 @@ where
         self.engine.list_session_summaries(query).await
     }
 
+    async fn get_session_summary(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<SessionSummary>, StoreError> {
+        self.engine.get_session_summary(session_id).await
+    }
+
+    async fn session_counts_by_workspace(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, i64>, StoreError> {
+        self.engine.session_counts_by_workspace(workspace_ids).await
+    }
+
     async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, StoreError> {
         self.engine.list_session_tree(root_id).await
     }
@@ -655,7 +755,8 @@ where
                     part: part.clone(),
                 });
             }
-            self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            self.bus
+                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
         Ok(outcome.run_id)
     }
@@ -675,10 +776,7 @@ where
             .await?;
         self.memory.invalidate(session_id);
         for part in created {
-            self.bus.emit(SessionChange::PartAdded {
-                session_id,
-                part,
-            });
+            self.bus.emit(SessionChange::PartAdded { session_id, part });
         }
         Ok(())
     }
@@ -723,7 +821,8 @@ where
             part: marker,
         });
         let meta = self.engine.session_meta(session_id).await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        self.bus
+            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(())
     }
 
@@ -739,7 +838,14 @@ where
         self.ensure_lease(session_id, &owner, true).await?;
         let outcome = self
             .engine
-            .start_run(session_id, &owner, run_kind, content, idempotency_key, self.now())
+            .start_run(
+                session_id,
+                &owner,
+                run_kind,
+                content,
+                idempotency_key,
+                self.now(),
+            )
             .await?;
         if outcome.created {
             self.memory.invalidate(session_id);
@@ -750,7 +856,8 @@ where
                     part: part.clone(),
                 });
             }
-            self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+            self.bus
+                .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
         Ok(outcome.run_id)
     }
@@ -760,7 +867,10 @@ where
         session_id: i64,
         anchors: Option<Value>,
     ) -> Result<SessionMeta, StoreError> {
-        let meta = self.engine.set_provider_anchors(session_id, anchors).await?;
+        let meta = self
+            .engine
+            .set_provider_anchors(session_id, anchors)
+            .await?;
         self.memory.invalidate(session_id);
         self.bus.emit(SessionChange::SessionMetaUpdated {
             session_id,
@@ -808,7 +918,12 @@ where
         Ok(())
     }
 
-    async fn fork(&self, session_id: i64, at_part_id: i64, title: String) -> Result<i64, StoreError> {
+    async fn fork(
+        &self,
+        session_id: i64,
+        at_part_id: i64,
+        title: String,
+    ) -> Result<i64, StoreError> {
         let meta = self
             .engine
             .fork_session(session_id, at_part_id, title.clone(), false, self.now())
@@ -860,8 +975,13 @@ where
             .await?;
         self.memory.invalidate(session_id);
         let meta = self.engine.session_meta(session_id).await?;
-        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        self.bus
+            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(())
+    }
+
+    async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
+        SessionFacade::reconcile(self, session_id).await
     }
 
     async fn compact_session(&self, session_id: i64, owner_id: &str) -> Result<i64, StoreError> {
@@ -881,18 +1001,14 @@ where
                 self.now(),
             )
             .await?;
-        self.engine
-            .set_provider_anchors(session_id, None)
-            .await?;
+        self.engine.set_provider_anchors(session_id, None).await?;
         self.memory.invalidate(session_id);
         let meta = self.engine.session_meta(session_id).await?;
         for part in outcome.parts {
-            self.bus.emit(SessionChange::PartAdded {
-                session_id,
-                part,
-            });
+            self.bus.emit(SessionChange::PartAdded { session_id, part });
         }
-        self.bus.emit(SessionChange::SessionMetaUpdated { session_id, meta });
+        self.bus
+            .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         Ok(outcome.run_id)
     }
 
@@ -915,17 +1031,30 @@ where
         workspace_id: i64,
         bundle: &str,
     ) -> Result<i64, StoreError> {
-        self.engine.import_session_jsonl(workspace_id, bundle, self.now()).await
+        self.engine
+            .import_session_jsonl(workspace_id, bundle, self.now())
+            .await
     }
 
     async fn usage_stats(&self, query: UsageQuery) -> Result<UsageStats, StoreError> {
         self.engine.usage_stats(query).await
     }
 
+    async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
+        self.engine.maintenance(now_ms).await
+    }
+
     fn subscribe(&self, session_id: i64, observer: SessionObserver) -> Subscription {
         self.bus.subscribe(session_id, observer);
         Subscription {
             session_id,
+            bus: Arc::clone(&self.bus),
+        }
+    }
+
+    fn subscribe_all(&self, observer: SessionObserver) -> GlobalSubscription {
+        self.bus.subscribe_all(observer);
+        GlobalSubscription {
             bus: Arc::clone(&self.bus),
         }
     }
@@ -1027,14 +1156,20 @@ mod tests {
             .submit_user_message(
                 session_id,
                 "owner-a",
-                vec![NewPart::pending("text", PartRole::User, json!({"text": "hello"}))],
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "hello"}),
+                )],
                 None,
             )
             .await
             .expect("submit");
         let changes = seen.lock().unwrap().clone();
         assert!(
-            changes.iter().any(|c| matches!(c, SessionChange::PartAdded { .. })),
+            changes
+                .iter()
+                .any(|c| matches!(c, SessionChange::PartAdded { .. })),
             "submit emits PartAdded"
         );
         assert!(
@@ -1059,7 +1194,11 @@ mod tests {
             .submit_user_message(
                 session_id,
                 "owner-b",
-                vec![NewPart::pending("text", PartRole::User, json!({"text": "x"}))],
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "x"}),
+                )],
                 None,
             )
             .await
@@ -1073,7 +1212,11 @@ mod tests {
             .submit_user_message(
                 session_id,
                 "owner-b",
-                vec![NewPart::pending("text", PartRole::User, json!({"text": "y"}))],
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "y"}),
+                )],
                 None,
             )
             .await
@@ -1093,7 +1236,11 @@ mod tests {
             .submit_user_message(
                 session_id,
                 "owner-a",
-                vec![NewPart::pending("text", PartRole::User, json!({"text": "hi"}))],
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "hi"}),
+                )],
                 None,
             )
             .await
@@ -1129,7 +1276,11 @@ mod tests {
             .submit_user_message(
                 session_id,
                 "owner-a",
-                vec![NewPart::pending("text", PartRole::User, json!({"text": "q"}))],
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "q"}),
+                )],
                 None,
             )
             .await
@@ -1175,18 +1326,27 @@ mod tests {
             .submit_user_message(
                 session_id,
                 "owner-a",
-                vec![NewPart::pending("text", PartRole::User, json!({"text": "hello"}))],
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "hello"}),
+                )],
                 None,
             )
             .await
             .expect("submit");
         facade
-            .complete_run(session_id, "owner-a", run_id, RunOutcome {
-                status: PartState::Completed,
-                abort_reason: None,
-                content: None,
-                provider_state: None,
-            })
+            .complete_run(
+                session_id,
+                "owner-a",
+                run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+            )
             .await
             .expect("complete");
         clock.advance(1);
@@ -1194,9 +1354,16 @@ mod tests {
         let view = facade.load(session_id).await.expect("load");
         let cutoff = view.parts[0].part_id; // the marker
 
-        let fork_id = facade.fork(session_id, cutoff, "fork".to_owned()).await.expect("fork");
+        let fork_id = facade
+            .fork(session_id, cutoff, "fork".to_owned())
+            .await
+            .expect("fork");
         let fork_view = facade.load(fork_id).await.expect("fork view");
-        assert_eq!(fork_view.parts.len(), 1, "fork copies edges up to the marker");
+        assert_eq!(
+            fork_view.parts.len(),
+            1,
+            "fork copies edges up to the marker"
+        );
 
         let rewind_id = facade
             .rewind(session_id, cutoff, "rewind".to_owned())
@@ -1221,7 +1388,11 @@ mod tests {
             .await
             .expect("compact");
         assert!(compaction_id > 0);
-        let meta = facade.engine().session_meta(session_id).await.expect("meta");
+        let meta = facade
+            .engine()
+            .session_meta(session_id)
+            .await
+            .expect("meta");
         assert!(meta.provider_anchors_json.is_none(), "anchors cleared");
         let view = facade.load(session_id).await.expect("load");
         assert!(
@@ -1234,7 +1405,11 @@ mod tests {
     async fn idempotency_key_deduplicates_user_send_through_the_facade() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
-        let parts = vec![NewPart::pending("text", PartRole::User, json!({"text": "once"}))];
+        let parts = vec![NewPart::pending(
+            "text",
+            PartRole::User,
+            json!({"text": "once"}),
+        )];
         let first = facade
             .submit_user_message(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
             .await
@@ -1280,7 +1455,10 @@ mod tests {
             Arc::new(move |change| seen.lock().unwrap().push(change))
         };
         let _subscription = facade.subscribe(session_id, observer);
-        let meta = facade.rename(session_id, "new title".to_owned()).await.expect("rename");
+        let meta = facade
+            .rename(session_id, "new title".to_owned())
+            .await
+            .expect("rename");
         assert_eq!(meta.title, "new title");
         assert!(
             seen.lock()
@@ -1294,7 +1472,9 @@ mod tests {
             .await
             .expect("list");
         assert!(
-            listed.iter().any(|s| s.id == session_id && s.title == "new title"),
+            listed
+                .iter()
+                .any(|s| s.id == session_id && s.title == "new title"),
             "summary reflects the rename"
         );
     }
@@ -1345,7 +1525,11 @@ mod tests {
             .submit_user_message(
                 session_id,
                 "owner-a",
-                vec![NewPart::pending("text", PartRole::User, json!({"text": "export me"}))],
+                vec![NewPart::pending(
+                    "text",
+                    PartRole::User,
+                    json!({"text": "export me"}),
+                )],
                 None,
             )
             .await
@@ -1359,7 +1543,11 @@ mod tests {
             .await
             .expect("import");
         let imported_view = facade.load(imported).await.expect("imported view");
-        assert_eq!(imported_view.parts.len(), 2, "marker + text survive the round trip");
+        assert_eq!(
+            imported_view.parts.len(),
+            2,
+            "marker + text survive the round trip"
+        );
         assert_eq!(imported_view.parts[1].content["text"], "export me");
     }
 
@@ -1403,7 +1591,11 @@ mod tests {
             })
             .await
             .expect("create child");
-        assert_eq!(child.depth, meta.depth + 1, "depth matches the schema invariant");
+        assert_eq!(
+            child.depth,
+            meta.depth + 1,
+            "depth matches the schema invariant"
+        );
         assert_eq!(child.root_id, meta.id, "child inherits the root");
     }
 
@@ -1447,7 +1639,11 @@ mod tests {
             .set_config_json(session_id, Some(config.clone()))
             .await
             .expect("set config");
-        let meta = facade.engine().session_meta(session_id).await.expect("meta");
+        let meta = facade
+            .engine()
+            .session_meta(session_id)
+            .await
+            .expect("meta");
         assert_eq!(meta.provider_anchors_json, Some(anchors));
         assert_eq!(meta.config_json, Some(config));
     }

@@ -68,11 +68,14 @@ impl SessionManager {
         {
             return Ok(Arc::clone(snapshot));
         }
-        let workspace_id = self.store.current_workspace_id().await?;
+        let workspace_id = self.current_workspace_id().await?;
         let stored = self
-            .store
-            .resolve_permission_rule_snapshot(session_id, Some(workspace_id))
-            .await?;
+            .permission_rules
+            .resolve_snapshot(session_id, Some(workspace_id))
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("resolve permission rule snapshot: {error}"))
+            })?;
         let snapshot = Arc::new(RuleSnapshot {
             rules: group_snapshot_rules(stored.as_slice()),
         });

@@ -632,4 +632,3 @@ where
     }
     get_session_by_id(db, session_id).await
 }
-

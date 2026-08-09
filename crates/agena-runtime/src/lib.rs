@@ -63,6 +63,7 @@ mod composition;
 mod connect;
 mod control_state;
 mod invocation_guard;
+mod live_signal;
 mod lsp_config;
 mod mcp_runtime;
 mod model_catalog_cache;
@@ -204,7 +205,7 @@ pub use agena_runtime_session::{
 };
 pub use agena_runtime_session::{
     RuntimeLivePresentationSubscription, RuntimeLivePresentationSubscriptionItem,
-    RuntimePresentationEvent, RuntimePresentationEventKind,
+    RuntimePresentationEvent, RuntimePresentationEventKind, RuntimePresentationEventMeta,
 };
 pub use agena_runtime_session::{
     SessionCreateRequest, SessionExecutionReplyRequest, SessionExecutionRequest,
@@ -280,6 +281,11 @@ pub(crate) use composition::{
 pub(crate) use connect::connect_or_initialize;
 pub(crate) use control_state::RuntimeControlState;
 pub(crate) use invocation_guard::try_enter_invocation;
+pub(crate) use live_signal::LiveSignalHub;
+pub use live_signal::{
+    RuntimeLiveSignal, RuntimeLiveSignalItem, RuntimeLiveSignalService,
+    RuntimeLiveSignalSubscription,
+};
 pub(crate) use lsp_config::compose_lsp_services;
 pub(crate) use mcp_runtime::{
     MCP_PLUGIN_ID, McpConfig, McpRuntimeConfig, build_configured_mcp_manager,

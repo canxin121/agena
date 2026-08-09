@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::pagination::{PageInfo, PaginatedResponse};
+use crate::pagination::PaginatedResponse;
 use crate::resource::{
     BackgroundActivityLogResource, BackgroundActivityResource, HealthResponse,
     PermissionRuleResource, ProviderAdapterModelsResponse, ProviderModelsResponse,
@@ -29,7 +29,6 @@ pub enum Query {
     /// Lazily fetch the human-facing detail of one tool Activity. Clients call
     /// this on expansion; the runtime derives Markdown from compact data.
     GetOperationDetail(GetOperationDetailParams),
-    ListEvents(ListEventsParams),
     ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
     ListActivities(ListActivitiesParams),
@@ -53,19 +52,11 @@ pub enum QueryResult {
     Session(SessionResource),
     SessionState(crate::resource::SessionExecutionResource),
     OperationDetail(crate::resource::OperationDetailResource),
-    Events(PaginatedEvents),
     PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
     Activities(Vec<BackgroundActivityResource>),
     Activity(BackgroundActivityResource),
     ActivityLogs(BackgroundActivityLogResource),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// A page of events with pagination metadata.
-pub struct PaginatedEvents {
-    pub items: Vec<crate::EventResource>,
-    pub page: PageInfo,
 }
 
 // ─── params ──────────────────────────────────────────────────────────────
@@ -209,25 +200,6 @@ pub struct GetSessionParams {
 pub struct GetOperationDetailParams {
     pub session_id: i64,
     pub activity_id: agena_domain::ActivityId,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Parameters for listing runtime events.
-pub struct ListEventsParams {
-    /// Defaults to global scope.
-    #[serde(default = "default_scope")]
-    pub scope: crate::Scope,
-    #[serde(default)]
-    pub kinds: Option<std::collections::HashSet<crate::EventKindTag>>,
-    /// Cursor: events with `seq_global > since_seq_global` are returned.
-    #[serde(default)]
-    pub since_seq_global: Option<i64>,
-    #[serde(default)]
-    pub limit: Option<u64>,
-}
-
-fn default_scope() -> crate::Scope {
-    crate::Scope::Global
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

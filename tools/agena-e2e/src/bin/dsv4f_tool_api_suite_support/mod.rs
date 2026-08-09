@@ -5,15 +5,15 @@ use std::{
 };
 
 use agena_domain::{
-    EventFilter, EventScope as Scope, ExecutionStatus, NetworkPermissionConfig, PathAccessModes,
-    PathPermissionConfig, PendingInteractiveRequest, PermissionConfig, PermissionMode,
-    PermissionReply, ToolPermissionConfig, UserInputReply, UserInputReplyKind, WorkflowState,
+    ExecutionStatus, NetworkPermissionConfig, PathAccessModes, PathPermissionConfig,
+    PendingInteractiveRequest, PermissionConfig, PermissionMode, PermissionReply,
+    ToolPermissionConfig, UserInputReply, UserInputReplyKind, WorkflowState,
 };
 use agena_runtime::{
-    RuntimeLiveEventSubscription, RuntimeLiveEventSubscriptionItem, SessionCreateRequest,
-    SessionExecutionReplyRequest, SessionPermissionReplyRequest, SessionRunOptions,
-    SessionUserMessageRequest,
+    SessionCreateRequest, SessionExecutionReplyRequest, SessionPermissionReplyRequest,
+    SessionRunOptions, SessionUserMessageRequest,
 };
+use agena_storage::store::{PartState, SessionChange};
 use anyhow::{Context, bail, ensure};
 use serde_json::{Value, json};
 
@@ -113,9 +113,13 @@ impl Harness {
         input: Value,
         expected_text: &str,
     ) -> anyhow::Result<ToolApiOutcome> {
-        let mut subscription = self
-            .event_stream
-            .subscribe_events(EventFilter::new(Scope::Session { session_id }));
+        let (change_tx, mut changes) = tokio::sync::mpsc::unbounded_channel();
+        let _subscription = self.session_store.subscribe(
+            session_id,
+            Arc::new(move |change| {
+                let _ = change_tx.send(change);
+            }),
+        );
         let outcome = self
             .run_execution_tool(
                 session_id,
@@ -126,13 +130,7 @@ impl Harness {
                 true,
             )
             .await?;
-        assert_outer_tool_api_stream_update(
-            subscription.as_mut(),
-            tool_name,
-            &input,
-            expected_text,
-        )
-        .await?;
+        assert_outer_tool_api_stream_update(&mut changes, tool_name, &input, expected_text).await?;
         Ok(outcome)
     }
 
@@ -709,10 +707,10 @@ pub(super) fn assert_contains(outcome: &ToolApiOutcome, expected: &str) -> anyho
 
 /// The final operation result is insufficient evidence that a plugin's
 /// streaming handler ran: the ordinary non-streaming handler may return the
-/// same text. Require a live `MessagePartCheckpointed` snapshot where the outer
-/// Tool API operation is still in progress and contains a streamed chunk.
+/// same text. Require a live v2 part patch where the outer Tool API operation
+/// is still in progress and contains a streamed chunk.
 pub(super) async fn assert_outer_tool_api_stream_update(
-    subscription: &mut dyn RuntimeLiveEventSubscription,
+    changes: &mut tokio::sync::mpsc::UnboundedReceiver<SessionChange>,
     tool_name: &str,
     input: &Value,
     expected_text: &str,
@@ -731,27 +729,22 @@ pub(super) async fn assert_outer_tool_api_stream_update(
                 }
             );
         }
-        let item = match tokio::time::timeout(remaining, subscription.recv()).await {
+        let item = match tokio::time::timeout(remaining, changes.recv()).await {
             Ok(item) => item.context(
-                "Runtime session event stream closed while awaiting streamed Tool API update",
+                "session part-patch stream closed while awaiting streamed Tool API update",
             )?,
             Err(_) => continue,
         };
         match item {
-            RuntimeLiveEventSubscriptionItem::Lagged(count) => {
-                bail!(
-                    "session event subscription lagged by {count} event(s) while checking streamed Tool API output"
-                );
-            }
-            RuntimeLiveEventSubscriptionItem::Event(event) => {
-                if event.kind != "message_part_checkpointed" {
+            SessionChange::PartAdded { part, .. } | SessionChange::PartUpdated { part, .. } => {
+                if part.kind != "tool_call" {
                     continue;
                 }
-                let Some(part) = event.payload.get("part") else {
-                    continue;
-                };
-                let Some(operation) = part.get("content").filter(|content| {
-                    content.get("type") == Some(&Value::String("operation".to_string()))
+                let content = &part.content;
+                let Some(operation) = content.get("payload").filter(|_| {
+                    content.get("type") == Some(&Value::String("activity".to_string()))
+                        && content.get("activity_type")
+                            == Some(&Value::String("operation".to_string()))
                 }) else {
                     continue;
                 };
@@ -775,11 +768,14 @@ pub(super) async fn assert_outer_tool_api_stream_update(
                         "name={} input={} status={:?} output={}",
                         name,
                         invocation_input,
-                        part.get("status"),
+                        operation.get("status"),
                         output
                     ));
                 }
-                if part.get("status") != Some(&serde_json::to_value(ExecutionStatus::InProgress)?) {
+                if part.state != PartState::InProgress
+                    || operation.get("status")
+                        != Some(&serde_json::to_value(ExecutionStatus::InProgress)?)
+                {
                     continue;
                 }
                 if name != TOOLS_CALL_HANDLER_KEY
@@ -790,6 +786,7 @@ pub(super) async fn assert_outer_tool_api_stream_update(
                 }
                 return Ok(());
             }
+            SessionChange::PartRemoved { .. } | SessionChange::SessionMetaUpdated { .. } => {}
         }
     }
 }

@@ -2,10 +2,10 @@ use agena_storage::PermissionRuleListQuery;
 
 use super::{
     ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
-    PermissionAction, PermissionRuleCursor, PermissionRuleEvent, PermissionRuleResource,
-    PermissionRuleWriteCommand, PermissionRuleWriteRequest, PermissionScope,
-    PersistedPermissionRule, SearchPaginationQuery, Utc, api_error_from_app, build_page,
-    decode_cursor, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
+    PermissionAction, PermissionRuleCursor, PermissionRuleResource, PermissionRuleWriteCommand,
+    PermissionRuleWriteRequest, PermissionScope, PersistedPermissionRule, SearchPaginationQuery,
+    api_error_from_app, build_page, decode_cursor, non_empty, normalize_limit,
+    timestamp_millis_to_utc, trim_page,
 };
 
 impl ApplicationService {
@@ -74,23 +74,12 @@ impl ApplicationService {
     ) -> ApplicationResult<PermissionRuleResource> {
         let rule = self.persisted_permission_rule_from_command(command).await?;
 
-        let (created, is_new) = self
+        let (created, _is_new) = self
             .permission_rule_repository
             .upsert(&rule)
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let resource = permission_rule_record_resource(&created)?;
-        self.publish_permission_rule_event(if is_new {
-            agena_runtime::RuntimeEventPublishRequest::PermissionRuleCreated(
-                permission_rule_record_event(&created),
-            )
-        } else {
-            agena_runtime::RuntimeEventPublishRequest::PermissionRuleUpdated(
-                permission_rule_record_event(&created),
-            )
-        })
-        .await?;
-        Ok(resource)
+        permission_rule_record_resource(&created)
     }
 
     pub async fn replace_permission_rule(
@@ -127,14 +116,7 @@ impl ApplicationService {
                 format!("permission rule not found: {rule_id}"),
             ));
         };
-        let resource = permission_rule_record_resource(&updated)?;
-        self.publish_permission_rule_event(
-            agena_runtime::RuntimeEventPublishRequest::PermissionRuleUpdated(
-                permission_rule_record_event(&updated),
-            ),
-        )
-        .await?;
-        Ok(resource)
+        permission_rule_record_resource(&updated)
     }
 
     pub async fn revoke_permission_rule(
@@ -163,14 +145,7 @@ impl ApplicationService {
                 format!("permission rule not found: {rule_id}"),
             ));
         };
-        let resource = permission_rule_record_resource(&updated)?;
-        self.publish_permission_rule_event(
-            agena_runtime::RuntimeEventPublishRequest::PermissionRuleRevoked(
-                permission_rule_record_event(&updated),
-            ),
-        )
-        .await?;
-        Ok(resource)
+        permission_rule_record_resource(&updated)
     }
 
     async fn persisted_permission_rule_from_command(
@@ -320,37 +295,6 @@ fn permission_rule_record_resource(
     row: &agena_storage::PermissionRuleRecord,
 ) -> ApplicationResult<PermissionRuleResource> {
     permission_rule_resource(row)
-}
-
-impl ApplicationService {
-    async fn publish_permission_rule_event(
-        &self,
-        request: agena_runtime::RuntimeEventPublishRequest,
-    ) -> ApplicationResult<()> {
-        let Some(publisher) = self.publisher.as_ref() else {
-            return Ok(());
-        };
-        publisher.publish_event(request).await.map_err(|err| {
-            ApplicationError::internal(format!("publish permission rule event failed: {err}"))
-        })?;
-        Ok(())
-    }
-}
-
-fn permission_rule_record_event(row: &agena_storage::PermissionRuleRecord) -> PermissionRuleEvent {
-    PermissionRuleEvent {
-        session_id: row.session_id,
-        rule_id: row.id,
-        action_key: row.action_key.clone(),
-        mode: row.mode.clone(),
-        scope: row.scope.clone(),
-        source: row.source.clone(),
-        reason: row.reason.clone(),
-        operator: row.operator.clone(),
-        revoked_reason: row.revoked_reason.clone(),
-        revoked_by: row.revoked_by.clone(),
-        ts_ms: Utc::now().timestamp_millis(),
-    }
 }
 
 fn permission_scope_from_request(value: Option<&str>) -> ApplicationResult<PermissionScope> {
@@ -517,10 +461,8 @@ mod tests {
 
     use agena_domain::PermissionMode;
     use agena_storage::MemoryStore;
-    use agena_storage_sqlite::{
-        SeaPermissionRuleRepository, SeaSessionStatsRepository, SeaSessionSummaryRepository,
-        SeaWorkspaceRepository,
-    };
+    use agena_storage::store::{SessionFacade, SessionStore};
+    use agena_storage_sqlite::{SeaPermissionRuleRepository, SeaWorkspaceRepository, SqliteEngine};
     use sea_orm::Database;
 
     use super::{
@@ -536,15 +478,17 @@ mod tests {
         agena_storage_sqlite::initialize_schema(database.as_ref())
             .await
             .expect("initialize test schema");
+        let facade: Arc<dyn SessionStore> = Arc::new(SessionFacade::new(
+            SqliteEngine::new(Arc::clone(&database)),
+            "permissions-test",
+            64,
+        ));
         ApplicationService::new(
             "/test/workspace",
-            None,
             Arc::new(MemoryStore::for_workspace(Path::new("/test/workspace"))),
             Arc::new(SeaWorkspaceRepository::new(Arc::clone(&database))),
-            Arc::new(SeaPermissionRuleRepository::new(Arc::clone(&database))),
-            Arc::new(SeaSessionStatsRepository::new(Arc::clone(&database))),
-            Arc::new(SeaSessionSummaryRepository::new(Arc::clone(&database))),
-            Arc::new(SeaSessionSummaryRepository::new(database)),
+            Arc::new(SeaPermissionRuleRepository::new(database)),
+            facade,
         )
     }
 

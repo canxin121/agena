@@ -186,7 +186,9 @@ pub fn apply_part_transition(
             to.as_str()
         )));
     }
-    if to == super::PartState::InProgress && part.state == super::PartState::Failed && !retry_allowed
+    if to == super::PartState::InProgress
+        && part.state == super::PartState::Failed
+        && !retry_allowed
     {
         return Err(StoreError::InvalidState(
             "retry (failed -> in_progress) requires an explicit retry".to_owned(),

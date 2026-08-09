@@ -5,9 +5,36 @@
 //! without reconstructing a private Runtime event envelope from JSON.
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
+
+/// Routing and observability metadata outside a presentation event payload.
+///
+/// v2 has no event log, so these fields are derived from the operation that
+/// produced the notification (part id / session version / created-at) rather
+/// than a persisted envelope (design 14.3). Kept shape-compatible with v1 so
+/// live subscribers can order and scope notifications without a full reload.
+#[derive(Debug, Clone)]
+pub struct RuntimePresentationEventMeta {
+    pub id: Uuid,
+    pub seq_global: i64,
+    pub seq_session: Option<i64>,
+    pub session_id: Option<i64>,
+    pub workspace_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub causation_id: Option<Uuid>,
+    pub correlation_id: Option<Uuid>,
+    pub envelope_schema: u32,
+}
+
 #[derive(Debug, Clone)]
 /// Kind of a runtime presentation event.
 pub enum RuntimePresentationEventKind {
+    /// A committed v2 part/meta patch from the sealed session facade. The TUI
+    /// currently treats this as an incremental invalidation and reloads the
+    /// marker-grouped transcript projection; the raw patch remains available
+    /// to consumers that can apply it directly.
+    PartPatch(Box<agena_storage::store::SessionChange>),
     TranscriptPatch(Box<agena_domain::TranscriptPatch>),
     /// A background activity started, updated, or finished. Carries the
     /// mutated activity so presentation consumers can refresh a management
@@ -37,7 +64,7 @@ pub enum RuntimePresentationEventKind {
 /// example the TUI's staleness check against the server's durable
 /// `latest_event_seq`) must only count durable events.
 pub struct RuntimePresentationEvent {
-    pub meta: agena_domain::EventMeta,
+    pub meta: RuntimePresentationEventMeta,
     pub invalidates_ancestor_projection: bool,
     pub durable: bool,
     pub kind: RuntimePresentationEventKind,

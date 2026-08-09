@@ -5,32 +5,25 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 
 use crate::error::AppError;
-use crate::event::{
-    EventKind, EventPublisher, MessagePartCheckpointedEvent, PublishContext,
-    TranscriptPartUpsertedEvent,
-};
 use crate::message::{
     Message, MessageMetadata, MessagePart, MessageProviderState, OperationPart, PartContent,
 };
 use crate::provider::ProviderRegistry;
 use agena_domain::ModelRef;
 use agena_domain::{
-    AssistantReasoningField, ExecutionStatus, FinishReason, MessageSource, Role, StreamErrorEvent,
-    StructuredObject, TimeRange, ToolInvocation,
+    AssistantReasoningField, ExecutionStatus, FinishReason, MessageSource, Role, StructuredObject,
+    TimeRange, ToolInvocation,
 };
 use agena_provider::CompletionFinishReason;
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 
-use super::history::{MessageId as HistoryMessageId, RunBuffer, RunId, ToolCallId};
 use super::{ContextGovernor, store::ProcessorPartIdAllocator};
 
 const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
 
 #[derive(Clone)]
 pub(crate) struct SessionRunRequest {
-    pub run_id: RunId,
-    pub execution_id: agena_domain::ExecutionId,
     pub turn_id: agena_domain::TurnId,
     pub reply_id: agena_domain::AssistantReplyId,
     pub session_id: i64,
@@ -47,10 +40,6 @@ pub(crate) struct SessionRunRequest {
     pub next_message_id: i64,
     pub part_ids: ProcessorPartIdAllocator,
     pub next_call_id: i64,
-    /// Live publisher used to push streaming events ("running") onto the
-    /// unified bus while the run is in flight. `None` keeps test harnesses
-    /// terse — they observe the buffered `client_events` on the result.
-    pub event_publisher: Option<Arc<EventPublisher>>,
     /// Optional cancel handle. When the token fires the stream loop
     /// terminates between provider events and surfaces a `RunAbortReason::
     /// Cancelled`-shaped terminal error. `None` runs the turn to completion.
@@ -61,17 +50,8 @@ pub(crate) struct SessionRunRequest {
 pub(crate) struct SessionRunResult {
     pub assistant_message_id: i64,
     pub state: Vec<Message>,
-    /// UI-projection events buffered during the run (also pushed onto the
-    /// bus when `event_publisher` was set).
-    pub client_events: Vec<EventKind>,
     pub provider_metadata: Option<serde_json::Value>,
     pub termination: SessionRunTermination,
-    /// Append-only history events emitted by the run buffer. Routed by the
-    /// manager into `SessionStore::append_history_items`.
-    pub history_items: Vec<EventKind>,
-    /// The run id used by `history_items` — the manager wraps this with
-    /// `RunStarted` / `RunCompleted` / `RunAborted` boundary events.
-    pub run_id: RunId,
     /// True when the provider terminal event carried an explicit
     /// `end_turn=false` signal: the model asked for another turn even though
     /// it did not request any tool call.

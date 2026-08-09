@@ -1,14 +1,14 @@
 //! WebSocket subscription multiplexer.
 //!
 //! [`WsClient::connect`] opens a single connection; each
-//! [`WsClient::subscribe`] returns a [`Subscription`] that delivers
-//! [`agena_api::EventResource`]s. Many subscriptions share one socket.
+//! [`WsClient::subscribe`] returns a [`Subscription`] that delivers v2 part
+//! patches and ephemeral runtime signals. Many subscriptions share one socket.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use agena_api::{
-    EventResource,
+    live::{RuntimeSignalResource, SessionChangeResource},
     notifications::Notification,
     subscribe::{SubscribeRequest, SubscriptionId},
     ws::{ClientMessage, ServerMessage},
@@ -22,9 +22,10 @@ use crate::error::ClientError;
 /// Item delivered to a subscriber.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
-/// Event received on a websocket subscription.
+/// Item received on a websocket live subscription.
 pub enum SubscriptionEvent {
-    Event(EventResource),
+    SessionChanged(SessionChangeResource),
+    RuntimeSignal(RuntimeSignalResource),
     Lagged(u64),
 }
 
@@ -50,7 +51,7 @@ struct Subscribers {
 }
 
 #[derive(Clone)]
-/// Websocket client for the Agena runtime event stream.
+/// Websocket client for Agena's live part-patch/signal stream.
 pub struct WsClient {
     out_tx: mpsc::Sender<ClientMessage>,
     subscribers: Arc<Mutex<Subscribers>>,
@@ -93,17 +94,19 @@ impl WsClient {
                 let Ok(server_msg) = parsed else { continue };
                 if let ServerMessage::Notification(notification) = server_msg {
                     let (id, item) = match notification {
-                        Notification::Event {
+                        Notification::SessionChanged {
                             subscription,
-                            event,
-                        } => (subscription, SubscriptionEvent::Event(*event)),
+                            change,
+                        } => (subscription, SubscriptionEvent::SessionChanged(*change)),
+                        Notification::RuntimeSignal {
+                            subscription,
+                            signal,
+                        } => (subscription, SubscriptionEvent::RuntimeSignal(*signal)),
                         Notification::Lagged {
                             subscription,
                             skipped,
                         } => (subscription, SubscriptionEvent::Lagged(skipped)),
-                        Notification::Resumed { .. } | Notification::SubscriptionClosed { .. } => {
-                            continue;
-                        }
+                        Notification::SubscriptionClosed { .. } => continue,
                     };
                     let guard = subs_for_reader.lock().await;
                     if let Some(tx) = guard.inner.get(&id) {

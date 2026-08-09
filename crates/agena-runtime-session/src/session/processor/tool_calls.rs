@@ -1,7 +1,7 @@
 use super::{
     AppError, BTreeMap, ExecutionStatus, Message, MessagePart, OperationPart, PartContent,
-    PendingProviderNativeToolCall, PendingToolCall, RunBuffer, SessionProcessor, SessionRunRequest,
-    StructuredObject, TimeRange, ToolCallId, ToolInvocation, Utc, parse_tool_invocation_lossy,
+    PendingProviderNativeToolCall, PendingToolCall, SessionProcessor, SessionRunRequest,
+    StructuredObject, TimeRange, ToolInvocation, Utc, parse_tool_invocation_lossy,
     placeholder_tool_invocation, provider_native_tool_execution_title,
     tool_api_definition_identity, tool_execution_title, tool_execution_title_for_invocation,
 };
@@ -11,10 +11,8 @@ impl SessionProcessor {
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        run_buffer: &mut RunBuffer,
         pending: &mut PendingToolCall,
     ) -> Result<(), AppError> {
-        let mut should_emit = false;
         if pending.part_id.is_none() {
             let part_id = run.part_ids.reserve().await?;
             let call_id = run.next_call_id;
@@ -57,55 +55,6 @@ impl SessionProcessor {
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
             pending.started_at_ms = Some(start.timestamp_millis());
-            should_emit = true;
-
-            // Mirror into RunBuffer with a stable history-side call id.
-            // Prefer the provider-supplied id when present; otherwise fall
-            // back to a synthetic one derived from the integer call_id so it
-            // remains stable for the lifetime of this run.
-            let history_call_id = match pending.id.as_deref() {
-                Some(id) if !id.trim().is_empty() => ToolCallId::new(id),
-                _ => ToolCallId::new(format!("call_{call_id}")),
-            };
-            run_buffer
-                .start_tool_call(history_call_id.clone())
-                .map_err(|err| AppError::Internal(err.to_string()))?;
-            if let Some(name) = pending.name.as_deref() {
-                run_buffer
-                    .name_tool_call(&history_call_id, name)
-                    .map_err(|err| AppError::Internal(err.to_string()))?;
-            }
-            pending.history_call_id = Some(history_call_id);
-        } else if pending.history_call_id.is_some() {
-            if let Some(provider_call_id) = pending.id.as_deref().filter(|id| !id.trim().is_empty())
-            {
-                let next_history_call_id = ToolCallId::new(provider_call_id);
-                let should_replace = pending
-                    .history_call_id
-                    .as_ref()
-                    .is_some_and(|history_call_id| history_call_id != &next_history_call_id);
-                if should_replace {
-                    let current_history_call_id =
-                        pending.history_call_id.clone().expect("checked above");
-                    run_buffer
-                        .replace_tool_call_id(
-                            &current_history_call_id,
-                            next_history_call_id.clone(),
-                        )
-                        .map_err(|err| AppError::Internal(err.to_string()))?;
-                    pending.history_call_id = Some(next_history_call_id);
-                }
-            }
-
-            if let Some(history_call_id) = pending.history_call_id.as_ref()
-                && let Some(name) = pending.name.as_deref()
-            {
-                // A second name fragment can arrive after the part already exists.
-                // Re-set the name; RunBuffer accepts repeated assignment.
-                run_buffer
-                    .name_tool_call(history_call_id, name)
-                    .map_err(|err| AppError::Internal(err.to_string()))?;
-            }
         }
 
         if let (Some(part_id), Some(operation_id)) = (
@@ -127,7 +76,6 @@ impl SessionProcessor {
                 })?;
             if part.operation_id.as_deref() != Some(operation_id.as_str()) {
                 part.operation_id = Some(operation_id);
-                should_emit = true;
             }
         }
 
@@ -160,12 +108,7 @@ impl SessionProcessor {
             {
                 operation.invocation.name = name.to_owned();
                 operation.set_title(tool_execution_title(Some(name)));
-                should_emit = true;
             }
-        }
-
-        if should_emit && let Some(part_id) = pending.part_id {
-            self.checkpoint_part(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -175,11 +118,10 @@ impl SessionProcessor {
         &self,
         run: &mut SessionRunRequest,
         assistant: &mut Message,
-        run_buffer: &mut RunBuffer,
         pending_calls: BTreeMap<String, PendingToolCall>,
     ) -> Result<(), AppError> {
         for mut pending in pending_calls.into_values() {
-            self.ensure_pending_tool_call_part(run, assistant, run_buffer, &mut pending)
+            self.ensure_pending_tool_call_part(run, assistant, &mut pending)
                 .await?;
 
             // A tool call with no name fragment at all is a malformed provider
@@ -238,17 +180,6 @@ impl SessionProcessor {
                 operation.set_advertised_tool_identity(identity);
             }
             part.set_content(PartContent::operation(operation));
-
-            // Re-assert name on RunBuffer (final, authoritative). The
-            // accumulated `arguments_json` was already streamed in chunks via
-            // `append_tool_arguments`; we don't repeat it here.
-            if let Some(history_call_id) = pending.history_call_id.as_ref() {
-                run_buffer
-                    .name_tool_call(history_call_id, tool_name)
-                    .map_err(|err| AppError::Internal(err.to_string()))?;
-            }
-
-            self.checkpoint_part(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -276,7 +207,6 @@ impl SessionProcessor {
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
         let now = Utc::now();
-        let mut should_emit = false;
 
         if pending.part_id.is_none() {
             let part_id = run.part_ids.reserve().await?;
@@ -315,7 +245,6 @@ impl SessionProcessor {
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
             pending.started_at_ms = Some(start.timestamp_millis());
-            should_emit = true;
         } else if let Some(part_id) = pending.part_id {
             let part = assistant
                 .parts
@@ -349,11 +278,6 @@ impl SessionProcessor {
             if part.operation_id != operation_id {
                 part.operation_id = operation_id.clone();
             }
-            should_emit = true;
-        }
-
-        if should_emit && let Some(part_id) = pending.part_id {
-            self.checkpoint_part(run, assistant, part_id).await?;
         }
 
         Ok(())
@@ -439,7 +363,6 @@ impl SessionProcessor {
             part.operation_id = Some(operation_id.to_owned());
         }
 
-        self.checkpoint_part(run, assistant, part_id).await?;
         Ok(())
     }
 }

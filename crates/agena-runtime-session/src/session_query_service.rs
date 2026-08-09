@@ -333,18 +333,6 @@ impl std::error::Error for SessionQueryError {}
 #[async_trait]
 /// Service for querying projected session state.
 pub trait SessionQueryService: Send + Sync {
-    /// Resolve a persisted projected message to its owning session without
-    /// exposing the concrete transcript repository.
-    async fn find_session_id_for_message(
-        &self,
-        message_id: i64,
-    ) -> Result<Option<i64>, SessionQueryError>;
-
-    async fn find_session_id_for_part(
-        &self,
-        part_id: i64,
-    ) -> Result<Option<i64>, SessionQueryError>;
-
     async fn list_session_summaries(
         &self,
         request: agena_domain::SessionListRequest,
@@ -377,11 +365,6 @@ pub trait SessionQueryService: Send + Sync {
         let _ = (session_id, activity_id);
         Ok(None)
     }
-
-    async fn list_projected_message_headers(
-        &self,
-        session_id: i64,
-    ) -> Result<Vec<SessionProjectedMessageHeader>, SessionQueryError>;
 
     async fn list_projected_messages(
         &self,
@@ -433,19 +416,6 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionQueryService for FakeQueries {
-        async fn find_session_id_for_message(
-            &self,
-            _message_id: i64,
-        ) -> Result<Option<i64>, SessionQueryError> {
-            Ok(None)
-        }
-        async fn find_session_id_for_part(
-            &self,
-            _part_id: i64,
-        ) -> Result<Option<i64>, SessionQueryError> {
-            Ok(None)
-        }
-
         async fn list_session_summaries(
             &self,
             _request: agena_domain::SessionListRequest,
@@ -470,12 +440,6 @@ mod tests {
             })
         }
 
-        async fn list_projected_message_headers(
-            &self,
-            _session_id: i64,
-        ) -> Result<Vec<super::SessionProjectedMessageHeader>, SessionQueryError> {
-            Ok(Vec::new())
-        }
         async fn list_projected_messages(
             &self,
             _session_id: i64,

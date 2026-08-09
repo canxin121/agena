@@ -78,24 +78,39 @@ impl Backend {
         &self,
         session_id: i64,
         limit: u64,
-    ) -> Result<Vec<agena_runtime::RuntimeTimelineEvent>> {
+    ) -> Result<Vec<SessionTimelineEntry>> {
         let limit = usize::try_from(limit).unwrap_or(usize::MAX);
-        let events = self
+        let view = self
             .application
-            .event_query_service()
+            .session_store_facade()
             .map_err(anyhow::Error::new)?
-            .list_timeline_events_before(
-                &EventFilter::new(Scope::Session { session_id }),
-                agena_runtime::RuntimeReverseEventRange {
-                    before_seq_global: None,
-                    limit,
-                },
-            )
+            .load(session_id)
             .await
             .map_err(anyhow::Error::new)?;
-        let mut all = events;
-        all.sort_by_key(|event| event.meta.seq_global);
-        Ok(all)
+        let visible = view
+            .parts
+            .into_iter()
+            .filter(|part| part.visibility.visible_to_user())
+            .collect::<Vec<_>>();
+        let skip = visible.len().saturating_sub(limit);
+        Ok(visible
+            .into_iter()
+            .skip(skip)
+            .map(|part| SessionTimelineEntry {
+                part_id: part.part_id,
+                kind: part.kind,
+                role: part.role.as_str().to_owned(),
+                state: part.state.as_str().to_owned(),
+                summary: part.summary,
+                content: part.content,
+                rendered_markdown: part.rendered_markdown,
+                parent_part_id: part.parent_part_id,
+                run_id: part.run_id,
+                revision: part.revision,
+                created_at_ms: part.created_at_ms,
+                updated_at_ms: part.updated_at_ms,
+            })
+            .collect())
     }
 
     pub async fn get_session_state(&self, session_id: i64) -> Result<SessionExecutionResource> {
@@ -167,24 +182,14 @@ impl Backend {
         after_seq: Option<i64>,
         force: bool,
     ) -> Result<SessionRefresh> {
-        let events = self
+        let queries = self
             .application
-            .event_query_service()
+            .session_query_service()
             .map_err(anyhow::Error::new)?;
-        let filter = EventFilter::new(Scope::Session { session_id });
-        let latest_event_seq = events
-            .list_events_before(
-                &filter,
-                agena_runtime::RuntimeReverseEventRange {
-                    before_seq_global: None,
-                    limit: 1,
-                },
-            )
+        let latest_event_seq = queries
+            .latest_event_seq(session_id)
             .await
-            .map_err(anyhow::Error::new)?
-            .into_iter()
-            .map(|event| event.meta.seq_global)
-            .max();
+            .map_err(anyhow::Error::new)?;
         let changed = force
             || match (after_seq, latest_event_seq) {
                 (None, Some(_)) => true,
@@ -200,20 +205,10 @@ impl Backend {
             });
         }
 
-        let event_count = match after_seq {
-            Some(after) => events
-                .list_events(
-                    &filter,
-                    agena_runtime::RuntimeEventRange {
-                        after_seq_global: after,
-                        limit: 256,
-                    },
-                )
-                .await
-                .map_err(anyhow::Error::new)?
-                .len(),
-            None => 0,
-        };
+        let event_count = after_seq
+            .zip(latest_event_seq)
+            .map(|(after, current)| current.saturating_sub(after).clamp(0, 256) as usize)
+            .unwrap_or(0);
 
         let execution = self.get_session_state(session_id).await?;
         Ok(SessionRefresh {
@@ -229,34 +224,23 @@ impl Backend {
         &self,
         session_id: i64,
     ) -> Option<mpsc::UnboundedReceiver<LiveEvent>> {
-        let stream = self.application.event_stream_service().ok()?;
+        let store = self.application.session_store_facade().ok()?;
         let queries = self.application.session_execution_services().ok()?.queries;
         let (tx, rx) = mpsc::unbounded_channel::<LiveEvent>();
-        // Interactive requests raised by delegated child sessions are exposed
-        // through the selected parent's execution resource. Listen globally
-        // and turn relevant descendant events into refresh-only signals.
-        let mut subscription =
-            stream.subscribe_presentation_events(EventFilter::new(Scope::Global))?;
+        let (change_tx, mut change_rx) = mpsc::unbounded_channel();
+        let subscription = store.subscribe_all(std::sync::Arc::new(move |change| {
+            let _ = change_tx.send(change);
+        }));
+        let change_output = tx.clone();
         tokio::spawn(async move {
-            while let Some(item) = subscription.recv().await {
-                let event = match item {
-                    agena_runtime::RuntimeLivePresentationSubscriptionItem::Event(event) => {
-                        Some(*event)
-                    }
-                    agena_runtime::RuntimeLivePresentationSubscriptionItem::Lagged(_) => None,
+            let _subscription = subscription;
+            loop {
+                let change = tokio::select! {
+                    change = change_rx.recv() => change,
+                    _ = change_output.closed() => break,
                 };
-                if event.is_none() {
-                    let live = LiveEvent {
-                        event: None,
-                        triggers_refresh: true,
-                        force_refresh: true,
-                    };
-                    if tx.send(live).is_err() {
-                        break;
-                    }
-                    continue;
-                }
-                let event = event.expect("event should exist after lag handling");
+                let Some(change) = change else { break };
+                let event = presentation_event_from_session_change(change);
                 if event.meta.session_id != Some(session_id) {
                     let Some(descendant_id) = event.meta.session_id else {
                         continue;
@@ -271,7 +255,7 @@ impl Backend {
                     if !is_descendant {
                         continue;
                     }
-                    if tx
+                    if change_output
                         .send(LiveEvent {
                             event: None,
                             triggers_refresh: true,
@@ -283,25 +267,34 @@ impl Backend {
                     }
                     continue;
                 }
-                let (triggers_refresh, force_refresh) = match &event.kind {
-                    agena_runtime::RuntimePresentationEventKind::Refresh { force_refresh } => {
-                        (true, *force_refresh)
-                    }
-                    _ => (false, false),
-                };
                 let live = LiveEvent {
                     event: Some(event),
-                    triggers_refresh,
-                    // A permission event is itself the state transition the
-                    // UI needs to observe. Do not let an already-recorded
-                    // event watermark turn this into an empty refresh.
-                    force_refresh,
+                    triggers_refresh: true,
+                    force_refresh: false,
                 };
-                if tx.send(live).is_err() {
+                if change_output.send(live).is_err() {
                     break;
                 }
             }
         });
+        if let Ok(signals) = self.application.live_signal_service() {
+            let mut subscription = signals.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    let item = tokio::select! {
+                        item = subscription.recv() => item,
+                        _ = tx.closed() => break,
+                    };
+                    let Some(item) = item else { break };
+                    let live = live_event_from_runtime_signal(item, session_id);
+                    if let Some(live) = live
+                        && tx.send(live).is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
         Some(rx)
     }
 
@@ -667,14 +660,132 @@ impl Backend {
     }
 }
 
+fn presentation_event_from_session_change(
+    change: agena_storage::store::SessionChange,
+) -> agena_runtime::RuntimePresentationEvent {
+    let (session_id, workspace_id, seq_global, seq_session, created_at_ms) = match &change {
+        agena_storage::store::SessionChange::PartAdded { session_id, part }
+        | agena_storage::store::SessionChange::PartUpdated { session_id, part } => (
+            *session_id,
+            None,
+            part.updated_at_ms,
+            Some(part.revision),
+            part.updated_at_ms,
+        ),
+        agena_storage::store::SessionChange::PartRemoved {
+            session_id,
+            part_id,
+        } => (
+            *session_id,
+            None,
+            *part_id,
+            None,
+            chrono::Utc::now().timestamp_millis(),
+        ),
+        agena_storage::store::SessionChange::SessionMetaUpdated { session_id, meta } => (
+            *session_id,
+            Some(meta.workspace_id),
+            meta.version,
+            Some(meta.version),
+            meta.updated_at_ms,
+        ),
+    };
+    agena_runtime::RuntimePresentationEvent {
+        meta: agena_runtime::RuntimePresentationEventMeta {
+            id: uuid::Uuid::new_v4(),
+            seq_global,
+            seq_session,
+            session_id: Some(session_id),
+            workspace_id,
+            created_at: chrono::DateTime::from_timestamp_millis(created_at_ms)
+                .unwrap_or(chrono::DateTime::UNIX_EPOCH),
+            causation_id: None,
+            correlation_id: None,
+            envelope_schema: 1,
+        },
+        invalidates_ancestor_projection: true,
+        durable: true,
+        kind: agena_runtime::RuntimePresentationEventKind::PartPatch(Box::new(change)),
+    }
+}
+
+fn live_event_from_runtime_signal(
+    item: agena_runtime::RuntimeLiveSignalItem,
+    selected_session_id: i64,
+) -> Option<LiveEvent> {
+    let signal = match item {
+        agena_runtime::RuntimeLiveSignalItem::Lagged(_) => {
+            return Some(LiveEvent {
+                event: None,
+                triggers_refresh: true,
+                force_refresh: true,
+            });
+        }
+        agena_runtime::RuntimeLiveSignalItem::Signal(signal) => signal,
+    };
+    let now = chrono::Utc::now();
+    let (session_id, invalidates_ancestor_projection, kind) = match signal {
+        agena_runtime::RuntimeLiveSignal::Activity(activity) => {
+            let session_id = activity.activity.session_id;
+            let invalidates_ancestor = activity.activity.parent_session_id
+                == Some(selected_session_id)
+                && session_id != Some(selected_session_id);
+            if session_id != Some(selected_session_id) && !invalidates_ancestor {
+                return None;
+            }
+            (
+                session_id,
+                invalidates_ancestor,
+                agena_runtime::RuntimePresentationEventKind::ActivityChanged {
+                    activity: Box::new(activity.activity),
+                    reason: activity.reason,
+                },
+            )
+        }
+        agena_runtime::RuntimeLiveSignal::Plugin { session_id, .. } => {
+            if session_id != Some(selected_session_id) {
+                return None;
+            }
+            (
+                session_id,
+                false,
+                agena_runtime::RuntimePresentationEventKind::Refresh {
+                    force_refresh: false,
+                },
+            )
+        }
+        agena_runtime::RuntimeLiveSignal::ToolRegistryChanged(_) => return None,
+    };
+    Some(LiveEvent {
+        event: Some(agena_runtime::RuntimePresentationEvent {
+            meta: agena_runtime::RuntimePresentationEventMeta {
+                id: uuid::Uuid::new_v4(),
+                seq_global: now.timestamp_millis(),
+                seq_session: None,
+                session_id,
+                workspace_id: None,
+                created_at: now,
+                causation_id: None,
+                correlation_id: None,
+                envelope_schema: 1,
+            },
+            invalidates_ancestor_projection,
+            durable: false,
+            kind,
+        }),
+        triggers_refresh: true,
+        force_refresh: false,
+    })
+}
+
 use crate::Result;
 use crate::{
     ActivityId, ApiCommand, Backend, CommandResult, CompactSessionParams, ContinueRunParams,
-    EventFilter, ForkSessionParams, GetOperationDetailParams, GetSessionParams, HashSet,
-    ListSessionsParams, LiveEvent, MarkInteractiveRequestPresentedParams, OperationDetailResource,
-    Path, PathBuf, PermissionReply, PermissionReplyKind, PermissionScope, Query, QueryResult,
-    ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, RunOptions, Scope,
+    ForkSessionParams, GetOperationDetailParams, GetSessionParams, HashSet, ListSessionsParams,
+    LiveEvent, MarkInteractiveRequestPresentedParams, OperationDetailResource, Path, PathBuf,
+    PermissionReply, PermissionReplyKind, PermissionScope, Query, QueryResult,
+    ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, RunOptions,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
-    SubmitMessageParams, UpdateSessionSelectionParams, UserInputReply, api_error, build_file_index,
-    direct_path_candidate, dispatch, file_search_score, mpsc,
+    SessionTimelineEntry, SubmitMessageParams, UpdateSessionSelectionParams, UserInputReply,
+    api_error, build_file_index, direct_path_candidate, dispatch, file_search_score, mpsc,
 };

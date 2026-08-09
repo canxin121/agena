@@ -187,7 +187,6 @@ impl RuntimeSnapshot {
         if let Ok(value) = agena_runtime::config_resolution_json_value(&resolution) {
             agena_runtime::dispatch_config_if_nonempty(Arc::clone(&plugins), value).await;
         }
-        let reusing_session_manager = existing_session_manager.is_some();
         let (lsp_registry, lsp_registration) = agena_runtime::compose_lsp_services(
             &resolution.config.plugins,
             workspace_root,
@@ -210,8 +209,9 @@ impl RuntimeSnapshot {
                 monitor_registry: monitor_registry.clone(),
             })
         });
-        resume_session_state(session_manager.as_ref(), reusing_session_manager).await?;
-        let event_bridge = build_event_bridge(session_manager.as_ref(), &plugins);
+        // v2 has no persisted event store to resume (14.3): interrupted-run
+        // reconciliation is deferred to `SessionManager::get_session` on open
+        // (17.4), so there is nothing to do here.
         let plugin_shutdown = agena_runtime::plugin_shutdown_guard(Arc::clone(&plugins));
         let services = agena_runtime::RuntimeServiceBundle::new(
             providers,
@@ -222,7 +222,7 @@ impl RuntimeSnapshot {
             mcp_manager,
             lsp_registry,
             lsp_registration,
-            event_bridge,
+            None,
             plugin_shutdown,
         );
         let tasks = agena_runtime::RuntimeTaskState::new(agena_runtime::runtime_watch_paths(

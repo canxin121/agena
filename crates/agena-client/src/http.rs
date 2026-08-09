@@ -14,10 +14,10 @@ use agena_api::{
     notifications::Notification,
     queries::{
         ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
-        GetSessionParams, GetWorkspaceParams, ListEventsParams, ListPermissionRulesParams,
+        GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
         ListProviderAdapterModelsParams, ListProviderModelsParams,
-        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-        PaginatedEvents, Query, QueryResult,
+        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
+        QueryResult,
     },
     resource::{
         BackgroundActivityResource, HealthResponse, PermissionRuleResource,
@@ -91,15 +91,9 @@ impl AgenaClient {
             .expect("valid endpoint")
     }
 
-    fn append_event_query(url: &mut url::Url, params: &ListEventsParams) {
+    fn append_live_scope(url: &mut url::Url, scope: &agena_api::Scope) {
         let mut q = url.query_pairs_mut();
-        if let Some(seq) = params.since_seq_global {
-            q.append_pair("since_seq_global", &seq.to_string());
-        }
-        if let Some(limit) = params.limit {
-            q.append_pair("limit", &limit.to_string());
-        }
-        match &params.scope {
+        match scope {
             agena_api::Scope::Global => {}
             agena_api::Scope::Workspace { workspace_id } => {
                 q.append_pair("scope_kind", "workspace");
@@ -110,25 +104,11 @@ impl AgenaClient {
                 q.append_pair("session_id", &session_id.to_string());
             }
         }
-        if let Some(kinds) = &params.kinds {
-            let csv = kinds
-                .iter()
-                .map(|k| k.as_str())
-                .collect::<Vec<_>>()
-                .join(",");
-            q.append_pair("kinds", &csv);
-        }
     }
 
-    fn events_url(&self, params: &ListEventsParams) -> url::Url {
-        let mut url = self.endpoint("/api/v1/events");
-        Self::append_event_query(&mut url, params);
-        url
-    }
-
-    fn events_stream_url(&self, params: &ListEventsParams) -> url::Url {
-        let mut url = self.endpoint("/api/v1/events/stream");
-        Self::append_event_query(&mut url, params);
+    fn changes_stream_url(&self, scope: &agena_api::Scope) -> url::Url {
+        let mut url = self.endpoint("/api/v1/changes/stream");
+        Self::append_live_scope(&mut url, scope);
         url
     }
 
@@ -237,9 +217,13 @@ impl AgenaClient {
         notification: Notification,
     ) -> bool {
         let item = match notification {
-            Notification::Event { event, .. } => Ok(SubscriptionEvent::Event(*event)),
+            Notification::SessionChanged { change, .. } => {
+                Ok(SubscriptionEvent::SessionChanged(*change))
+            }
+            Notification::RuntimeSignal { signal, .. } => {
+                Ok(SubscriptionEvent::RuntimeSignal(*signal))
+            }
             Notification::Lagged { skipped, .. } => Ok(SubscriptionEvent::Lagged(skipped)),
-            Notification::Resumed { .. } => return true,
             Notification::SubscriptionClosed { reason, .. } => Err(ClientError::Protocol(format!(
                 "sse subscription closed: {reason}"
             ))),
@@ -361,20 +345,11 @@ impl AgenaClient {
         .await
     }
 
-    pub async fn list_events(
+    pub async fn stream_changes(
         &self,
-        params: ListEventsParams,
-    ) -> Result<PaginatedEvents, ClientError> {
-        let url = self.events_url(&params);
-        let response = self.http.get(url).send().await?;
-        self.parse_json(response).await
-    }
-
-    pub async fn stream_notifications(
-        &self,
-        params: ListEventsParams,
+        scope: agena_api::Scope,
     ) -> Result<NotificationSubscription, ClientError> {
-        let url = self.events_stream_url(&params);
+        let url = self.changes_stream_url(&scope);
         let response = self
             .http
             .get(url)
@@ -892,7 +867,6 @@ impl AgenaClient {
                 ))
                 .await?,
             )),
-            Query::ListEvents(p) => Ok(QueryResult::Events(self.list_events(p).await?)),
             Query::ListPermissionRules(ListPermissionRulesParams {
                 cursor,
                 limit,

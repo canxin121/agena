@@ -486,10 +486,7 @@ impl SessionManager {
         session_id: i64,
     ) -> Result<(Arc<SessionManagerState>, Session), AppError> {
         let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         // Permission replies can arrive after a global reload or a live
         // session overlay update. Refresh before resolving the pending tool so
         // an approval continuation cannot use a stale permission snapshot.
@@ -538,7 +535,7 @@ impl SessionManager {
         let continuation_model_turn_id = matching_model_turn_id(&session, model_turn_id, &options);
         if self.apply_run_selection_to_session(&mut session, &options) {
             session = self
-                .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+                .persist_session_changes(session, Vec::new(), None, state.clone())
                 .await?;
         }
 
@@ -610,7 +607,7 @@ impl SessionManager {
             None
         };
         if continue_model && self.apply_run_selection_to_session(&mut session, &options) {
-            self.persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+            self.persist_session_changes(session, Vec::new(), None, state.clone())
                 .await?;
         }
 
@@ -632,10 +629,7 @@ impl SessionManager {
             // A plugin may have persisted nested interaction state while the
             // blocking invocation was in flight. Apply the terminal result to
             // the latest projection, exactly as ordinary tool execution does.
-            let session = manager
-                .store
-                .load_session(session_id, state.cache_policy())
-                .await?;
+            let session = manager.store.load_session(session_id).await?;
             let session = manager
                 .apply_tool_execution_result(session, &pending_tool, execution, state.clone())
                 .await?;
@@ -681,39 +675,26 @@ impl SessionManager {
     async fn persist_tool_completion(
         &self,
         mut session: Session,
-        _assistant_message: Message,
         resolved: &ResolvedPendingTool,
         persisted_rules: Vec<PersistedPermissionRule>,
-        mut terminal_events: Vec<EventKind>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let tool_call_id = tool_call_id_for(resolved);
-        let mut changed_part_ids =
-            cancel_unanswered_request_parts_for_operation(&mut session, tool_call_id.as_ref())?;
+        let mut changed_part_ids = cancel_unanswered_request_parts_for_operation(
+            &mut session,
+            resolved.operation_id.as_str(),
+        )?;
         changed_part_ids.push(resolved.pending.part.part_id);
         let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
-        let session = Box::pin(self.persist_session_changes_with_rules(
+        self.persist_session_changes_with_rules(
             session,
             vec![MessageCheckpoint::parts(
                 assistant_message.id,
                 changed_part_ids,
             )],
-            Vec::new(),
             persisted_rules,
             state.clone(),
-        ))
-        .await?;
-        let mut events = vec![EventKind::ToolCallCompleted(ToolCallCompleted {
-            message_id: HistoryMessageId(assistant_message.id),
-            call_id: tool_call_id,
-            run_id: HistoryRunId::new(),
-            tool_name: resolved.invocation.name.clone().into(),
-            completed_at: Utc::now(),
-        })];
-        events.append(&mut terminal_events);
-        self.store
-            .append_history_items(session, events, state.cache_policy())
-            .await
+        )
+        .await
     }
 
     async fn reply_permission_dispatch(
@@ -787,8 +768,8 @@ impl SessionManager {
 
         let replied_at_ms = Utc::now().timestamp_millis();
         let resolved_tool = resolve_pending_tool(&session, &pending.tool)?;
-        let operation_id = resolved_tool.operation_id.clone();
-        let call_id = resolved_tool.call_id;
+        let _operation_id = resolved_tool.operation_id.clone();
+        let _call_id = resolved_tool.call_id;
         {
             let tool_part = session
                 .part_mut(&pending.tool.part)
@@ -864,7 +845,7 @@ impl SessionManager {
             permission_request.requested_actions.clone()
         };
         let persisted_rules = persisted_rules_for_reply(
-            &self.store,
+            self,
             request.request.session_id,
             persisted_actions.as_slice(),
             &request.request.reply,
@@ -878,16 +859,6 @@ impl SessionManager {
                     replied_assistant_message.id,
                     pending.tool.part.part_id,
                 )],
-                vec![EventKind::PermissionReplied(PermissionRepliedEvent {
-                    session_id: request.request.session_id,
-                    operation_id,
-                    call_id,
-                    request_id: request.request.reply.request_id.clone(),
-                    kind: request.request.reply.kind,
-                    reason: request.request.reply.reason.clone(),
-                    scope: request.request.reply.scope.map(permission_scope_label),
-                    ts_ms: Utc::now().timestamp_millis(),
-                })],
                 persisted_rules.clone(),
                 state.clone(),
             )
@@ -1081,13 +1052,7 @@ impl SessionManager {
             return Ok(session);
         }
         session = self
-            .persist_session_changes(
-                session,
-                changed_checkpoints,
-                Vec::new(),
-                None,
-                state.clone(),
-            )
+            .persist_session_changes(session, changed_checkpoints, None, state.clone())
             .await?;
         drop(reply_guard);
         Ok(session)
@@ -1178,7 +1143,6 @@ impl SessionManager {
                         assistant_message.id,
                         pending.request.part_id,
                     )],
-                    Vec::new(),
                     None,
                     state.clone(),
                 )
@@ -1449,20 +1413,18 @@ mod tests {
     }
 }
 use super::{
-    AppError, Arc, DecisionTraceStep, EventKind, ExecutionControl, ExecutionSource,
-    ExecutionStatus, HistoryMessageId, HistoryRunId, InteractiveRequestPart, Message,
-    MessageCheckpoint, MessageMetadata, MessagePart, MessageSource, ModelRef,
-    ModelSpeedModeRequestOverride, OperationPart, PartContent, PathBuf, PermissionAction,
-    PermissionMode, PermissionRepliedEvent, PermissionReplyKind, PermissionScope,
+    AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ExecutionStatus,
+    InteractiveRequestPart, Message, MessageCheckpoint, MessageMetadata, MessagePart,
+    MessageSource, ModelRef, ModelSpeedModeRequestOverride, OperationPart, PartContent, PathBuf,
+    PermissionAction, PermissionMode, PermissionReplyKind, PermissionScope,
     PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget, ProviderPromptAnchor,
-    RequestPart, ResolvedPendingTool, Role, RunAborted, RunCompleted, RunStarted, SessionCommit,
-    SessionExecutionReplyRequest, SessionManager, SessionManagerState, SessionPendingTool,
-    SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest, SessionRunTermination,
-    StreamingToolExecution, TimeRange, ToolCallCompleted, ToolError, ToolInvocation,
-    ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title, build_message,
-    build_request_part, completed_lifecycle, custom_payload_value, execution_control_to_app_error,
-    host_user_input_response, mpsc, operation_blocks_from_tool_output,
-    payload_tool_name_for_invocation, permission_action_key, permission_scope_label,
+    RequestPart, ResolvedPendingTool, Role, SessionExecutionReplyRequest, SessionManager,
+    SessionManagerState, SessionPendingTool, SessionPermissionReplyRequest, SessionRunOptions,
+    SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange, ToolError,
+    ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title,
+    build_message, build_request_part, completed_lifecycle, custom_payload_value,
+    execution_control_to_app_error, host_user_input_response, mpsc,
+    operation_blocks_from_tool_output, payload_tool_name_for_invocation, permission_action_key,
     persisted_rules_for_reply, resolve_pending_tool, run_abort_reason, text_result_blocks,
-    tool_call_id_for, tool_name, user_input_execution,
+    tool_name, user_input_execution,
 };

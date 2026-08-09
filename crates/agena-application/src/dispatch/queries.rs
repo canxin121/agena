@@ -62,50 +62,6 @@ pub async fn dispatch_query(
             })
             .await?,
         )),
-        Query::ListEvents(ListEventsParams {
-            scope,
-            kinds,
-            since_seq_global,
-            limit,
-        }) => {
-            let events = state.event_query_service()?;
-            let filter = agena_domain::EventFilter {
-                scope: match scope {
-                    agena_api::Scope::Global => agena_domain::EventScope::Global,
-                    agena_api::Scope::Workspace { workspace_id } => {
-                        agena_domain::EventScope::Workspace { workspace_id }
-                    }
-                    agena_api::Scope::Session { session_id } => {
-                        agena_domain::EventScope::Session { session_id }
-                    }
-                },
-                kinds,
-                since_seq_global,
-            };
-            let limit = normalize_limit(limit) as usize;
-            let range = agena_runtime::RuntimeEventRange {
-                after_seq_global: since_seq_global.unwrap_or(0),
-                limit,
-            };
-            let events = events
-                .list_events(&filter, range)
-                .await
-                .map_err(|e| ApplicationError::internal(e.to_string()))?;
-            let returned = events.len() as u64;
-            let next_cursor = events.last().map(|e| e.meta.seq_global.to_string());
-            let items = events
-                .iter()
-                .map(crate::event_projection::event_resource_from_runtime)
-                .collect::<Vec<_>>();
-            Ok(QueryResult::Events(PaginatedEvents {
-                items,
-                page: PageInfo {
-                    next_cursor,
-                    has_more: returned as usize >= limit,
-                    returned,
-                },
-            }))
-        }
         Query::Health => Ok(QueryResult::Health(agena_api::resource::HealthResponse {
             status: "ok".into(),
             generation: 0,
@@ -248,11 +204,10 @@ pub async fn dispatch_query(
 use super::{
     ActivityLogsParams, Application, ApplicationError, CursorPaginationQuery, GetActivityParams,
     GetOperationDetailParams, GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams,
-    ListActivitiesParams, ListEventsParams, ListPermissionRulesParams,
-    ListProviderAdapterModelsParams, ListProviderModelsParams,
-    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-    OperationDetailResource, PageInfo, PaginatedEvents, Query, QueryResult, SearchPaginationQuery,
-    SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result, normalize_limit,
+    ListActivitiesParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
+    ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
+    ListWorkspacesParams, OperationDetailResource, Query, QueryResult, SearchPaginationQuery,
+    SessionListQuery, WorkspaceListQuery, http_optional_result, http_page_result,
     runtime_status_response,
 };
 

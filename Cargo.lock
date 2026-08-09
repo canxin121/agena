@@ -167,6 +167,7 @@ dependencies = [
  "agena-plugin-marketplace",
  "agena-runtime",
  "agena-runtime-notifications",
+ "agena-storage",
  "async-stream",
  "async-trait",
  "axum",
@@ -329,6 +330,7 @@ dependencies = [
  "agena-mcp-client",
  "agena-mcp-server",
  "agena-runtime",
+ "agena-storage",
  "anyhow",
  "async-trait",
  "clap",
@@ -1225,9 +1227,11 @@ dependencies = [
  "agena-plugin-sdk",
  "agena-provider",
  "agena-runtime",
+ "agena-storage",
  "agena-tui",
  "anyhow",
  "base64",
+ "chrono",
  "ignore",
  "imagesize 0.15.0",
  "mime_guess",
@@ -1235,6 +1239,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

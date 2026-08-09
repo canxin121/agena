@@ -1,11 +1,10 @@
 use super::{
-    ApplicationError, ApplicationResult, ApplicationService, CursorPaginationQuery, EventCursor,
-    HashMap, PageOrder, PaginatedResponse, SessionCreateRequest, SessionCursor,
-    SessionLifecycleState, SessionRelationKind, SessionResource, SessionUpdateRequest,
-    SubtaskStatus, build_page, decode_cursor, execution_access_from_domain, non_empty,
-    normalize_limit, timestamp_millis_to_utc, trim_page,
+    ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse,
+    SessionCreateRequest, SessionCursor, SessionLifecycleState, SessionRelationKind,
+    SessionResource, SessionUpdateRequest, SubtaskStatus, build_page, decode_cursor,
+    execution_access_from_domain, non_empty, normalize_limit, timestamp_millis_to_utc, trim_page,
 };
-use agena_storage::SessionSummaryListQuery;
+use agena_storage::store::SessionListQuery;
 
 impl ApplicationService {
     pub async fn list_sessions(
@@ -17,19 +16,23 @@ impl ApplicationService {
             .pagination
             .cursor()
             .map(decode_cursor::<SessionCursor>)
-            .transpose()?;
+            .transpose()?
+            .map(|cursor| agena_storage::store::SessionCursor {
+                updated_at_ms: cursor.updated_at_ms,
+                id: cursor.id,
+            });
+        let fetch_limit = i64::try_from(limit.saturating_add(1)).map_err(|_| {
+            ApplicationError::internal("page limit cannot be represented in storage")
+        })?;
         let rows = self
-            .session_summary_repository
-            .list(SessionSummaryListQuery {
+            .session_store
+            .list_session_summaries(SessionListQuery {
                 workspace_id: query.workspace_id,
-                roots_only: query.roots,
                 parent_id: query.parent_id,
+                roots_only: query.roots,
                 search: non_empty(query.pagination.search()).map(ToString::to_string),
-                before_updated_at_ms: cursor.map(|value| value.updated_at_ms),
-                before_id: cursor.map(|value| value.id),
-                offset: 0,
-                limit: limit + 1,
-                include_subagents: true,
+                limit: Some(fetch_limit),
+                before: cursor,
             })
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
@@ -38,22 +41,9 @@ impl ApplicationService {
             updated_at_ms: row.updated_at_ms,
             id: row.id,
         });
-        let session_ids = slice.iter().map(|row| row.id).collect::<Vec<_>>();
-        let message_stats = self
-            .session_stats_repository
-            .event_stats(&session_ids)
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let child_counts = self
-            .session_stats_repository
-            .child_counts(&session_ids)
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
         let resources = slice
             .iter()
-            .map(|summary| {
-                session_resource_from_storage_summary(summary, &message_stats, &child_counts)
-            })
+            .map(session_resource_from_storage_summary)
             .collect::<ApplicationResult<Vec<_>>>()?;
 
         build_page(resources, has_more, next_cursor, PageOrder::Desc, limit)
@@ -61,8 +51,8 @@ impl ApplicationService {
 
     pub async fn get_session(&self, session_id: i64) -> ApplicationResult<Option<SessionResource>> {
         let Some(summary) = self
-            .session_summary_repository
-            .get(session_id)
+            .session_store
+            .get_session_summary(session_id)
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?
         else {
@@ -71,21 +61,7 @@ impl ApplicationService {
         if summary.lifecycle_state != agena_domain::SessionLifecycleState::Ready {
             return Ok(None);
         }
-        let message_stats = self
-            .session_stats_repository
-            .event_stats(&[session_id])
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let child_counts = self
-            .session_stats_repository
-            .child_counts(&[session_id])
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        Ok(Some(session_resource_from_storage_summary(
-            &summary,
-            &message_stats,
-            &child_counts,
-        )?))
+        Ok(Some(session_resource_from_storage_summary(&summary)?))
     }
 
     pub async fn create_session(
@@ -103,25 +79,20 @@ impl ApplicationService {
         }
 
         let created = self
-            .session_mutation_repository
-            .create(
-                request.workspace_id,
-                request.session.parent_id,
-                request.session.title,
-            )
+            .session_store
+            .create_session(agena_storage::store::NewSession {
+                workspace_id: request.workspace_id,
+                parent_id: request.session.parent_id,
+                relation_kind: agena_domain::SessionRelationKind::Child,
+                cutoff_part_id: None,
+                title: request.session.title,
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let message_stats = self
-            .session_stats_repository
-            .event_stats(&[created.id])
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let child_counts = self
-            .session_stats_repository
-            .child_counts(&[created.id])
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        session_resource_from_storage_summary(&created, &message_stats, &child_counts)
+        session_resource_from_storage_meta(&created)
     }
 
     pub async fn replace_session(
@@ -132,104 +103,21 @@ impl ApplicationService {
         self.ensure_session_model(session_id).await?;
 
         let updated = self
-            .session_mutation_repository
+            .session_store
             .rename(session_id, request.title)
             .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
-            .ok_or_else(|| {
-                ApplicationError::not_found_with_diagnostic(
-                    "The session was not found.",
-                    format!("session not found: {session_id}"),
-                )
-            })?;
-        let message_stats = self
-            .session_stats_repository
-            .event_stats(&[session_id])
-            .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let child_counts = self
-            .session_stats_repository
-            .child_counts(&[session_id])
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        session_resource_from_storage_summary(&updated, &message_stats, &child_counts)
+        session_resource_from_storage_meta(&updated)
     }
 
     pub async fn delete_session(&self, session_id: i64) -> ApplicationResult<SessionResource> {
-        self.ensure_session_model(session_id).await?;
-        let existing = self
-            .session_summary_repository
-            .get(session_id)
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?
-            .ok_or_else(|| {
-                ApplicationError::not_found_with_diagnostic(
-                    "The session was not found.",
-                    format!("session not found: {session_id}"),
-                )
-            })?;
-        let message_stats = self
-            .session_stats_repository
-            .event_stats(&[session_id])
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let child_counts = self
-            .session_stats_repository
-            .child_counts(&[session_id])
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-        let resource =
-            session_resource_from_storage_summary(&existing, &message_stats, &child_counts)?;
-        self.session_mutation_repository
+        let summary = self.ensure_session_model(session_id).await?;
+        let resource = session_resource_from_storage_summary(&summary)?;
+        self.session_store
             .delete(session_id)
             .await
             .map_err(|error| ApplicationError::internal(error.to_string()))?;
         Ok(resource)
-    }
-
-    pub async fn list_session_events(
-        &self,
-        events: &dyn agena_runtime::RuntimeEventQueryService,
-        session_id: i64,
-        query: CursorPaginationQuery,
-    ) -> ApplicationResult<PaginatedResponse<agena_runtime::RuntimeEvent>> {
-        self.ensure_session_exists(session_id).await?;
-        let limit = normalize_limit(query.limit);
-        let cursor = query
-            .cursor
-            .as_deref()
-            .map(decode_cursor::<EventCursor>)
-            .transpose()?;
-
-        let fetch_limit = usize::try_from(limit)
-            .unwrap_or(usize::MAX)
-            .saturating_add(1);
-        let newest_first = events
-            .list_events_before(
-                &agena_domain::EventFilter {
-                    scope: agena_domain::EventScope::Session { session_id },
-                    kinds: None,
-                    since_seq_global: None,
-                },
-                agena_runtime::RuntimeReverseEventRange {
-                    before_seq_global: cursor.map(|cursor| cursor.seq),
-                    limit: fetch_limit,
-                },
-            )
-            .await
-            .map_err(|error| ApplicationError::internal(error.to_string()))?;
-
-        // Storage returns newest-first; reverse after truncation so clients
-        // can append each page in ascending event order.
-        let has_more = newest_first.len() > limit as usize;
-        let mut slice: Vec<_> = newest_first.into_iter().take(limit as usize).collect();
-        let next_cursor = slice.last().map(|e| EventCursor {
-            seq: e.meta.seq_global,
-            id: e.meta.seq_global,
-        });
-        slice.reverse();
-
-        build_page(slice, has_more, next_cursor, PageOrder::Asc, limit)
     }
 }
 
@@ -261,31 +149,18 @@ pub(crate) fn session_resource_from_summary(
 }
 
 fn session_resource_from_storage_summary(
-    summary: &agena_storage::SessionSummaryRecord,
-    message_stats: &HashMap<i64, agena_storage::SessionEventStats>,
-    child_counts: &HashMap<i64, i64>,
+    summary: &agena_storage::store::SessionSummary,
 ) -> ApplicationResult<SessionResource> {
     let subtask_status = if summary.relation_kind.is_subagent() {
         summary
             .subtask_status
+            .as_deref()
+            .and_then(agena_domain::SubtaskStatus::parse)
             .map(subtask_status_from_domain)
-            .or_else(|| Some(SubtaskStatus::default()))
+            .or(Some(SubtaskStatus::default()))
     } else {
         None
     };
-    let stats = message_stats.get(&summary.id).copied();
-    let message_count = stats
-        .map(|item| u64::try_from(item.message_count))
-        .transpose()
-        .map_err(|_| ApplicationError::internal("invalid negative message count"))?
-        .unwrap_or_default();
-    let child_session_count = child_counts
-        .get(&summary.id)
-        .copied()
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|_| ApplicationError::internal("invalid negative child session count"))?
-        .unwrap_or_default();
     Ok(SessionResource {
         id: summary.id,
         parent_id: summary.parent_id,
@@ -296,20 +171,70 @@ fn session_resource_from_storage_summary(
         version: summary.version,
         relation_kind: session_relation_kind_from_domain(summary.relation_kind),
         lifecycle_state: session_lifecycle_state_from_domain(summary.lifecycle_state),
-        source_cutoff_seq_global: summary.source_cutoff_seq_global,
-        source_message_id: summary.source_message_id,
+        source_cutoff_seq_global: None,
+        source_message_id: None,
         is_subagent: summary.relation_kind.is_subagent(),
         task_id: summary.task_id.clone(),
-        subtask_access: summary.subtask_access.map(execution_access_from_domain),
+        // v2 dissolved per-summary `subtask_access` (13.2); wire keeps it None.
+        subtask_access: None,
         subtask_status,
         created_at: timestamp_millis_to_utc(summary.created_at_ms)?,
         updated_at: timestamp_millis_to_utc(summary.updated_at_ms)?,
-        message_count,
-        child_session_count,
-        last_message_at: stats
-            .and_then(|item| item.last_message_at_ms)
+        message_count: u64::try_from(summary.message_count).map_err(|_| {
+            ApplicationError::internal(format!(
+                "invalid negative message count for session {}",
+                summary.id
+            ))
+        })?,
+        child_session_count: u64::try_from(summary.child_session_count).map_err(|_| {
+            ApplicationError::internal(format!(
+                "invalid negative child session count for session {}",
+                summary.id
+            ))
+        })?,
+        last_message_at: summary
+            .last_message_at_ms
             .map(timestamp_millis_to_utc)
             .transpose()?,
+    })
+}
+
+/// Project a v2 `SessionMeta` (returned by create/rename) into the public
+/// resource. Counts are zero — a freshly created/renamed session has no parts
+/// yet, and callers re-fetch via `get_session` when they need full stats.
+fn session_resource_from_storage_meta(
+    meta: &agena_storage::store::SessionMeta,
+) -> ApplicationResult<SessionResource> {
+    let subtask_status = if meta.relation_kind.is_subagent() {
+        meta.subtask_status
+            .as_deref()
+            .and_then(agena_domain::SubtaskStatus::parse)
+            .map(subtask_status_from_domain)
+            .or(Some(SubtaskStatus::default()))
+    } else {
+        None
+    };
+    Ok(SessionResource {
+        id: meta.id,
+        parent_id: meta.parent_id,
+        depth: meta.depth,
+        root_id: meta.root_id,
+        workspace_id: meta.workspace_id,
+        title: meta.title.clone(),
+        version: meta.version,
+        relation_kind: session_relation_kind_from_domain(meta.relation_kind),
+        lifecycle_state: session_lifecycle_state_from_domain(meta.lifecycle_state),
+        source_cutoff_seq_global: None,
+        source_message_id: None,
+        is_subagent: meta.relation_kind.is_subagent(),
+        task_id: meta.task_id.clone(),
+        subtask_access: None,
+        subtask_status,
+        created_at: timestamp_millis_to_utc(meta.created_at_ms)?,
+        updated_at: timestamp_millis_to_utc(meta.updated_at_ms)?,
+        message_count: 0,
+        child_session_count: 0,
+        last_message_at: None,
     })
 }
 
@@ -351,127 +276,101 @@ pub(crate) const fn subtask_status_from_domain(
 
 #[cfg(test)]
 mod tests {
-    use agena_domain::{
-        EVENT_ENVELOPE_SCHEMA_VERSION, EventEnvelope, EventKindTag, EventMeta, KindMatcher,
-    };
-    use agena_storage::{EventStore, SessionMutationRepository, WorkspaceRepository};
-    use chrono::{TimeZone, Utc};
+    use std::sync::Arc;
+
+    use agena_domain::{PartRole, SessionRelationKind};
+    use agena_storage::WorkspaceRepository;
+    use agena_storage::store::{NewPart, NewSession, SessionFacade, SessionStore};
     use sea_orm::Database;
-    use serde::{Deserialize, Serialize};
+    use serde_json::json;
 
     use super::*;
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    enum SessionListFixtureEvent {
-        UserMessageAppended,
-        AssistantMessageFinished,
-    }
-
-    impl KindMatcher for SessionListFixtureEvent {
-        fn tag(&self) -> EventKindTag {
-            match self {
-                Self::UserMessageAppended => "user_message_appended".into(),
-                Self::AssistantMessageFinished => "assistant_message_finished".into(),
-            }
-        }
-    }
-
-    fn fixture_event(
-        session_id: i64,
-        workspace_id: i64,
-        seq: i64,
-        kind: SessionListFixtureEvent,
-        created_at_ms: i64,
-    ) -> EventEnvelope<SessionListFixtureEvent> {
-        EventEnvelope {
-            meta: EventMeta {
-                id: uuid::Uuid::from_u128(seq as u128),
-                seq_global: seq,
-                seq_session: Some(seq),
-                session_id: Some(session_id),
-                workspace_id: Some(workspace_id),
-                created_at: Utc
-                    .timestamp_millis_opt(created_at_ms)
-                    .single()
-                    .expect("fixture event timestamp"),
-                causation_id: None,
-                correlation_id: None,
-                envelope_schema: EVENT_ENVELOPE_SCHEMA_VERSION,
-            },
-            kind,
-        }
-    }
-
-    #[tokio::test]
-    async fn session_list_materializes_message_and_child_counts() {
-        let db = std::sync::Arc::new(
+    async fn test_service() -> (
+        ApplicationService,
+        Arc<agena_storage_sqlite::SqliteEngine>,
+        i64,
+    ) {
+        let db = Arc::new(
             Database::connect("sqlite::memory:")
                 .await
                 .expect("open test database"),
         );
-        agena_storage_sqlite::initialize_schema(db.as_ref())
+        agena_storage_sqlite::initialize_schema(&db)
             .await
             .expect("initialize test schema");
-        let workspace_id =
-            agena_storage_sqlite::SeaWorkspaceRepository::new(std::sync::Arc::clone(&db))
-                .ensure_id("/test/workspace")
-                .await
-                .expect("create test workspace");
-        let sessions =
-            agena_storage_sqlite::SeaSessionSummaryRepository::new(std::sync::Arc::clone(&db));
-        let session = sessions
-            .create(workspace_id, None, "Counted session".to_owned())
+        let workspace_id = agena_storage_sqlite::SeaWorkspaceRepository::new(Arc::clone(&db))
+            .ensure_id("/test/workspace")
             .await
-            .expect("create test session");
-        sessions
-            .create(workspace_id, Some(session.id), "Child session".to_owned())
-            .await
-            .expect("create child session");
-        let events = agena_storage_sqlite::SeaEventStore::<SessionListFixtureEvent>::new(
-            std::sync::Arc::clone(&db),
-        );
-        events
-            .append_batch(&[
-                fixture_event(
-                    session.id,
-                    workspace_id,
-                    1,
-                    SessionListFixtureEvent::UserMessageAppended,
-                    1_000,
-                ),
-                fixture_event(
-                    session.id,
-                    workspace_id,
-                    2,
-                    SessionListFixtureEvent::AssistantMessageFinished,
-                    2_000,
-                ),
-            ])
-            .await
-            .expect("append test events");
-
+            .expect("create test workspace");
+        let engine = Arc::new(agena_storage_sqlite::SqliteEngine::new(Arc::clone(&db)));
+        let facade: Arc<dyn SessionStore> =
+            Arc::new(SessionFacade::new(engine.clone(), "application-test", 64));
         let service = ApplicationService::new(
             "/test/workspace",
-            None,
-            std::sync::Arc::new(agena_storage::MemoryStore::for_workspace(
+            Arc::new(agena_storage::MemoryStore::for_workspace(
                 std::path::Path::new("/test/workspace"),
             )),
-            std::sync::Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(
-                std::sync::Arc::clone(&db),
+            Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(db)),
+            Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
+                Arc::clone(&db),
             )),
-            std::sync::Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
-                std::sync::Arc::clone(&db),
-            )),
-            std::sync::Arc::new(agena_storage_sqlite::SeaSessionStatsRepository::new(
-                std::sync::Arc::clone(&db),
-            )),
-            std::sync::Arc::new(agena_storage_sqlite::SeaSessionSummaryRepository::new(
-                std::sync::Arc::clone(&db),
-            )),
-            std::sync::Arc::new(agena_storage_sqlite::SeaSessionSummaryRepository::new(
-                std::sync::Arc::clone(&db),
-            )),
+            facade,
         );
+        (service, engine, workspace_id)
+    }
+
+    /// A run marker part that contributes to `message_count` (D9: message
+    /// count = run markers) plus one child text part so the session is
+    /// non-empty, mirroring the v1 fixture's two messages.
+    fn marker_part() -> NewPart {
+        NewPart::pending(
+            "run",
+            PartRole::User,
+            json!({ "run_kind": "chat", "user": "hello" }),
+        )
+    }
+
+    #[tokio::test]
+    async fn session_list_materializes_message_and_child_counts() {
+        let (service, engine, workspace_id) = test_service().await;
+        let session = engine
+            .create_session(NewSession {
+                workspace_id,
+                parent_id: None,
+                relation_kind: SessionRelationKind::Root,
+                cutoff_part_id: None,
+                title: "Counted session".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .expect("create test session");
+        engine
+            .create_session(NewSession {
+                workspace_id,
+                parent_id: Some(session.id),
+                relation_kind: SessionRelationKind::Child,
+                cutoff_part_id: Some(0),
+                title: "Child session".to_owned(),
+                task_id: None,
+                config_json: None,
+                provider_anchors_json: None,
+            })
+            .await
+            .expect("create child session");
+        // Two runs over the parent session → message_count 2, last message at
+        // the second run's timestamp.
+        engine
+            .submit_user_message(session.id, "test-owner", vec![marker_part()], None, 1_000)
+            .await
+            .expect("first run");
+        engine
+            .submit_user_message(session.id, "test-owner", vec![marker_part()], None, 2_000)
+            .await
+            .expect("second run");
+
         let page = service
             .list_sessions(crate::dto::SessionListQuery {
                 workspace_id: Some(workspace_id),
@@ -492,6 +391,54 @@ mod tests {
                 .last_message_at
                 .map(|value| value.timestamp_millis()),
             Some(2_000)
+        );
+    }
+
+    #[tokio::test]
+    async fn get_create_rename_delete_round_trip_on_the_facade() {
+        let (service, _engine, workspace_id) = test_service().await;
+        let created = service
+            .create_session(crate::dto::SessionCreateRequest {
+                workspace_id,
+                session: crate::dto::SessionHierarchyRequest {
+                    parent_id: None,
+                    title: "New session".to_owned(),
+                },
+            })
+            .await
+            .expect("create session");
+        assert_eq!(created.title, "New session");
+        assert_eq!(created.lifecycle_state, SessionLifecycleState::Ready);
+
+        let renamed = service
+            .replace_session(
+                created.id,
+                SessionUpdateRequest {
+                    title: "Renamed".to_owned(),
+                },
+            )
+            .await
+            .expect("rename session");
+        assert_eq!(renamed.title, "Renamed");
+
+        let fetched = service
+            .get_session(created.id)
+            .await
+            .expect("get session")
+            .expect("session exists");
+        assert_eq!(fetched.title, "Renamed");
+
+        let deleted = service
+            .delete_session(created.id)
+            .await
+            .expect("delete session");
+        assert_eq!(deleted.title, "Renamed");
+        assert!(
+            service
+                .get_session(created.id)
+                .await
+                .expect("get session")
+                .is_none()
         );
     }
 }

@@ -1,8 +1,8 @@
 use super::{
-    AppError, AttachmentItem, ExecutionControlError, ExecutionStatus, HashSet, HistoryToolCallId,
-    Message, MessageMetadata, MessagePart, PartContent, PermissionAction, PermissionMode,
+    AppError, AttachmentItem, ExecutionControlError, ExecutionStatus, HashSet, Message,
+    MessageMetadata, MessagePart, PartContent, PermissionAction, PermissionMode,
     PermissionReplyKind, PermissionScope, PersistedPermissionRule, RequestPart, ReservedMessageIds,
-    ResolvedPendingTool, Role, RunAbortReason, SessionPendingTool, SessionStore, TimeRange,
+    ResolvedPendingTool, Role, RunAbortReason, SessionManager, SessionPendingTool, TimeRange,
     ToolError, ToolInvocation, ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
 };
 use crate::session::Session;
@@ -127,10 +127,6 @@ pub(super) fn build_message(
     })
 }
 
-pub(super) fn tool_call_id_for(resolved: &ResolvedPendingTool) -> HistoryToolCallId {
-    HistoryToolCallId::new(resolved.operation_id.clone())
-}
-
 pub(super) fn resolve_pending_tool(
     session: &Session,
     pending_tool: &SessionPendingTool,
@@ -155,10 +151,6 @@ pub(super) fn resolve_pending_tool(
             ))
         })?;
 
-    let activity_id = session
-        .part(&normalized_pending.part)
-        .and_then(|part| part.activity_id);
-
     Ok(ResolvedPendingTool {
         pending: normalized_pending,
         operation_id: record.operation_id,
@@ -168,7 +160,6 @@ pub(super) fn resolve_pending_tool(
         prepared_shell_command: None,
         lifecycle: record.lifecycle,
         session_runtime: session.runtime.clone(),
-        activity_id,
     })
 }
 
@@ -285,7 +276,7 @@ pub(super) fn persisted_mode_for_reply(kind: PermissionReplyKind) -> Option<Perm
 }
 
 pub(super) async fn persisted_rules_for_reply(
-    store: &SessionStore,
+    manager: &SessionManager,
     session_id: i64,
     actions: &[PermissionAction],
     reply: &PermissionReply,
@@ -297,7 +288,7 @@ pub(super) async fn persisted_rules_for_reply(
     let scope = reply.scope.unwrap_or(PermissionScope::Session);
     let workspace_id = match scope {
         PermissionScope::Session | PermissionScope::Global => None,
-        PermissionScope::Workspace => Some(store.current_workspace_id().await?),
+        PermissionScope::Workspace => Some(manager.current_workspace_id().await?),
     };
     let session_rule_id = match scope {
         PermissionScope::Session => Some(session_id),
@@ -328,14 +319,6 @@ pub(super) async fn persisted_rules_for_reply(
         });
     }
     Ok(rules)
-}
-
-pub(super) fn permission_scope_label(scope: PermissionScope) -> String {
-    match scope {
-        PermissionScope::Session => "session".to_string(),
-        PermissionScope::Workspace => "workspace".to_string(),
-        PermissionScope::Global => "global".to_string(),
-    }
 }
 
 pub(super) fn permission_action_key(action: &PermissionAction) -> Result<String, AppError> {

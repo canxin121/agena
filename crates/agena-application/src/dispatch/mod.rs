@@ -27,13 +27,13 @@ use agena_api::{
         RewindSessionParams, StopActivityParams, SubmitMessageParams, UpdateSessionParams,
         UpdateSessionSelectionParams, UpdateWorkspaceParams, UpsertPermissionRuleParams,
     },
-    pagination::{PageInfo, PaginatedResponse, normalize_limit},
+    pagination::{PageInfo, PaginatedResponse},
     queries::{
         ActivityLogsParams, GetActivityParams, GetOperationDetailParams, GetPermissionRuleParams,
-        GetSessionParams, GetWorkspaceParams, ListActivitiesParams, ListEventsParams,
-        ListPermissionRulesParams, ListProviderAdapterModelsParams, ListProviderModelsParams,
-        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams,
-        PaginatedEvents, Query, QueryResult,
+        GetSessionParams, GetWorkspaceParams, ListActivitiesParams, ListPermissionRulesParams,
+        ListProviderAdapterModelsParams, ListProviderModelsParams,
+        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
+        QueryResult,
     },
     resource::{
         DefaultSelectionResource, ModelCatalogResponse, ModelCatalogSourceKind,

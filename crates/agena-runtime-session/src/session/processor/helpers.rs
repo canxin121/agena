@@ -1,34 +1,8 @@
 use super::{
-    AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, EventKind,
-    ExecutionStatus, FinishReason, HistoryMessageId, Message, MessageProviderState, ToolCallId,
-    ToolInvocation,
+    AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, ExecutionStatus,
+    FinishReason, Message, MessageProviderState, ToolInvocation,
 };
 use agena_provider::CompletionInputProviderState;
-use agena_storage::MessageIdAllocator;
-
-/// Adapter that returns a single, pre-allocated `MessageId` to satisfy the
-/// `RunBuffer` API. The processor reserves message ids via the global session
-/// allocator before opening the buffer, so the buffer must adopt that id
-/// rather than mint its own.
-pub(crate) struct FixedAssistantId {
-    next: Option<HistoryMessageId>,
-}
-
-impl FixedAssistantId {
-    pub(crate) fn new(message_id: i64) -> Self {
-        Self {
-            next: Some(HistoryMessageId(message_id)),
-        }
-    }
-}
-
-impl MessageIdAllocator for FixedAssistantId {
-    fn next_message_id(&mut self) -> HistoryMessageId {
-        self.next
-            .take()
-            .expect("FixedAssistantId only yields one id per run")
-    }
-}
 
 pub(crate) fn complete_part_status(assistant: &mut Message, part_id: i64) -> Result<(), AppError> {
     let part = assistant
@@ -69,24 +43,6 @@ fn terminalize_nonterminal_parts(
         }
     }
     Ok(())
-}
-
-pub(crate) fn sync_assistant_completion_event(
-    history_items: &mut [EventKind],
-    assistant: &Message,
-) {
-    for event in history_items {
-        let EventKind::AssistantMessageFinished(payload) = event else {
-            continue;
-        };
-        if payload.message_id.raw() != assistant.id {
-            continue;
-        }
-        payload.parts = assistant.parts.clone();
-        payload.usage = assistant.usage.clone();
-        payload.metadata = assistant.metadata.clone();
-        payload.provider_state = assistant.provider_state.clone();
-    }
 }
 
 pub(crate) fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason {
@@ -195,10 +151,6 @@ pub(crate) struct PendingToolCall {
     pub(crate) id: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) arguments_json: String,
-    /// History-side call identifier propagated to `RunBuffer`. Set the first
-    /// time the part is materialized and reused for every subsequent argument
-    /// fragment so chunks land on the right tool.
-    pub(crate) history_call_id: Option<ToolCallId>,
 }
 
 /// Pick a stable pending-call key for one provider stream event.

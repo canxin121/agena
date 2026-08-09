@@ -1,15 +1,14 @@
 use super::{
-    AggregatedPermissionOutcome, AggregatedPermissionRequest, AppError, Arc, EventKind,
-    ExecutionControl, ExecutionStatus, InteractiveRequestPart, MessageCheckpoint, MessageMetadata,
-    MessageSource, OperationPart, PartContent, PersistedPermissionRule, PromptRequestOptions,
-    PromptTurnBudget, ProviderPromptAnchor, RequestPart, ResolvedPendingTool, RunAborted,
-    RunCompleted, RunStarted, SessionManager, SessionManagerState, SessionPendingTool,
-    SessionRunOptions, SessionRunRequest, SessionRunTermination, StreamingToolExecution, ToolError,
-    ToolInvocationExecution, ToolPermissionCheck, Utc, append_resolved_message_part,
-    ask_user_title, assistant_message_for_part, build_message, build_request_part,
-    completed_lifecycle, execution_control_to_app_error, is_authorization_phase_title,
-    operation_authorization, operation_blocks_from_tool_output, pending_operation_for_resolved,
-    pending_tool_part_not_found_error, permission_action_key, permission_scope_label,
+    AggregatedPermissionOutcome, AggregatedPermissionRequest, AppError, Arc, ExecutionControl,
+    ExecutionStatus, InteractiveRequestPart, MessageCheckpoint, MessageMetadata, MessageSource,
+    OperationPart, PartContent, PersistedPermissionRule, PromptRequestOptions, PromptTurnBudget,
+    ProviderPromptAnchor, RequestPart, ResolvedPendingTool, SessionManager, SessionManagerState,
+    SessionPendingTool, SessionRunOptions, SessionRunRequest, SessionRunTermination,
+    StreamingToolExecution, ToolError, ToolInvocationExecution, ToolPermissionCheck, Utc,
+    append_resolved_message_part, ask_user_title, assistant_message_for_part, build_message,
+    build_request_part, completed_lifecycle, execution_control_to_app_error,
+    is_authorization_phase_title, operation_authorization, operation_blocks_from_tool_output,
+    pending_operation_for_resolved, pending_tool_part_not_found_error, permission_action_key,
     push_unique_permission_action, resolve_pending_tool, responses_api_request_metadata,
     run_abort_reason, should_execute_pending_tools_concurrently, terminal_operation_title,
     tool_name, update_resolved_tool_message,
@@ -19,8 +18,7 @@ use crate::session::prompt_window;
 use agena_domain::UserInputRequest;
 use agena_domain::{
     DecisionTraceStep, ExecutionPhase, ExecutionSource, FinishReason, PermissionAction,
-    PermissionDecision, PermissionRequest, PermissionRequestedEvent, PermissionScope,
-    PolicySourceKind, Role, RunAbortReason, UserInputRequestedEvent,
+    PermissionDecision, PermissionRequest, PermissionScope, PolicySourceKind, Role, RunAbortReason,
 };
 use tracing::Instrument;
 
@@ -181,65 +179,15 @@ impl SessionManager {
     /// is handed back to Tokio immediately and never blocks the pipe reader.
     pub(in crate::session::manager) fn command_event_sink_for_pending(
         &self,
-        session_id: i64,
-        pending: &ResolvedPendingTool,
+        _session_id: i64,
+        _pending: &ResolvedPendingTool,
     ) -> agena_tool::ToolRuntimeEventSink {
-        let publisher = Arc::clone(&self.publisher);
-        let handle = tokio::runtime::Handle::current();
-        let message_id = pending.pending.part.message_id;
-        let part_id = pending.pending.part.part_id;
-        let call_id = pending.call_id;
-        let activity_id = pending.activity_id.map(|id| id.to_string());
-        let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<EventKind>();
-        handle.spawn(async move {
-            while let Some(kind) = event_rx.recv().await {
-                if let Err(error) = publisher
-                    .publish(crate::event::PublishContext::for_session(session_id), kind)
-                    .await
-                {
-                    tracing::debug!(
-                        target: "agena::session::command_events",
-                        session_id,
-                        error = %error,
-                        "failed to publish live command event"
-                    );
-                }
-            }
-        });
-
-        Arc::new(move |event| {
-            let kind = match event {
-                agena_tool::ToolRuntimeEvent::CommandBegin(mut event) => {
-                    event.context.session_id = session_id;
-                    event.context.call_id = call_id;
-                    event.context.message_id = Some(message_id);
-                    event.context.part_id = Some(part_id);
-                    event.context.activity_id = activity_id.clone();
-                    EventKind::CommandBegin(event)
-                }
-                agena_tool::ToolRuntimeEvent::CommandOutputDelta(mut event) => {
-                    event.context.session_id = session_id;
-                    event.context.call_id = call_id;
-                    event.context.message_id = Some(message_id);
-                    event.context.part_id = Some(part_id);
-                    event.context.activity_id = activity_id.clone();
-                    EventKind::CommandOutputDelta(event)
-                }
-                agena_tool::ToolRuntimeEvent::CommandEnd(mut event) => {
-                    event.context.session_id = session_id;
-                    event.context.call_id = call_id;
-                    event.context.message_id = Some(message_id);
-                    event.context.part_id = Some(part_id);
-                    event.context.activity_id = activity_id.clone();
-                    EventKind::CommandEnd(event)
-                }
-            };
-            // A single queue preserves begin → delta → end ordering even
-            // though the shell itself runs on a blocking worker. Spawning one
-            // publisher task per chunk allowed Tokio scheduling to reorder
-            // stdout deltas and made the browser occasionally drop output.
-            let _ = event_tx.send(kind);
-        })
+        // v2 (design 14): the event bus and its `EventKind::CommandBegin/Delta/
+        // End` envelopes are gone. Command progress is carried by the streamed
+        // tool part's own deltas and the live ActivityV2 bridge; there is
+        // nothing durable to publish here. The sink is kept as a no-op so the
+        // tool executor's `with_command_event_sink` contract still type-checks.
+        Arc::new(|_event| {})
     }
 
     pub(in crate::session::manager) fn command_event_sink_for_pending_if_needed(
@@ -353,10 +301,7 @@ impl SessionManager {
                 // Re-read after observing the signal generation. This closes
                 // the race where the final reply commits between our stale
                 // in-memory blocked check and installation of the waiter.
-                session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                session = self.store.load_session(session.id).await?;
                 session.refresh_derived();
                 if !session.blocked() {
                     continue;
@@ -367,10 +312,7 @@ impl SessionManager {
                     _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
                     _ = control.wait_for_interaction_after(interaction_epoch) => {}
                 }
-                session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                session = self.store.load_session(session.id).await?;
                 continue;
             }
 
@@ -719,10 +661,7 @@ impl SessionManager {
                             == Some(agena_provider::ProviderErrorKind::ContextOverflow)
                     {
                         reactive_compaction_attempted = true;
-                        let reloaded = self
-                            .store
-                            .load_session(session_id, state.cache_policy())
-                            .await?;
+                        let reloaded = self.store.load_session(session_id).await?;
                         let generation = reloaded.runtime.prompt_window.generation;
                         let compacted = Box::pin(self.reactive_compact_session(
                             reloaded,
@@ -749,10 +688,7 @@ impl SessionManager {
                     if control.cancel.is_cancelled() {
                         return Err(AppError::Cancelled);
                     }
-                    session = self
-                        .store
-                        .load_session(session_id, state.cache_policy())
-                        .await?;
+                    session = self.store.load_session(session_id).await?;
                     if let Some(continued) = self
                         .dispatch_run_failure_continuation(
                             session,
@@ -799,10 +735,7 @@ impl SessionManager {
             last_assistant_message: None,
             run_error: Some(run_error.to_string()),
         };
-        session = self
-            .store
-            .load_session(session.id, state.cache_policy())
-            .await?;
+        session = self.store.load_session(session.id).await?;
         match state
             .tool_executor
             .plugin_manager()
@@ -875,6 +808,8 @@ impl SessionManager {
                 source: MessageSource::System,
                 idempotency_key: None,
                 model_turn_id: Some(follow_up_turn_id),
+                conversation_turn_id: None,
+                conversation_reply_id: None,
                 parent_message_id: session.last_conversation_message().map(|m| m.id),
                 generated_by_call_id: None,
                 externally_initiated_tool: false,
@@ -887,7 +822,7 @@ impl SessionManager {
         )?;
         session.messages.push(user_message.clone());
         let checkpoint = MessageCheckpoint::all(&user_message);
-        self.persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
+        self.persist_session_changes(session, vec![checkpoint], None, state)
             .await
     }
 
@@ -898,11 +833,10 @@ impl SessionManager {
     /// `PluginHost::drain_hook_runs` (session.start, user.prompt.submit,
     /// chat.params, command.before/after, agent.stop) records through here.
     ///
-    /// Hook messages carry no execution identity, so the execution-scoped
-    /// content-node projection never emits nodes for their parts; the TUI
-    /// transcript reads session-owned content nodes and would otherwise never
-    /// show hook activity. Each run is therefore also mirrored as a
-    /// session Notice activity (human-facing only) so the terminal renders it.
+    /// v2 (design 4.1): hook parts are ordinary parts under an assistant run
+    /// marker (kind `hook`, run_kind `execution`), persisted through the
+    /// facade like any other message; there is no separate content-node
+    /// projection to mirror into.
     pub(in crate::session::manager) async fn record_hook_runs(
         &self,
         mut session: Session,
@@ -930,6 +864,8 @@ impl SessionManager {
                 source: MessageSource::System,
                 idempotency_key: None,
                 model_turn_id: None,
+                conversation_turn_id: None,
+                conversation_reply_id: None,
                 parent_message_id: session.last_conversation_message().map(|m| m.id),
                 generated_by_call_id: None,
                 externally_initiated_tool: false,
@@ -942,43 +878,15 @@ impl SessionManager {
         )?;
         session.messages.push(message.clone());
         let checkpoint = MessageCheckpoint::all(&message);
-        session = self
-            .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state)
-            .await?;
-        // Mirror each hook part as a session Notice activity (see the doc
-        // comment above). Activity ids are assigned by `build_message`, so
-        // read them back off the persisted message parts.
-        // Each notice mirrors its run's `occurred_at_ms` (the time the hook
-        // actually ran) so the transcript can place the activity at the real
-        // hook call position instead of at record time.
-        for (run, part) in runs.iter().zip(&message.parts) {
-            let Some(activity_id) = part.activity_id else {
-                continue;
-            };
-            let Some(PartContent::Activity(crate::message::RuntimeActivity::Hook(hook))) =
-                part.content.as_ref()
-            else {
-                continue;
-            };
-            crate::session::store::upsert_session_notice_node(
-                &self.store.db,
-                session.id,
-                &activity_id,
-                "hook",
-                &hook.summary,
-                hook.detail.as_deref(),
-                run.occurred_at_ms,
-            )
-            .await?;
-        }
-        Ok(session)
+        self.persist_session_changes(session, vec![checkpoint], None, state)
+            .await
     }
 
     pub(in crate::session::manager) async fn run_model_turn(
         &self,
         mut session: Session,
         options: &SessionRunOptions,
-        run_source: ExecutionSource,
+        _run_source: ExecutionSource,
         model_turn_id: Option<i64>,
         state: Arc<SessionManagerState>,
         control: Arc<ExecutionControl>,
@@ -1085,7 +993,10 @@ impl SessionManager {
                 "prepared prompt for session run"
             );
 
+            // The assistant message's durable id is the run marker's part id
+            // (started below); only the placeholder part allocator is used.
             let processor_ids = self.store.reserve_processor_ids().await?;
+            let _message_id = processor_ids.message_id;
             let run_id = agena_domain::RunId::new();
             let turn_started_at_unix_ms = Utc::now().timestamp_millis();
             let mut completion = super::super::completion_request(
@@ -1108,11 +1019,33 @@ impl SessionManager {
                 )
                 .await,
             );
+            let turn_id = control.turn_id();
+            let reply_id = control.reply_id();
+
+            // The attempt start is durable before the provider worker begins
+            // (design 17.4): the run marker exists before the provider call,
+            // so a crash at any point leaves an in-flight marker that startup
+            // reconciliation closes as `process_restart` — including a process
+            // crash before the first token. The marker's part id is the
+            // assistant message's durable id (design 4.1: a message == one run).
+            let marker_run_id = self
+                .store
+                .start_run(
+                    session.id,
+                    "continue",
+                    crate::session::store::run_marker_content(
+                        "continue",
+                        Some(options.model.provider_id.as_ref()),
+                        Some(options.model.model_id.as_ref()),
+                        Some(turn_id),
+                        Some(reply_id),
+                    ),
+                )
+                .await?;
+
             let run = SessionRunRequest {
-                run_id,
-                execution_id: control.execution_id(),
-                turn_id: control.turn_id(),
-                reply_id: control.reply_id(),
+                turn_id,
+                reply_id,
                 session_id: session.id,
                 model_turn_id,
                 completion_parent_message_id: session
@@ -1122,31 +1055,11 @@ impl SessionManager {
                 model_thinking_mode: options.thinking_mode.clone(),
                 model_speed_mode: options.speed_mode.clone(),
                 completion,
-                next_message_id: processor_ids.message_id,
+                next_message_id: marker_run_id,
                 part_ids: processor_ids.part_ids,
                 next_call_id: session.next_call_id(),
-                event_publisher: Some(Arc::clone(&self.publisher)),
                 cancel: Some(control.cancel.clone()),
             };
-
-            // The attempt start is durable before the provider worker begins.
-            // Startup reconciliation can therefore close every interrupted
-            // attempt, including a process crash before the first token.
-            session = self
-                .store
-                .append_history_items(
-                    session,
-                    vec![EventKind::RunStarted(RunStarted {
-                        execution_id: control.execution_id(),
-                        run_id,
-                        source: run_source,
-                        model_id: options.model.model_id.as_ref().into(),
-                        provider_id: options.model.provider_id.as_ref().into(),
-                        request_digest: None,
-                    })],
-                    state.cache_policy(),
-                )
-                .await?;
 
             // `SessionProcessor` is the sole owner of cooperative model-stream
             // cancellation. Never race it with an outer select: dropping this
@@ -1175,7 +1088,6 @@ impl SessionManager {
                             .record_hook_runs(session, hook_runs, state.clone())
                             .await?;
                     }
-                    let run_id = result.run_id;
                     let termination = result.termination;
                     let assistant_message = result
                         .state
@@ -1265,7 +1177,6 @@ impl SessionManager {
                     drop(request_tool_api_functions);
                     drop(prepared);
 
-                    let client_events = result.client_events;
                     session.messages.push(assistant_message.clone());
                     // Tool Operations already publish their authoritative
                     // invocation/result checkpoints from the processor. Text
@@ -1286,58 +1197,20 @@ impl SessionManager {
                         .collect::<Vec<_>>();
                     let checkpoints = (!final_part_ids.is_empty())
                         .then(|| MessageCheckpoint::parts(assistant_message.id, final_part_ids));
-                    let mut persisted_session = self
+                    // The v2 write path (design 14.2): the persist appends the
+                    // streamed parts under the run marker started above,
+                    // pushes checkpointed deltas, and — only when every part
+                    // under the marker is terminal — completes or cancels the
+                    // run (`complete_run`/`cancel_run`). There is no event log
+                    // to append: RunStarted/RunCompleted/RunAborted are gone.
+                    let persisted_session = self
                         .persist_session_changes(
                             session,
                             checkpoints.into_iter().collect(),
-                            client_events,
                             None,
                             state.clone(),
                         )
                         .await?;
-
-                    let mut run_events: Vec<EventKind> = Vec::new();
-                    run_events.extend(result.history_items);
-                    match &termination {
-                        SessionRunTermination::Completed => {
-                            run_events.push(EventKind::RunCompleted(RunCompleted {
-                                run_id,
-                                finish_reason: FinishReason::default(),
-                            }));
-                        }
-                        SessionRunTermination::Cancelled => {
-                            run_events.push(EventKind::RunAborted(RunAborted {
-                                run_id,
-                                reason: RunAbortReason::UserCancelled,
-                                failure: None,
-                            }));
-                        }
-                        SessionRunTermination::Failed(error) => {
-                            let failure = error.failure();
-                            tracing::warn!(
-                                failure_id = %failure.id,
-                                session_id = persisted_session.id,
-                                diagnostic = %error,
-                                "session run failed"
-                            );
-                            run_events.push(EventKind::RunAborted(RunAborted {
-                                run_id,
-                                reason: RunAbortReason::ProviderError,
-                                failure: Some((&failure).into()),
-                            }));
-                        }
-                    }
-                    let store = Arc::clone(&self.store);
-                    let cache_policy = state.cache_policy();
-                    persisted_session = tokio::task::spawn(async move {
-                        store
-                            .append_history_items(persisted_session, run_events, cache_policy)
-                            .await
-                    })
-                    .await
-                    .map_err(|err| {
-                        AppError::Internal(format!("history append task failed: {err}"))
-                    })??;
 
                     match termination {
                         SessionRunTermination::Completed => Ok((
@@ -1362,9 +1235,9 @@ impl SessionManager {
                     );
                     // Drain hook runs observed while the provider call failed
                     // (for example chat.params that fired before the transport
-                    // error) and record them before the session is consumed by
-                    // the history append below. Recording failures are
-                    // swallowed so the original run error is preserved.
+                    // error) and record them before the run marker is
+                    // terminalized below. Recording failures are swallowed so
+                    // the original run error is preserved.
                     let session_id = session.id;
                     let hook_runs = state
                         .tool_executor
@@ -1375,46 +1248,56 @@ impl SessionManager {
                             .record_hook_runs(session, hook_runs, state.clone())
                             .await
                         {
-                            Ok(recorded) => session = recorded,
+                            Ok(_recorded) => {}
                             Err(record_err) => {
                                 tracing::warn!(
                                     target: "agena::session::hook_runs",
                                     session_id,
                                     "failed to record hook runs after failed model turn: {record_err}"
                                 );
-                                // `record_hook_runs` consumed the session; reload
-                                // a fresh one so the RunAborted history append
-                                // below still works. If even that fails, return
-                                // the original run error.
-                                match self
-                                    .store
-                                    .load_session(session_id, state.cache_policy())
-                                    .await
-                                {
-                                    Ok(reloaded) => session = reloaded,
-                                    Err(load_err) => {
-                                        tracing::warn!(
-                                            target: "agena::session::hook_runs",
-                                            session_id,
-                                            "failed to reload session after failed model turn: {load_err}"
-                                        );
-                                        return Err(err);
-                                    }
-                                }
                             }
                         }
                     }
-                    self.store
-                        .append_history_items(
-                            session,
-                            vec![EventKind::RunAborted(RunAborted {
-                                run_id,
-                                reason,
-                                failure: Some((&failure).into()),
-                            })],
-                            state.cache_policy(),
-                        )
-                        .await?;
+                    // Terminalize the run marker started above (design 17.4):
+                    // the processor failed before any message was built, so the
+                    // marker has no content parts to persist. A user-cancelled
+                    // run is cancelled; every other failure completes the marker
+                    // as failed with its abort reason. Failures here are logged
+                    // and swallowed so the original run error is preserved.
+                    if matches!(reason, RunAbortReason::UserCancelled) {
+                        self.store
+                            .cancel_run(session_id, marker_run_id)
+                            .await
+                            .or_else(|error| {
+                                tracing::warn!(
+                                    target: "agena::session::run",
+                                    session_id,
+                                    "failed to cancel the interrupted run marker: {error}"
+                                );
+                                Ok::<(), AppError>(())
+                            })?;
+                    } else {
+                        self.store
+                            .complete_run(
+                                session_id,
+                                marker_run_id,
+                                agena_storage::store::RunOutcome {
+                                    status: agena_storage::store::PartState::Failed,
+                                    abort_reason: Some(reason.to_string()),
+                                    content: None,
+                                    provider_state: None,
+                                },
+                            )
+                            .await
+                            .or_else(|error| {
+                                tracing::warn!(
+                                    target: "agena::session::run",
+                                    session_id,
+                                    "failed to terminalize the interrupted run marker: {error}"
+                                );
+                                Ok::<(), AppError>(())
+                            })?;
+                    }
                     Err(err)
                 }
             }
@@ -1557,7 +1440,6 @@ impl SessionManager {
                 session = Box::pin(self.persist_session_changes(
                     session,
                     checkpoints,
-                    Vec::new(),
                     None,
                     state.clone(),
                 ))
@@ -1573,10 +1455,7 @@ impl SessionManager {
             // request parts while its execution is suspended. Merge results
             // into the latest projection so completing outer calls cannot
             // replace those request/reply records with another snapshot.
-            session = self
-                .store
-                .load_session(session.id, state.cache_policy())
-                .await?;
+            session = self.store.load_session(session.id).await?;
             for (resolved, result) in ready_tools.into_iter().zip(executions) {
                 session = Box::pin(self.apply_tool_execution_result(
                     session,
@@ -1907,10 +1786,7 @@ impl SessionManager {
                     | ToolError::ToolUnavailable(_)
             )
         {
-            session = self
-                .store
-                .load_session(session.id, state.cache_policy())
-                .await?;
+            session = self.store.load_session(session.id).await?;
         }
 
         match error {
@@ -2034,7 +1910,6 @@ impl SessionManager {
                     resolved.pending.part.message_id,
                     resolved.pending.part.part_id,
                 )],
-                Vec::new(),
                 None,
                 state.clone(),
             ))
@@ -2069,7 +1944,6 @@ impl SessionManager {
                     resolved.pending.part.message_id,
                     resolved.pending.part.part_id,
                 )],
-                Vec::new(),
                 None,
                 state.clone(),
             ))
@@ -2124,10 +1998,7 @@ impl SessionManager {
         .await
         .map_err(|err| AppError::Internal(format!("tool execution task failed: {err}")))?;
 
-        let session = self
-            .store
-            .load_session(session.id, state.cache_policy())
-            .await?;
+        let session = self.store.load_session(session.id).await?;
         Box::pin(self.apply_tool_execution_result(session, &resolved.pending, execution, state))
             .await
     }
@@ -2596,34 +2467,12 @@ impl SessionManager {
                 tool_part.status = ExecutionStatus::Pending;
                 tool_part.summary = Some(operation.summary.clone());
             })?;
-        let session_id = session.id;
-        let events = if existing_permission_replied.is_some() {
-            Vec::new()
-        } else {
-            vec![EventKind::PermissionRequested(PermissionRequestedEvent {
-                session_id,
-                operation_id: resolved.operation_id.clone(),
-                call_id: resolved.call_id,
-                request_id: request.request_id.clone(),
-                action: request.action.clone(),
-                related_actions,
-                requested_actions,
-                reason: reason.clone(),
-                explanation,
-                source: request.source.clone(),
-                scope: request.scope.map(permission_scope_label),
-                operator: request.operator.clone(),
-                trace,
-                ts_ms: Utc::now().timestamp_millis(),
-            })]
-        };
         self.persist_session_changes(
             session,
             vec![MessageCheckpoint::part(
                 assistant_message.id,
                 resolved.pending.part.part_id,
             )],
-            events,
             None,
             state.clone(),
         )
@@ -2714,19 +2563,7 @@ impl SessionManager {
                 .filter(|part| part.operation_id.as_deref() == Some(resolved.operation_id.as_str()))
                 .map(|part| part.id),
         );
-        // Surface the request to every UI immediately: the durable part
-        // checkpoint below projects to a TranscriptPatch, which terminals apply
-        // without refreshing the execution snapshot (and therefore without
-        // seeing the pending interactive request). A dedicated event forces the
-        // presentation refresh that pops the approval/question modal.
-        let events = vec![EventKind::UserInputRequested(UserInputRequestedEvent {
-            session_id: session.id,
-            operation_id: resolved.operation_id.clone(),
-            call_id: resolved.call_id,
-            request_id: request.request_id.clone(),
-            ts_ms: Utc::now().timestamp_millis(),
-        })];
-        self.persist_session_changes(session, vec![checkpoint], events, None, state)
+        self.persist_session_changes(session, vec![checkpoint], None, state)
             .await
     }
 
@@ -2754,8 +2591,8 @@ impl SessionManager {
             .and_then(|part| part.activity_id);
         // Activity v2 live bridge (07 §5.2, §6.1): one in-memory handler feeds
         // the unified wire events from the same text deltas that drive the
-        // legacy detail broadcasts. Events are published as
-        // `EventKind::ActivityV2` (live, non-persistent) for TUI/Web.
+        // streamed tool part. Events are broadcast live (a no-op bridge in v2;
+        // P5 re-homes onto the facade notification bus).
         let initial_title = session
             .part(&pending_tool.part)
             .and_then(|part| match &part.content {
@@ -2877,16 +2714,6 @@ impl SessionManager {
                     && let Some(event) =
                         handler.refresh_elapsed_title(stream_started.elapsed().as_secs())
                 {
-                    if let crate::activity::ActivityLiveEvent::TitleChanged { activity_id, title } =
-                        &event
-                    {
-                        crate::session::store::update_activity_label(
-                            &self.store.db,
-                            *activity_id,
-                            title,
-                        )
-                        .await?;
-                    }
                     self.broadcast_activity_v2(session.id, event)?;
                 }
             }
@@ -2913,55 +2740,37 @@ impl SessionManager {
         let execution = match stream_end {
             Ok(Ok(execution)) => execution,
             Ok(Err(ToolError::PolicyDenied(denial))) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(session.id).await?;
                 return self
                     .apply_tool_policy_denied(session, pending_tool, *denial, state)
                     .await;
             }
             Ok(Err(ToolError::UserDeclined(decline))) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(session.id).await?;
                 return self
                     .apply_tool_user_declined(session, pending_tool, *decline, Vec::new(), state)
                     .await;
             }
             Ok(Err(ToolError::CapabilityUnavailable(unavailable))) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(session.id).await?;
                 return self
                     .apply_tool_capability_unavailable(session, pending_tool, *unavailable, state)
                     .await;
             }
             Ok(Err(ToolError::ToolUnavailable(unavailable))) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(session.id).await?;
                 return self
                     .apply_tool_unavailable(session, pending_tool, *unavailable, state)
                     .await;
             }
             Ok(Err(err)) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(session.id).await?;
                 return self
                     .apply_tool_error(session, pending_tool, err, None, state)
                     .await;
             }
             Err(_) => {
-                let session = self
-                    .store
-                    .load_session(session.id, state.cache_policy())
-                    .await?;
+                let session = self.store.load_session(session.id).await?;
                 return self
                     .apply_tool_error(
                         session,
@@ -2976,39 +2785,27 @@ impl SessionManager {
             }
         };
 
-        // Assemble the terminal v2 activity node once the stream finished
-        // successfully. The live wire event is broadcast immediately; the
-        // durable write happens after every legacy checkpoint so the v2
-        // payload (raw output) is the final word for this node.
-        let terminal_node = activity_handler.take().map(|mut handler| {
-            handler.finish(
+        // Assemble the terminal activity node once the stream finished
+        // successfully and broadcast it live (a no-op bridge in v2; P5
+        // re-homes onto the notification bus). The durable payload is the
+        // streamed output the tool part checkpoint carries — the v1
+        // `upsert_content_node` projection is deleted.
+        if let Some(mut handler) = activity_handler.take() {
+            let node = handler.finish(
                 agena_tool::ToolActivityResult::raw(agena_domain::RawOutput::text(streamed_output)),
                 agena_domain::ActivityState::Completed,
-            )
-        });
-        if let Some(node) = &terminal_node {
+            );
             self.broadcast_activity_v2(
                 session.id,
                 crate::activity::ActivityLiveEvent::Upserted {
-                    node: Box::new(node.clone()),
+                    node: Box::new(node),
                 },
             )?;
         }
 
-        let session = self
-            .store
-            .load_session(session.id, state.cache_policy())
-            .await?;
-        let session = self
-            .apply_tool_success(session, pending_tool, execution, None, state)
-            .await?;
-        // Durable v2 terminal write (07 §8.2 upsert_content_node): the raw
-        // output lands exactly once, after every legacy checkpoint, and the
-        // revision guard lets the v2 payload win over any earlier projection.
-        if let Some(node) = &terminal_node {
-            crate::session::store::upsert_content_node(&self.store.db, session.id, node).await?;
-        }
-        Ok(session)
+        let session = self.store.load_session(session.id).await?;
+        self.apply_tool_success(session, pending_tool, execution, None, state)
+            .await
     }
 
     pub(in crate::session::manager) async fn apply_tool_cancellation(
@@ -3018,7 +2815,7 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         let resolved = resolve_pending_tool(&session, pending_tool)?;
-        let assistant_message = update_resolved_tool_message(&mut session, &resolved, |part| {
+        let _assistant_message = update_resolved_tool_message(&mut session, &resolved, |part| {
             if let Some(PartContent::Activity(crate::message::RuntimeActivity::Operation(
                 operation,
             ))) = part.content.as_ref()
@@ -3032,15 +2829,8 @@ impl SessionManager {
             part.summary = Some("Execution cancelled".to_string());
         })?;
 
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            Vec::new(),
-            Vec::new(),
-            state,
-        )
-        .await
+        self.persist_tool_completion(session, &resolved, Vec::new(), state)
+            .await
     }
 
     /// Broadcast a slice of freshly streamed output to live presentation
@@ -3049,30 +2839,17 @@ impl SessionManager {
     /// terminals drop it. Nothing is written to disk.
     /// Publish one activity v2 live wire event (07 §5.2). In-memory,
     /// non-persistent, fire-and-forget like the legacy detail broadcasts.
+    ///
+    /// v2 (design 14): the event bus is gone; live streaming progress is
+    /// delivered by the facade's `NotificationBus` as part-patch
+    /// [`SessionChange`](agena_storage::store::SessionChange) events (D10),
+    /// and this call is a no-op bridge kept for the streaming-tool path. P5
+    /// re-homes any remaining consumers onto the notification bus.
     fn broadcast_activity_v2(
         &self,
-        session_id: i64,
-        event: crate::activity::ActivityLiveEvent,
+        _session_id: i64,
+        _event: crate::activity::ActivityLiveEvent,
     ) -> Result<(), AppError> {
-        let publisher = Arc::clone(&self.publisher);
-        let context = crate::event::PublishContext::for_session(session_id);
-        let handle = tokio::runtime::Handle::current();
-        handle.spawn(async move {
-            if let Err(error) = publisher
-                .publish(
-                    context,
-                    crate::event::EventKind::ActivityV2(Box::new(event)),
-                )
-                .await
-            {
-                tracing::debug!(
-                    target: "agena::session::activity_v2",
-                    session_id,
-                    error = %error,
-                    "failed to broadcast activity v2 live event"
-                );
-            }
-        });
         Ok(())
     }
 
@@ -3087,14 +2864,11 @@ impl SessionManager {
         pending_tool: &SessionPendingTool,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         let tool_part_ref = session
             .resolve_part_ref(&pending_tool.part)
             .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
-        let refreshed_title = {
+        {
             let tool_part = session
                 .part_mut(&tool_part_ref)
                 .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
@@ -3125,39 +2899,19 @@ impl SessionManager {
                         serde_json::json!(base_title),
                     );
                     operation.set_title(format!("{base_title} · {elapsed_secs}s"));
-                    Some(operation.title.clone())
-                } else {
-                    None
                 }
-            } else {
-                None
             }
         };
-        // Persist the title with a targeted column update (no content/payload
-        // rewrite), then broadcast a header checkpoint so the terminal sees
-        // the live title change. The Activity id lets the tiny UPDATE target
-        // the content-node title column directly.
-        if let Some(title) = refreshed_title {
-            let activity_id = session
-                .part(&tool_part_ref)
-                .and_then(|part| part.activity_id);
-            self.store
-                .update_part_title(
-                    session_id,
-                    pending_tool.part.message_id,
-                    pending_tool.part.part_id,
-                    activity_id,
-                    &title,
-                )
-                .await?;
-        }
+        // Persist the refreshed title as a part delta checkpoint (v2 D10):
+        // the in-memory title change is written through the facade, which is
+        // the single write path for streamed content. There is no separate
+        // content-node title column to target.
         self.persist_session_changes(
             session,
             vec![MessageCheckpoint::part(
                 pending_tool.part.message_id,
                 pending_tool.part.part_id,
             )],
-            Vec::new(),
             None,
             state,
         )
@@ -3178,18 +2932,12 @@ impl SessionManager {
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         if streamed_output.is_empty() {
-            return self
-                .store
-                .load_session(session_id, state.cache_policy())
-                .await;
+            return self.store.load_session(session_id).await;
         }
         // Bound the intermediate preview so a giant stream is not written in
         // full even once; the terminal frame carries the real truncated output.
         let preview = agena_runtime_tools::truncate_tool_output_text(streamed_output, 16 * 1024);
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         let tool_part_ref = session
             .resolve_part_ref(&pending_tool.part)
             .ok_or_else(|| pending_tool_part_not_found_error(&pending_tool.part))?;
@@ -3210,7 +2958,6 @@ impl SessionManager {
                 pending_tool.part.message_id,
                 pending_tool.part.part_id,
             )],
-            Vec::new(),
             None,
             state,
         )
@@ -3337,17 +3084,9 @@ impl SessionManager {
                 .attributed_usage
                 .push(attributed_usage);
         }
-        let assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
+        let _assistant_message = assistant_message_for_part(&session, &resolved.pending.part)?;
 
-        Box::pin(self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            persisted_rules,
-            Vec::new(),
-            state,
-        ))
-        .await
+        Box::pin(self.persist_tool_completion(session, &resolved, persisted_rules, state)).await
     }
 }
 

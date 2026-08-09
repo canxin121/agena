@@ -1605,7 +1605,6 @@ struct AgenaMcpBackend {
     // lifetime; service trait objects alone are not the bootstrap boundary.
     runtime: agena_runtime::RuntimeBootstrapResult,
     tools: Arc<dyn agena_runtime::RuntimeToolExecutionService>,
-    event_publisher: Option<Arc<dyn agena_runtime::RuntimeEventPublishService>>,
     next_call_id: Arc<AtomicI64>,
 }
 
@@ -1642,8 +1641,6 @@ impl McpServerBackend for AgenaMcpBackend {
         match result {
             Ok(outcome) => {
                 let summary = outcome.into_summary();
-                self.audit_tool_call(name.as_str(), call_id, false, None)
-                    .await;
                 let text = if summary.output_text.is_empty() {
                     serde_json::to_string_pretty(&summary.payload)
                         .unwrap_or_else(|_| "<empty output>".to_owned())
@@ -1654,8 +1651,6 @@ impl McpServerBackend for AgenaMcpBackend {
             }
             Err(err) => {
                 let message = err.to_string();
-                self.audit_tool_call(name.as_str(), call_id, true, Some(message.as_str()))
-                    .await;
                 Ok(agena_mcp_server::text_error(message))
             }
         }
@@ -1665,33 +1660,6 @@ impl McpServerBackend for AgenaMcpBackend {
 impl AgenaMcpBackend {
     fn shutdown(&self) {
         self.runtime.shutdown();
-    }
-
-    async fn audit_tool_call(
-        &self,
-        tool_name: &str,
-        call_id: i64,
-        is_error: bool,
-        error: Option<&str>,
-    ) {
-        let Some(publisher) = self.event_publisher.as_ref() else {
-            return;
-        };
-        let payload = serde_json::json!({
-            "tool_name": tool_name,
-            "call_id": call_id,
-            "is_error": is_error,
-            "error": error,
-        });
-        let _ = publisher
-            .publish_event(agena_runtime::RuntimeEventPublishRequest::PluginEvent {
-                plugin_id: "agena.mcp_server"
-                    .parse::<agena_plugin_host::PluginKey>()
-                    .expect("static plugin key"),
-                kind_label: "mcp_tool_call".to_owned(),
-                payload,
-            })
-            .await;
     }
 }
 

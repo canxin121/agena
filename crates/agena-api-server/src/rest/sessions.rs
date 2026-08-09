@@ -134,146 +134,93 @@ pub async fn delete_session(
     json_http(state.service().delete_session(session_id)).await
 }
 
-pub async fn list_session_events(
+pub async fn list_session_parts(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
-    AxumQuery(query): AxumQuery<SessionEventListCompatQuery>,
+    AxumQuery(query): AxumQuery<SessionPartListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    if let Some(after_seq) = query.after_seq {
-        let limit = query.limit.unwrap_or(100).clamp(1, 1000);
-        let events = state.application().event_query_service()?;
-        let items = state
-            .service()
-            .list_session_events_after(events.as_ref(), session_id, after_seq, Some(limit))
-            .await
-            .map_err(server_error_from_application)?;
-        let returned = items.len() as u64;
-        let next_cursor = items.last().map(|event| event.meta.seq_global.to_string());
-        return Ok(Json(serde_json::json!({
-            "items": items.iter().map(agena_application::event_projection::event_resource_from_runtime).collect::<Vec<_>>(),
-            "page": {
-                "limit": limit,
-                "returned": returned,
-                "has_more": returned >= limit,
-                "next_cursor": next_cursor,
-                "order": "asc"
-            }
-        })));
+    let store = state.session_store()?;
+    let mut snapshot = crate::live::session_parts(store.as_ref(), session_id).await?;
+    if let Some(limit) = query.limit {
+        let limit = usize::try_from(limit.clamp(1, 1000)).unwrap_or(1000);
+        if snapshot.parts.len() > limit {
+            snapshot.parts.drain(..snapshot.parts.len() - limit);
+        }
     }
-
-    let events = state.application().event_query_service()?;
-    let page = state
-        .service()
-        .list_session_events(
-            events.as_ref(),
-            session_id,
-            agena_application::dto::CursorPaginationQuery {
-                cursor: query.cursor,
-                limit: query.limit,
-            },
-        )
-        .await
-        .map_err(server_error_from_application)?;
-    let page = agena_application::pagination::PaginatedResponse {
-        items: page
-            .items
-            .iter()
-            .map(agena_application::event_projection::event_resource_from_runtime)
-            .collect::<Vec<_>>(),
-        page: page.page,
-    };
-    Ok(Json(serde_json::to_value(page).map_err(|error| {
-        ServerError::internal(error.to_string())
-    })?))
+    Ok(Json(snapshot))
 }
 
-pub async fn stream_session_events(
+pub async fn stream_session_changes(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
-    AxumQuery(query): AxumQuery<SessionEventStreamQuery>,
+    AxumQuery(query): AxumQuery<SessionChangeStreamQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    use agena_domain::{EventFilter, EventScope as Scope};
-    use agena_runtime::RuntimeLiveEventSubscriptionItem;
-
-    let stream_service = state.event_stream_service()?;
-    // A selected parent exposes pending interactive requests and subtask
-    // lifecycle from its whole descendant tree. Subscribe before reading the
-    // backfill so events published during that read remain queued.
-    let mut subscription = stream_service.subscribe_events(EventFilter::new(Scope::Global));
-    let service = state.service().clone();
-    let backfill_after = query.after_seq.unwrap_or(0);
-    let backfill_limit = query.limit.unwrap_or(100).clamp(1, 1000);
-    let events = state.application().event_query_service()?;
+    // Subscribe before reading the snapshot so mutations committed during the
+    // read remain queued. The snapshot is current state, not replay.
+    let mut subscription = crate::live::subscribe(&state)?;
+    let store = state.session_store()?;
     let session_queries = state.application().session_query_service()?;
-    let initial = service
-        .list_session_events_after(
-            events.as_ref(),
-            session_id,
-            backfill_after,
-            Some(backfill_limit),
-        )
-        .await
-        .map_err(server_error_from_application)?;
+    let initial = crate::live::session_parts(store.as_ref(), session_id).await?;
 
     let stream = stream! {
-        for event in &initial {
-            let event = agena_application::event_projection::event_resource_from_runtime(event);
-            match Event::default()
-                .event("session_event")
-                .id(event.meta.seq_global.to_string())
-                .json_data(&event)
-            {
-                Ok(ev) => yield Ok::<Event, Infallible>(ev),
+        if query.since_version != Some(initial.version) {
+            match Event::default().event("session_snapshot").json_data(&initial) {
+                Ok(frame) => yield Ok::<Event, Infallible>(frame),
                 Err(error) => {
                     yield Ok::<Event, Infallible>(sse_error_event(error));
                     return;
                 }
             }
         }
-        let mut last_seen = initial
-            .last()
-            .map(|event| event.meta.seq_global)
-            .unwrap_or(backfill_after);
 
         loop {
             match subscription.recv().await {
-                Some(RuntimeLiveEventSubscriptionItem::Event(event)) => {
-                    if event.meta.seq_global <= last_seen {
-                        continue;
-                    }
-                    let event_name = if event.meta.session_id == Some(session_id) {
-                        "session_event"
+                Some(crate::live::LiveItem::SessionChanged(change)) => {
+                    let changed_session_id = change.session_id();
+                    let frame_name = if changed_session_id == session_id {
+                        "session_change"
                     } else {
-                        let Some(descendant_id) = event.meta.session_id else {
-                            continue;
-                        };
-                        if !event.invalidates_ancestor_projection
-                            || !session_queries
-                                .is_descendant_session(descendant_id, session_id)
+                        if !session_queries
+                                .is_descendant_session(changed_session_id, session_id)
                                 .await
                                 .unwrap_or(false)
                         {
                             continue;
                         }
-                        // This is deliberately a different SSE event name:
-                        // clients must refresh the ancestor projection rather
-                        // than merge child transcript data into the parent.
-                        "descendant_session_event"
+                        "descendant_session_change"
                     };
-                    last_seen = event.meta.seq_global;
-                    match Event::default()
-                        .event(event_name)
-                        .id(event.meta.seq_global.to_string())
-                        .json_data(agena_application::event_projection::event_resource_from_runtime(&event))
-                    {
-                        Ok(ev) => yield Ok::<Event, Infallible>(ev),
+                    match Event::default().event(frame_name).json_data(&change) {
+                        Ok(frame) => yield Ok::<Event, Infallible>(frame),
                         Err(error) => {
                             yield Ok::<Event, Infallible>(sse_error_event(error));
                             return;
                         }
                     }
                 }
-                Some(RuntimeLiveEventSubscriptionItem::Lagged(skipped)) => {
+                Some(crate::live::LiveItem::RuntimeSignal(signal)) => {
+                    let Some(signal_session_id) = signal.session_id else {
+                        continue;
+                    };
+                    let frame_name = if signal_session_id == session_id {
+                        "runtime_signal"
+                    } else if session_queries
+                        .is_descendant_session(signal_session_id, session_id)
+                        .await
+                        .unwrap_or(false)
+                    {
+                        "descendant_runtime_signal"
+                    } else {
+                        continue;
+                    };
+                    match Event::default().event(frame_name).json_data(&signal) {
+                        Ok(frame) => yield Ok::<Event, Infallible>(frame),
+                        Err(error) => {
+                            yield Ok::<Event, Infallible>(sse_error_event(error));
+                            return;
+                        }
+                    }
+                }
+                Some(crate::live::LiveItem::Lagged(skipped)) => {
                     yield Ok::<Event, Infallible>(Event::default().event("lagged").data(skipped.to_string()));
                 }
                 None => return,
@@ -522,8 +469,8 @@ pub async fn import_session(
 
 use super::{
     AppState, AxumQuery, Deserialize, Event, HeaderMap, Infallible, IntoResponse, Json, Path,
-    PermissionReply, ServerError, SessionCreateRequest, SessionEventListCompatQuery,
-    SessionEventStreamQuery, SessionForkRequestBody, SessionListQuery, SessionMessageRequest,
+    PermissionReply, ServerError, SessionChangeStreamQuery, SessionCreateRequest,
+    SessionForkRequestBody, SessionListQuery, SessionMessageRequest, SessionPartListQuery,
     SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
     Sse, State, UserInputReply, dispatch, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,

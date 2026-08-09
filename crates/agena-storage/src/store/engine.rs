@@ -7,6 +7,8 @@
 //! distinguish memory from DB. See `crates/agena-storage-sqlite/src/engine.rs`
 //! and `crates/agena-storage/src/store/in_memory.rs`.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use super::{
@@ -71,7 +73,7 @@ pub trait PersistenceEngine: Send + Sync {
     /// and this cursor catches part additions (14.4). Both are compared on
     /// cache hit; a change in either invalidates the cached view.
     async fn newest_member_cursor(&self, session_id: i64)
-        -> Result<Option<(i64, i64)>, StoreError>;
+    -> Result<Option<(i64, i64)>, StoreError>;
 
     /// Rename a session (bumps `version`).
     async fn rename_session(
@@ -133,6 +135,22 @@ pub trait PersistenceEngine: Send + Sync {
         query: SessionListQuery,
     ) -> Result<Vec<SessionSummary>, StoreError>;
 
+    /// Fetch one session's summary row, or `None` when it does not exist.
+    /// A cheap single-row projection of [`Self::list_session_summaries`]
+    /// (13.1) for existence/lifecycle/version checks on the application path.
+    async fn get_session_summary(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<SessionSummary>, StoreError>;
+
+    /// Session counts per workspace (13.5 `workspace_counts`), for the
+    /// workspaces listing surface. `0` is returned for a workspace with no
+    /// sessions.
+    async fn session_counts_by_workspace(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, i64>, StoreError>;
+
     /// List every session in one root's subtree, newest first.
     async fn list_session_tree(&self, root_id: i64) -> Result<Vec<SessionSummary>, StoreError>;
 
@@ -164,7 +182,8 @@ pub trait PersistenceEngine: Send + Sync {
     async fn release_lease(&self, session_id: i64, owner_id: &str) -> Result<bool, StoreError>;
 
     /// Current lease row, if any.
-    async fn current_lease(&self, session_id: i64) -> Result<Option<super::LeaseState>, StoreError>;
+    async fn current_lease(&self, session_id: i64)
+    -> Result<Option<super::LeaseState>, StoreError>;
 
     /// Delete leases whose heartbeat is stale and return their session ids.
     async fn reap_stale_leases(&self, stale_before_ms: i64) -> Result<Vec<i64>, StoreError>;
@@ -261,11 +280,8 @@ pub trait PersistenceEngine: Send + Sync {
     /// Reconcile a session whose in-flight run has no fresh lease (17.4 step
     /// 2c): mark in-flight run markers failed (`process_restart`) and their
     /// non-terminal children cancelled. Idempotent.
-    async fn reconcile(
-        &self,
-        session_id: i64,
-        now_ms: i64,
-    ) -> Result<ReconcileOutcome, StoreError>;
+    async fn reconcile(&self, session_id: i64, now_ms: i64)
+    -> Result<ReconcileOutcome, StoreError>;
 
     /// Reap stale leases and GC orphan parts (7.6). Refcount-guarded: a part
     /// is deleted only when it has zero membership AND (no run reference OR its

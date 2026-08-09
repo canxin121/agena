@@ -73,6 +73,15 @@ pub struct MessageMetadata {
     pub idempotency_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_turn_id: Option<i64>,
+    /// The canonical conversation identity this message's run belongs to
+    /// (design 19.5). v2 persists the UUID pair on the run marker and
+    /// recovers it here so reply wake-up and reply-command matching
+    /// (`signal_interaction_for_reply`) work after any reload; the marker
+    /// part id is the `model_turn_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_turn_id: Option<agena_domain::TurnId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_reply_id: Option<agena_domain::AssistantReplyId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -98,6 +107,8 @@ impl Default for MessageMetadata {
             source: MessageSource::Assistant,
             idempotency_key: None,
             model_turn_id: None,
+            conversation_turn_id: None,
+            conversation_reply_id: None,
             parent_message_id: None,
             generated_by_call_id: None,
             externally_initiated_tool: false,

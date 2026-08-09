@@ -5,8 +5,8 @@ use super::{
 };
 use crate::session::Session;
 use crate::session::prompt_window;
-use crate::session::store::LEASE_STALENESS_MS;
 use agena_domain::{ModelRef, SessionUsage, SessionUsageLimitBasis};
+use std::collections::HashMap;
 
 impl SessionManager {
     pub async fn reconcile_interrupted_executions(&self) -> Result<(), AppError> {
@@ -21,17 +21,16 @@ impl SessionManager {
     /// execution lease: another process is actively running them, so their
     /// RunStarted entries are not interrupted and must not be aborted.
     async fn reconcile_interrupted_session(&self, session_id: i64) -> Result<(), AppError> {
-        let state = self.execution_state();
-        if self.store.active_lease_owner(session_id).await.is_some() {
+        // A live cross-process run means another process is actively running
+        // this session; its interrupted work is not ours to abort (17.4 2b).
+        let presentation = self.store.session_state(session_id).await?;
+        if presentation.state == agena_storage::store::SessionState::Running {
             return Ok(());
         }
-        self.store
-            .reconcile_interrupted_lifecycles(session_id)
-            .await?;
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        // Abort the session's in-flight run markers (17.4 2c). The engine
+        // owns lease freshness; an interrupted (stale-lease) run is failed.
+        self.store.reconcile(session_id).await?;
+        let mut session = self.store.load_session(session_id).await?;
         if session.is_subagent()
             && session.runtime.subtask.status == agena_domain::SubtaskStatus::Running
             && !self.execution_registry.is_active(session_id).await
@@ -40,38 +39,30 @@ impl SessionManager {
             session.runtime.subtask.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());
             session.runtime.subtask.failure = Some(interrupted_subtask_failure());
             let interrupted_at_ms = session.runtime.subtask.finished_at_ms;
-            let lifecycle_event = session.parent_id.zip(session.task_id.clone()).map(
-                |(parent_session_id, task_id)| {
-                    crate::event::EventKind::SubtaskStatusChanged(
-                        agena_domain::SubtaskStatusChangedEvent {
-                            session_id,
-                            parent_session_id,
-                            task_id,
-                            access: session.runtime.execution.access,
-                            status: agena_domain::SubtaskStatus::Interrupted,
-                            resumed: false,
-                            started_at_ms: session.runtime.subtask.started_at_ms,
-                            finished_at_ms: interrupted_at_ms,
-                            failure: session.runtime.subtask.failure.as_ref().map(Into::into),
-                            ts_ms: interrupted_at_ms
-                                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis()),
-                        },
-                    )
-                },
-            );
-            let subtask = session.runtime.subtask.clone();
-            session = self
-                .store
-                .update_subtask_state(session, subtask, state.cache_policy())
+            let subtask_started_at_ms = session.runtime.subtask.started_at_ms;
+            let subtask_failure = session
+                .runtime
+                .subtask
+                .failure
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    AppError::Internal(format!("serialize subtask failure: {error}"))
+                })?;
+            self.store
+                .update_subtask_state(
+                    session,
+                    Some(
+                        agena_domain::SubtaskStatus::Interrupted
+                            .as_ref()
+                            .to_string(),
+                    ),
+                    subtask_started_at_ms,
+                    interrupted_at_ms,
+                    subtask_failure,
+                )
                 .await?;
-            self.persist_session_changes(
-                session,
-                Vec::new(),
-                lifecycle_event.into_iter().collect(),
-                None,
-                state.clone(),
-            )
-            .await?;
         }
         Ok(())
     }
@@ -90,17 +81,19 @@ impl SessionManager {
                 return Ok(());
             }
         }
-        // A live cross-process lease means another process is actively running
+        // A live cross-process run means another process is actively running
         // this session; leave it alone.
-        if self.store.active_lease_owner(session_id).await.is_some() {
-            return Ok(());
-        }
-        if !self.store.session_exists(session_id).await? {
+        let presentation = self.store.session_state(session_id).await?;
+        if presentation.state == agena_storage::store::SessionState::Running {
             return Ok(());
         }
         self.reconcile_interrupted_session(session_id).await?;
-        for child_id in self.store.list_child_session_ids(session_id).await? {
-            self.reconcile_interrupted_session(child_id).await?;
+        let session = self.store.load_session(session_id).await?;
+        let root_id = session.root_id;
+        for summary in self.store.list_session_tree(root_id).await? {
+            if summary.parent_id == Some(session_id) {
+                self.reconcile_interrupted_session(summary.id).await?;
+            }
         }
         Ok(())
     }
@@ -110,24 +103,21 @@ impl SessionManager {
     /// a maintenance loop so a running process can recover another process's
     /// crashed run without waiting for a restart.
     pub async fn reap_stale_leases(&self) -> Result<(), AppError> {
-        let stale_before_ms =
-            agena_runtime_session_core::db::leases::lease_now_ms() - LEASE_STALENESS_MS;
-        let reclaimed = agena_runtime_session_core::db::leases::reap_stale_leases(
-            &self.store.db,
-            stale_before_ms,
-        )
-        .await
-        .map_err(|error| AppError::Internal(error.to_string()))?;
-        let state = self.execution_state();
-        for session_id in reclaimed {
-            // Reconcile the reclaimed session's interrupted lifecycle.
-            self.store
-                .reconcile_interrupted_lifecycles(session_id)
-                .await?;
-            self.store
-                .reconcile_unmatched_runs(session_id, agena_domain::RunAbortReason::ProcessRestart)
-                .await?;
-            let _ = state;
+        // Engine-owned maintenance: reap stale leases and GC orphan parts
+        // (14.2). Reconcile-on-open handles the interrupted-run recovery for
+        // each reclaimed session the next time it is loaded.
+        let outcome = self
+            .store
+            .maintenance()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        if !outcome.reaped_sessions.is_empty() || outcome.gc_deleted_parts > 0 {
+            tracing::info!(
+                target: "agena_session::maintenance",
+                reaped_sessions = ?outcome.reaped_sessions,
+                gc_deleted_parts = outcome.gc_deleted_parts,
+                "maintenance reaped stale leases and GC'd orphan parts"
+            );
         }
         Ok(())
     }
@@ -140,12 +130,22 @@ impl SessionManager {
     }
     pub async fn create_session(&self, request: SessionCreateRequest) -> Result<Session, AppError> {
         let state = self.execution_state();
+        let workspace_id = self.current_workspace_id().await?;
+        let relation_kind = if request.parent_session_id.is_some() {
+            agena_domain::SessionRelationKind::Child
+        } else {
+            agena_domain::SessionRelationKind::Root
+        };
         let mut session = self
             .store
             .create_session(
-                request.title,
+                workspace_id,
                 request.parent_session_id,
-                state.cache_policy(),
+                relation_kind,
+                None,
+                request.title,
+                None,
+                None,
             )
             .await?;
 
@@ -183,6 +183,8 @@ impl SessionManager {
                     source: MessageSource::System,
                     idempotency_key: None,
                     model_turn_id: None,
+                    conversation_turn_id: None,
+                    conversation_reply_id: None,
                     parent_message_id: session
                         .last_conversation_message()
                         .map(|message| message.id),
@@ -210,6 +212,8 @@ impl SessionManager {
                     source: MessageSource::System,
                     idempotency_key: None,
                     model_turn_id: Some(initial_turn_id),
+                    conversation_turn_id: None,
+                    conversation_reply_id: None,
                     parent_message_id: session
                         .last_conversation_message()
                         .map(|message| message.id),
@@ -247,7 +251,7 @@ impl SessionManager {
             .iter()
             .map(MessageCheckpoint::all)
             .collect();
-        self.persist_session_changes(session, checkpoints, Vec::new(), None, state)
+        self.persist_session_changes(session, checkpoints, None, state)
             .await
     }
 
@@ -257,10 +261,7 @@ impl SessionManager {
         // shows aborted (not stuck in-progress) replies without scanning
         // unrelated sessions at startup.
         self.reconcile_session_on_open(session_id).await?;
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         // The persisted runtime contains a historical effective-permission
         // snapshot. It is not the source of truth after a config reload or a
         // live session-permission edit. Rebuild it from the current shared
@@ -274,10 +275,7 @@ impl SessionManager {
         session_id: i64,
         title: String,
     ) -> Result<Session, AppError> {
-        let state = self.execution_state();
-        self.store
-            .rename_session(session_id, title, state.cache_policy())
-            .await
+        self.store.rename_session(session_id, title).await
     }
 
     /// Replace one session's persisted model selection without starting a
@@ -293,15 +291,12 @@ impl SessionManager {
             )));
         }
         let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         if !self.apply_run_selection_to_session(&mut session, &options) {
             return Ok(session);
         }
         let persisted = self
-            .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+            .persist_session_changes(session, Vec::new(), None, state.clone())
             .await?;
         if let Ok(mut permissions) = state.shared_session_permissions.write() {
             permissions.insert(
@@ -327,16 +322,13 @@ impl SessionManager {
         }
         let state = self.execution_state();
         state.processor.model_metadata(&model)?;
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         session.runtime.set_model_override(
             Some(model.provider_id.to_string()),
             model.adapter_id.as_ref().map(ToString::to_string),
             Some(model.model_id.to_string()),
         );
-        self.persist_session_changes(session, Vec::new(), Vec::new(), None, state)
+        self.persist_session_changes(session, Vec::new(), None, state)
             .await
     }
 
@@ -496,10 +488,7 @@ impl SessionManager {
         permission: crate::authorization::PermissionConfig,
     ) -> Result<Session, AppError> {
         let state = self.execution_state();
-        let mut session = self
-            .store
-            .load_session(session_id, state.cache_policy())
-            .await?;
+        let mut session = self.store.load_session(session_id).await?;
         let previous_shared_permission = state
             .shared_session_permissions
             .write()
@@ -509,7 +498,7 @@ impl SessionManager {
         session.runtime.execution.effective_permission =
             self.resolve_effective_session_permission(&session, &state);
         let persisted = match self
-            .persist_session_changes(session, Vec::new(), Vec::new(), None, state.clone())
+            .persist_session_changes(session, Vec::new(), None, state.clone())
             .await
         {
             Ok(persisted) => persisted,
@@ -567,7 +556,20 @@ impl SessionManager {
     }
 
     pub async fn workspace_session_ids(&self) -> Result<Vec<i64>, AppError> {
-        self.store.list_workspace_session_ids().await
+        let workspace_id = self.current_workspace_id().await?;
+        let summaries = self
+            .store
+            .list_session_summaries(
+                workspace_id,
+                agena_domain::SessionListRequest {
+                    offset: 0,
+                    limit: None,
+                    include_subagents: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(summaries.into_iter().map(|summary| summary.id).collect())
     }
 
     pub async fn list_projected_messages(
@@ -575,9 +577,12 @@ impl SessionManager {
         session_id: i64,
         include_full_parts: bool,
     ) -> Result<Vec<Message>, AppError> {
-        self.store
-            .list_projected_messages(session_id, include_full_parts)
-            .await
+        // v2 has no separate "projected" transcript: the canonical read is
+        // the aggregate rebuilt from parts (`load_session`). `include_full_parts`
+        // is retained for callers that historically fetched headers only; the
+        // aggregate always carries full parts.
+        let _ = include_full_parts;
+        Ok(self.store.load_session(session_id).await?.messages)
     }
 
     /// Returns whether a persisted user message already owns an external
@@ -593,20 +598,14 @@ impl SessionManager {
         }
         Ok(self
             .store
-            .list_projected_messages(session_id, false)
+            .load_session(session_id)
             .await?
+            .messages
             .into_iter()
             .any(|message| {
                 message.role == agena_domain::Role::User
                     && message.metadata.idempotency_key.as_deref() == Some(key)
             }))
-    }
-
-    pub async fn list_projected_message_headers(
-        &self,
-        session_id: i64,
-    ) -> Result<Vec<crate::session::ProjectedMessageHeader>, AppError> {
-        self.store.list_projected_message_headers(session_id).await
     }
 
     pub async fn broadcast_session_end(
@@ -628,31 +627,30 @@ impl SessionManager {
         }
     }
 
-    pub async fn find_session_id_for_message(
-        &self,
-        message_id: i64,
-    ) -> Result<Option<i64>, AppError> {
-        self.store
-            .find_projected_session_id_for_message(message_id)
-            .await
-    }
-
-    pub async fn find_session_id_for_part(&self, part_id: i64) -> Result<Option<i64>, AppError> {
-        self.store.find_projected_session_id_for_part(part_id).await
-    }
-
     pub async fn list_session_summaries(
         &self,
         request: SessionListRequest,
     ) -> Result<Vec<SessionSummary>, AppError> {
-        self.store.list_session_summaries(request).await
+        let workspace_id = self.current_workspace_id().await?;
+        self.store
+            .list_session_summaries(workspace_id, request)
+            .await
     }
 
-    pub async fn list_session_events(
+    /// Fetch one session's summary row as the shared domain DTO, or `None`.
+    pub async fn get_session_summary(
         &self,
         session_id: i64,
-    ) -> Result<Vec<crate::event::DomainEvent>, AppError> {
-        self.store.list_session_events(session_id).await
+    ) -> Result<Option<SessionSummary>, AppError> {
+        self.store.get_session_summary(session_id).await
+    }
+
+    /// Session counts per workspace (13.5 `workspace_counts`).
+    pub async fn session_counts_by_workspace(
+        &self,
+        workspace_ids: &[i64],
+    ) -> Result<HashMap<i64, i64>, AppError> {
+        self.store.session_counts_by_workspace(workspace_ids).await
     }
 }
 

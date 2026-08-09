@@ -18,14 +18,14 @@
 //! - [`ws`]: `/api/v1/ws` upgrade handler implementing the
 //!   [`agena_api::ws::ClientMessage`] / [`agena_api::ws::ServerMessage`]
 //!   protocol with multiplexed subscriptions.
-//! - [`sse`]: `/api/v1/events/stream` push-only event stream.
+//! - [`sse`]: `/api/v1/changes/stream` push-only part-patch/signal stream.
 //! - [`ipc`]: optional Unix socket binder reusing the same WS protocol.
 //!
 //! ## Design notes
 //!
 //! - The transports never poll the database. They consume Runtime's stable
-//!   live-event stream service. Resume from the persisted store happens on
-//!   initial subscribe / on `Lagged` recovery via `EventStore::range`.
+//!   live-change surfaces. Catch-up is an explicit current parts snapshot;
+//!   live notifications themselves are never persisted or replayed.
 //! - Commands and queries route through `dispatch::*` so that the WS handler
 //!   and REST handler share identical semantics where practical, while the
 //!   REST surface keeps returning the plain JSON resources the Studio web UI
@@ -36,6 +36,7 @@ pub mod error;
 pub mod ipc;
 #[cfg(feature = "jsonrpc")]
 pub mod jsonrpc;
+mod live;
 #[cfg(feature = "http")]
 pub mod rest;
 #[cfg(feature = "sse")]
@@ -267,12 +268,12 @@ pub fn router(state: AppState) -> Router {
                 axum::routing::put(rest::replace_session_permission),
             )
             .route(
-                "/api/v1/sessions/{session_id}/events",
-                get(rest::list_session_events),
+                "/api/v1/sessions/{session_id}/parts",
+                get(rest::list_session_parts),
             )
             .route(
-                "/api/v1/sessions/{session_id}/events/stream",
-                get(rest::stream_session_events),
+                "/api/v1/sessions/{session_id}/changes/stream",
+                get(rest::stream_session_changes),
             )
             .route(
                 "/api/v1/sessions/{session_id}/messages",
@@ -354,7 +355,6 @@ pub fn router(state: AppState) -> Router {
                 "/api/v1/activities/{activity_id}/dismiss",
                 post(rest::dismiss_activity),
             )
-            .route("/api/v1/events", get(rest::list_events))
             .route("/api/v1/notifications", get(rest::list_notifications))
             .route(
                 "/api/v1/notifications/{notification_id}/dismiss",
@@ -376,7 +376,7 @@ pub fn router(state: AppState) -> Router {
 
     #[cfg(feature = "sse")]
     let router = router
-        .route("/api/v1/events/stream", get(sse::handler))
+        .route("/api/v1/changes/stream", get(sse::handler))
         .route(
             "/api/v1/notifications/stream",
             get(sse::notifications_stream),
@@ -395,7 +395,7 @@ pub fn transport_router(state: AppState) -> Router {
 
     #[cfg(feature = "sse")]
     let router = router
-        .route("/api/v1/events/stream", get(sse::handler))
+        .route("/api/v1/changes/stream", get(sse::handler))
         .route(
             "/api/v1/notifications/stream",
             get(sse::notifications_stream),

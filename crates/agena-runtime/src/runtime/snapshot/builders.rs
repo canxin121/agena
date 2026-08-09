@@ -101,43 +101,6 @@ pub(super) fn build_or_reconfigure_session_manager(
     manager
 }
 
-pub(super) fn build_event_bridge(
-    session_manager: Option<&Arc<SessionManager>>,
-    plugins: &Arc<PluginHost>,
-) -> Option<Arc<agena_runtime::AbortOnDrop>> {
-    session_manager.map(|manager| {
-        Arc::new(crate::event::bridge::spawn_event_bridge(
-            manager.event_bus(),
-            Arc::clone(plugins),
-        ))
-    })
-}
-
-pub(super) async fn resume_session_state(
-    session_manager: Option<&Arc<SessionManager>>,
-    reusing: bool,
-) -> Result<(), crate::AppError> {
-    if reusing {
-        return Ok(());
-    }
-    if let Some(manager) = session_manager {
-        manager
-            .event_publisher()
-            .resume_from_store()
-            .await
-            .map_err(|err| {
-                crate::AppError::Internal(format!("resume event sequence failed: {err}"))
-            })?;
-        // Interrupted-run reconciliation is intentionally NOT run here: it
-        // scans every session's history and would delay startup on large
-        // databases. `SessionManager` reconciles a session lazily when it is
-        // opened (`get_session`), which is the only session the user can
-        // observe; stale execution leases are stolen atomically on demand by
-        // `register`, so deferring reconciliation cannot block a new run.
-    }
-    Ok(())
-}
-
 pub(super) async fn build_model_catalog_services(
     inputs: agena_runtime::ModelCatalogCompositionInputs<
         &std::collections::BTreeMap<String, agena_runtime::ResolvedProviderConfig>,

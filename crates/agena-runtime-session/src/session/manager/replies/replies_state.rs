@@ -1,9 +1,9 @@
 use super::{
-    AppError, Arc, EventKind, ExecutionStatus, MessageCheckpoint, MessageMetadata, MessageSource,
-    ModelRef, PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool, Role,
-    SessionCommit, SessionManager, SessionManagerState, SessionRunOptions, ToolError,
-    ToolInvocationExecution, build_message, custom_payload_value, managed_project_state_permission,
-    mode_request_override_for_adapter, mpsc, payload_tool_name_for_invocation,
+    AppError, Arc, ExecutionStatus, MessageCheckpoint, MessageMetadata, MessageSource, ModelRef,
+    PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool, Role, SessionManager,
+    SessionManagerState, SessionRunOptions, ToolError, ToolInvocationExecution, build_message,
+    custom_payload_value, managed_project_state_permission, mode_request_override_for_adapter,
+    mpsc, payload_tool_name_for_invocation,
 };
 use crate::session::Session;
 use agena_domain::ToolInvocation;
@@ -13,14 +13,12 @@ impl SessionManager {
         &self,
         session: Session,
         checkpoints: Vec<MessageCheckpoint>,
-        client_events: Vec<EventKind>,
         persisted_rule: Option<PersistedPermissionRule>,
         state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
         self.persist_session_changes_with_rules(
             session,
             checkpoints,
-            client_events,
             persisted_rule.into_iter().collect(),
             state,
         )
@@ -31,26 +29,21 @@ impl SessionManager {
         &self,
         session: Session,
         checkpoints: Vec<MessageCheckpoint>,
-        client_events: Vec<EventKind>,
         persisted_rules: Vec<PersistedPermissionRule>,
-        state: Arc<SessionManagerState>,
+        _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {
-        // Rules may target any scope (session, workspace, or global), and a
-        // persisted batch may also delete rules. Invalidate every cached
-        // snapshot so no session keeps applying stale rules.
+        // Rules may target any scope (session, workspace, or global). Persist
+        // them through the kept permission-rule repository (design 19.1) and
+        // invalidate every cached snapshot so no session keeps applying stale
+        // rules. The session data itself flows through the sealed facade.
         self.invalidate_rule_snapshots();
-        let expected_version = Some(session.version);
-        Box::pin(self.store.persist(
-            SessionCommit {
-                session,
-                checkpoints,
-                client_events,
-                persisted_rules,
-                expected_version,
-            },
-            state.cache_policy(),
-        ))
-        .await
+        for rule in &persisted_rules {
+            self.permission_rules
+                .upsert(rule)
+                .await
+                .map_err(|error| AppError::Internal(format!("persist permission rule: {error}")))?;
+        }
+        self.store.persist_session(session, &checkpoints).await
     }
 
     pub(in crate::session::manager) fn apply_run_selection_to_session(
@@ -501,6 +494,8 @@ impl SessionManager {
                     source: MessageSource::User,
                     idempotency_key: None,
                     model_turn_id: Some(steer_turn_id),
+                    conversation_turn_id: None,
+                    conversation_reply_id: None,
                     parent_message_id: session.last_conversation_message().map(|m| m.id),
                     generated_by_call_id: None,
                     externally_initiated_tool: false,
@@ -514,7 +509,7 @@ impl SessionManager {
             session.messages.push(user_message.clone());
             let checkpoint = MessageCheckpoint::all(&user_message);
             session = self
-                .persist_session_changes(session, vec![checkpoint], Vec::new(), None, state.clone())
+                .persist_session_changes(session, vec![checkpoint], None, state.clone())
                 .await?;
         }
     }

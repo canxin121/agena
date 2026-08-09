@@ -131,6 +131,8 @@ impl AgenaRuntime {
                 activity_registry.clone(),
                 monitor_service,
             )),
+            live_signals: Arc::new(agena_runtime::LiveSignalHub::new(256)),
+            subtask_bridge: Arc::new(std::sync::Mutex::new(None)),
         };
 
         // Project runtime maintenance tasks (marketplace sync, catalog
@@ -146,33 +148,16 @@ impl AgenaRuntime {
                 .set_listener(bridge);
         }
 
-        // Drain activity events onto the runtime bus. Resolving the session
-        // manager lazily keeps this correct across runtime reloads. The weak
-        // handle avoids a retain cycle with the registry channel.
+        // Drain activity records onto the runtime's ephemeral live-signal
+        // stream. v2 has no event bus (14.3): the drain emits observer
+        // notifications only, never persisted, never replayed.
         let runtime = Arc::new(runtime);
         {
-            let runtime_weak = Arc::downgrade(&runtime);
+            let live_signals = Arc::clone(&runtime.live_signals);
             let mut rx = activity_rx;
             tokio::spawn(async move {
                 while let Some(event) = rx.recv().await {
-                    let Some(runtime) = runtime_weak.upgrade() else {
-                        break;
-                    };
-                    let Some(manager) = runtime.current_snapshot().session_manager() else {
-                        continue;
-                    };
-                    let session_id = event.activity.session_id;
-                    let ctx = match session_id {
-                        Some(id) => crate::event::PublishContext::for_session(id),
-                        None => crate::event::PublishContext::default(),
-                    };
-                    let kind = crate::event::EventKind::BackgroundActivityChanged(event);
-                    if let Err(err) = manager.event_publisher().publish(ctx, kind).await {
-                        tracing::debug!(
-                            error = %err,
-                            "failed to publish background activity event"
-                        );
-                    }
+                    live_signals.emit(agena_runtime::RuntimeLiveSignal::Activity(Box::new(event)));
                 }
             });
         }
@@ -191,42 +176,33 @@ impl AgenaRuntime {
         runtime.spawn_subtask_activity_bridge();
         Ok(runtime)
     }
-}
 
-impl AgenaRuntime {
-    /// Subscribe to delegated-task status events and project them into the
-    /// unified background-activity registry.
+    /// Project delegated-task status into the unified background-activity
+    /// registry. v2 keeps subtask state in the `sessions` row; the facade's
+    /// [`SessionChange::SessionMetaUpdated`](agena_storage::SessionChange)
+    /// notifications (emitted after commit, never persisted) drive this.
     fn spawn_subtask_activity_bridge(&self) {
+        if self
+            .subtask_bridge
+            .lock()
+            .expect("subtask bridge lock")
+            .is_some()
+        {
+            return;
+        }
         let Some(manager) = self.current_snapshot().session_manager() else {
             return;
         };
-        let stream = manager.clone() as Arc<dyn agena_runtime::RuntimeEventStreamService>;
         let registry = self.activities.registry.clone();
-        tokio::spawn(async move {
-            let filter = agena_domain::EventFilter {
-                scope: agena_domain::EventScope::Global,
-                kinds: Some(
-                    [agena_domain::EventKindTag::from("subtask_status_changed")]
-                        .into_iter()
-                        .collect(),
-                ),
-                since_seq_global: None,
-            };
-            let mut subscription = stream.subscribe_events(filter);
-            while let Some(item) = subscription.recv().await {
-                let event = match item {
-                    agena_runtime::RuntimeLiveEventSubscriptionItem::Event(event) => event,
-                    agena_runtime::RuntimeLiveEventSubscriptionItem::Lagged(_) => continue,
-                };
-                if event.kind.as_str() == "subtask_status_changed"
-                    && let Ok(event) = serde_json::from_value::<
-                        agena_domain::SubtaskStatusChangedEvent,
-                    >(event.payload)
-                {
-                    crate::activity::upsert_task_activity(&registry, &event);
-                }
+        let store = manager.session_store();
+        let subscription = store.subscribe_all(Arc::new(move |change| {
+            if let agena_storage::store::SessionChange::SessionMetaUpdated { meta, .. } = change {
+                crate::activity::upsert_task_activity_from_meta(&registry, &meta);
             }
-        });
+        }));
+        // Retain the handle for the runtime's lifetime; dropping it would
+        // unsubscribe (15.5).
+        *self.subtask_bridge.lock().expect("subtask bridge lock") = Some(subscription);
     }
 }
 
@@ -1496,6 +1472,10 @@ fn runtime_database_error(error: agena_runtime::RuntimeDatabaseCompositionError)
 pub(crate) struct AgenaRuntime {
     pub(crate) inner: Arc<AgenaRuntimeInner>,
     pub(crate) activities: Arc<crate::activity::ActivityRuntimeState>,
+    pub(crate) live_signals: Arc<crate::live_signal::LiveSignalHub>,
+    /// Holds the subtask→activity facade subscription for the runtime's
+    /// lifetime. The handle must not be dropped or it unsubscribes (15.5).
+    subtask_bridge: Arc<std::sync::Mutex<Option<agena_storage::store::GlobalSubscription>>>,
 }
 
 pub(crate) type AgenaRuntimeInner = agena_runtime::RuntimeProcessState<
@@ -1540,17 +1520,11 @@ impl AgenaRuntime {
                 permission_rules: Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
                     Arc::clone(database),
                 )),
-                session_stats: Arc::new(agena_storage_sqlite::SeaSessionStatsRepository::new(
-                    Arc::clone(database),
-                )),
-                session_summary: Arc::new(agena_storage_sqlite::SeaSessionSummaryRepository::new(
-                    Arc::clone(database),
-                )),
-                session_mutation: Arc::new(agena_storage_sqlite::SeaSessionSummaryRepository::new(
-                    Arc::clone(database),
-                )),
             }
         });
+        let session_store = session_manager
+            .as_ref()
+            .map(|manager| manager.session_store());
         let session_queries = session_manager
             .as_ref()
             .map(|manager| manager.clone() as Arc<dyn agena_runtime::SessionQueryService>);
@@ -1583,15 +1557,22 @@ impl AgenaRuntime {
                 activities: Some(
                     Arc::new(self.clone()) as Arc<dyn agena_runtime::RuntimeActivityService>
                 ),
-                event_queries: session_manager.as_ref().map(|manager| {
-                    manager.clone() as Arc<dyn agena_runtime::RuntimeEventQueryService>
-                }),
-                event_stream: session_manager.as_ref().map(|manager| {
-                    manager.clone() as Arc<dyn agena_runtime::RuntimeEventStreamService>
-                }),
-                event_publisher: session_manager.as_ref().map(|manager| {
-                    manager.clone() as Arc<dyn agena_runtime::RuntimeEventPublishService>
-                }),
+                live_signals: {
+                    struct Adapter(Arc<agena_runtime::LiveSignalHub>);
+                    impl agena_runtime::RuntimeLiveSignalService for Adapter {
+                        fn subscribe(
+                            &self,
+                        ) -> Box<dyn agena_runtime::RuntimeLiveSignalSubscription>
+                        {
+                            self.0
+                                .subscribe()
+                                .expect("live signal subscription requires a tokio runtime")
+                        }
+                    }
+                    Some(Arc::new(Adapter(Arc::clone(&self.live_signals)))
+                        as Arc<dyn agena_runtime::RuntimeLiveSignalService>)
+                },
+                session_store,
                 session_queries,
                 execution_control,
                 execution_commands,

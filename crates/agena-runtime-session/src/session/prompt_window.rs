@@ -18,11 +18,11 @@ use agena_domain::{ExecutionStatus, MessageSource, Role, ToolInvocation};
 use agena_provider::{PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionContext};
 
 use super::Session;
-use super::history::{
+use super::model::PromptCompactionContent;
+use super::transcript::{
     ProviderTranscript, TranscriptBlock, TranscriptContent, TranscriptFragment, TranscriptToolCall,
     TranscriptToolOutput,
 };
-use super::model::PromptCompactionContent;
 use agena_domain::ToolCallId;
 
 const PROMPT_PROTOCOL_OVERHEAD_CHARS: usize = 2_048;
@@ -1451,7 +1451,7 @@ mod compaction_tests {
     #[test]
     fn interstitial_text_segment_is_still_sent_to_the_model() {
         use crate::message::PartContent;
-        use crate::session::history::TranscriptBlock;
+        use crate::session::transcript::TranscriptBlock;
 
         let mut message = Message::prompt_parts(
             Role::Assistant,

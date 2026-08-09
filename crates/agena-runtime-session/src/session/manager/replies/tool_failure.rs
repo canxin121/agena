@@ -390,7 +390,7 @@ impl SessionManager {
             &failure,
         );
 
-        let assistant_message =
+        let _assistant_message =
             update_resolved_tool_message(&mut session, &resolved, |tool_part| {
                 let mut operation = OperationPart::failed(
                     resolved.call_id,
@@ -407,14 +407,7 @@ impl SessionManager {
                 tool_part.status = ExecutionStatus::Failed;
             })?;
 
-        self.persist_tool_completion(
-            session,
-            assistant_message,
-            &resolved,
-            persisted_rules,
-            Vec::new(),
-            state,
-        )
-        .await
+        self.persist_tool_completion(session, &resolved, persisted_rules, state)
+            .await
     }
 }

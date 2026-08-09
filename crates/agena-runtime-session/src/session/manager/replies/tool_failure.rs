@@ -1,10 +1,13 @@
 use super::{
-    AppError, Arc, ExecutionStatus, OperationPart, PartContent, PersistedPermissionRule,
-    SessionManager, SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
+    AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
+    SessionManagerState, SessionPendingTool, ToolError, completed_lifecycle,
     operation_authorization, resolve_pending_tool, terminal_operation_title, text_result_blocks,
     update_resolved_tool_message,
 };
-use crate::session::store::{part_content_to_value, part_state_from_execution_status};
+use crate::session::store::{
+    part_state_from_execution_status, tool_call_from_operation, typed_content_to_value,
+};
+use agena_runtime_contracts::part_content::TypedContent;
 use crate::session::Session;
 use agena_domain::ToolOutput;
 use agena_failure::{
@@ -404,8 +407,10 @@ impl SessionManager {
                 );
                 operation.authorization = authorization.clone();
                 operation.set_title(failure_title.clone());
-                tool_part.content = part_content_to_value(&PartContent::operation(operation))
-                    .expect("tool content is always JSON serializable");
+                tool_part.content = typed_content_to_value(&TypedContent::ToolCall(
+                    tool_call_from_operation(&operation),
+                ))
+                .expect("tool content is always JSON serializable");
                 tool_part.state = part_state_from_execution_status(ExecutionStatus::Failed);
             })?;
 

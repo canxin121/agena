@@ -24,18 +24,19 @@ use super::{SessionManager, SessionRunRequest, SessionRunTermination, merge_syst
 use crate::provider::{ModelRuntime, ProviderError};
 use crate::session::manager::runs::run_visible_text_lossy;
 use crate::session::store::{
-    ProcessorPartIdAllocator, new_part_from_content, part_content_to_value, parts_into_runs,
-    run_marker_content,
+    ProcessorPartIdAllocator, interaction_from_request, new_part_from_content, parts_into_runs,
+    run_marker_content, text_content, typed_content_to_value,
 };
 use crate::{
     RuntimeSessionManagerConfig,
     authorization::ExecutionPrincipal,
-    part::{InteractiveRequestPart, PartContent, RequestPart},
+    part::{InteractiveRequestPart, RequestPart},
     permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::ProviderRegistry,
     session::{ContextGovernor, Session, SessionProcessor},
     tool::ToolExecutor,
 };
+use agena_runtime_contracts::part_content::TypedContent;
 
 async fn test_manager() -> SessionManager {
     test_manager_with_database().await.0
@@ -106,7 +107,7 @@ async fn append_message(
     manager: &SessionManager,
     mut session: Session,
     role: Role,
-    contents: Vec<PartContent>,
+    contents: Vec<TypedContent>,
 ) -> Session {
     let part_role = match role {
         Role::User => PartRole::User,
@@ -197,14 +198,14 @@ async fn messages_are_run_markers_plus_ordered_parts() {
         &manager,
         session,
         Role::User,
-        vec![PartContent::text("first"), PartContent::text("second")],
+        vec![TypedContent::Text(text_content("first")), TypedContent::Text(text_content("second"))],
     )
     .await;
     let session = append_message(
         &manager,
         session,
         Role::Assistant,
-        vec![PartContent::text("answer")],
+        vec![TypedContent::Text(text_content("answer"))],
     )
     .await;
 
@@ -242,7 +243,7 @@ async fn one_checkpoint_updates_only_the_named_part_revision() {
         &manager,
         session,
         Role::Assistant,
-        vec![PartContent::text("left"), PartContent::text("right")],
+        vec![TypedContent::Text(text_content("left")), TypedContent::Text(text_content("right"))],
     )
     .await;
     let before = manager
@@ -277,8 +278,10 @@ async fn one_checkpoint_updates_only_the_named_part_revision() {
                 part_id: changed_part_id,
             })
             .expect("changed part");
-        changed.content = part_content_to_value(&PartContent::text("right updated"))
-            .expect("part content is JSON serializable");
+        changed.content = typed_content_to_value(&TypedContent::Text(text_content(
+            "right updated",
+        )))
+        .expect("part content is JSON serializable");
     }
     manager
         .persist_session_changes(
@@ -318,7 +321,7 @@ async fn fork_renders_the_shared_prefix_without_copying_parts() {
         &manager,
         session,
         Role::User,
-        vec![PartContent::text("shared prompt")],
+        vec![TypedContent::Text(text_content("shared prompt"))],
     )
     .await;
     let source = manager
@@ -366,8 +369,8 @@ async fn default_manager_fork_includes_the_complete_last_message() {
         session,
         Role::User,
         vec![
-            PartContent::text("shared first"),
-            PartContent::text("shared second"),
+            TypedContent::Text(text_content("shared first")),
+            TypedContent::Text(text_content("shared second")),
         ],
     )
     .await;
@@ -455,7 +458,7 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
             vec![NewPart::pending(
                 "interaction",
                 PartRole::Runtime,
-                serde_json::to_value(PartContent::request(RequestPart::UserInput(
+                interaction_from_request(&RequestPart::UserInput(
                     InteractiveRequestPart::pending(agena_domain::UserInputRequest {
                         request_id: "ask-1".to_owned(),
                         session_id: Some(session.id),
@@ -466,8 +469,8 @@ async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
                         questions: Vec::new(),
                         created_at: chrono::Utc::now(),
                     }),
-                )))
-                .expect("serialize interaction part"),
+                ))
+                .as_value(),
             )],
         )
         .await
@@ -572,7 +575,7 @@ async fn manager_jsonl_round_trip_restores_parts_as_an_independent_root() {
         &manager,
         session,
         Role::User,
-        vec![PartContent::text("round trip")],
+        vec![TypedContent::Text(text_content("round trip"))],
     )
     .await;
     let bundle = manager
@@ -598,7 +601,7 @@ async fn query_projection_is_derived_from_persisted_parts() {
         &manager,
         session,
         Role::User,
-        vec![PartContent::text("query me")],
+        vec![TypedContent::Text(text_content("query me"))],
     )
     .await;
     let projected = manager

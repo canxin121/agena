@@ -1,15 +1,17 @@
 use super::{ExecutionControlError, execution_control_to_app_error};
 use crate::{
     AppError,
-    part::PartContent,
     session::{
         store::{
-            execution_status_from_part_state, part_content_from_value, parts_into_runs,
-            role_from_part_role, timestamp_millis_to_utc, OPERATION_ID_METADATA_KEY,
+            attachment_from_file_ref, execution_status_from_part_state, interaction_from_content,
+            operation_from_tool_call, parts_into_runs, role_from_part_role,
+            skill_reference_from_skill_ref, timestamp_millis_to_utc, typed_content_from_value,
+            typed_content_to_value, user_problem_from_error, OPERATION_ID_METADATA_KEY,
         },
         Session, SessionManager,
     },
 };
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_domain::{ExecutionStatus, Role, SessionSummary};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 use agena_storage::store::{Part, PartRole};
@@ -127,7 +129,7 @@ impl SessionManager {
     pub async fn steer_input(
         &self,
         session_id: i64,
-        parts: Vec<PartContent>,
+        parts: Vec<TypedContent>,
     ) -> Result<(), AppError> {
         self.execution_registry
             .steer(session_id, parts)
@@ -502,13 +504,11 @@ fn more_terminal_status(
 /// The failure of a canonical turn, when any part reports one.
 fn part_failure(part: &DecodedPart) -> Option<agena_failure::UserProblem> {
     match part.content.as_ref()? {
-        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => operation
+        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call)
             .error
             .as_ref()
             .map(|error| (&error.failure).into()),
-        PartContent::Activity(crate::part::RuntimeActivity::Error(error)) => {
-            Some(error.problem.clone())
-        }
+        TypedContent::Error(error) => Some(user_problem_from_error(error)),
         _ => None,
     }
 }
@@ -575,7 +575,7 @@ fn transcript_node_from_part(
         let Some(content) = part.content.as_ref() else {
             return Ok(None);
         };
-        let PartContent::Text(text) = content else {
+        let TypedContent::Text(text) = content else {
             return Ok(None);
         };
         Ok(Some(agena_domain::ContentNode::text_at(
@@ -633,7 +633,7 @@ fn activity_actor_from_role(role: Role) -> agena_domain::ActivityActor {
 
 /// Map a message part's content into the transcript [`agena_domain::ActivityPayload`].
 ///
-/// v2 persists parts in their rich `PartContent` form (there is no separate
+/// v2 persists parts in their rich typed form (there is no separate
 /// content-node projection), so the durable payload is recovered directly from
 /// the part. Operation parts carry their compact tool data; the human-facing
 /// detail Markdown is derived here, at snapshot load, and never persisted.
@@ -652,7 +652,7 @@ fn activity_payload_from_part(
         // Assistant text parts that carry an ActivityId are interstitial body
         // segments (produced between tool calls); they render as their own
         // collapsible block. User text activities stay TextArtifact.
-        Some(PartContent::Text(text)) => match role {
+        Some(TypedContent::Text(text)) => match role {
             Role::Assistant => Some(ActivityPayload::TextSegment(TextSegmentActivity {
                 text: text.text.clone(),
             })),
@@ -662,12 +662,13 @@ fn activity_payload_from_part(
                 label: part.summary.clone(),
             })),
         },
-        Some(PartContent::Activity(crate::part::RuntimeActivity::Reasoning(reasoning))) => {
+        Some(TypedContent::Think(think)) => {
             Some(ActivityPayload::Reasoning(ReasoningActivity {
-                content: reasoning.clone(),
+                content: crate::session::store::reasoning_from_think(think),
             }))
         }
-        Some(PartContent::Activity(crate::part::RuntimeActivity::Operation(operation))) => {
+        Some(TypedContent::ToolCall(tool_call)) => {
+            let operation = operation_from_tool_call(tool_call);
             // The compact `ToolResult` payload is the only durable tool data.
             // The human-facing detail Markdown is derived from it at render
             // time and is never persisted.
@@ -697,7 +698,8 @@ fn activity_payload_from_part(
                     }),
             }))
         }
-        Some(PartContent::Activity(crate::part::RuntimeActivity::Resource(attachment))) => {
+        Some(TypedContent::FileRef(file_ref)) => {
+            let attachment = attachment_from_file_ref(file_ref);
             let Some(item) = attachment.attachments.first() else {
                 return Ok(None);
             };
@@ -742,7 +744,8 @@ fn activity_payload_from_part(
                 page_count: item.page_count,
             }))
         }
-        Some(PartContent::Activity(crate::part::RuntimeActivity::SkillReference(skills))) => {
+        Some(TypedContent::SkillRef(skill_ref)) => {
+            let skills = skill_reference_from_skill_ref(skill_ref);
             let Some(skill) = skills.skills.first() else {
                 return Ok(None);
             };
@@ -755,20 +758,20 @@ fn activity_payload_from_part(
                 aliases: skill.aliases.clone(),
             }))
         }
-        Some(PartContent::Activity(crate::part::RuntimeActivity::Interaction(request))) => {
-            Some(ActivityPayload::Interaction(match request {
+        Some(TypedContent::Interaction(interaction)) => {
+            Some(ActivityPayload::Interaction(match interaction_from_content(interaction) {
                 crate::part::RequestPart::UserInput(value) => InteractionActivity::UserInput {
                     request: value.request.clone(),
                     reply: value.reply.clone(),
                 },
             }))
         }
-        Some(PartContent::Activity(crate::part::RuntimeActivity::Error(error))) => {
+        Some(TypedContent::Error(error)) => {
             Some(ActivityPayload::Error(ErrorActivity {
-                problem: error.problem.clone(),
+                problem: user_problem_from_error(error),
             }))
         }
-        Some(PartContent::Activity(crate::part::RuntimeActivity::Hook(hook))) => {
+        Some(TypedContent::Hook(hook)) => {
             Some(ActivityPayload::Notice(NoticeActivity {
                 kind: "hook".to_owned(),
                 summary: hook.summary.clone(),
@@ -777,15 +780,19 @@ fn activity_payload_from_part(
                 title: None,
             }))
         }
-        Some(PartContent::Activity(crate::part::RuntimeActivity::Notice(notice))) => {
-            Some(ActivityPayload::Notice(NoticeActivity {
-                kind: notice.kind.clone(),
-                summary: notice.summary.clone(),
-                detail: notice.detail.clone(),
-                occurred_at_ms: None,
-                title: notice.title.clone(),
-            }))
-        }
+        Some(TypedContent::Notice(notice)) => Some(ActivityPayload::Notice(NoticeActivity {
+            kind: notice.kind.clone(),
+            summary: notice.summary.clone(),
+            detail: notice.detail.clone(),
+            occurred_at_ms: None,
+            title: notice.title.clone(),
+        })),
+        Some(
+            TypedContent::Run(_)
+            | TypedContent::ToolResult(_)
+            | TypedContent::PasteRef(_)
+            | TypedContent::Compaction(_),
+        ) => None,
         None => None,
     }) else {
         return Ok(None);
@@ -1212,7 +1219,7 @@ struct DecodedPart {
     segment_id: Option<agena_domain::TextSegmentId>,
     operation_id: Option<String>,
     created_at: chrono::DateTime<chrono::Utc>,
-    content: Option<PartContent>,
+    content: Option<TypedContent>,
 }
 
 /// Decode one persisted content part (its `kind` column plus canonical JSON
@@ -1220,39 +1227,49 @@ struct DecodedPart {
 /// `store::part_to_message_part` exactly so the transcript and projected-message
 /// surfaces keep the same shape without the v1 message bridge.
 fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
-    let content = part_content_from_value(&part.kind, &part.content)?;
+    let content = typed_content_from_value(&part.kind, &part.content)?;
     // The coarse state column carries the lifecycle; the fine-grained status
     // (including denial outcomes) is reconstructed from the rich content.
     let status = match &content {
-        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => {
-            operation.status()
+        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call).status(),
+        TypedContent::Interaction(interaction) => {
+            match interaction_from_content(interaction) {
+                crate::part::RequestPart::UserInput(request) => request.status(),
+            }
         }
-        PartContent::Activity(crate::part::RuntimeActivity::Interaction(
-            crate::part::RequestPart::UserInput(request),
-        )) => request.status(),
         _ => execution_status_from_part_state(part.state),
     };
-    // Recover the provider operation id stashed by `serialize_part_content` so
-    // pending-tool correlation and prompt assembly survive a reload.
+    // Recover the provider operation id stashed by the tool-call serialization
+    // so pending-tool correlation and prompt assembly survive a reload.
     let operation_id = match &content {
-        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => operation
+        TypedContent::ToolCall(tool_call) => operation_from_tool_call(tool_call)
             .metadata
             .get(OPERATION_ID_METADATA_KEY)
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned),
         _ => None,
     };
+    let activity_kind = matches!(
+        &content,
+        TypedContent::Think(_)
+            | TypedContent::ToolCall(_)
+            | TypedContent::FileRef(_)
+            | TypedContent::SkillRef(_)
+            | TypedContent::Notice(_)
+            | TypedContent::Hook(_)
+            | TypedContent::Error(_)
+            | TypedContent::Interaction(_)
+    );
     Ok(DecodedPart {
         id: part.part_id,
         part_index,
         status,
-        kind: content.kind(),
+        kind: crate::session::store::typed_part_kind(&content),
         name: part_name_from_content(&content),
         summary: part.summary.clone(),
         has_detail: part.content.is_object(),
-        activity_id: matches!(&content, PartContent::Activity(_))
-            .then(agena_domain::ActivityId::new),
-        segment_id: matches!(&content, PartContent::Text(_))
+        activity_id: activity_kind.then(agena_domain::ActivityId::new),
+        segment_id: matches!(&content, TypedContent::Text(_))
             .then(agena_domain::TextSegmentId::new),
         operation_id,
         created_at: timestamp_millis_to_utc(part.created_at_ms)?,
@@ -1260,16 +1277,15 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
     })
 }
 
-/// The v1 `MessagePart::name` derivation from decoded content: text/reasoning
+/// The `MessagePart::name` derivation from decoded content: text/reasoning
 /// are plain labels, operations use their header title (falling back to the
 /// invocation name), and failures use their problem code.
-fn part_name_from_content(content: &PartContent) -> Option<String> {
+fn part_name_from_content(content: &TypedContent) -> Option<String> {
     match content {
-        PartContent::Text(_) => Some("text".to_string()),
-        PartContent::Activity(crate::part::RuntimeActivity::Reasoning(_)) => {
-            Some("reasoning".to_string())
-        }
-        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => {
+        TypedContent::Text(_) => Some("text".to_string()),
+        TypedContent::Think(_) => Some("reasoning".to_string()),
+        TypedContent::ToolCall(tool_call) => {
+            let operation = operation_from_tool_call(tool_call);
             let title = operation.title.trim();
             Some(if title.is_empty() {
                 operation.invocation.name.clone()
@@ -1277,24 +1293,20 @@ fn part_name_from_content(content: &PartContent) -> Option<String> {
                 title.to_owned()
             })
         }
-        PartContent::Activity(crate::part::RuntimeActivity::SkillReference(_)) => {
-            Some("skill_reference".to_string())
+        TypedContent::SkillRef(_) => Some("skill_reference".to_string()),
+        TypedContent::Error(error) => Some(user_problem_from_error(error).code.to_string()),
+        TypedContent::FileRef(_) => Some("resource".to_string()),
+        TypedContent::Interaction(interaction) => {
+            match interaction_from_content(interaction) {
+                crate::part::RequestPart::UserInput(_) => Some("user_input".to_string()),
+            }
         }
-        PartContent::Activity(crate::part::RuntimeActivity::Error(error)) => {
-            Some(error.problem.code.to_string())
-        }
-        PartContent::Activity(crate::part::RuntimeActivity::Resource(_)) => {
-            Some("resource".to_string())
-        }
-        PartContent::Activity(crate::part::RuntimeActivity::Interaction(
-            crate::part::RequestPart::UserInput(_),
-        )) => Some("user_input".to_string()),
-        PartContent::Activity(crate::part::RuntimeActivity::Hook(hook)) => {
-            Some(format!("hook:{}", hook.hook))
-        }
-        PartContent::Activity(crate::part::RuntimeActivity::Notice(_)) => {
-            Some("notice".to_string())
-        }
+        TypedContent::Hook(hook) => Some(format!("hook:{}", hook.hook)),
+        TypedContent::Notice(_) => Some("notice".to_string()),
+        TypedContent::Run(_)
+        | TypedContent::PasteRef(_)
+        | TypedContent::ToolResult(_)
+        | TypedContent::Compaction(_) => None,
     }
 }
 
@@ -1323,63 +1335,86 @@ fn project_storage_part(
         content: decoded
             .content
             .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .map_err(|error| AppError::Internal(format!("serialize part content: {error}")))?,
+            .map(|content| {
+                typed_content_to_value(content)
+                    .map_err(|error| AppError::Internal(format!("serialize part content: {error}")))
+            })
+            .transpose()?,
     })
 }
 
-fn project_part_detail(content: &PartContent) -> agena_runtime::SessionProjectedPartDetail {
+fn project_part_detail(content: &TypedContent) -> agena_runtime::SessionProjectedPartDetail {
     match content {
-        PartContent::Text(value) => agena_runtime::SessionProjectedPartDetail::Text {
+        TypedContent::Text(value) => agena_runtime::SessionProjectedPartDetail::Text {
             text: value.text.clone(),
             synthetic: value.synthetic,
         },
-        PartContent::Activity(crate::part::RuntimeActivity::Reasoning(value)) => {
+        TypedContent::Think(value) => {
             agena_runtime::SessionProjectedPartDetail::Reasoning {
                 summary: value.summary.clone(),
-                raw_content: value.raw_content.clone(),
+                raw_content: value.raw.clone(),
                 encrypted_content: value.encrypted_content.clone(),
             }
         }
-        PartContent::Activity(crate::part::RuntimeActivity::Error(value)) => {
+        TypedContent::Error(value) => {
             agena_runtime::SessionProjectedPartDetail::Error {
-                problem: value.problem.clone(),
+                problem: user_problem_from_error(value),
             }
         }
-        PartContent::Activity(crate::part::RuntimeActivity::Resource(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Attachment(value.clone())
+        TypedContent::FileRef(value) => {
+            agena_runtime::SessionProjectedPartDetail::Attachment(
+                attachment_from_file_ref(value),
+            )
         }
-        PartContent::Activity(crate::part::RuntimeActivity::SkillReference(value)) => {
-            agena_runtime::SessionProjectedPartDetail::SkillReference(value.clone())
+        TypedContent::SkillRef(value) => agena_runtime::SessionProjectedPartDetail::SkillReference(
+            skill_reference_from_skill_ref(value),
+        ),
+        TypedContent::Interaction(value) => {
+            match interaction_from_content(value) {
+                crate::part::RequestPart::UserInput(request) => {
+                    agena_runtime::SessionProjectedPartDetail::UserInputRequest {
+                        request: request.request.clone(),
+                        reply: request.reply.clone(),
+                    }
+                }
+            }
         }
-        PartContent::Activity(crate::part::RuntimeActivity::Interaction(
-            crate::part::RequestPart::UserInput(value),
-        )) => agena_runtime::SessionProjectedPartDetail::UserInputRequest {
-            request: value.request.clone(),
-            reply: value.reply.clone(),
-        },
-        PartContent::Activity(crate::part::RuntimeActivity::Operation(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Operation(Box::new(project_operation_part(
-                value,
-            )))
-        }
-        PartContent::Activity(crate::part::RuntimeActivity::Hook(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
-                agena_runtime::SessionProjectedHookPart {
-                    hook: value.hook.clone(),
-                    plugin_id: value.plugin_id.clone(),
-                    summary: value.summary.clone(),
-                    detail: value.detail.clone(),
-                },
+        TypedContent::ToolCall(value) => {
+            agena_runtime::SessionProjectedPartDetail::Operation(Box::new(
+                project_operation_part(&operation_from_tool_call(value)),
             ))
         }
-        PartContent::Activity(crate::part::RuntimeActivity::Notice(value)) => {
-            agena_runtime::SessionProjectedPartDetail::Notice {
+        TypedContent::Hook(value) => agena_runtime::SessionProjectedPartDetail::Hook(Box::new(
+            agena_runtime::SessionProjectedHookPart {
+                hook: value.hook.clone(),
+                plugin_id: value.plugin_id.clone(),
                 summary: value.summary.clone(),
                 detail: value.detail.clone(),
-            }
-        }
+            },
+        )),
+        TypedContent::Notice(value) => agena_runtime::SessionProjectedPartDetail::Notice {
+            summary: value.summary.clone(),
+            detail: value.detail.clone(),
+        },
+        // These kinds have no v1 rich projection; degrade to a text detail
+        // exactly as the v1 typed fold did (Run → empty, PasteRef/ToolResult/
+        // Compaction → their text).
+        TypedContent::Run(_) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: String::new(),
+            synthetic: false,
+        },
+        TypedContent::PasteRef(value) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: value.text.clone(),
+            synthetic: false,
+        },
+        TypedContent::ToolResult(value) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: value.output.clone(),
+            synthetic: false,
+        },
+        TypedContent::Compaction(value) => agena_runtime::SessionProjectedPartDetail::Text {
+            text: value.summary.clone().unwrap_or_default(),
+            synthetic: false,
+        },
     }
 }
 

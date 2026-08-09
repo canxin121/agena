@@ -11,7 +11,8 @@ use chrono::Utc;
 use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
-use crate::part::{AttachmentItem, OperationPart, PartContent};
+use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource, OperationPart};
+use agena_runtime_contracts::part_content::{TypedContent, TextContent};
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
@@ -81,7 +82,7 @@ struct SessionUserRunRequest {
 }
 
 impl SessionUserRunRequest {
-    fn new(session_id: i64, options: SessionRunOptions, parts: Vec<PartContent>) -> Self {
+    fn new(session_id: i64, options: SessionRunOptions, parts: Vec<TypedContent>) -> Self {
         Self {
             run: SessionExecutionRequest::new(session_id, options),
             parts: parts
@@ -101,11 +102,11 @@ impl SessionUserRunRequest {
 
 #[derive(Debug, Clone)]
 struct UserInputPart {
-    content: PartContent,
+    content: TypedContent,
 }
 
 impl UserInputPart {
-    fn text_or_runtime(content: PartContent) -> Self {
+    fn text_or_runtime(content: TypedContent) -> Self {
         Self { content }
     }
 }
@@ -258,7 +259,7 @@ struct StableRunContext {
     active_model_turn_id: Option<i64>,
     state: Arc<SessionManagerState>,
     control: Arc<ExecutionControl>,
-    steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+    steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
     usage_budget: Option<SubtaskUsageBudget>,
 }
 
@@ -756,76 +757,82 @@ fn part_contents_from_composer_document(
         .into_iter()
         .map(|node| match node {
             ComposerNode::Text { text } => Ok(UserInputPart {
-                content: PartContent::text(text),
+                content: TypedContent::Text(TextContent {
+                    text,
+                    synthetic: false,
+                    extra: Default::default(),
+                }),
             }),
             ComposerNode::Activity { activity } => match activity.payload {
                 ActivityPayload::Resource(resource) => {
                     let kind = match resource.kind {
-                        ResourceKind::Image => crate::part::AttachmentKind::Image,
-                        ResourceKind::Audio => crate::part::AttachmentKind::Audio,
-                        ResourceKind::Video => crate::part::AttachmentKind::Video,
-                        ResourceKind::Pdf => crate::part::AttachmentKind::Pdf,
+                        ResourceKind::Image => AttachmentKind::Image,
+                        ResourceKind::Audio => AttachmentKind::Audio,
+                        ResourceKind::Video => AttachmentKind::Video,
+                        ResourceKind::Pdf => AttachmentKind::Pdf,
                         ResourceKind::File
                         | ResourceKind::Directory
                         | ResourceKind::Url
-                        | ResourceKind::Artifact => crate::part::AttachmentKind::File,
+                        | ResourceKind::Artifact => AttachmentKind::File,
                     };
                     let source = match resource.reference {
                         ResourceReference::Artifact { uri, .. } => {
-                            crate::part::AttachmentSource::FileId { file_id: uri }
+                            AttachmentSource::FileId { file_id: uri }
                         }
                         ResourceReference::WorkspacePath { path } => {
-                            crate::part::AttachmentSource::LocalPath { path }
+                            AttachmentSource::LocalPath { path }
                         }
-                        ResourceReference::Url { url } => {
-                            crate::part::AttachmentSource::Url { url }
-                        }
+                        ResourceReference::Url { url } => AttachmentSource::Url { url },
                         ResourceReference::ProviderFile { file_id, .. } => {
-                            crate::part::AttachmentSource::FileId { file_id }
+                            AttachmentSource::FileId { file_id }
                         }
                     };
                     Ok(UserInputPart {
-                        content: PartContent::attachments(vec![AttachmentItem {
-                        kind,
-                        mime: resource.media_type.unwrap_or_else(|| {
-                            if resource.kind == ResourceKind::Directory {
-                                "inode/directory".to_owned()
-                            } else {
-                                String::new()
-                            }
-                        }),
-                        source,
-                        filename: Some(resource.name),
-                        title: None,
-                        size_bytes: resource.size_bytes,
-                        sha256: None,
-                        width: resource.width,
-                        height: resource.height,
-                        duration_ms: resource.duration_ms,
-                        page_count: resource.page_count,
-                        }]),
+                        content: TypedContent::FileRef(super::store::file_ref_from_attachment(
+                            &crate::part::AttachmentPart {
+                                attachments: vec![AttachmentItem {
+                                kind,
+                                mime: resource.media_type.unwrap_or_else(|| {
+                                    if resource.kind == ResourceKind::Directory {
+                                        "inode/directory".to_owned()
+                                    } else {
+                                        String::new()
+                                    }
+                                }),
+                                source,
+                                filename: Some(resource.name),
+                                title: None,
+                                size_bytes: resource.size_bytes,
+                                sha256: None,
+                                width: resource.width,
+                                height: resource.height,
+                                duration_ms: resource.duration_ms,
+                                page_count: resource.page_count,
+                                }],
+                            },
+                        )),
                     })
                 }
-                ActivityPayload::SkillReference(skill) => {
-                    Ok(UserInputPart {
-                        content: PartContent::Activity(
-                            crate::part::RuntimeActivity::SkillReference(
-                                crate::part::SkillReferencePart {
-                                    skills: vec![crate::part::SkillReference {
-                            name: skill.name,
-                            description: skill.description,
-                            instructions: skill.instructions,
-                            content_hash: skill.content_hash,
-                            source: skill.source,
-                            aliases: skill.aliases,
-                                    }],
-                                },
-                            ),
-                        ),
-                    })
-                }
+                ActivityPayload::SkillReference(skill) => Ok(UserInputPart {
+                    content: TypedContent::SkillRef(super::store::skill_ref_from_reference(
+                        &crate::part::SkillReferencePart {
+                            skills: vec![crate::part::SkillReference {
+                                name: skill.name,
+                                description: skill.description,
+                                instructions: skill.instructions,
+                                content_hash: skill.content_hash,
+                                source: skill.source,
+                                aliases: skill.aliases,
+                            }],
+                        },
+                    )),
+                }),
                 ActivityPayload::TextArtifact(artifact) => Ok(UserInputPart {
-                    content: PartContent::text(artifact.text),
+                    content: TypedContent::Text(TextContent {
+                        text: artifact.text,
+                        synthetic: false,
+                        extra: Default::default(),
+                    }),
                 }),
                 _ => Err(AppError::Config(
                     "turn input accepts only resource, skill_reference, and text_artifact activities"
@@ -1027,7 +1034,7 @@ impl SessionManager {
         F: FnOnce(
                 SessionManager,
                 Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<PartContent>>,
+                mpsc::UnboundedReceiver<Vec<TypedContent>>,
             ) -> Fut
             + Send
             + 'static,
@@ -1072,7 +1079,7 @@ impl SessionManager {
         F: FnOnce(
                 SessionManager,
                 Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<PartContent>>,
+                mpsc::UnboundedReceiver<Vec<TypedContent>>,
             ) -> Fut
             + Send
             + 'static,
@@ -1136,7 +1143,7 @@ impl SessionManager {
         session_id: i64,
         task_name: &'static str,
         control: Arc<ExecutionControl>,
-        steer_rx: mpsc::UnboundedReceiver<Vec<PartContent>>,
+        steer_rx: mpsc::UnboundedReceiver<Vec<TypedContent>>,
         operation: F,
     ) -> Result<T, AppError>
     where
@@ -1144,7 +1151,7 @@ impl SessionManager {
         F: FnOnce(
                 SessionManager,
                 Arc<ExecutionControl>,
-                mpsc::UnboundedReceiver<Vec<PartContent>>,
+                mpsc::UnboundedReceiver<Vec<TypedContent>>,
             ) -> Fut
             + Send
             + 'static,

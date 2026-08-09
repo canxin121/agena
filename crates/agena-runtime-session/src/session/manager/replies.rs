@@ -6,7 +6,9 @@ use crate::session::model::{
     SessionPartRef, SessionPendingInteractiveRequest, SessionPendingPermissionRequest,
     SessionPendingTool,
 };
-use crate::session::store::{OPERATION_ID_METADATA_KEY, part_content_from_value};
+use crate::session::store::{
+    OPERATION_ID_METADATA_KEY, operation_from_tool_call, typed_content_from_value,
+};
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
 use agena_storage::store::{Part, PartRole, PartState};
@@ -193,15 +195,17 @@ fn operation_authorization(
         .unwrap_or_default()
 }
 
-/// Decode the v1 [`OperationPart`] payload from a `tool_call` part's canonical
-/// content. Returns `None` for non-tool parts or undecodable payloads.
+/// Decode the [`OperationPart`] payload from a `tool_call` part's canonical
+/// content (recovered via the lossless `extra["operation"]` bucket). Returns
+/// `None` for non-tool parts or undecodable payloads.
 pub(super) fn operation_from_part(part: &Part) -> Option<OperationPart> {
-    part_content_from_value(&part.kind, &part.content).ok().and_then(|content| match content {
-        PartContent::Activity(crate::part::RuntimeActivity::Operation(operation)) => {
-            Some(operation)
+    let content = typed_content_from_value(&part.kind, &part.content).ok()?;
+    match content {
+        agena_runtime_contracts::part_content::TypedContent::ToolCall(tool_call) => {
+            Some(operation_from_tool_call(&tool_call))
         }
         _ => None,
-    })
+    }
 }
 
 /// The provider operation id stashed on a `tool_call` part's content metadata
@@ -1642,7 +1646,7 @@ mod tests {
 }
 use super::{
     AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ExecutionStatus,
-    ModelRef, ModelSpeedModeRequestOverride, OperationPart, PartContent, PathBuf, PermissionAction,
+    ModelRef, ModelSpeedModeRequestOverride, OperationPart, PathBuf, PermissionAction,
     PermissionMode, PermissionReplyKind, PermissionScope, PersistedPermissionRule,
     PromptRequestOptions, PromptTurnBudget, ProviderPromptAnchor, ResolvedPendingTool,
     SessionExecutionReplyRequest, SessionManager, SessionManagerState,

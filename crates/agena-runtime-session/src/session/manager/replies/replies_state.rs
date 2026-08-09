@@ -1,5 +1,5 @@
 use super::{
-    AppError, Arc, ModelRef, PartContent, PathBuf, PersistedPermissionRule, ResolvedPendingTool,
+    AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, ResolvedPendingTool,
     SessionManager, SessionManagerState, SessionRunOptions, ToolError, ToolInvocationExecution,
     custom_payload_value, managed_project_state_permission, mode_request_override_for_adapter,
     mpsc, payload_tool_name_for_invocation,
@@ -7,6 +7,7 @@ use super::{
 use crate::session::store::new_part_from_content;
 use crate::session::Session;
 use agena_domain::ToolInvocation;
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{PartDelta, PartRole, PartState};
 
 impl SessionManager {
@@ -520,7 +521,7 @@ impl SessionManager {
     pub(in crate::session::manager) async fn drain_steer_input(
         &self,
         mut session: Session,
-        steer_rx: &mut mpsc::UnboundedReceiver<Vec<PartContent>>,
+        steer_rx: &mut mpsc::UnboundedReceiver<Vec<TypedContent>>,
         _options: &SessionRunOptions,
         _state: Arc<SessionManagerState>,
     ) -> Result<Session, AppError> {

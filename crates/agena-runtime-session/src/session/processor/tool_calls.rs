@@ -1,14 +1,15 @@
 use super::{
-    AppError, BTreeMap, OperationPart, PartContent, PendingProviderNativeToolCall,
-    PendingToolCall, SessionProcessor, SessionRunRequest, StructuredObject, TimeRange,
-    ToolInvocation, Utc, parse_tool_invocation_lossy, placeholder_tool_invocation,
+    AppError, BTreeMap, OperationPart, PendingProviderNativeToolCall, PendingToolCall,
+    SessionProcessor, SessionRunRequest, StructuredObject, TimeRange, ToolInvocation, Utc,
+    parse_tool_invocation_lossy, placeholder_tool_invocation,
     provider_native_tool_execution_title, tool_api_definition_identity, tool_execution_title,
     tool_execution_title_for_invocation,
 };
-use crate::part::RuntimeActivity;
 use crate::session::store::{
-    OPERATION_ID_METADATA_KEY, part_content_from_value, part_content_to_value,
+    OPERATION_ID_METADATA_KEY, operation_from_tool_call, tool_call_from_operation,
+    typed_content_from_value, typed_content_to_value,
 };
+use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
 
 impl SessionProcessor {
@@ -42,7 +43,9 @@ impl SessionProcessor {
             }) {
                 operation.set_advertised_tool_identity(identity);
             }
-            let content = part_content_to_value(&PartContent::operation(operation))?;
+            let content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_call_from_operation(&operation),
+            ))?;
             parts.push(placeholder_part(part_id, run_id, start.timestamp_millis(), content));
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
@@ -65,17 +68,20 @@ impl SessionProcessor {
                         "tool part missing from turn accumulator: {part_id}"
                     ))
                 })?;
-            let mut content = part_content_from_value(&part.kind, &part.content)?;
-            if let PartContent::Activity(RuntimeActivity::Operation(operation)) = &mut content
-                && operation.metadata.get(OPERATION_ID_METADATA_KEY).and_then(
+            let mut content = typed_content_from_value(&part.kind, &part.content)?;
+            if let TypedContent::ToolCall(tool_call) = &mut content {
+                let mut operation = operation_from_tool_call(tool_call);
+                if operation.metadata.get(OPERATION_ID_METADATA_KEY).and_then(
                     serde_json::Value::as_str,
                 ) != Some(operation_id.as_str())
-            {
-                operation.metadata.insert(
-                    OPERATION_ID_METADATA_KEY.to_owned(),
-                    serde_json::Value::String(operation_id.clone()),
-                );
-                part.content = part_content_to_value(&content)?;
+                {
+                    operation.metadata.insert(
+                        OPERATION_ID_METADATA_KEY.to_owned(),
+                        serde_json::Value::String(operation_id.clone()),
+                    );
+                    *tool_call = tool_call_from_operation(&operation);
+                    part.content = typed_content_to_value(&content)?;
+                }
             }
         }
 
@@ -99,14 +105,17 @@ impl SessionProcessor {
                         "tool part missing from turn accumulator: {part_id}"
                     ))
                 })?;
-            let mut content = part_content_from_value(&part.kind, &part.content)?;
-            if let PartContent::Activity(RuntimeActivity::Operation(operation)) = &mut content
-                && (operation.invocation.name != name
-                    || operation.title != tool_execution_title(Some(name)))
-            {
-                operation.invocation.name = name.to_owned();
-                operation.set_title(tool_execution_title(Some(name)));
-                part.content = part_content_to_value(&content)?;
+            let mut content = typed_content_from_value(&part.kind, &part.content)?;
+            if let TypedContent::ToolCall(tool_call) = &mut content {
+                let mut operation = operation_from_tool_call(tool_call);
+                if operation.invocation.name != name
+                    || operation.title != tool_execution_title(Some(name))
+                {
+                    operation.invocation.name = name.to_owned();
+                    operation.set_title(tool_execution_title(Some(name)));
+                    *tool_call = tool_call_from_operation(&operation);
+                    part.content = typed_content_to_value(&content)?;
+                }
             }
         }
 
@@ -178,7 +187,9 @@ impl SessionProcessor {
             {
                 operation.set_advertised_tool_identity(identity);
             }
-            part.content = part_content_to_value(&PartContent::operation(operation))?;
+            part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_call_from_operation(&operation),
+            ))?;
         }
 
         Ok(())
@@ -231,7 +242,9 @@ impl SessionProcessor {
                     serde_json::Value::String(operation_id.clone()),
                 );
             }
-            let content = part_content_to_value(&PartContent::operation(operation))?;
+            let content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_call_from_operation(&operation),
+            ))?;
             parts.push(placeholder_part(part_id, run_id, start.timestamp_millis(), content));
             pending.part_id = Some(part_id);
             pending.call_id = Some(call_id);
@@ -266,7 +279,9 @@ impl SessionProcessor {
                     serde_json::Value::String(operation_id.clone()),
                 );
             }
-            part.content = part_content_to_value(&PartContent::operation(operation))?;
+            part.content = typed_content_to_value(&TypedContent::ToolCall(
+                tool_call_from_operation(&operation),
+            ))?;
             if part.state == PartState::Pending {
                 part.state = PartState::InProgress;
             }
@@ -352,7 +367,9 @@ impl SessionProcessor {
                 serde_json::Value::String(operation_id.to_owned()),
             );
         }
-        part.content = part_content_to_value(&PartContent::operation(operation))?;
+        part.content = typed_content_to_value(&TypedContent::ToolCall(
+            tool_call_from_operation(&operation),
+        ))?;
         if part.state != PartState::Completed {
             part.state = PartState::Completed;
         }

@@ -1059,12 +1059,12 @@ fn digest_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod compaction_tests {
     use super::*;
-    use crate::part::PartContent;
     use crate::session::model::{
         PromptCompactionContent, PromptCompactionMessage, PromptCompactionRuntime,
     };
-    use crate::session::store::{part_content_to_value, run_marker_content};
+    use crate::session::store::{run_marker_content, text_content, typed_content_to_value};
     use agena_domain::{MessageSource, PromptCompactionStrategy, PromptCompactionTrigger};
+    use agena_runtime_contracts::part_content::TypedContent;
     use agena_provider::CompletionUsage;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use chrono::{DateTime, Utc};
@@ -1100,8 +1100,10 @@ mod compaction_tests {
                 kind: "text".to_owned(),
                 role,
                 state: PartState::Completed,
-                content: part_content_to_value(&PartContent::text(text.to_owned()))
-                    .expect("text content is always serializable"),
+                content: typed_content_to_value(&TypedContent::Text(text_content(
+                    text.to_owned(),
+                )))
+                .expect("text content is always serializable"),
                 summary: None,
                 visibility: PartVisibility::Both,
                 rendered_markdown: None,
@@ -1148,12 +1150,15 @@ mod compaction_tests {
                 kind: "hook".to_owned(),
                 role: PartRole::Assistant,
                 state: PartState::Completed,
-                content: part_content_to_value(&PartContent::hook(crate::part::HookPart {
-                    hook: "agent.stop".to_owned(),
-                    plugin_id: Some("agena.plan".to_owned()),
-                    summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
-                    detail: Some("continue with the next plan step".to_owned()),
-                }))
+                content: typed_content_to_value(&TypedContent::Hook(
+                    agena_runtime_contracts::part_content::HookContent {
+                        hook: "agent.stop".to_owned(),
+                        plugin_id: Some("agena.plan".to_owned()),
+                        summary: "agent.stop hook blocked stop: workflow plan autorun".to_owned(),
+                        detail: Some("continue with the next plan step".to_owned()),
+                        extra: Default::default(),
+                    },
+                ))
                 .expect("hook content is always serializable"),
                 summary: None,
                 visibility: PartVisibility::Both,

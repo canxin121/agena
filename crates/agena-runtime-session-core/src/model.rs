@@ -735,6 +735,14 @@ pub struct Session {
     pending_operations: Vec<SessionPendingOperation>,
 }
 
+/// True for a compaction checkpoint: the run marker emitted by
+/// `start_run("compaction", …)` — `kind == "run"` with
+/// `content.run_kind == "compaction"` (engine.rs maps the compaction run kind
+/// to an assistant marker and stamps `content.run_kind`).
+fn is_compaction_marker(part: &Part) -> bool {
+    part.kind == "run" && part.content.get("run_kind") == Some(&serde_json::json!("compaction"))
+}
+
 impl Session {
     pub fn new(id: i64, workspace_id: i64, title: impl Into<String>, now: DateTime<Utc>) -> Self {
         Self {
@@ -859,12 +867,18 @@ impl Session {
     }
 
     /// The active model window: parts strictly after the last compaction
-    /// checkpoint part (`kind == "compaction"`). The compaction part itself
-    /// marks the boundary and is excluded; with no compaction part the window
-    /// is the full projection. Cheap slice view — parts are already ordered,
-    /// so the window is a contiguous suffix (13.4).
+    /// checkpoint. A compaction checkpoint is the run marker emitted by
+    /// `start_run("compaction", …)` — `kind == "run"` with
+    /// `content.run_kind == "compaction"` — and the marker itself is excluded
+    /// from the window; with no compaction checkpoint the window is the full
+    /// projection. Cheap slice view — parts are already ordered, so the
+    /// window is a contiguous suffix (13.4).
     pub fn active_window_parts(&self) -> &[Part] {
-        match self.parts.iter().rposition(|part| part.kind == "compaction") {
+        match self
+            .parts
+            .iter()
+            .rposition(|part| is_compaction_marker(part))
+        {
             Some(index) => &self.parts[index + 1..],
             None => &self.parts[..],
         }
@@ -1415,7 +1429,7 @@ mod parts_projection_tests {
     fn active_window_parts_with_one_compaction_returns_only_parts_after_it() {
         let session = session_with(vec![
             part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old 1"})),
-            part(2, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp"})),
+            part(2, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp"})),
             part(3, "text", PartRole::User, PartState::Completed, json!({"text": "new 1"})),
             part(4, "text", PartRole::Assistant, PartState::Completed, json!({"text": "new 2"})),
         ]);
@@ -1430,9 +1444,9 @@ mod parts_projection_tests {
     fn active_window_parts_with_two_compactions_returns_parts_after_the_last() {
         let session = session_with(vec![
             part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old 1"})),
-            part(2, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp1"})),
+            part(2, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp1"})),
             part(3, "text", PartRole::User, PartState::Completed, json!({"text": "mid"})),
-            part(4, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp2"})),
+            part(4, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp2"})),
             part(5, "text", PartRole::User, PartState::Completed, json!({"text": "new"})),
         ]);
 
@@ -1445,10 +1459,26 @@ mod parts_projection_tests {
     fn active_window_parts_with_compaction_at_the_end_is_empty() {
         let session = session_with(vec![
             part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old"})),
-            part(2, "compaction", PartRole::Runtime, PartState::Completed, json!({"summary": "cp"})),
+            part(2, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp"})),
         ]);
 
         assert!(session.active_window_parts().is_empty());
+    }
+
+    #[test]
+    fn active_window_parts_ignores_unrelated_run_markers() {
+        // A background/steer run marker is NOT a compaction checkpoint; the
+        // window must still span it.
+        let session = session_with(vec![
+            part(1, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "background"})),
+            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
+            part(3, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp"})),
+            part(4, "text", PartRole::User, PartState::Completed, json!({"text": "new"})),
+        ]);
+
+        let window = session.active_window_parts();
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].part_id, 4);
     }
 }
 // NOTE: `SessionEventType` and `SessionEventRecord` have been removed. The

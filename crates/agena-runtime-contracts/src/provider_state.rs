@@ -1,4 +1,4 @@
-//! Provider-specific state attached to a message (design 13.2).
+//! Provider-specific state attached to a part (design 13.2).
 //!
 //! Persisted as a nullable `provider_state` JSON column on the assistant run
 //! marker so reasoning/thinking state survives a reload and round-trips
@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use agena_domain::AssistantReasoningField;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, FromJsonQueryResult)]
-/// Provider-specific state attached to a message.
-pub struct MessageProviderState {
+/// Provider-specific state attached to a part.
+pub struct PartProviderState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assistant_reasoning_field: Option<AssistantReasoningField>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -29,7 +29,7 @@ pub struct MessageProviderState {
     pub copilot_reasoning_opaque: Option<String>,
 }
 
-impl MessageProviderState {
+impl PartProviderState {
     pub fn is_empty(&self) -> bool {
         self.assistant_reasoning_field.is_none()
             && self.response_id.is_none()
@@ -41,8 +41,8 @@ impl MessageProviderState {
     }
 }
 
-impl From<MessageProviderState> for agena_provider::CompletionInputProviderState {
-    fn from(value: MessageProviderState) -> Self {
+impl From<PartProviderState> for agena_provider::CompletionInputProviderState {
+    fn from(value: PartProviderState) -> Self {
         Self {
             assistant_reasoning_field: value.assistant_reasoning_field,
             response_id: value.response_id,
@@ -55,7 +55,7 @@ impl From<MessageProviderState> for agena_provider::CompletionInputProviderState
     }
 }
 
-impl From<agena_provider::CompletionInputProviderState> for MessageProviderState {
+impl From<agena_provider::CompletionInputProviderState> for PartProviderState {
     fn from(value: agena_provider::CompletionInputProviderState) -> Self {
         Self {
             assistant_reasoning_field: value.assistant_reasoning_field,
@@ -71,18 +71,18 @@ impl From<agena_provider::CompletionInputProviderState> for MessageProviderState
 
 #[cfg(test)]
 mod tests {
-    use super::MessageProviderState;
+    use super::PartProviderState;
     use std::collections::BTreeMap;
 
     #[test]
     fn provider_replay_state_round_trips_through_contract_value() {
-        let state = MessageProviderState {
+        let state = PartProviderState {
             response_id: Some("response-1".to_owned()),
             gemini_thought_signatures: BTreeMap::from([("part".to_owned(), "sig".to_owned())]),
             ..Default::default()
         };
         let contract: agena_provider::CompletionInputProviderState = state.clone().into();
-        let restored = MessageProviderState::from(contract);
+        let restored = PartProviderState::from(contract);
         assert_eq!(restored, state);
     }
 }

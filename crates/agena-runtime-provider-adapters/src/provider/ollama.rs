@@ -366,10 +366,10 @@ fn to_ollama_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
         });
     }
 
-    for message in &request.messages {
-        if let Some(content) = message_text(message) {
+    for run in &request.turns {
+        if let Some(content) = message_text(run) {
             messages.push(OllamaChatMessage {
-                role: role_name(message.role).to_owned(),
+                role: role_name(run.role).to_owned(),
                 content,
             });
         }
@@ -377,8 +377,8 @@ fn to_ollama_messages(request: &CompletionRequest) -> Vec<OllamaChatMessage> {
     messages
 }
 
-fn message_text(message: &agena_provider::CompletionInputMessage) -> Option<String> {
-    let text = wire_message::project_text_lossy(message);
+fn message_text(run: &agena_provider::CompletionInputRun) -> Option<String> {
+    let text = wire_message::project_text_lossy(run);
     let trimmed = text.trim();
     (!trimmed.is_empty()).then_some(text)
 }

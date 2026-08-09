@@ -191,7 +191,7 @@ impl TranscriptState {
             } else if part.kind == "error"
                 && let Some(run_id) = current_run
                 && let Ok(error) = serde_json::from_value::<
-                    agena_api::message_part::MessageErrorPartResource,
+                    agena_api::part::ErrorPartResource,
                 >(part.content.clone())
             {
                 failures.insert(run_id, error.problem);
@@ -3049,7 +3049,7 @@ fn inject_remembered_failures(
     reply_failures: &BTreeMap<i64, agena_failure::UserProblem>,
 ) {
     for entry in entries {
-        if entry.role != Some(agena_api::resource::MessageRole::Assistant) {
+        if entry.role != Some(agena_api::resource::RunRole::Assistant) {
             continue;
         }
         let agena_tui_transcript::TranscriptEntryId::StoredMessage(run_id) = entry.id else {
@@ -3071,10 +3071,10 @@ fn inject_remembered_failures(
         }
         entry.parts.push(agena_tui_transcript::TranscriptEntryPart {
             id: agena_tui_transcript::TranscriptContentId::StoredPart(run_id),
-            status: agena_api::message_part::PartExecutionStatusResource::Failed,
+            status: agena_api::part::PartExecutionStatusResource::Failed,
             content: agena_tui_transcript::TranscriptPartContent::Activity(
                 agena_tui_transcript::TranscriptActivityContent::Error(
-                    agena_api::message_part::MessageErrorPartResource {
+                    agena_api::part::ErrorPartResource {
                         problem: problem.clone(),
                     },
                 ),

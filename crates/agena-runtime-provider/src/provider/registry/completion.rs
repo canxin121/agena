@@ -227,7 +227,7 @@ fn append_tool_api_repair_turn(
             guidance.join("\n")
         )
     };
-    request.messages.push(agena_provider::CompletionInputMessage {
+    request.turns.push(agena_provider::CompletionInputRun {
         role: agena_domain::Role::User,
         parts: vec![agena_provider::CompletionInputPart::Text { text: format!(
             "Trusted Agena transport correction: the original user's task is still unresolved. The preceding Tool API call was rejected before execution. It produced no tool result and must not be reported as successful.\nError: {error}\nRejected calls: {}\nThe only allowed Tool API function names are: [{declared}].{guidance}\nRetry the unresolved tool step now. Emit an exact declared Tool API function call; do not answer the user's task, narrate a call, invent a result, or repeat an execution-tool name as `function.name`.",
@@ -245,7 +245,7 @@ fn append_tool_api_repair_turn(
 /// next attempt must be told the task is still open instead of silently
 /// resampling the same empty completion.
 fn append_empty_response_nudge(request: &mut CompletionRequest) {
-    request.messages.push(agena_provider::CompletionInputMessage {
+    request.turns.push(agena_provider::CompletionInputRun {
         role: agena_domain::Role::User,
         parts: vec![agena_provider::CompletionInputPart::Text {
             text: "Trusted Agena runtime note: the previous provider attempt returned an empty response with no text, reasoning, or tool call. The user's task is still unresolved. Provide your final answer now, or emit a valid Tool API call to make progress."
@@ -716,7 +716,7 @@ impl ProviderRegistry {
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_native_tool_input_history(
-            &request.messages,
+            &request.turns,
         )?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
@@ -803,7 +803,7 @@ impl ProviderRegistry {
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_native_tool_input_history(
-            &request.messages,
+            &request.turns,
         )?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -837,7 +837,7 @@ impl ProviderRegistry {
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
         crate::provider::wire_message::validate_provider_native_tool_input_history(
-            &request.messages,
+            &request.turns,
         )?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
@@ -1847,7 +1847,7 @@ mod tool_api_function_validation_tests {
         CompletionRequest {
             model: ModelId::new("test-model"),
             system: Some("base system".to_owned()),
-            messages: vec![
+            turns: vec![
                 crate::provider::project_completion_input(&[user_text_part("read README.md")]),
                 crate::provider::project_completion_input(&[completed_help_message()]),
             ],
@@ -2098,7 +2098,7 @@ mod tool_api_function_validation_tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].system.as_deref(), Some("base system"));
         let repair = requests[1]
-            .messages
+            .turns
             .last()
             .expect("repair message")
             .as_text_lossy();
@@ -2133,7 +2133,7 @@ mod tool_api_function_validation_tests {
         let requests = provider.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 2);
         let repair_text = requests[1]
-            .messages
+            .turns
             .last()
             .expect("repair message")
             .as_text_lossy();
@@ -2220,7 +2220,7 @@ mod tool_api_function_validation_tests {
 
         let requests = provider.requests.lock().expect("requests lock");
         assert_eq!(requests.len(), 2);
-        let repair = requests[1].messages.last().expect("repair message");
+        let repair = requests[1].turns.last().expect("repair message");
         let repair_text = repair.as_text_lossy();
         assert!(repair_text.contains("rejected before execution"));
         assert!(repair_text.contains("The only allowed Tool API function names are"));
@@ -2275,7 +2275,7 @@ mod replay_tests {
         CompletionRequest {
             model: ModelId::new("test-model"),
             system: Some("base system".to_owned()),
-            messages: vec![crate::provider::project_completion_input(&[Part {
+            turns: vec![crate::provider::project_completion_input(&[Part {
                 part_id: 1,
                 kind: "text".to_owned(),
                 role: PartRole::User,

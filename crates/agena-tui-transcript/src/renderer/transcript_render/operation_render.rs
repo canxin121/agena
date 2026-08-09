@@ -213,7 +213,7 @@ fn render_operation_attachments(
     width: u16,
     i18n: &I18n,
 ) {
-    let mut seen: Vec<&agena_api::resource::MessageAttachment> = Vec::new();
+    let mut seen: Vec<&agena_api::resource::PartAttachment> = Vec::new();
     let mut attachments = Vec::new();
     for item in tool
         .attachments
@@ -255,8 +255,8 @@ fn render_operation_attachments(
 }
 
 fn same_attachment_resource(
-    left: &agena_api::resource::MessageAttachment,
-    right: &agena_api::resource::MessageAttachment,
+    left: &agena_api::resource::PartAttachment,
+    right: &agena_api::resource::PartAttachment,
 ) -> bool {
     left.kind == right.kind
         && (left.source == right.source
@@ -265,7 +265,7 @@ fn same_attachment_resource(
             }))
 }
 
-fn attachment_label(item: &agena_api::resource::MessageAttachment) -> String {
+fn attachment_label(item: &agena_api::resource::PartAttachment) -> String {
     item.title
         .as_ref()
         .or(item.filename.as_ref())

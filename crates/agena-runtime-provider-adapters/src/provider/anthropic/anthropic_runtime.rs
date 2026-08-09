@@ -186,7 +186,7 @@ impl ModelRuntime for AnthropicAdapter {
         let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
 
         let mut messages = Vec::new();
-        for msg in &request.messages {
+        for msg in &request.turns {
             match msg.role {
                 Role::System => {
                     let text = msg.as_text_lossy();
@@ -368,7 +368,7 @@ impl ModelRuntime for AnthropicAdapter {
         let tool_choice = structured_output.as_ref().map(|(_, choice)| choice.clone());
 
         let mut messages = Vec::new();
-        for msg in &request.messages {
+        for msg in &request.turns {
             match msg.role {
                 Role::System => {
                     let text = msg.as_text_lossy();

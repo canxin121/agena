@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
 };
 
-use agena_api::resource::{MessageAttachment, MessageAttachmentKind, MessageAttachmentSource};
+use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource};
 use comrak::{
     Arena, Options,
     nodes::{AlertType, AstNode, ListDelimType, ListType, NodeValue, TableAlignment},
@@ -927,7 +927,7 @@ fn markdown_node_kind(node: &MarkdownNode) -> TranscriptNodeKind {
 
 #[cfg(test)]
 mod tests {
-    use agena_api::resource::{MessageAttachment, MessageAttachmentKind, MessageAttachmentSource};
+    use agena_api::resource::{PartAttachment, PartAttachmentKind, PartAttachmentSource};
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
     use super::*;
@@ -1454,10 +1454,10 @@ mod tests {
 
     #[test]
     fn base64_image_attachments_enter_the_bounded_image_pipeline() {
-        let item = MessageAttachment {
-            kind: MessageAttachmentKind::Image,
+        let item = PartAttachment {
+            kind: PartAttachmentKind::Image,
             mime: "image/png".to_owned(),
-            source: MessageAttachmentSource::Base64 {
+            source: PartAttachmentSource::Base64 {
                 data: concat!(
                     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk",
                     "+A8AAQUBAScY42YAAAAASUVORK5CYII="

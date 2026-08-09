@@ -20,12 +20,12 @@ use crate::ProviderError;
 use agena_domain::{ExecutionStatus, Role, ToolApiFunction, ToolInvocation};
 use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
-    CompletionInputMessage, CompletionInputPart, CompletionInputProviderState, ModelToolFunction,
+    CompletionInputRun, CompletionInputPart, CompletionInputProviderState, ModelToolFunction,
 };
 use agena_runtime_contracts::part::{
     AttachmentItem, AttachmentKind, AttachmentSource, OperationPart, PartContent, RuntimeActivity,
 };
-use agena_runtime_contracts::provider_state::MessageProviderState;
+use agena_runtime_contracts::provider_state::PartProviderState;
 use agena_runtime_contracts::part_content::decode_part_content;
 use agena_storage::store::{Part, PartRole};
 
@@ -78,12 +78,11 @@ impl WirePart {
 
 // ─── Projection ───────────────────────────────────────────────────────────────
 
-/// Normalise a [`CompletionInputMessage`] into a flat list of provider-ready
+/// Normalise a [`CompletionInputRun`] into a flat list of provider-ready
 /// [`WirePart`]s. Project provider-owned input into the adapter-neutral
 /// wire-part view.
-pub fn project(message: &CompletionInputMessage) -> Vec<WirePart> {
-    message
-        .parts
+pub fn project(run: &CompletionInputRun) -> Vec<WirePart> {
+    run.parts
         .iter()
         .cloned()
         .map(wire_part_from_completion_input)
@@ -281,13 +280,13 @@ fn attachment_item_from_completion_input(attachment: CompletionInputAttachment) 
 /// groups storage parts into logical messages. Runtime-only interaction and
 /// error Activities are excluded; all provider-visible parts and replay state
 /// are retained.
-pub fn project_completion_input(parts: &[Part]) -> CompletionInputMessage {
+pub fn project_completion_input(parts: &[Part]) -> CompletionInputRun {
     let marker = parts.iter().find(|part| part.is_run_marker());
     let role = marker
         .map(|part| role_from_part_role(part.role))
         .or_else(|| parts.first().map(|part| role_from_part_role(part.role)))
         .unwrap_or(Role::User);
-    CompletionInputMessage {
+    CompletionInputRun {
         role,
         parts: project_persisted(parts)
             .into_iter()
@@ -365,7 +364,7 @@ fn completion_input_attachment(item: AttachmentItem) -> CompletionInputAttachmen
 }
 
 fn completion_input_provider_state(value: &serde_json::Value) -> Option<CompletionInputProviderState> {
-    serde_json::from_value::<MessageProviderState>(value.clone())
+    serde_json::from_value::<PartProviderState>(value.clone())
         .ok()
         .map(Into::into)
 }
@@ -375,7 +374,7 @@ fn completion_input_provider_state(value: &serde_json::Value) -> Option<Completi
 /// Tool API function; execution-tool names and internal keys are never
 /// provider function calls.
 pub fn validate_provider_native_tool_input_history(
-    _messages: &[CompletionInputMessage],
+    _runs: &[CompletionInputRun],
 ) -> Result<(), ProviderError> {
     // A `CompletionInputPart::ToolCall`/`ToolResult` already carries the
     // closed `ToolApiFunction` identity. Runtime validates dynamic operation
@@ -405,10 +404,10 @@ pub fn validate_provider_native_tool_history(parts: &[Part]) -> Result<(), Provi
 
 /// Like [`project`] but returns a single lossy string — used when the provider
 /// only needs plain text (e.g. system messages for non-multimodal endpoints).
-pub fn project_text_lossy(message: &CompletionInputMessage) -> String {
-    let parts = project(message);
+pub fn project_text_lossy(run: &CompletionInputRun) -> String {
+    let parts = project(run);
     if parts.is_empty() {
-        message.as_text_lossy()
+        run.as_text_lossy()
     } else {
         parts_text_lossy(parts.as_slice())
     }

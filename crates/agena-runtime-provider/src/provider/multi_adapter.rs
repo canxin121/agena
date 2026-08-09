@@ -985,7 +985,7 @@ mod tests {
         CompletionRequest {
             model: ModelId::new("model"),
             system: Some("base system".to_owned()),
-            messages: vec![crate::provider::project_completion_input(&[Part {
+            turns: vec![crate::provider::project_completion_input(&[Part {
                 part_id: 1,
                 kind: "text".to_owned(),
                 role: PartRole::User,

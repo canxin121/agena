@@ -361,7 +361,7 @@ mod tests {
 
     use super::{
         CompletionFinishReason, CompletionInputAttachment, CompletionInputAttachmentKind,
-        CompletionInputAttachmentSource, CompletionInputMessage, CompletionInputPart,
+        CompletionInputAttachmentSource, CompletionInputRun, CompletionInputPart,
         CompletionResponse, CompletionStreamEvent, ProviderHostedCodeExecutionConfig,
         ProviderHostedFileSearchConfig, ProviderHostedImageGenerationConfig,
         ProviderHostedToolConfigs, ProviderHostedUrlContextConfig, ProviderHostedWebSearchConfig,
@@ -569,8 +569,8 @@ mod tests {
     }
 
     #[test]
-    fn completion_input_message_has_a_contract_owned_text_fallback() {
-        let message = CompletionInputMessage {
+    fn completion_input_run_has_a_contract_owned_text_fallback() {
+        let run = CompletionInputRun {
             role: agena_domain::Role::User,
             parts: vec![
                 CompletionInputPart::Text {
@@ -597,6 +597,6 @@ mod tests {
             provider_state: Default::default(),
         };
 
-        assert_eq!(message.as_text_lossy(), "inspect [document:report.pdf]");
+        assert_eq!(run.as_text_lossy(), "inspect [document:report.pdf]");
     }
 }

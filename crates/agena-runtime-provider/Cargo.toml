@@ -15,6 +15,7 @@ agena-provider-google-auth = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-runtime-contracts = { workspace = true }
 agena-runtime-tools = { workspace = true }
+agena-storage = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }

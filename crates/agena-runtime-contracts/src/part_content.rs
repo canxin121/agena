@@ -14,15 +14,33 @@
 //! `#[serde(default)]`, so a payload missing canonical keys decodes to its
 //! defaults and never fails — the only failure is a non-object payload.
 //!
-//! The module deliberately does NOT depend on `agena-runtime-contracts` (R6
-//! deletes it). It builds only on `serde_json`, `std`, `agena_domain`, and the
-//! plugin SDK attachment types. The store adapter (`session/store.rs`) owns the
-//! v1 ⇄ typed mapping in both directions.
+//! The module builds only on `serde_json`, `std`, `agena_domain`,
+//! `agena_failure`, and the shared contracts part types (which re-export the
+//! plugin SDK attachment types). It never depends on `agena-storage`; the
+//! mapping between a storage [`Part`] row and these payloads lives in the
+//! consuming crate (provider/session), which owns the storage-facing
+//! `PartRole`/`PartState` conversions.
 
 use std::collections::BTreeMap;
 
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use agena_domain::{
+    ErrorPart, ReasoningPart, StructuredObject, TextPart, TimeRange, ToolInvocation,
+    UserInputReply, UserInputRequest,
+};
+use agena_failure::{
+    FailureCategory, FailureCode, FailureId, FailureImpact, FailureResponsibility,
+    RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
+};
+
+use crate::part::{
+    AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource, HookPart,
+    InteractiveRequestPart, NoticePart, OperationPart, PartContent, RequestPart, RuntimeActivity,
+    SkillReference, SkillReferencePart,
+};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -48,22 +66,21 @@ where
 /// `run` — turn/run marker. Extended keys: `provider_id`, `model_id`,
 /// `turn_id`, `reply_id` (written by [`crate::session::store::run_marker_content`]).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct RunContent {
+pub struct RunContent {
     #[serde(default)]
-    pub(crate) run_kind: String,
+    pub run_kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) abort_reason: Option<String>,
+    pub abort_reason: Option<String>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl RunContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "run"
     }
 
-    #[cfg(test)]
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("run content is always JSON serializable")
     }
 }
@@ -78,21 +95,21 @@ impl TryFrom<&Value> for RunContent {
 
 /// `text` — plain text. `synthetic` marks internally produced text.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct TextContent {
+pub struct TextContent {
     #[serde(default)]
-    pub(crate) text: String,
+    pub text: String,
     #[serde(default, skip_serializing_if = "is_false")]
-    pub(crate) synthetic: bool,
+    pub synthetic: bool,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl TextContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "text"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("text content is always JSON serializable")
     }
 }
@@ -108,23 +125,23 @@ impl TryFrom<&Value> for TextContent {
 /// `think` — reasoning. v1 `ReasoningPart` maps `raw_content` onto the
 /// canonical `raw` key; `encrypted_content` is the v1 encrypted-reasoning key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct ThinkContent {
+pub struct ThinkContent {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) summary: Vec<String>,
+    pub summary: Vec<String>,
     #[serde(default, rename = "raw", skip_serializing_if = "Vec::is_empty")]
-    pub(crate) raw: Vec<String>,
+    pub raw: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) encrypted_content: Option<String>,
+    pub encrypted_content: Option<String>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl ThinkContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "think"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("think content is always JSON serializable")
     }
 }
@@ -143,23 +160,23 @@ impl TryFrom<&Value> for ThinkContent {
 /// rebuild the rich operation (call id, result envelope, details, lifecycle,
 /// authorization) losslessly. Extended keys also include `tool_api_call`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct ToolCallContent {
+pub struct ToolCallContent {
     #[serde(default)]
-    pub(crate) name: String,
+    pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) plugin: Option<String>,
+    pub plugin: Option<String>,
     #[serde(default)]
-    pub(crate) input: Value,
+    pub input: Value,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl ToolCallContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "tool_call"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("tool call content is always JSON serializable")
     }
 }
@@ -180,22 +197,21 @@ impl TryFrom<&Value> for ToolCallContent {
 /// operation, so the store serializes `tool_call`; this shape is the future
 /// split part and is decoded for completeness.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct ToolResultContent {
+pub struct ToolResultContent {
     #[serde(default)]
-    pub(crate) output: String,
+    pub output: String,
     #[serde(default)]
-    pub(crate) ok: bool,
+    pub ok: bool,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl ToolResultContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "tool_result"
     }
 
-    #[cfg(test)]
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("tool result content is always JSON serializable")
     }
 }
@@ -215,25 +231,25 @@ impl TryFrom<&Value> for ToolResultContent {
 /// carried multiple attachments the lossless full array rides in
 /// `extra["attachments"]`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct FileRefContent {
+pub struct FileRefContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) path: Option<String>,
+    pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) name: Option<String>,
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) mime: Option<String>,
+    pub mime: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) sha: Option<String>,
+    pub sha: Option<String>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl FileRefContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "file_ref"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("file ref content is always JSON serializable")
     }
 }
@@ -248,15 +264,15 @@ impl TryFrom<&Value> for FileRefContent {
 
 /// `paste_ref` — pasted text stored inline (full content, no blob cache).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct PasteRefContent {
+pub struct PasteRefContent {
     #[serde(default)]
-    pub(crate) text: String,
+    pub text: String,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl PasteRefContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "paste_ref"
     }
 }
@@ -274,21 +290,21 @@ impl TryFrom<&Value> for PasteRefContent {
 /// under `extra["skills"]` (name/description/instructions/content_hash/
 /// source/aliases) so reload can rebuild it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct SkillRefContent {
+pub struct SkillRefContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) skill: Option<String>,
+    pub skill: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) args: Option<Value>,
+    pub args: Option<Value>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl SkillRefContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "skill_ref"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("skill ref content is always JSON serializable")
     }
 }
@@ -303,25 +319,25 @@ impl TryFrom<&Value> for SkillRefContent {
 
 /// `notice` — system notice (hook runs etc.). `title` is the 19.4 extension.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct NoticeContent {
+pub struct NoticeContent {
     #[serde(default)]
-    pub(crate) kind: String,
+    pub kind: String,
     #[serde(default)]
-    pub(crate) summary: String,
+    pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) detail: Option<String>,
+    pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) title: Option<String>,
+    pub title: Option<String>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl NoticeContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "notice"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("notice content is always JSON serializable")
     }
 }
@@ -336,25 +352,25 @@ impl TryFrom<&Value> for NoticeContent {
 
 /// `hook` — one observed plugin hook run. `plugin_id` is the 19.4 extension.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct HookContent {
+pub struct HookContent {
     #[serde(default)]
-    pub(crate) hook: String,
+    pub hook: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) plugin_id: Option<String>,
+    pub plugin_id: Option<String>,
     #[serde(default)]
-    pub(crate) summary: String,
+    pub summary: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) detail: Option<String>,
+    pub detail: Option<String>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl HookContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "hook"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("hook content is always JSON serializable")
     }
 }
@@ -369,17 +385,17 @@ impl TryFrom<&Value> for HookContent {
 
 /// `compaction` — compaction summary with the compacted window.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct CompactionContent {
+pub struct CompactionContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) summary: Option<String>,
+    pub summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) window: Option<Vec<Value>>,
+    pub window: Option<Vec<Value>>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl CompactionContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "compaction"
     }
 }
@@ -396,23 +412,23 @@ impl TryFrom<&Value> for CompactionContent {
 /// (id/code/responsibility/retry/recovery/impact/user, 19.4) rides losslessly
 /// under `extra["problem"]`; `category`/`message` are the canonical headline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct ErrorContent {
+pub struct ErrorContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) category: Option<String>,
+    pub category: Option<String>,
     #[serde(default)]
-    pub(crate) message: String,
+    pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) detail: Option<Value>,
+    pub detail: Option<Value>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl ErrorContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "error"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("error content is always JSON serializable")
     }
 }
@@ -430,25 +446,25 @@ impl TryFrom<&Value> for ErrorContent {
 /// carry the full v1 [`RequestPart::UserInput`] payload: `request` and `reply`
 /// as complete [`UserInputRequest`]/[`UserInputReply`] objects.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-pub(crate) struct InteractionContent {
+pub struct InteractionContent {
     #[serde(rename = "type", default)]
-    pub(crate) kind: String,
+    pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) prompt: Option<String>,
+    pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) options: Option<Value>,
+    pub options: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) response: Option<Value>,
+    pub response: Option<Value>,
     #[serde(flatten)]
-    pub(crate) extra: BTreeMap<String, Value>,
+    pub extra: BTreeMap<String, Value>,
 }
 
 impl InteractionContent {
-    pub(crate) const fn kind() -> &'static str {
+    pub const fn kind() -> &'static str {
         "interaction"
     }
 
-    pub(crate) fn as_value(&self) -> Value {
+    pub fn as_value(&self) -> Value {
         serde_json::to_value(self).expect("interaction content is always JSON serializable")
     }
 }
@@ -468,7 +484,7 @@ impl TryFrom<&Value> for InteractionContent {
 /// A typed view over one part's canonical content payload, dispatched by the
 /// part's `kind` column.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum TypedContent {
+pub enum TypedContent {
     Run(RunContent),
     Text(TextContent),
     Think(ThinkContent),
@@ -487,7 +503,7 @@ pub(crate) enum TypedContent {
 /// Decode a part's canonical JSON payload into its typed shape, dispatching on
 /// the part's `kind` column (4.1.1). Unknown kinds are an error; every known
 /// kind decodes leniently (missing keys default, unknown keys land in `extra`).
-pub(crate) fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
+pub fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> {
     Ok(match kind {
         "run" => TypedContent::Run(RunContent::try_from(value)?),
         "text" => TypedContent::Text(TextContent::try_from(value)?),
@@ -504,6 +520,267 @@ pub(crate) fn decode(kind: &str, value: &Value) -> Result<TypedContent, String> 
         "interaction" => TypedContent::Interaction(InteractionContent::try_from(value)?),
         other => return Err(format!("unknown part kind: {other}")),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Typed → v1 PartContent rebuild (decode direction)
+// ---------------------------------------------------------------------------
+
+/// Decode a part's canonical JSON payload directly into the execution-engine
+/// [`PartContent`], dispatching on the `kind` column and rebuilding the v1
+/// payload through [`part_content_from_typed`].
+///
+/// This is the provider-facing entry point for projecting persisted parts:
+/// a storage row's `(kind, content)` becomes the same rich [`PartContent`]
+/// the session reload path builds, so projections behave identically whether
+/// they consume v1 messages or v2 parts.
+pub fn decode_part_content(kind: &str, value: &Value) -> Result<PartContent, String> {
+    let typed = decode(kind, value)?;
+    Ok(part_content_from_typed(typed))
+}
+
+/// Rebuild the execution-engine [`PartContent`] from a decoded typed payload.
+///
+/// The rebuild is lossless for every v1 variant the engine still reads its
+/// rich fields from (the v1 payload is preserved verbatim in the typed
+/// struct's `extra` bucket). Kinds the v1 vocabulary has no representation
+/// for (`paste_ref`, `tool_result`, `compaction`, `run`) degrade to a text
+/// part rather than fail the reload (design principle: reload 宁缺勿崩). Run
+/// markers are handled as the message marker by the caller and never reach
+/// this path — that arm is purely defensive.
+pub fn part_content_from_typed(typed: TypedContent) -> PartContent {
+    match typed {
+        TypedContent::Text(part) => PartContent::Text(TextPart {
+            text: part.text,
+            synthetic: part.synthetic,
+        }),
+        TypedContent::Think(part) => PartContent::Activity(RuntimeActivity::Reasoning(
+            ReasoningPart {
+                summary: part.summary,
+                raw_content: part.raw,
+                encrypted_content: part.encrypted_content,
+            },
+        )),
+        TypedContent::ToolCall(part) => {
+            PartContent::Activity(RuntimeActivity::Operation(operation_from_tool_call(part)))
+        }
+        TypedContent::FileRef(part) => {
+            PartContent::Activity(RuntimeActivity::Resource(attachment_from_file_ref(part)))
+        }
+        TypedContent::SkillRef(part) => PartContent::Activity(RuntimeActivity::SkillReference(
+            skill_reference_from_skill_ref(part),
+        )),
+        TypedContent::Notice(part) => PartContent::Activity(RuntimeActivity::Notice(NoticePart {
+            kind: part.kind,
+            summary: part.summary,
+            detail: part.detail,
+            title: part.title,
+        })),
+        TypedContent::Hook(part) => PartContent::Activity(RuntimeActivity::Hook(HookPart {
+            hook: part.hook,
+            plugin_id: part.plugin_id,
+            summary: part.summary,
+            detail: part.detail,
+        })),
+        TypedContent::Error(part) => {
+            PartContent::Activity(RuntimeActivity::Error(ErrorPart {
+                problem: user_problem_from_error(part),
+            }))
+        }
+        TypedContent::Interaction(part) => {
+            PartContent::Activity(RuntimeActivity::Interaction(interaction_from_content(part)))
+        }
+        TypedContent::Run(_) => PartContent::text(String::new()),
+        TypedContent::PasteRef(part) => PartContent::text(part.text),
+        TypedContent::ToolResult(part) => PartContent::text(part.output),
+        TypedContent::Compaction(part) => PartContent::text(part.summary.unwrap_or_default()),
+    }
+}
+
+/// Rebuild a v1 [`OperationPart`] from the canonical `tool_call` shape,
+/// restoring the full payload from `extra["operation"]` and falling back to a
+/// pending operation built from the canonical invocation identity.
+fn operation_from_tool_call(part: ToolCallContent) -> OperationPart {
+    if let Some(operation) = part
+        .extra
+        .get("operation")
+        .and_then(|value| serde_json::from_value::<OperationPart>(value.clone()).ok())
+    {
+        return operation;
+    }
+    let invocation = ToolInvocation {
+        tool_api_call: part
+            .extra
+            .get("tool_api_call")
+            .and_then(|value| serde_json::from_value(value.clone()).ok()),
+        name: part.name,
+        plugin_name: part.plugin,
+        input: StructuredObject::try_from(part.input).unwrap_or_default(),
+    };
+    let call_id = part.extra.get("call_id").and_then(Value::as_i64).unwrap_or(0);
+    OperationPart::pending(call_id, invocation, "", TimeRange::default())
+}
+
+/// Rebuild a v1 [`AttachmentPart`] from the canonical `file_ref` shape,
+/// preferring the lossless `extra["attachments"]` list and otherwise
+/// reconstructing a single item from the named keys + extended keys.
+fn attachment_from_file_ref(part: FileRefContent) -> AttachmentPart {
+    if let Some(items) = part
+        .extra
+        .get("attachments")
+        .and_then(|value| serde_json::from_value::<Vec<AttachmentItem>>(value.clone()).ok())
+    {
+        return AttachmentPart { attachments: items };
+    }
+    let kind = part
+        .extra
+        .get("kind")
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            serde_json::from_value::<AttachmentKind>(Value::String(value.to_owned())).ok()
+        })
+        .unwrap_or(AttachmentKind::File);
+    let source = attachment_source_from_file_ref(&part);
+    AttachmentPart {
+        attachments: vec![AttachmentItem {
+            kind,
+            mime: part.mime.unwrap_or_default(),
+            source,
+            filename: part.name,
+            title: part.extra.get("title").and_then(Value::as_str).map(str::to_owned),
+            size_bytes: part.extra.get("size_bytes").and_then(Value::as_u64),
+            sha256: part.sha,
+            width: part.extra.get("width").and_then(Value::as_u64).map(|v| v as u32),
+            height: part
+                .extra
+                .get("height")
+                .and_then(Value::as_u64)
+                .map(|v| v as u32),
+            duration_ms: part.extra.get("duration_ms").and_then(Value::as_u64),
+            page_count: part
+                .extra
+                .get("page_count")
+                .and_then(Value::as_u64)
+                .map(|v| v as u32),
+        }],
+    }
+}
+
+/// Rebuild an [`AttachmentSource`] from the canonical `file_ref` named keys
+/// and extended keys (`url`, `data_url`, `base64`, `file_id`, `path`).
+fn attachment_source_from_file_ref(part: &FileRefContent) -> AttachmentSource {
+    let extra = &part.extra;
+    if let Some(url) = extra.get("url").and_then(Value::as_str) {
+        return AttachmentSource::Url {
+            url: url.to_owned(),
+        };
+    }
+    if let Some(url) = extra.get("data_url").and_then(Value::as_str) {
+        return AttachmentSource::DataUrl {
+            url: url.to_owned(),
+        };
+    }
+    if let Some(data) = extra.get("base64").and_then(Value::as_str) {
+        return AttachmentSource::Base64 {
+            data: data.to_owned(),
+        };
+    }
+    if let Some(file_id) = extra.get("file_id").and_then(Value::as_str) {
+        return AttachmentSource::FileId {
+            file_id: file_id.to_owned(),
+        };
+    }
+    if let Some(path) = part.path.as_deref() {
+        return AttachmentSource::LocalPath {
+            path: path.to_owned(),
+        };
+    }
+    if let Some(source) = extra
+        .get("source")
+        .and_then(|value| serde_json::from_value::<AttachmentSource>(value.clone()).ok())
+    {
+        return source;
+    }
+    AttachmentSource::LocalPath {
+        path: String::new(),
+    }
+}
+
+/// Rebuild a v1 [`SkillReferencePart`] from `extra["skills"]` (empty when the
+/// snapshot is missing or does not match the v1 shape).
+fn skill_reference_from_skill_ref(part: SkillRefContent) -> SkillReferencePart {
+    let skills = part
+        .extra
+        .get("skills")
+        .and_then(|value| serde_json::from_value::<Vec<SkillReference>>(value.clone()).ok())
+        .unwrap_or_default();
+    SkillReferencePart { skills }
+}
+
+/// Rebuild a v1 [`agena_failure::UserProblem`] from the canonical `error`
+/// shape, preferring the lossless `extra["problem"]` object and otherwise
+/// constructing a minimal problem from the named keys.
+fn user_problem_from_error(part: ErrorContent) -> UserProblem {
+    if let Some(problem) = part
+        .extra
+        .get("problem")
+        .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
+    {
+        return problem;
+    }
+    UserProblem {
+        id: FailureId::new(),
+        code: FailureCode::new("runtime.error"),
+        category: part
+            .category
+            .as_deref()
+            .and_then(|value| {
+                serde_json::from_value::<FailureCategory>(Value::String(value.to_owned())).ok()
+            })
+            .unwrap_or(FailureCategory::Internal),
+        responsibility: FailureResponsibility::System,
+        retry: RetryDirective::Never,
+        recovery: RecoveryDirective::None,
+        impact: FailureImpact::OperationFailed,
+        user: UserPresentation {
+            key: part.category.unwrap_or_else(|| "runtime-error".to_owned()),
+            fallback: part.message,
+            detail_key: None,
+        },
+    }
+}
+
+/// Rebuild a v1 [`RequestPart`] from the canonical `interaction` shape,
+/// preferring the lossless `extra["request"]`/`extra["reply"]` objects and
+/// otherwise reconstructing from the named display keys.
+fn interaction_from_content(part: InteractionContent) -> RequestPart {
+    let extra = &part.extra;
+    let request = extra
+        .get("request")
+        .and_then(|value| serde_json::from_value::<UserInputRequest>(value.clone()).ok())
+        .unwrap_or_else(|| UserInputRequest {
+            request_id: format!("restored-{}", part.kind),
+            session_id: None,
+            title: part.prompt.clone().unwrap_or_default(),
+            kind: part.kind.clone(),
+            auto_resolution_ms: None,
+            presented_at: None,
+            questions: part
+                .options
+                .as_ref()
+                .and_then(|value| serde_json::from_value(value.clone()).ok())
+                .unwrap_or_default(),
+            created_at: Utc::now(),
+        });
+    let reply = extra
+        .get("reply")
+        .and_then(|value| serde_json::from_value::<UserInputReply>(value.clone()).ok())
+        .or_else(|| {
+            part.response
+                .as_ref()
+                .and_then(|value| serde_json::from_value::<UserInputReply>(value.clone()).ok())
+        });
+    RequestPart::UserInput(InteractiveRequestPart { request, reply })
 }
 
 #[cfg(test)]

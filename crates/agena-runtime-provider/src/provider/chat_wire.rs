@@ -68,8 +68,41 @@ mod tests {
         apply_raw_assistant_reasoning_state, chat_usage_to_completion, merge_reasoning_details,
         parse_completion_response, reasoning_effort,
     };
-    use agena_domain::{Role, ThinkingRequest};
-    use agena_runtime_contracts::message::{Message, MessageProviderState, PartContent};
+    use agena_domain::ThinkingRequest;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
+    use serde_json::{json, Value};
+
+    /// A minimal persisted assistant content part (R6-T5: projections consume
+    /// storage `Part` slices, so fixtures are built as parts, not v1 messages).
+    fn part(kind: &str, content: Value) -> Part {
+        Part {
+            part_id: 1,
+            kind: kind.to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content,
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            provider_state: None,
+        }
+    }
+
+    /// A run marker carrying the assistant's provider replay state.
+    fn run_marker(provider_state: Value) -> Part {
+        let mut marker = part("run", json!({ "run_kind": "assistant" }));
+        marker.run_id = None;
+        marker.provider_state = Some(provider_state);
+        marker
+    }
 
     fn request(parallel_tool_calls: Option<bool>) -> ChatCompletionRequest {
         ChatCompletionRequest {
@@ -394,21 +427,15 @@ mod tests {
             "text": "thinking",
             "signature": "provider-signature"
         }]);
-        let mut source = Message::prompt_parts(
-            Role::Assistant,
-            vec![
-                PartContent::reasoning_summary("thinking"),
-                PartContent::text("answer"),
-            ],
-        );
-        source.provider_state = Some(MessageProviderState {
-            openai_chat_reasoning_details: Some(raw_details.clone()),
-            copilot_reasoning_opaque: Some("opaque-state".to_owned()),
-            ..MessageProviderState::default()
-        });
+        let marker = run_marker(json!({
+            "openai_chat_reasoning_details": raw_details,
+            "copilot_reasoning_opaque": "opaque-state"
+        }));
+        let think = part("think", json!({ "summary": ["thinking"] }));
+        let text = part("text", json!({ "text": "answer" }));
         let mut target = ChatMessage::assistant(Some("answer".into()), None);
 
-        let source = crate::provider::project_completion_input(&source);
+        let source = crate::provider::project_completion_input(&[marker, think, text]);
         apply_raw_assistant_reasoning_state(&source, &mut target, "thinking");
 
         assert_eq!(target.reasoning_details, Some(raw_details));
@@ -422,20 +449,10 @@ mod tests {
         // `assistant_reasoning_text` was always empty and a `reasoning_content`
         // model received `"reasoning_content": ""`. Now the reasoning survives
         // projection into `CompletionInputPart::Reasoning` and is replayed.
-        let mut source = Message::prompt_parts(
-            Role::Assistant,
-            vec![
-                PartContent::reasoning_summary("think step by step"),
-                PartContent::text("visible answer"),
-            ],
-        );
-        source.provider_state = Some(MessageProviderState {
-            assistant_reasoning_field: Some(
-                agena_domain::AssistantReasoningField::ReasoningContent,
-            ),
-            ..MessageProviderState::default()
-        });
-        let source = crate::provider::project_completion_input(&source);
+        let marker = run_marker(json!({ "assistant_reasoning_field": "reasoning_content" }));
+        let think = part("think", json!({ "summary": ["think step by step"] }));
+        let text = part("text", json!({ "text": "visible answer" }));
+        let source = crate::provider::project_completion_input(&[marker, think, text]);
 
         let messages = super::request_to_chat_messages_with_assistant_reasoning_field(
             &agena_provider::CompletionRequest {

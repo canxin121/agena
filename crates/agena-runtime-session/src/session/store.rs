@@ -27,15 +27,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use agena_domain::{
-    ErrorPart, ExecutionAccess, ExecutionSelection, ExecutionStatus, ReasoningPart, Role,
-    StructuredObject, TextPart, TimeRange, ToolInvocation, UserInputReply, UserInputRequest,
-};
-use agena_failure::{
-    FailureCategory, FailureCode, FailureId, FailureImpact, FailureResponsibility,
-    RecoveryDirective, RetryDirective, UserPresentation, UserProblem,
-};
-use agena_plugin_sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};
+use agena_domain::{ExecutionAccess, ExecutionSelection, ExecutionStatus, Role};
+use agena_failure::UserProblem;
+use agena_plugin_sdk::attachment::{AttachmentPart, AttachmentSource};
+use agena_runtime_contracts::part_content;
 use agena_storage::store::{
     NewPart, Part, PartDelta, PartRole, PartState, PartVisibility, SessionMeta, SessionStore,
     SessionView, StoreError, SubmitOutcome, UsageQuery,
@@ -45,11 +40,9 @@ use serde_json::Value;
 
 use crate::AppError;
 use crate::message::{
-    HookPart, InteractiveRequestPart, Message, MessageMetadata, MessagePart, MessageProviderState,
-    NoticePart, OperationPart, PartContent, RequestPart, RuntimeActivity, SkillReference,
-    SkillReferencePart,
+    Message, MessageMetadata, MessagePart, MessageProviderState, OperationPart, PartContent,
+    RequestPart, RuntimeActivity, SkillReferencePart,
 };
-use crate::part_content::{self, TypedContent};
 use crate::session::Session;
 
 /// The facade-backed store adapter used by [`crate::SessionManager`].
@@ -881,69 +874,13 @@ fn truncate(value: &str) -> Option<String> {
 
 /// Decode the canonical JSON payload stored on a part back into the
 /// execution-engine [`PartContent`], dispatching on the part's `kind` column
-/// through the typed content layer ([`part_content::decode`]).
+/// through the typed content layer in `agena-runtime-contracts`
+/// ([`agena_runtime_contracts::part_content::decode_part_content`]). The
+/// v1-rebuild logic now lives next to the typed structs in contracts so the
+/// provider projections share the exact same decode path.
 pub(crate) fn part_content_from_value(kind: &str, value: &Value) -> Result<PartContent, AppError> {
-    let typed = part_content::decode(kind, value)
-        .map_err(|error| AppError::Internal(format!("decode part content from store: {error}")))?;
-    Ok(part_content_from_typed(typed))
-}
-
-/// Rebuild the execution-engine [`PartContent`] from a decoded typed payload.
-///
-/// The rebuild is lossless for every v1 variant the engine still reads its
-/// rich fields from (the v1 payload is preserved verbatim in the typed
-/// struct's `extra` bucket). Kinds the v1 vocabulary has no representation
-/// for (`paste_ref`, `tool_result`, `compaction`, `run`) degrade to a text
-/// part rather than fail the reload (design principle: reload 宁缺勿崩). Run
-/// markers never reach this path — they are handled as the message marker in
-/// [`session_from_view`] — so that arm is purely defensive.
-fn part_content_from_typed(typed: TypedContent) -> PartContent {
-    match typed {
-        TypedContent::Text(part) => PartContent::Text(TextPart {
-            text: part.text,
-            synthetic: part.synthetic,
-        }),
-        TypedContent::Think(part) => PartContent::Activity(RuntimeActivity::Reasoning(
-            ReasoningPart {
-                summary: part.summary,
-                raw_content: part.raw,
-                encrypted_content: part.encrypted_content,
-            },
-        )),
-        TypedContent::ToolCall(part) => {
-            PartContent::Activity(RuntimeActivity::Operation(operation_from_tool_call(part)))
-        }
-        TypedContent::FileRef(part) => {
-            PartContent::Activity(RuntimeActivity::Resource(attachment_from_file_ref(part)))
-        }
-        TypedContent::SkillRef(part) => PartContent::Activity(RuntimeActivity::SkillReference(
-            skill_reference_from_skill_ref(part),
-        )),
-        TypedContent::Notice(part) => PartContent::Activity(RuntimeActivity::Notice(NoticePart {
-            kind: part.kind,
-            summary: part.summary,
-            detail: part.detail,
-            title: part.title,
-        })),
-        TypedContent::Hook(part) => PartContent::Activity(RuntimeActivity::Hook(HookPart {
-            hook: part.hook,
-            plugin_id: part.plugin_id,
-            summary: part.summary,
-            detail: part.detail,
-        })),
-        TypedContent::Error(part) => {
-            PartContent::Activity(RuntimeActivity::Error(ErrorPart {
-                problem: user_problem_from_error(part),
-            }))
-        }
-        TypedContent::Interaction(part) => {
-            PartContent::Activity(RuntimeActivity::Interaction(interaction_from_content(part)))
-        }
-        TypedContent::Run(_) => PartContent::text(String::new()),
-        TypedContent::PasteRef(part) => PartContent::text(part.text),
-        TypedContent::ToolResult(part) => PartContent::text(part.output),
-        TypedContent::Compaction(part) => PartContent::text(part.summary.unwrap_or_default()),
-    }
+    agena_runtime_contracts::part_content::decode_part_content(kind, value)
+        .map_err(|error| AppError::Internal(format!("decode part content from store: {error}")))
 }
 
 /// Project a v1 [`OperationPart`] onto the canonical `tool_call` shape: the
@@ -969,30 +906,6 @@ fn tool_call_from_operation(operation: &OperationPart) -> part_content::ToolCall
         input: Value::from(operation.invocation.input.clone()),
         extra,
     }
-}
-
-/// Rebuild a v1 [`OperationPart`] from the canonical `tool_call` shape,
-/// restoring the full payload from `extra["operation"]` and falling back to a
-/// pending operation built from the canonical invocation identity.
-fn operation_from_tool_call(part: part_content::ToolCallContent) -> OperationPart {
-    if let Some(operation) = part
-        .extra
-        .get("operation")
-        .and_then(|value| serde_json::from_value::<OperationPart>(value.clone()).ok())
-    {
-        return operation;
-    }
-    let invocation = ToolInvocation {
-        tool_api_call: part
-            .extra
-            .get("tool_api_call")
-            .and_then(|value| serde_json::from_value(value.clone()).ok()),
-        name: part.name,
-        plugin_name: part.plugin,
-        input: StructuredObject::try_from(part.input).unwrap_or_default(),
-    };
-    let call_id = part.extra.get("call_id").and_then(Value::as_i64).unwrap_or(0);
-    OperationPart::pending(call_id, invocation, "", TimeRange::default())
 }
 
 /// Project a v1 [`AttachmentPart`] onto the canonical `file_ref` shape: the
@@ -1049,91 +962,6 @@ fn file_ref_from_attachment(part: &AttachmentPart) -> part_content::FileRefConte
     }
 }
 
-/// Rebuild a v1 [`AttachmentPart`] from the canonical `file_ref` shape,
-/// preferring the lossless `extra["attachments"]` list and otherwise
-/// reconstructing a single item from the named keys + extended keys.
-fn attachment_from_file_ref(part: part_content::FileRefContent) -> AttachmentPart {
-    if let Some(items) = part
-        .extra
-        .get("attachments")
-        .and_then(|value| serde_json::from_value::<Vec<AttachmentItem>>(value.clone()).ok())
-    {
-        return AttachmentPart { attachments: items };
-    }
-    let kind = part
-        .extra
-        .get("kind")
-        .and_then(Value::as_str)
-        .and_then(|value| {
-            serde_json::from_value::<AttachmentKind>(Value::String(value.to_owned())).ok()
-        })
-        .unwrap_or(AttachmentKind::File);
-    let source = attachment_source_from_file_ref(&part);
-    AttachmentPart {
-        attachments: vec![AttachmentItem {
-            kind,
-            mime: part.mime.unwrap_or_default(),
-            source,
-            filename: part.name,
-            title: part.extra.get("title").and_then(Value::as_str).map(str::to_owned),
-            size_bytes: part.extra.get("size_bytes").and_then(Value::as_u64),
-            sha256: part.sha,
-            width: part.extra.get("width").and_then(Value::as_u64).map(|v| v as u32),
-            height: part
-                .extra
-                .get("height")
-                .and_then(Value::as_u64)
-                .map(|v| v as u32),
-            duration_ms: part.extra.get("duration_ms").and_then(Value::as_u64),
-            page_count: part
-                .extra
-                .get("page_count")
-                .and_then(Value::as_u64)
-                .map(|v| v as u32),
-        }],
-    }
-}
-
-/// Rebuild an [`AttachmentSource`] from the canonical `file_ref` named keys
-/// and extended keys (`url`, `data_url`, `base64`, `file_id`, `path`).
-fn attachment_source_from_file_ref(part: &part_content::FileRefContent) -> AttachmentSource {
-    let extra = &part.extra;
-    if let Some(url) = extra.get("url").and_then(Value::as_str) {
-        return AttachmentSource::Url {
-            url: url.to_owned(),
-        };
-    }
-    if let Some(url) = extra.get("data_url").and_then(Value::as_str) {
-        return AttachmentSource::DataUrl {
-            url: url.to_owned(),
-        };
-    }
-    if let Some(data) = extra.get("base64").and_then(Value::as_str) {
-        return AttachmentSource::Base64 {
-            data: data.to_owned(),
-        };
-    }
-    if let Some(file_id) = extra.get("file_id").and_then(Value::as_str) {
-        return AttachmentSource::FileId {
-            file_id: file_id.to_owned(),
-        };
-    }
-    if let Some(path) = part.path.as_deref() {
-        return AttachmentSource::LocalPath {
-            path: path.to_owned(),
-        };
-    }
-    if let Some(source) = extra
-        .get("source")
-        .and_then(|value| serde_json::from_value::<AttachmentSource>(value.clone()).ok())
-    {
-        return source;
-    }
-    AttachmentSource::LocalPath {
-        path: String::new(),
-    }
-}
-
 /// Project a v1 [`SkillReferencePart`] onto the canonical `skill_ref` shape:
 /// the first skill name as the named key, and the full snapshot losslessly
 /// under `extra["skills"]` (transition period — the engine still writes it).
@@ -1150,17 +978,6 @@ fn skill_ref_from_reference(part: &SkillReferencePart) -> part_content::SkillRef
         args: None,
         extra,
     }
-}
-
-/// Rebuild a v1 [`SkillReferencePart`] from `extra["skills"]` (empty when the
-/// snapshot is missing or does not match the v1 shape).
-fn skill_reference_from_skill_ref(part: part_content::SkillRefContent) -> SkillReferencePart {
-    let skills = part
-        .extra
-        .get("skills")
-        .and_then(|value| serde_json::from_value::<Vec<SkillReference>>(value.clone()).ok())
-        .unwrap_or_default();
-    SkillReferencePart { skills }
 }
 
 /// Project a v1 [`agena_failure::UserProblem`] onto the canonical `error`
@@ -1181,39 +998,6 @@ fn error_from_problem(problem: &UserProblem) -> part_content::ErrorContent {
         message: problem.user.fallback.clone(),
         detail: None,
         extra,
-    }
-}
-
-/// Rebuild a v1 [`agena_failure::UserProblem`] from the canonical `error`
-/// shape, preferring the lossless `extra["problem"]` object and otherwise
-/// constructing a minimal problem from the named keys.
-fn user_problem_from_error(part: part_content::ErrorContent) -> UserProblem {
-    if let Some(problem) = part
-        .extra
-        .get("problem")
-        .and_then(|value| serde_json::from_value::<UserProblem>(value.clone()).ok())
-    {
-        return problem;
-    }
-    UserProblem {
-        id: FailureId::new(),
-        code: FailureCode::new("runtime.error"),
-        category: part
-            .category
-            .as_deref()
-            .and_then(|value| {
-                serde_json::from_value::<FailureCategory>(Value::String(value.to_owned())).ok()
-            })
-            .unwrap_or(FailureCategory::Internal),
-        responsibility: FailureResponsibility::System,
-        retry: RetryDirective::Never,
-        recovery: RecoveryDirective::None,
-        impact: FailureImpact::OperationFailed,
-        user: UserPresentation {
-            key: part.category.unwrap_or_else(|| "runtime-error".to_owned()),
-            fallback: part.message,
-            detail_key: None,
-        },
     }
 }
 
@@ -1250,39 +1034,6 @@ fn interaction_from_request(part: &RequestPart) -> part_content::InteractionCont
         response: reply_value,
         extra,
     }
-}
-
-/// Rebuild a v1 [`RequestPart`] from the canonical `interaction` shape,
-/// preferring the lossless `extra["request"]`/`extra["reply"]` objects and
-/// otherwise reconstructing from the named display keys.
-fn interaction_from_content(part: part_content::InteractionContent) -> RequestPart {
-    let extra = &part.extra;
-    let request = extra
-        .get("request")
-        .and_then(|value| serde_json::from_value::<UserInputRequest>(value.clone()).ok())
-        .unwrap_or_else(|| UserInputRequest {
-            request_id: format!("restored-{}", part.kind),
-            session_id: None,
-            title: part.prompt.clone().unwrap_or_default(),
-            kind: part.kind.clone(),
-            auto_resolution_ms: None,
-            presented_at: None,
-            questions: part
-                .options
-                .as_ref()
-                .and_then(|value| serde_json::from_value(value.clone()).ok())
-                .unwrap_or_default(),
-            created_at: Utc::now(),
-        });
-    let reply = extra
-        .get("reply")
-        .and_then(|value| serde_json::from_value::<UserInputReply>(value.clone()).ok())
-        .or_else(|| {
-            part.response
-                .as_ref()
-                .and_then(|value| serde_json::from_value::<UserInputReply>(value.clone()).ok())
-        });
-    RequestPart::UserInput(InteractiveRequestPart { request, reply })
 }
 
 pub(crate) fn role_from_part_role(role: PartRole) -> Role {
@@ -1609,7 +1360,9 @@ pub(crate) fn run_marker_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_domain::{SessionLifecycleState, SessionRelationKind};
+    use agena_domain::{
+        SessionLifecycleState, SessionRelationKind, StructuredObject, TimeRange, ToolInvocation,
+    };
     use agena_storage::store::{PartVisibility, SessionMeta, SessionView};
 
     fn meta(id: i64) -> SessionMeta {

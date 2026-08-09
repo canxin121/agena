@@ -17,6 +17,7 @@ pub mod authorization;
 pub mod identity;
 pub mod message;
 pub mod part;
+pub mod part_content;
 pub mod permission;
 pub mod provider_state;
 

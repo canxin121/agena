@@ -5,10 +5,10 @@
 //! This crate is intentionally small. Concrete runtime services and
 //! application composition belong to their owning crates.
 //!
-//! It defines the shared authorization, identity, message, permission, and
-//! provider-state surfaces ([`authorization`], [`identity`], [`message`],
-//! [`permission`], [`provider_state`]) plus cross-cutting contracts such as
-//! [`ToolSessionContext`], [`RuntimeRequestContext`],
+//! It defines the shared authorization, identity, message, part, permission,
+//! and provider-state surfaces ([`authorization`], [`identity`], [`message`],
+//! [`part`], [`permission`], [`provider_state`]) plus cross-cutting contracts
+//! such as [`ToolSessionContext`], [`RuntimeRequestContext`],
 //! [`NeutralToolExecutionResult`], and [`ConfigSnapshot`].
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 pub mod authorization;
 pub mod identity;
 pub mod message;
+pub mod part;
 pub mod permission;
 pub mod provider_state;
 

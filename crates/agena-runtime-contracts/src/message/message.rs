@@ -4,9 +4,8 @@ use serde::{Deserialize, Serialize};
 use crate::message::metadata::{MessageMetadata, MessageProviderState};
 use agena_domain::ExecutionStatus;
 
-use crate::message::part::{
-    MessagePart, OperationCompletion, OperationPart, PartContent, RuntimeActivity,
-};
+use crate::message::part::MessagePart;
+use crate::part::{OperationCompletion, OperationPart, PartContent, RuntimeActivity};
 use agena_domain::ExecutionStatusTransitionError;
 use agena_domain::Role;
 use agena_provider::CompletionUsage;

@@ -19,7 +19,7 @@ pub use callback_guard::CallbackOnDrop;
 
 pub use agena_runtime_config as config;
 pub use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig, MCP_PLUGIN_ID};
-pub use agena_runtime_contracts::{authorization, message, permission};
+pub use agena_runtime_contracts::{authorization, part, permission, provider_state};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Request to invoke a plugin method.

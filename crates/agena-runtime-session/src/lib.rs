@@ -40,6 +40,7 @@ mod execution_registry;
 mod guards;
 mod installation_id;
 mod metrics;
+mod part_content;
 mod periodic;
 mod presentation_event;
 mod prompt_budget;

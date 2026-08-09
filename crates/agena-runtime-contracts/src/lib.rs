@@ -5,11 +5,11 @@
 //! This crate is intentionally small. Concrete runtime services and
 //! application composition belong to their owning crates.
 //!
-//! It defines the shared authorization, identity, message, and permission
-//! surfaces ([`authorization`], [`identity`], [`message`], [`permission`])
-//! plus cross-cutting contracts such as [`ToolSessionContext`],
-//! [`RuntimeRequestContext`], [`NeutralToolExecutionResult`], and
-//! [`ConfigSnapshot`].
+//! It defines the shared authorization, identity, message, permission, and
+//! provider-state surfaces ([`authorization`], [`identity`], [`message`],
+//! [`permission`], [`provider_state`]) plus cross-cutting contracts such as
+//! [`ToolSessionContext`], [`RuntimeRequestContext`],
+//! [`NeutralToolExecutionResult`], and [`ConfigSnapshot`].
 
 use serde::{Deserialize, Serialize};
 
@@ -17,8 +17,10 @@ pub mod authorization;
 pub mod identity;
 pub mod message;
 pub mod permission;
+pub mod provider_state;
 
 pub use message::*;
+pub use provider_state::MessageProviderState;
 
 /// Session state needed by tool execution, kept as a neutral port so neither
 /// the tool executor nor session core depends on the other's implementation.

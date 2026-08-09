@@ -86,7 +86,8 @@ async fn seed_read_session(
         .collect();
     let run_id = facade
         .submit_user_message(session_id, "bench-owner", parts, None)
-        .await?;
+        .await?
+        .run_id;
     facade
         .complete_run(
             session_id,
@@ -203,7 +204,8 @@ async fn benchmark_streaming(
                 }],
                 None,
             )
-            .await?;
+            .await?
+            .run_id;
         let streamed_part_id = facade
             .load(session_id)
             .await?

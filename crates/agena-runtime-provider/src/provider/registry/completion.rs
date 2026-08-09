@@ -1549,7 +1549,6 @@ mod tool_api_function_validation_tests {
         validate_stream_tool_api_event, validate_tool_api_arguments,
     };
     use crate::provider::{CompletionResponse, ModelRuntime};
-    use agena_domain::Role;
     use agena_domain::StructuredObject;
     use agena_domain::TimeRange;
     use agena_domain::ToolApiFunction;
@@ -1562,8 +1561,9 @@ mod tool_api_function_validation_tests {
     use agena_provider::{
         CompletionFinishReason, CompletionRequest, CompletionToolCall, CompletionUsage,
     };
-    use agena_runtime_contracts::message::{Message, OperationPart, PartContent};
+    use agena_runtime_contracts::message::{OperationCompletion, OperationPart};
     use agena_runtime_tools::tool::ToolApiBinding;
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use async_trait::async_trait;
     use futures_util::{StreamExt, stream};
 
@@ -1750,7 +1750,7 @@ mod tool_api_function_validation_tests {
             .collect()
     }
 
-    fn completed_help_message() -> Message {
+    fn completed_help_message() -> Part {
         let mut invocation = ToolInvocation::new(
             ToolApiFunction::Help.function_name(),
             StructuredObject::try_from(serde_json::json!({ "tool": "fs.read" }))
@@ -1760,24 +1760,87 @@ mod tool_api_function_validation_tests {
             function: ToolApiFunction::Help,
             arguments: invocation.input.clone(),
         });
-        let mut message = Message::prompt_parts(
-            Role::Assistant,
-            vec![PartContent::operation(OperationPart::completed(
-                0,
-                invocation,
-                agena_runtime_contracts::message::OperationCompletion::new(
-                    "Tool help",
-                    "Help returned",
-                    "help output".to_owned(),
-                    Vec::new(),
-                    Vec::new(),
-                    ToolOutput::default(),
-                ),
-                TimeRange::default(),
-            ))],
+        let mut operation = OperationPart::completed(
+            0,
+            invocation,
+            OperationCompletion::new(
+                "Tool help",
+                "Help returned",
+                "help output".to_owned(),
+                Vec::new(),
+                Vec::new(),
+                ToolOutput::default(),
+            ),
+            TimeRange::default(),
         );
-        message.parts[0].operation_id = Some("call_help".to_owned());
-        message
+        // The session serializer stashes the provider operation id inside the
+        // rich operation metadata (see `serialize_part_content`); reproduce it
+        // for the fixture so `project_operation_call_id` recovers it.
+        operation.metadata.insert(
+            "agena.operation_id".to_owned(),
+            serde_json::Value::String("call_help".to_owned()),
+        );
+        let mut content = serde_json::Map::new();
+        content.insert(
+            "name".to_owned(),
+            serde_json::Value::String(operation.invocation.name.clone()),
+        );
+        content.insert(
+            "input".to_owned(),
+            serde_json::Value::from(operation.invocation.input.clone()),
+        );
+        content.insert(
+            "operation".to_owned(),
+            serde_json::to_value(&operation).expect("operation is JSON serializable"),
+        );
+        content.insert(
+            "tool_api_call".to_owned(),
+            serde_json::to_value(
+                operation.invocation.tool_api_call.as_ref().expect("tool api call"),
+            )
+            .expect("tool api call is JSON serializable"),
+        );
+        Part {
+            part_id: 1,
+            kind: "tool_call".to_owned(),
+            role: PartRole::Assistant,
+            state: PartState::Completed,
+            content: serde_json::Value::Object(content),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(1),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            provider_state: None,
+        }
+    }
+
+    fn user_text_part(text: &str) -> Part {
+        Part {
+            part_id: 2,
+            kind: "text".to_owned(),
+            role: PartRole::User,
+            state: PartState::Completed,
+            content: serde_json::json!({ "text": text }),
+            summary: None,
+            visibility: PartVisibility::Both,
+            rendered_markdown: None,
+            parent_part_id: None,
+            run_id: Some(2),
+            origin_session_id: 1,
+            revision: 1,
+            started_at_ms: 0,
+            finished_at_ms: None,
+            created_at_ms: 0,
+            updated_at_ms: 0,
+            provider_state: None,
+        }
     }
 
     fn repair_request() -> CompletionRequest {
@@ -1785,11 +1848,8 @@ mod tool_api_function_validation_tests {
             model: ModelId::new("test-model"),
             system: Some("base system".to_owned()),
             messages: vec![
-                crate::provider::project_completion_input(&Message::prompt_text(
-                    Role::User,
-                    "read README.md",
-                )),
-                crate::provider::project_completion_input(&completed_help_message()),
+                crate::provider::project_completion_input(&[user_text_part("read README.md")]),
+                crate::provider::project_completion_input(&[completed_help_message()]),
             ],
             tool_api_functions: all_tool_api_definitions(),
             provider_native_tools: Default::default(),
@@ -2199,25 +2259,41 @@ mod replay_tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use agena_domain::{Model, ModelId, ModelRef, ProviderId, Role};
+    use agena_domain::{Model, ModelId, ModelRef, ProviderId};
     use agena_provider::{
         CompletionFinishReason, CompletionRequest, CompletionStreamEvent, ProviderErrorKind,
         StreamResumePolicy,
     };
-    use agena_runtime_contracts::message::Message;
     use async_trait::async_trait;
     use futures_util::{StreamExt, stream};
 
     use crate::ProviderError;
     use crate::provider::{CompletionResponse, ModelRuntime, ProviderRegistry};
+    use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
 
     fn replay_request() -> CompletionRequest {
         CompletionRequest {
             model: ModelId::new("test-model"),
             system: Some("base system".to_owned()),
-            messages: vec![crate::provider::project_completion_input(
-                &Message::prompt_text(Role::User, "hi"),
-            )],
+            messages: vec![crate::provider::project_completion_input(&[Part {
+                part_id: 1,
+                kind: "text".to_owned(),
+                role: PartRole::User,
+                state: PartState::Completed,
+                content: serde_json::json!({ "text": "hi" }),
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                run_id: Some(1),
+                origin_session_id: 1,
+                revision: 1,
+                started_at_ms: 0,
+                finished_at_ms: None,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+                provider_state: None,
+            }])],
             tool_api_functions: Vec::new(),
             provider_native_tools: Default::default(),
             disable_tools: false,

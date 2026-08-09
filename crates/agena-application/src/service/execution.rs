@@ -496,17 +496,17 @@ fn session_query_error(error: agena_runtime::SessionQueryError) -> ApplicationEr
 }
 
 /// Project a session's v2 part transcript for presentation. Reads the runtime
-/// part projection (`list_projected_messages`) and flattens each run into its
+/// part projection (`list_projected_runs`) and flattens each run into its
 /// run marker plus content parts (shared `project_session_transcript`).
 async fn session_transcript_parts(
     session_queries: &dyn agena_runtime::SessionQueryService,
     session_id: i64,
 ) -> ApplicationResult<Vec<agena_api::resource::SessionTranscriptPart>> {
-    let messages = session_queries
-        .list_projected_messages(session_id, true)
+    let runs = session_queries
+        .list_projected_runs(session_id, true)
         .await
         .map_err(session_query_error)?;
-    Ok(crate::session::project_session_transcript(&messages))
+    Ok(crate::session::project_session_transcript(&runs))
 }
 
 fn execution_control_error(error: agena_runtime::SessionExecutionControlError) -> ApplicationError {

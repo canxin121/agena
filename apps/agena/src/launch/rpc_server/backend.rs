@@ -6,8 +6,8 @@ use agena_api_server::jsonrpc::protocol::{
     CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
     PermissionDecision as AppPermissionDecision, PermissionRememberScope, PermissionReplyParams,
-    PermissionReplyResult, ReadMessagesParams, ReadMessagesResult, SessionListItem,
-    SubmitMessageParams, SubmitMessageResult,
+    PermissionReplyResult, ReadPartsParams, ReadPartsResult, SessionListItem,
+    SubmitRunParams, SubmitRunResult,
 };
 use agena_api_server::jsonrpc::{self, AppServerError};
 use agena_cli::{AgenaCli, RpcServerRequest, RpcServerTransport};
@@ -17,7 +17,7 @@ use agena_runtime::bootstrap_application_services;
 use agena_runtime::{
     RuntimeApplicationServices, SessionCreateRequest, SessionExecutionCommandService,
     SessionExecutionControl, SessionPermissionReplyRequest, SessionQueryService, SessionRunOptions,
-    SessionUserMessageRequest,
+    SessionUserRunRequest,
 };
 use async_trait::async_trait;
 use clap::Parser;
@@ -124,8 +124,8 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
 
     async fn submit_message(
         &self,
-        params: SubmitMessageParams,
-    ) -> Result<SubmitMessageResult, AppServerError> {
+        params: SubmitRunParams,
+    ) -> Result<SubmitRunResult, AppServerError> {
         let commands = app_session_commands(&self.services)?;
         let options = resolve_run_options(
             self.services.provider_catalog.as_ref(),
@@ -135,7 +135,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         )
         .map_err(app_backend_error)?;
         let outcome = commands
-            .submit_user_message(SessionUserMessageRequest::new(
+            .submit_user_run(SessionUserRunRequest::new(
                 params.session_id,
                 options,
                 agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
@@ -150,7 +150,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             .await
             .map_err(app_backend_error)?;
         let messages = queries
-            .list_projected_messages(outcome.session_id, true)
+            .list_projected_runs(outcome.session_id, true)
             .await
             .map_err(app_backend_error)?;
         // The v2 run result: the newest run's marker plus its content parts.
@@ -165,7 +165,7 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
             }
             None => Vec::new(),
         };
-        Ok(SubmitMessageResult {
+        Ok(SubmitRunResult {
             session_id: presentation.id,
             run_id,
             parts,
@@ -240,13 +240,13 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
 
     async fn read_messages(
         &self,
-        params: ReadMessagesParams,
-    ) -> Result<ReadMessagesResult, AppServerError> {
+        params: ReadPartsParams,
+    ) -> Result<ReadPartsResult, AppServerError> {
         let messages = app_session_queries(&self.services)?
-            .list_projected_messages(params.session_id, true)
+            .list_projected_runs(params.session_id, true)
             .await
             .map_err(app_backend_error)?;
-        Ok(ReadMessagesResult {
+        Ok(ReadPartsResult {
             parts: agena_application::session::project_session_transcript(&messages),
         })
     }

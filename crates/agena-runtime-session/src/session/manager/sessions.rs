@@ -222,7 +222,7 @@ impl SessionManager {
         // reloaded projection preserves the System/User distinction.
         let outcome = self
             .store
-            .submit_user_message(session.id, injected_new_parts, None)
+            .submit_user_run(session.id, injected_new_parts, None)
             .await?;
         let mut projected = session.parts().to_vec();
         projected.extend(outcome.parts);
@@ -535,18 +535,18 @@ impl SessionManager {
         Ok(summaries.into_iter().map(|summary| summary.id).collect())
     }
 
-    pub async fn list_projected_messages(
+    pub async fn list_projected_runs(
         &self,
         session_id: i64,
         include_full_parts: bool,
-    ) -> Result<Vec<crate::session_query_service::SessionProjectedMessage>, AppError> {
+    ) -> Result<Vec<crate::session_query_service::SessionProjectedRun>, AppError> {
         // v2 has no separate "projected" transcript: the canonical read is
         // the aggregate rebuilt from parts (`load_session`). `include_full_parts`
         // is retained for callers that historically fetched headers only; the
         // aggregate always carries full parts.
         let _ = include_full_parts;
         let session = self.store.load_session(session_id).await?;
-        super::history::projected_messages_from_parts(session.parts())
+        super::history::projected_runs_from_parts(session.parts())
     }
 
     /// Returns whether a persisted user message already owns an external

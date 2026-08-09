@@ -417,8 +417,8 @@ pub(super) fn build_scheduler(
                             };
 
                             match session_manager
-                                .submit_user_message(
-                                    agena_runtime::SessionUserMessageRequest::new(
+                                .submit_user_run(
+                                    agena_runtime::SessionUserRunRequest::new(
                                         session_id,
                                         options,
                                         agena_domain::ComposerDocument(vec![

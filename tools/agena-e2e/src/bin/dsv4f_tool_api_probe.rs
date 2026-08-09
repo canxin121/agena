@@ -13,7 +13,7 @@ use agena_domain::{
 };
 use agena_runtime::{
     RuntimeBootstrapRequest, SessionCreateRequest, SessionPermissionReplyRequest,
-    SessionProjectedPartDetail, SessionQueryService, SessionRunOptions, SessionUserMessageRequest,
+    SessionProjectedPartDetail, SessionQueryService, SessionRunOptions, SessionUserRunRequest,
 };
 use anyhow::{Context, bail};
 use clap::Parser;
@@ -118,7 +118,7 @@ async fn async_main() -> anyhow::Result<()> {
     let run_options = options.clone();
     let run = tokio::spawn(async move {
         run_commands
-            .submit_user_message(SessionUserMessageRequest::new(
+            .submit_user_run(SessionUserRunRequest::new(
                 session.session_id,
                 run_options,
                 agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
@@ -181,7 +181,7 @@ async fn async_main() -> anyhow::Result<()> {
         bail!("session remained blocked after AllowOnce");
     }
     let messages = queries
-        .list_projected_messages(session.session_id, true)
+        .list_projected_runs(session.session_id, true)
         .await
         .context("load completed probe transcript")?;
     assert_tool_api_trace(&messages, "web.fetch")?;
@@ -207,7 +207,7 @@ async fn async_main() -> anyhow::Result<()> {
 }
 
 fn assert_tool_api_trace(
-    messages: &[agena_runtime::SessionProjectedMessage],
+    messages: &[agena_runtime::SessionProjectedRun],
     tool_name: &str,
 ) -> anyhow::Result<()> {
     let operations = messages

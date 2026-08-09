@@ -963,7 +963,7 @@ impl PersistenceEngine for InMemoryEngine {
         Ok(stale)
     }
 
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
         session_id: i64,
         owner_id: &str,
@@ -1627,7 +1627,7 @@ mod tests {
     async fn user_send_creates_marker_and_content_parts_with_membership() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hello")],
@@ -1652,7 +1652,7 @@ mod tests {
     async fn idempotency_key_deduplicates_user_send() {
         let (engine, session_id) = setup().await;
         let first = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hi")],
@@ -1662,7 +1662,7 @@ mod tests {
             .await
             .expect("first submit");
         let second = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hi again")],
@@ -1694,7 +1694,7 @@ mod tests {
             .await
             .expect("create");
         let error = engine
-            .submit_user_message(
+            .submit_user_run(
                 meta.id,
                 "no-lease",
                 vec![text_part("x")],
@@ -1710,7 +1710,7 @@ mod tests {
     async fn lease_steal_aborts_stale_run_atomically() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hello")],
@@ -1753,7 +1753,7 @@ mod tests {
     async fn fork_copies_edges_up_to_cutoff_and_child_reads_shared_prefix() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("one")],
@@ -1764,7 +1764,7 @@ mod tests {
             .expect("first send");
         engine.set_now(engine.now_ms() + 1000);
         engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("two")],
@@ -1808,7 +1808,7 @@ mod tests {
     async fn fork_during_streaming_shares_completion_and_rejects_child_mutation() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart {
@@ -1895,7 +1895,7 @@ mod tests {
     async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_runs() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart {
@@ -1983,7 +1983,7 @@ mod tests {
     async fn retry_history_retains_failed_error_and_successful_result_parts() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart {
@@ -2116,7 +2116,7 @@ mod tests {
     async fn complete_run_requires_abort_reason_on_failure_and_keeps_children() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hello")],
@@ -2166,7 +2166,7 @@ mod tests {
     async fn answer_interaction_completes_it_and_appends_a_reply_part() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2207,7 +2207,7 @@ mod tests {
     async fn fork_cannot_answer_a_shared_interaction_in_place() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2263,7 +2263,7 @@ mod tests {
     async fn state_derivation_covers_all_sessions_states() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hi")],
@@ -2300,7 +2300,7 @@ mod tests {
 
         // Pending interaction -> AwaitingUser, even when the lease is gone.
         let paused = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2340,7 +2340,7 @@ mod tests {
     async fn gc_deletes_only_refcount_orphans() {
         let (engine, session_id) = setup().await;
         let outcome = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hello")],
@@ -2379,7 +2379,7 @@ mod tests {
     async fn jsonl_round_trip_preserves_ordering_and_references() {
         let (engine, session_id) = setup().await;
         engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hello")],
@@ -2454,7 +2454,7 @@ mod tests {
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 1);
 
         let submitted = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("hello")],
@@ -2465,7 +2465,7 @@ mod tests {
             .expect("submit");
         assert_eq!(engine.session_meta(session_id).await.unwrap().version, 2);
         let replay = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("ignored")],
@@ -2596,7 +2596,7 @@ mod tests {
     async fn updating_a_shared_part_bumps_every_member_session_version() {
         let (engine, session_id) = setup().await;
         let submitted = engine
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![text_part("shared")],

@@ -952,15 +952,15 @@ impl agena_runtime::SessionQueryService for SessionManager {
         }))
     }
 
-    async fn list_projected_messages(
+    async fn list_projected_runs(
         &self,
         session_id: i64,
         include_content: bool,
-    ) -> Result<Vec<agena_runtime::SessionProjectedMessage>, agena_runtime::SessionQueryError> {
-        // Parts-native: `SessionManager::list_projected_messages` already
-        // builds the stable `SessionProjectedMessage` values directly from the
+    ) -> Result<Vec<agena_runtime::SessionProjectedRun>, agena_runtime::SessionQueryError> {
+        // Parts-native: `SessionManager::list_projected_runs` already
+        // builds the stable `SessionProjectedRun` values directly from the
         // session's parts; only the error type needs adapting here.
-        SessionManager::list_projected_messages(self, session_id, include_content)
+        SessionManager::list_projected_runs(self, session_id, include_content)
             .await
             .map_err(|error| agena_runtime::SessionQueryError::internal(error.to_string()))
     }
@@ -1165,13 +1165,13 @@ impl agena_runtime::SessionQueryService for SessionManager {
 
 /// Project a session's parts into the stable transcript values, one per run.
 ///
-/// Each run marker becomes a `SessionProjectedMessage` whose parts are the
+/// Each run marker becomes a `SessionProjectedRun` whose parts are the
 /// run's content parts, decoded from the canonical store payload. This is the
-/// parts-native replacement for the removed v1 `messages_from_parts` bridge,
+/// parts-native replacement for the removed v1 message bridge,
 /// preserving the exact wire shape `agena-application` / `agena-cli` consume.
-pub(crate) fn projected_messages_from_parts(
+pub(crate) fn projected_runs_from_parts(
     parts: &[Part],
-) -> Result<Vec<crate::session_query_service::SessionProjectedMessage>, AppError> {
+) -> Result<Vec<crate::session_query_service::SessionProjectedRun>, AppError> {
     parts_into_runs(parts)
         .into_iter()
         .map(|run| {
@@ -1180,7 +1180,7 @@ pub(crate) fn projected_messages_from_parts(
             for (index, part) in run.iter().enumerate().skip(1) {
                 projected_parts.push(project_storage_part(part, marker.part_id, index as i32)?);
             }
-            Ok(crate::session_query_service::SessionProjectedMessage {
+            Ok(crate::session_query_service::SessionProjectedRun {
                 id: marker.part_id,
                 role: role_from_part_role(marker.role),
                 state: execution_status_from_part_state(marker.state),
@@ -1302,13 +1302,13 @@ fn part_name_from_content(content: &PartContent) -> Option<String> {
 /// preserving the wire shape the v1 bridge produced for `MessagePart`.
 fn project_storage_part(
     part: &Part,
-    message_id: i64,
+    run_id: i64,
     part_index: i32,
-) -> Result<agena_runtime::SessionProjectedMessagePart, AppError> {
+) -> Result<agena_runtime::SessionProjectedPart, AppError> {
     let decoded = decode_part(part, part_index)?;
-    Ok(agena_runtime::SessionProjectedMessagePart {
+    Ok(agena_runtime::SessionProjectedPart {
         id: decoded.id,
-        message_id,
+        run_id,
         part_index: decoded.part_index,
         status: decoded.status,
         kind: decoded.kind,

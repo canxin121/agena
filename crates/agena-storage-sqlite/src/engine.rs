@@ -1136,7 +1136,7 @@ impl PersistenceEngine for SqliteEngine {
             .collect()
     }
 
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
         session_id: i64,
         owner_id: &str,

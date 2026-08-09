@@ -147,7 +147,7 @@ pub(crate) async fn run_tool_api_meta_suite(
         });
         let start_message_count = harness
             .session_queries
-            .list_projected_messages(session, true)
+            .list_projected_runs(session, true)
             .await?
             .len();
         let mut options = harness.options.clone();
@@ -222,7 +222,7 @@ pub(crate) async fn run_tool_api_meta_suite(
         });
         let start_message_count = harness
             .session_queries
-            .list_projected_messages(session, true)
+            .list_projected_runs(session, true)
             .await?
             .len();
         let prompt = format!(

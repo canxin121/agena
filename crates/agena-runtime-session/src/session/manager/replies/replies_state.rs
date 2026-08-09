@@ -539,7 +539,7 @@ impl SessionManager {
                 .collect::<Result<Vec<_>, _>>()?;
             let outcome = self
                 .store
-                .submit_user_message(session.id, new_parts, None)
+                .submit_user_run(session.id, new_parts, None)
                 .await?;
             if !outcome.created {
                 continue;

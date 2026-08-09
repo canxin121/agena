@@ -306,7 +306,7 @@ impl Backend {
     ) -> Result<SessionExecutionResource> {
         match dispatch::dispatch_command(
             &self.application,
-            ApiCommand::SubmitMessage(SubmitMessageParams {
+            ApiCommand::SubmitMessage(SubmitRunParams {
                 session_id,
                 options: request,
                 document,
@@ -786,6 +786,6 @@ use crate::{
     PermissionReply, PermissionReplyKind, PermissionScope, Query, QueryResult,
     ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, RunOptions,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
-    SessionTimelineEntry, SubmitMessageParams, UpdateSessionSelectionParams, UserInputReply,
+    SessionTimelineEntry, SubmitRunParams, UpdateSessionSelectionParams, UserInputReply,
     api_error, build_file_index, direct_path_candidate, dispatch, file_search_score, mpsc,
 };

@@ -150,7 +150,7 @@ pub trait SessionStore: Send + Sync {
     /// idempotency in one committed transaction. Returns the full
     /// [`SubmitOutcome`] — the run marker id plus the committed parts — so
     /// callers never reload after writing.
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
         session_id: i64,
         owner_id: &str,
@@ -1056,7 +1056,7 @@ where
         self.derive_presentation(session_id).await
     }
 
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
         session_id: i64,
         owner_id: &str,
@@ -1067,7 +1067,7 @@ where
         self.ensure_lease(session_id, &owner).await?;
         let outcome: SubmitOutcome = self
             .engine
-            .submit_user_message(session_id, &owner, parts, idempotency_key, self.now())
+            .submit_user_run(session_id, &owner, parts, idempotency_key, self.now())
             .await?;
         if outcome.created {
             let meta = self.engine.session_meta(session_id).await?;
@@ -1671,7 +1671,7 @@ mod tests {
         let _subscription = facade.subscribe(session_id, observer);
 
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -1720,7 +1720,7 @@ mod tests {
         .with_streaming_flush_delta_count(3);
         let session_id = ready_session(&facade, 1, "stream").await;
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart {
@@ -1864,7 +1864,7 @@ mod tests {
 
         // A second owner cannot write while owner-a's lease is fresh.
         let err = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-b",
                 vec![NewPart::pending(
@@ -1882,7 +1882,7 @@ mod tests {
         // (now stale) owner-a state and lets owner-b write.
         clock.advance(60_000);
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-b",
                 vec![NewPart::pending(
@@ -1906,7 +1906,7 @@ mod tests {
         assert_eq!(ready.state, SessionState::Ready);
 
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -1947,7 +1947,7 @@ mod tests {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -1998,7 +1998,7 @@ mod tests {
         let (facade, clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2119,11 +2119,11 @@ mod tests {
             json!({"text": "once"}),
         )];
         let first = facade
-            .submit_user_message(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
+            .submit_user_run(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
             .await
             .expect("first");
         let second = facade
-            .submit_user_message(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
+            .submit_user_run(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
             .await
             .expect("replay");
         // The replay resolves to the same run but is not a re-creation: the
@@ -2140,7 +2140,7 @@ mod tests {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
         facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2188,7 +2188,7 @@ mod tests {
         let (facade, _clock) = harness();
         let root_id = ready_session(&facade, 1, "delete tree").await;
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 root_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2323,7 +2323,7 @@ mod tests {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
         facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2589,7 +2589,7 @@ mod tests {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "answer patches").await;
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2648,7 +2648,7 @@ mod tests {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "cancel patches").await;
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![
@@ -2713,7 +2713,7 @@ mod tests {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "reconcile patches").await;
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart {
@@ -2775,7 +2775,7 @@ mod tests {
         }
 
         facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2809,7 +2809,7 @@ mod tests {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "global creation patches").await;
         facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -2871,7 +2871,7 @@ mod tests {
         let (facade, clock) = harness();
         let session_id = ready_session(&facade, 1, "maintenance patch").await;
         facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(
@@ -3077,7 +3077,7 @@ mod tests {
             self.inner.reap_stale_leases(stale_before_ms).await
         }
 
-        async fn submit_user_message(
+        async fn submit_user_run(
             &self,
             session_id: i64,
             owner_id: &str,
@@ -3086,7 +3086,7 @@ mod tests {
             now_ms: i64,
         ) -> Result<SubmitOutcome, StoreError> {
             self.inner
-                .submit_user_message(session_id, owner_id, parts, idempotency_key, now_ms)
+                .submit_user_run(session_id, owner_id, parts, idempotency_key, now_ms)
                 .await
         }
 
@@ -3250,10 +3250,10 @@ mod tests {
         );
         facade.engine().load_session_calls.store(0, Ordering::SeqCst);
 
-        // a. submit_user_message: apply_committed seeds the cache with the
+        // a. submit_user_run: apply_committed seeds the cache with the
         //    committed marker + parts, so the next load is a hit.
         let outcome = facade
-            .submit_user_message(
+            .submit_user_run(
                 session_id,
                 "owner-a",
                 vec![NewPart::pending(

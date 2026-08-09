@@ -7,7 +7,7 @@ use chrono::Utc;
 use crate::error::AppError;
 use crate::part::{OperationPart, PartContent};
 use crate::provider::ProviderRegistry;
-use crate::provider_state::MessageProviderState;
+use crate::provider_state::PartProviderState;
 use agena_domain::ModelRef;
 use agena_domain::{
     AssistantReasoningField, FinishReason, StructuredObject, TimeRange, ToolInvocation,

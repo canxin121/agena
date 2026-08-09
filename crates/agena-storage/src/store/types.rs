@@ -246,7 +246,7 @@ pub struct RunOutcome {
     pub provider_state: Option<Value>,
 }
 
-/// Result of [`PersistenceEngine::submit_user_message`].
+/// Result of [`PersistenceEngine::submit_user_run`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct SubmitOutcome {
     /// The run marker part id (the run identity).

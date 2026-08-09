@@ -19,7 +19,7 @@ use super::protocol::{
     self, AppServerNotification, CancelRunParams, CancelRunResult, CreateSessionParams,
     CreateSessionResult, InboundMessage, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
     ListSessionsParams, ListSessionsResult, PermissionReplyParams, PermissionReplyResult,
-    ReadMessagesParams, ReadMessagesResult, SubmitMessageParams, SubmitMessageResult,
+    ReadPartsParams, ReadPartsResult, SubmitRunParams, SubmitRunResult,
 };
 
 #[derive(Debug, Error)]
@@ -46,8 +46,8 @@ pub trait AppServerBackend: Send + Sync + 'static {
     ) -> Result<CreateSessionResult, AppServerError>;
     async fn submit_message(
         &self,
-        params: SubmitMessageParams,
-    ) -> Result<SubmitMessageResult, AppServerError>;
+        params: SubmitRunParams,
+    ) -> Result<SubmitRunResult, AppServerError>;
     async fn reply_permission(
         &self,
         params: PermissionReplyParams,
@@ -58,8 +58,8 @@ pub trait AppServerBackend: Send + Sync + 'static {
     ) -> Result<ListSessionsResult, AppServerError>;
     async fn read_messages(
         &self,
-        params: ReadMessagesParams,
-    ) -> Result<ReadMessagesResult, AppServerError>;
+        params: ReadPartsParams,
+    ) -> Result<ReadPartsResult, AppServerError>;
     async fn cancel_run(&self, params: CancelRunParams) -> Result<CancelRunResult, AppServerError>;
 }
 
@@ -149,7 +149,7 @@ where
                 .await
             }
             protocol::method::MESSAGE_SUBMIT => {
-                self.dispatch::<SubmitMessageParams, SubmitMessageResult, _>(
+                self.dispatch::<SubmitRunParams, SubmitRunResult, _>(
                     request.params,
                     |params| async move {
                         let result = self.backend.submit_message(params).await?;
@@ -192,7 +192,7 @@ where
                 .await
             }
             protocol::method::MESSAGES_LIST => {
-                self.dispatch::<ReadMessagesParams, ReadMessagesResult, _>(
+                self.dispatch::<ReadPartsParams, ReadPartsResult, _>(
                     request.params,
                     |params| async move { self.backend.read_messages(params).await },
                 )

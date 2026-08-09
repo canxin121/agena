@@ -1,6 +1,6 @@
 use super::{
     AppError, AssistantReasoningField, BTreeMap, CompletionFinishReason, FinishReason,
-    MessageProviderState, ToolInvocation,
+    PartProviderState, ToolInvocation,
 };
 use agena_provider::CompletionInputProviderState;
 use agena_storage::store::{Part, PartState};
@@ -52,7 +52,7 @@ pub(crate) fn map_finish_reason(reason: &CompletionFinishReason) -> FinishReason
 
 pub(crate) fn message_provider_state_from_provider_metadata(
     provider_metadata: &serde_json::Value,
-) -> Option<MessageProviderState> {
+) -> Option<PartProviderState> {
     let assistant_reasoning_field =
         provider_metadata_string_field(provider_metadata, "assistant_reasoning_field")
             .and_then(|value| value.as_str())

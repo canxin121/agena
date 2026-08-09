@@ -67,7 +67,7 @@ fn text_part(text: &str) -> NewPart {
 
 async fn submit_hello(engine: &SqliteEngine, session_id: i64) -> (i64, SessionView) {
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![text_part("hello")],
@@ -107,7 +107,7 @@ async fn writes_without_a_fresh_lease_are_refused() {
 
     // A different owner is refused outright.
     let held = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-b",
             vec![text_part("nope")],
@@ -129,7 +129,7 @@ async fn writes_without_a_fresh_lease_are_refused() {
             .expect("release")
     );
     let missing = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![text_part("nope")],
@@ -234,7 +234,7 @@ async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_appen
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart {
@@ -346,7 +346,7 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
     // A tool_call created `in_progress` (not `pending`), so
     // in_progress -> failed -> in_progress is the valid retry flow.
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart {
@@ -442,7 +442,7 @@ async fn retry_history_keeps_the_durable_error_beside_the_successful_result() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart {
@@ -599,7 +599,7 @@ async fn idempotency_key_deduplicates_user_send() {
     let (engine, session_id) = setup(db).await;
 
     let first = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![text_part("once")],
@@ -611,7 +611,7 @@ async fn idempotency_key_deduplicates_user_send() {
     assert!(first.created);
 
     let replay = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![text_part("once")],
@@ -679,7 +679,7 @@ async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
         || 1_000_000,
     );
     let run_id = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart {
@@ -755,7 +755,7 @@ async fn resume_mid_ask_without_a_lease_remains_awaiting_user() {
         || 1_000_000,
     );
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart::pending(
@@ -818,7 +818,7 @@ async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
         || 1_000_000,
     );
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart {
@@ -910,7 +910,7 @@ async fn jsonl_round_trip_preserves_ordering_and_references() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db.clone()).await;
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart {
@@ -1245,7 +1245,7 @@ async fn lease_steal_aborts_stale_run_across_processes() {
         LeaseAcquire::Acquired { reconciled_runs, .. } if reconciled_runs.is_empty()
     ));
     let run_id = engine_a
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "proc-a",
             vec![text_part("hello")],
@@ -1318,7 +1318,7 @@ async fn facade_cross_process_cache_invalidation() {
         .expect("create session")
         .id;
     facade_a
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart::pending(
@@ -1433,7 +1433,7 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 1);
 
     let submitted = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![text_part("hello")],
@@ -1444,7 +1444,7 @@ async fn every_sqlite_part_mutation_bumps_version_but_idempotency_replay_does_no
         .expect("submit");
     assert_eq!(engine.session_meta(session_id).await.unwrap().version, 2);
     let replay = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![text_part("ignored")],
@@ -1577,7 +1577,7 @@ async fn sqlite_fork_cannot_answer_a_shared_interaction_in_place() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
     let outcome = engine
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "owner-a",
             vec![NewPart::pending(
@@ -1664,7 +1664,7 @@ async fn second_process_reads_committed_parts() {
         .await
         .expect("acquire");
     let run_id = engine_a
-        .submit_user_message(
+        .submit_user_run(
             session_id,
             "proc-a",
             vec![text_part("hello")],

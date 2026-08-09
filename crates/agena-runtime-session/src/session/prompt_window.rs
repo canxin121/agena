@@ -8,7 +8,7 @@ use crate::{
 };
 use agena_domain::{Role, ToolCallId};
 use agena_provider::{
-    CompletionInputAttachment, CompletionInputAttachmentSource, CompletionInputMessage,
+    CompletionInputAttachment, CompletionInputAttachmentSource, CompletionInputRun,
     CompletionInputPart, PromptCacheShape, PromptCacheShapeDiff, ProviderCompactionContext,
 };
 use agena_storage::store::{Part, PartRole, PartState};
@@ -31,7 +31,7 @@ const PROMPT_REQUEST_SHAPE_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PreparedPrompt {
     pub system: Option<String>,
-    pub messages: Vec<CompletionInputMessage>,
+    pub turns: Vec<CompletionInputRun>,
     pub prompt_cache_key: String,
     pub previous_response_id: Option<String>,
     pub provider_compaction: Option<ProviderCompactionContext>,
@@ -87,7 +87,7 @@ pub(crate) enum PromptContinuationReason {
     RequestOptionsFingerprintMismatch,
     AnchorAssistantMissing,
     TranscriptDigestMismatch,
-    NoDeltaMessages,
+    NoDeltaRuns,
     ProviderContinuation,
 }
 
@@ -101,7 +101,7 @@ impl AsRef<str> for PromptContinuationReason {
             Self::RequestOptionsFingerprintMismatch => "request_options_fingerprint_mismatch",
             Self::AnchorAssistantMissing => "anchor_assistant_missing",
             Self::TranscriptDigestMismatch => "transcript_digest_mismatch",
-            Self::NoDeltaMessages => "no_delta_messages",
+            Self::NoDeltaRuns => "no_delta_runs",
             Self::ProviderContinuation => "provider_continuation",
         }
     }
@@ -122,7 +122,7 @@ pub(crate) struct PromptTokenEstimate {
 #[derive(Debug, Clone)]
 struct WindowItem {
     id: Option<i64>,
-    message: CompletionInputMessage,
+    run: CompletionInputRun,
 }
 
 /// Project the session's active model window — [`Session::active_window_parts`],
@@ -176,11 +176,11 @@ fn project_window_items(
             let mut items = Vec::with_capacity(recent_messages.len().saturating_add(4));
             items.push(WindowItem {
                 id: None,
-                message: compaction_summary_message(session, summary.as_str()),
+                run: compaction_summary_run(session, summary.as_str()),
             });
-            items.extend(recent_messages.iter().map(|message| WindowItem {
+            items.extend(recent_messages.iter().map(|run| WindowItem {
                 id: None,
-                message: checkpoint_recent_message(message),
+                run: checkpoint_recent_run(run),
             }));
             items.extend(window_items_from_parts(parts));
             items
@@ -212,13 +212,13 @@ fn project_window_items(
 /// contract (including any installed TextSummary checkpoint injection), minus
 /// assistant runs that failed or were cancelled — they carry no provider-visible
 /// content worth summarizing or counting toward compaction safety.
-pub(crate) fn compactable_prompt_messages(
+pub(crate) fn compactable_prompt_runs(
     session: &Session,
     provider_id: Option<&str>,
     adapter_id: Option<&str>,
     model_id: Option<&str>,
     native_compaction_enabled: bool,
-) -> Vec<CompletionInputMessage> {
+) -> Vec<CompletionInputRun> {
     let filtered: Vec<Part> = parts_into_runs(session.active_window_parts())
         .into_iter()
         .filter(|run| !run_is_failed_or_cancelled_assistant(run))
@@ -234,7 +234,7 @@ pub(crate) fn compactable_prompt_messages(
         native_compaction_enabled,
     )
     .into_iter()
-    .map(|item| item.message)
+    .map(|item| item.run)
     .collect()
 }
 
@@ -255,13 +255,13 @@ fn window_items_from_parts(parts: &[Part]) -> Vec<WindowItem> {
                 .iter()
                 .find(|part| part.is_run_marker())
                 .map(|marker| marker.part_id),
-            message: project_completion_input(&run),
+            run: project_completion_input(&run),
         })
         .collect()
 }
 
-fn checkpoint_recent_message(stored: &PromptCompactionMessage) -> CompletionInputMessage {
-    CompletionInputMessage {
+fn checkpoint_recent_run(stored: &PromptCompactionMessage) -> CompletionInputRun {
+    CompletionInputRun {
         role: stored.role,
         parts: vec![CompletionInputPart::Text {
             text: stored.text.clone(),
@@ -270,8 +270,8 @@ fn checkpoint_recent_message(stored: &PromptCompactionMessage) -> CompletionInpu
     }
 }
 
-fn compaction_summary_message(session: &Session, summary: &str) -> CompletionInputMessage {
-    CompletionInputMessage {
+fn compaction_summary_run(session: &Session, summary: &str) -> CompletionInputRun {
+    CompletionInputRun {
         role: Role::User,
         parts: vec![CompletionInputPart::Text {
             text: format!(
@@ -313,25 +313,25 @@ pub(crate) fn provider_compaction_for_model(
     }
 }
 
-pub(crate) fn normalize_prompt_messages(
-    messages: &[CompletionInputMessage],
-) -> Vec<CompletionInputMessage> {
+pub(crate) fn normalize_prompt_runs(
+    messages: &[CompletionInputRun],
+) -> Vec<CompletionInputRun> {
     messages
         .iter()
-        .filter(|message| message_has_visible_prompt_payload(message))
+        .filter(|run| run_has_visible_prompt_payload(run))
         .cloned()
         .collect()
 }
 
-fn prompt_messages_for_request(items: Vec<WindowItem>) -> Vec<WindowItem> {
+fn prompt_runs_for_request(items: Vec<WindowItem>) -> Vec<WindowItem> {
     items
         .into_iter()
-        .filter(|item| message_has_visible_prompt_payload(&item.message))
+        .filter(|item| run_has_visible_prompt_payload(&item.run))
         .collect()
 }
 
-fn message_has_visible_prompt_payload(message: &CompletionInputMessage) -> bool {
-    message.parts.iter().any(prompt_part_has_visible_payload)
+fn run_has_visible_prompt_payload(run: &CompletionInputRun) -> bool {
+    run.parts.iter().any(prompt_part_has_visible_payload)
 }
 
 fn prompt_part_has_visible_payload(part: &CompletionInputPart) -> bool {
@@ -348,11 +348,11 @@ pub(crate) fn approximate_prompt_payload_chars(parts: &[Part]) -> usize {
     parts_into_runs(parts)
         .into_iter()
         .map(|run| {
-            let message = project_completion_input(&run);
-            if !message_has_visible_prompt_payload(&message) {
+            let projected_run = project_completion_input(&run);
+            if !run_has_visible_prompt_payload(&projected_run) {
                 return 0;
             }
-            approximate_message_payload_chars(&message)
+            approximate_run_payload_chars(&projected_run)
         })
         .sum()
 }
@@ -392,21 +392,21 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
 
     let last_successful_prompt_tokens = runtime.prompt_tokens()?;
     let assistant_message_id = runtime.last_successful_assistant_message_id?;
-    let prompt_messages = prompt_messages_for_request(window_items_from_parts(parts));
-    let anchor_index = prompt_messages
+    let prompt_runs = prompt_runs_for_request(window_items_from_parts(parts));
+    let anchor_index = prompt_runs
         .iter()
         .position(|item| item.id == Some(assistant_message_id))?;
     if !runtime.transcript_digest.is_empty()
-        && prompt_prefix_transcript_digest(prompt_messages.as_slice(), anchor_index)
+        && prompt_prefix_transcript_digest(prompt_runs.as_slice(), anchor_index)
             != runtime.transcript_digest
     {
         return None;
     }
     // The provider's previous response includes the request prefix, but not the
     // assistant output itself. Include the anchor response plus later deltas.
-    let delta_chars: usize = prompt_messages[anchor_index..]
+    let delta_chars: usize = prompt_runs[anchor_index..]
         .iter()
-        .map(|item| approximate_message_payload_chars(&item.message))
+        .map(|item| approximate_run_payload_chars(&item.run))
         .sum();
     let delta_tokens = agena_runtime::estimate_prompt_tokens_from_chars(delta_chars);
 
@@ -418,7 +418,7 @@ pub(crate) fn estimate_prompt_tokens_from_runtime(
 }
 
 pub(crate) fn prompt_transcript_digest(parts: &[Part]) -> String {
-    let normalized = prompt_messages_for_request(window_items_from_parts(parts));
+    let normalized = prompt_runs_for_request(window_items_from_parts(parts));
     prompt_prefix_transcript_digest(normalized.as_slice(), normalized.len().saturating_sub(1))
 }
 
@@ -432,21 +432,21 @@ pub(crate) fn prompt_transcript_digest(parts: &[Part]) -> String {
 /// (status, timestamps, in-memory ids).
 fn prompt_prefix_transcript_digest(items: &[WindowItem], inclusive_end: usize) -> String {
     let end = inclusive_end.saturating_add(1).min(items.len());
-    let transcript = messages_to_provider_transcript(&items[..end]);
+    let transcript = runs_to_provider_transcript(&items[..end]);
     transcript.digest_hex()
 }
 
-fn messages_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
+fn runs_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
     let mut transcript = ProviderTranscript::new();
     for item in items {
-        let message = &item.message;
-        match message.role {
+        let run = &item.run;
+        match run.role {
             Role::Assistant => {
                 let mut content_blocks = Vec::new();
                 let mut tool_calls = Vec::new();
                 let mut tool_results = Vec::new();
                 let mut had_any = false;
-                for part in &message.parts {
+                for part in &run.parts {
                     match part {
                         CompletionInputPart::Text { text } => {
                             had_any = true;
@@ -495,7 +495,7 @@ fn messages_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
                     }
                 }
                 if !had_any {
-                    let fallback = message.as_text_lossy();
+                    let fallback = run.as_text_lossy();
                     if !fallback.trim().is_empty() {
                         content_blocks.push(TranscriptBlock::Text { text: fallback });
                         had_any = true;
@@ -512,7 +512,7 @@ fn messages_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
                 }
             }
             Role::Tool => {
-                for part in &message.parts {
+                for part in &run.parts {
                     if let CompletionInputPart::ToolResult {
                         tool_call_id,
                         output_json,
@@ -534,7 +534,7 @@ fn messages_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
             Role::User | Role::System => {
                 let mut content_blocks = Vec::new();
                 let mut had_any = false;
-                for part in &message.parts {
+                for part in &run.parts {
                     match part {
                         CompletionInputPart::Text { text } => {
                             had_any = true;
@@ -552,7 +552,7 @@ fn messages_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
                     }
                 }
                 if !had_any {
-                    let fallback = message.as_text_lossy();
+                    let fallback = run.as_text_lossy();
                     if !fallback.trim().is_empty() {
                         content_blocks.push(TranscriptBlock::Text { text: fallback });
                         had_any = true;
@@ -561,7 +561,7 @@ fn messages_to_provider_transcript(items: &[WindowItem]) -> ProviderTranscript {
                 if !had_any {
                     continue;
                 }
-                let fragment = if matches!(message.role, Role::System) {
+                let fragment = if matches!(run.role, Role::System) {
                     TranscriptFragment::System {
                         text: content_blocks
                             .iter()
@@ -652,23 +652,23 @@ pub(crate) fn approximate_total_request_tokens_with_compaction(
 /// Char/token estimate over an already-projected message list (e.g. a
 /// compaction candidate assembled from a synthetic checkpoint message plus a
 /// hardened recent suffix, which has no backing parts). Mirrors
-/// [`approximate_total_request_tokens`] over [`CompletionInputMessage`]s.
-pub(crate) fn approximate_request_tokens_from_messages(
-    messages: &[CompletionInputMessage],
+/// [`approximate_total_request_tokens`] over [`CompletionInputRun`]s.
+pub(crate) fn approximate_request_tokens_from_runs(
+    messages: &[CompletionInputRun],
     system: Option<&str>,
     tools: &[ToolApiBinding],
 ) -> u64 {
     let payload_chars = messages
         .iter()
-        .map(approximate_message_payload_chars)
+        .map(approximate_run_payload_chars)
         .sum::<usize>();
     let total_chars = payload_chars.saturating_add(approximate_request_overhead_chars(system, tools));
     agena_runtime::estimate_prompt_tokens_from_chars(total_chars)
 }
 
-/// [`approximate_request_tokens_from_messages`] with native compaction payload.
-pub(crate) fn approximate_request_tokens_from_messages_with_compaction(
-    messages: &[CompletionInputMessage],
+/// [`approximate_request_tokens_from_runs`] with native compaction payload.
+pub(crate) fn approximate_request_tokens_from_runs_with_compaction(
+    messages: &[CompletionInputRun],
     system: Option<&str>,
     tools: &[ToolApiBinding],
     provider_compaction: Option<&ProviderCompactionContext>,
@@ -679,7 +679,7 @@ pub(crate) fn approximate_request_tokens_from_messages_with_compaction(
         .unwrap_or_default();
     let payload_chars = messages
         .iter()
-        .map(approximate_message_payload_chars)
+        .map(approximate_run_payload_chars)
         .sum::<usize>();
     let total_chars = payload_chars
         .saturating_add(approximate_request_overhead_chars(system, tools))
@@ -720,14 +720,14 @@ pub(crate) fn build_prepared_prompt(
     session: &Session,
     options: PromptRequestOptions<'_>,
 ) -> PreparedPrompt {
-    let active_messages = prompt_window_items(
+    let active_runs = prompt_window_items(
         session,
         Some(options.provider_id),
         options.adapter_id,
         Some(options.model_id),
         options.native_compaction_enabled,
     );
-    let prompt_messages = prompt_messages_for_request(active_messages);
+    let prompt_runs = prompt_runs_for_request(active_runs);
     let provider_request_shape = options.provider_request_shape.cloned();
     let PromptRequestFingerprint {
         system_fingerprint,
@@ -736,7 +736,7 @@ pub(crate) fn build_prepared_prompt(
 
     let continuation = evaluate_prompt_continuation(
         session,
-        prompt_messages.as_slice(),
+        prompt_runs.as_slice(),
         &options,
         system_fingerprint.as_str(),
         request_options_fingerprint.as_str(),
@@ -747,15 +747,15 @@ pub(crate) fn build_prepared_prompt(
         PromptContinuationOutcome::Restart { reason, .. } => *reason,
     };
     let continuation_diagnostic = continuation.diagnostic();
-    let (messages, previous_response_id, provider_compaction) = match continuation {
+    let (turns, previous_response_id, provider_compaction) = match continuation {
         PromptContinuationOutcome::Reuse {
             previous_response_id,
-            delta_messages,
-        } => (delta_messages, Some(previous_response_id), None),
+            delta_runs,
+        } => (delta_runs, Some(previous_response_id), None),
         PromptContinuationOutcome::Restart { .. } => (
-            prompt_messages
+            prompt_runs
                 .into_iter()
-                .map(|item| item.message)
+                .map(|item| item.run)
                 .collect(),
             None,
             provider_compaction_for_model(
@@ -770,7 +770,7 @@ pub(crate) fn build_prepared_prompt(
 
     PreparedPrompt {
         system: options.system.map(ToOwned::to_owned),
-        messages,
+        turns,
         prompt_cache_key: prompt_cache_key_for_session(session),
         previous_response_id,
         provider_compaction,
@@ -791,7 +791,7 @@ enum PromptContinuationOutcome {
     },
     Reuse {
         previous_response_id: String,
-        delta_messages: Vec<CompletionInputMessage>,
+        delta_runs: Vec<CompletionInputRun>,
     },
 }
 
@@ -806,7 +806,7 @@ impl PromptContinuationOutcome {
 
 fn evaluate_prompt_continuation(
     session: &Session,
-    prompt_messages: &[WindowItem],
+    prompt_runs: &[WindowItem],
     options: &PromptRequestOptions<'_>,
     system_fingerprint: &str,
     request_options_fingerprint: &str,
@@ -854,7 +854,7 @@ fn evaluate_prompt_continuation(
         };
     }
 
-    let Some(anchor_index) = prompt_messages
+    let Some(anchor_index) = prompt_runs
         .iter()
         .position(|item| item.id == Some(anchor.assistant_message_id))
     else {
@@ -865,7 +865,7 @@ fn evaluate_prompt_continuation(
     };
 
     if !anchor.transcript_digest.is_empty()
-        && prompt_prefix_transcript_digest(prompt_messages, anchor_index)
+        && prompt_prefix_transcript_digest(prompt_runs, anchor_index)
             != anchor.transcript_digest
     {
         return PromptContinuationOutcome::Restart {
@@ -874,20 +874,20 @@ fn evaluate_prompt_continuation(
         };
     }
 
-    let delta_messages = prompt_messages[anchor_index + 1..]
+    let delta_runs = prompt_runs[anchor_index + 1..]
         .iter()
-        .map(|item| item.message.clone())
+        .map(|item| item.run.clone())
         .collect::<Vec<_>>();
-    if delta_messages.is_empty() {
+    if delta_runs.is_empty() {
         return PromptContinuationOutcome::Restart {
-            reason: PromptContinuationReason::NoDeltaMessages,
+            reason: PromptContinuationReason::NoDeltaRuns,
             diagnostic: PromptContinuationDiagnostic::default(),
         };
     }
 
     PromptContinuationOutcome::Reuse {
         previous_response_id: anchor.previous_response_id.clone(),
-        delta_messages,
+        delta_runs,
     }
 }
 
@@ -979,8 +979,8 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     text.chars().take(max_chars).collect()
 }
 
-fn approximate_message_payload_chars(message: &CompletionInputMessage) -> usize {
-    message
+fn approximate_run_payload_chars(run: &CompletionInputRun) -> usize {
+    run
         .parts
         .iter()
         .map(|part| match part {
@@ -1212,8 +1212,8 @@ mod compaction_tests {
         session
     }
 
-    fn text_lossy_list(messages: &[CompletionInputMessage]) -> Vec<String> {
-        messages.iter().map(|message| message.as_text_lossy()).collect()
+    fn text_lossy_list(runs: &[CompletionInputRun]) -> Vec<String> {
+        runs.iter().map(|run| run.as_text_lossy()).collect()
     }
 
     #[test]
@@ -1239,7 +1239,7 @@ mod compaction_tests {
             created_at_ms: 1,
         });
 
-        let active = compactable_prompt_messages(&session, Some("p"), None, Some("m"), false);
+        let active = compactable_prompt_runs(&session, Some("p"), None, Some("m"), false);
         let texts = text_lossy_list(&active);
         assert_eq!(texts.len(), 3);
         assert!(texts[0].contains("durable state"));
@@ -1265,20 +1265,20 @@ mod compaction_tests {
         parts.extend(run_parts(100, PartRole::User, "user", "trailing user", now));
         session.install_projected_parts(parts);
 
-        let prompt_messages = prompt_messages_for_request(window_items_from_parts(session.parts()));
+        let prompt_runs = prompt_runs_for_request(window_items_from_parts(session.parts()));
         assert!(
-            prompt_messages.iter().all(|item| item.id != Some(99)),
+            prompt_runs.iter().all(|item| item.id != Some(99)),
             "hook-only assistant message must not be sent to the model; got {:?}",
-            prompt_messages
+            prompt_runs
                 .iter()
-                .map(|item| (item.id, item.message.as_text_lossy()))
+                .map(|item| (item.id, item.run.as_text_lossy()))
                 .collect::<Vec<_>>()
         );
         // The base messages plus the trailing user message remain; the
         // hook-only assistant message and the checkpoint marker project to no
         // provider payload.
         assert_eq!(
-            prompt_messages
+            prompt_runs
                 .iter()
                 .map(|item| item.id)
                 .collect::<Vec<_>>(),
@@ -1307,7 +1307,7 @@ mod compaction_tests {
             created_at_ms: 1,
         });
 
-        let matching = compactable_prompt_messages(
+        let matching = compactable_prompt_runs(
             &session,
             Some("openai"),
             Some("responses"),
@@ -1321,7 +1321,7 @@ mod compaction_tests {
                 .is_some()
         );
 
-        let locally_compacted = compactable_prompt_messages(
+        let locally_compacted = compactable_prompt_runs(
             &session,
             Some("openai"),
             Some("responses"),
@@ -1330,7 +1330,7 @@ mod compaction_tests {
         );
         // With native compaction disabled the window is still the parts after
         // the checkpoint marker; the opaque checkpoint never replays as text.
-        let projected = compactable_prompt_messages(&session, None, None, None, false);
+        let projected = compactable_prompt_runs(&session, None, None, None, false);
         assert_eq!(locally_compacted.len(), projected.len());
         for (actual, expected) in locally_compacted.iter().zip(projected.iter()) {
             assert_eq!(
@@ -1343,7 +1343,7 @@ mod compaction_tests {
                 .is_none()
         );
 
-        let wrong_adapter = compactable_prompt_messages(
+        let wrong_adapter = compactable_prompt_runs(
             &session,
             Some("openai"),
             Some("chat"),
@@ -1352,7 +1352,7 @@ mod compaction_tests {
         );
         assert_eq!(wrong_adapter.len(), 1);
 
-        let switched = compactable_prompt_messages(
+        let switched = compactable_prompt_runs(
             &session,
             Some("anthropic"),
             None,
@@ -1423,7 +1423,7 @@ mod compaction_tests {
         assert_eq!(
             text_lossy_list(&window_items_from_parts(window)
                 .into_iter()
-                .map(|item| item.message)
+                .map(|item| item.run)
                 .collect::<Vec<_>>()),
             vec!["future user".to_owned()]
         );

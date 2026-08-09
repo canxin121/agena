@@ -46,7 +46,7 @@ use agena_runtime::{
 fn completion_request(
     options: &SessionRunOptions,
     system: Option<String>,
-    messages: Vec<agena_provider::CompletionInputMessage>,
+    turns: Vec<agena_provider::CompletionInputRun>,
     tool_api_functions: Vec<crate::tool::ToolApiBinding>,
     prompt_cache_key: Option<String>,
     previous_response_id: Option<String>,
@@ -55,7 +55,7 @@ fn completion_request(
     agena_runtime::build_completion_request(agena_runtime::CompletionRequestInputs {
         model: options.model.model_id.clone(),
         system,
-        messages,
+        turns,
         tool_api_functions: tool_api_functions
             .into_iter()
             .map(|binding| binding.definition())
@@ -74,13 +74,13 @@ fn completion_request(
 pub(super) use agena_runtime::merge_system_prompts;
 
 #[derive(Debug, Clone)]
-struct SessionUserMessageRequest {
+struct SessionUserRunRequest {
     run: SessionExecutionRequest,
     parts: Vec<UserInputPart>,
     idempotency_key: Option<String>,
 }
 
-impl SessionUserMessageRequest {
+impl SessionUserRunRequest {
     fn new(session_id: i64, options: SessionRunOptions, parts: Vec<PartContent>) -> Self {
         Self {
             run: SessionExecutionRequest::new(session_id, options),
@@ -555,21 +555,21 @@ impl agena_runtime::SessionExecutionCommandService for SessionManager {
         ))
     }
 
-    async fn submit_user_message(
+    async fn submit_user_run(
         &self,
-        request: agena_runtime::SessionUserMessageRequest,
+        request: agena_runtime::SessionUserRunRequest,
     ) -> Result<
         agena_runtime::SessionExecutionCommandOutcome,
         agena_runtime::SessionExecutionCommandError,
     > {
-        let agena_runtime::SessionUserMessageRequest {
+        let agena_runtime::SessionUserRunRequest {
             run,
             document,
             idempotency_key,
         } = request;
         let parts = part_contents_from_composer_document(document)
             .map_err(session_execution_command_error)?;
-        let mut request = SessionUserMessageRequest {
+        let mut request = SessionUserRunRequest {
             run,
             parts,
             idempotency_key: None,

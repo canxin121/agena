@@ -10,7 +10,7 @@ use agena_domain::{
 };
 use agena_runtime::{
     SessionExecutionReplyRequest, SessionExecutionRequest, SessionPermissionReplyRequest,
-    SessionRunOptions, SessionUserMessageRequest,
+    SessionRunOptions, SessionUserRunRequest,
 };
 
 pub fn session_resource_from_summary(
@@ -43,40 +43,40 @@ pub async fn session_user_input_reply_request(
     .await
 }
 
-/// Flatten projected session messages into the v2 part transcript projection.
+/// Flatten projected session runs into the v2 part transcript projection.
 ///
-/// Each projected message is one v2 run: its id is the run marker part id, so
-/// the projection emits a `run` marker part followed by the message's content
-/// parts in order. `role` is the run's role; content parts carry `run_id`
-/// linking them back to the marker. This is the shared transcript shape for
-/// the REST `SessionExecutionResource.parts` and the JSON-RPC
-/// `messages/list` / `message/submit` surfaces.
+/// Each projected run is one v2 run: its id is the run marker part id, so the
+/// projection emits a `run` marker part followed by the run's content parts in
+/// order. `role` is the run's role; content parts carry `run_id` linking them
+/// back to the marker. This is the shared transcript shape for the REST
+/// `SessionExecutionResource.parts` and the JSON-RPC `messages/list` /
+/// `message/submit` surfaces.
 pub fn project_session_transcript(
-    messages: &[agena_runtime::SessionProjectedMessage],
+    runs: &[agena_runtime::SessionProjectedRun],
 ) -> Vec<agena_api::resource::SessionTranscriptPart> {
     let mut parts = Vec::new();
-    for message in messages {
-        let run_id = message.id;
+    for run in runs {
+        let run_id = run.id;
         parts.push(agena_api::resource::SessionTranscriptPart {
             part_id: run_id,
             kind: "run".to_owned(),
-            role: message.role.to_string(),
-            state: message.state.to_string(),
-            content: if message.metadata.is_object() {
-                message.metadata.clone()
+            role: run.role.to_string(),
+            state: run.state.to_string(),
+            content: if run.metadata.is_object() {
+                run.metadata.clone()
             } else {
                 serde_json::json!({})
             },
             summary: None,
-            created_at_ms: message.created_at.timestamp_millis(),
+            created_at_ms: run.created_at.timestamp_millis(),
             parent_part_id: None,
             run_id: Some(run_id),
         });
-        for part in &message.parts {
+        for part in &run.parts {
             parts.push(agena_api::resource::SessionTranscriptPart {
                 part_id: part.id,
                 kind: part.kind.to_string(),
-                role: message.role.to_string(),
+                role: run.role.to_string(),
                 state: part.status.to_string(),
                 content: part.content.clone().unwrap_or(serde_json::Value::Null),
                 summary: part.summary.clone(),
@@ -186,14 +186,14 @@ pub async fn session_permission_reply_request(
     ))
 }
 
-pub async fn session_user_message_request(
+pub async fn session_user_run_request(
     state: &Application,
     session_id: i64,
     options: RunOptions,
     document: ComposerDocument,
-) -> Result<SessionUserMessageRequest, ApplicationError> {
+) -> Result<SessionUserRunRequest, ApplicationError> {
     validate_input_document(&document)?;
-    Ok(SessionUserMessageRequest::new(
+    Ok(SessionUserRunRequest::new(
         session_id,
         resolve_session_run_options(state, session_id, options).await?,
         document,

@@ -316,10 +316,10 @@ impl SessionManager {
                 let request = agena_provider::CompletionRequest {
                     model: model_ref.model_id.clone(),
                     system: Some(agena_permission::AUTO_APPROVAL_SYSTEM_PROMPT.to_owned()),
-                    messages: {
-                        let mut messages = Vec::with_capacity(2);
+                    turns: {
+                        let mut turns = Vec::with_capacity(2);
                         if let Some(context) = &context {
-                            messages.push(agena_provider::CompletionInputMessage {
+                            turns.push(agena_provider::CompletionInputRun {
                                 role: Role::User,
                                 parts: vec![agena_provider::CompletionInputPart::Text {
                                     text: context.clone(),
@@ -327,14 +327,14 @@ impl SessionManager {
                                 provider_state: Default::default(),
                             });
                         }
-                        messages.push(agena_provider::CompletionInputMessage {
+                        turns.push(agena_provider::CompletionInputRun {
                             role: Role::User,
                             parts: vec![agena_provider::CompletionInputPart::Text {
                                 text: action_message,
                             }],
                             provider_state: Default::default(),
                         });
-                        messages
+                        turns
                     },
                     tool_api_functions: Vec::new(),
                     provider_native_tools: Default::default(),

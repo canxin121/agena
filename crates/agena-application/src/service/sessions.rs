@@ -323,7 +323,7 @@ mod tests {
         (service, facade, workspace_id)
     }
 
-    /// One user content part. `submit_user_message` creates the D9 run marker.
+    /// One user content part. `submit_user_run` creates the D9 run marker.
     fn marker_part() -> NewPart {
         NewPart::pending("text", PartRole::User, json!({ "text": "hello" }))
     }
@@ -360,7 +360,7 @@ mod tests {
         // Two runs over the parent session → message_count 2, last message at
         // the second run's timestamp.
         facade
-            .submit_user_message(session.id, "application-test", vec![marker_part()], None)
+            .submit_user_run(session.id, "application-test", vec![marker_part()], None)
             .await
             .expect("first run");
         let first_run = facade
@@ -387,7 +387,7 @@ mod tests {
             .await
             .expect("complete first run");
         facade
-            .submit_user_message(session.id, "application-test", vec![marker_part()], None)
+            .submit_user_run(session.id, "application-test", vec![marker_part()], None)
             .await
             .expect("second run");
 

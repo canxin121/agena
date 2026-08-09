@@ -161,15 +161,13 @@ impl TranscriptFixture {
             segment_id: None,
             operation_id: None,
             created_at,
-            content: Some(
-                agena_api::part::PartDetailResource::Reasoning(
-                    agena_api::part::ReasoningPartResource {
-                        summary: reasoning.summary,
-                        raw_content: reasoning.raw_content,
-                        encrypted_content: reasoning.encrypted_content,
-                    },
-                ),
-            ),
+            content: Some(agena_api::part::PartDetailResource::Reasoning(
+                agena_api::part::ReasoningPartResource {
+                    summary: reasoning.summary,
+                    raw_content: reasoning.raw_content,
+                    encrypted_content: reasoning.encrypted_content,
+                },
+            )),
         }
     }
 }
@@ -180,18 +178,10 @@ const fn fixture_part_status(
 ) -> agena_api::part::PartExecutionStatusResource {
     match status {
         ExecutionStatus::Pending => agena_api::part::PartExecutionStatusResource::Pending,
-        ExecutionStatus::InProgress => {
-            agena_api::part::PartExecutionStatusResource::InProgress
-        }
-        ExecutionStatus::Completed => {
-            agena_api::part::PartExecutionStatusResource::Completed
-        }
-        ExecutionStatus::PolicyDenied => {
-            agena_api::part::PartExecutionStatusResource::PolicyDenied
-        }
-        ExecutionStatus::UserDeclined => {
-            agena_api::part::PartExecutionStatusResource::UserDeclined
-        }
+        ExecutionStatus::InProgress => agena_api::part::PartExecutionStatusResource::InProgress,
+        ExecutionStatus::Completed => agena_api::part::PartExecutionStatusResource::Completed,
+        ExecutionStatus::PolicyDenied => agena_api::part::PartExecutionStatusResource::PolicyDenied,
+        ExecutionStatus::UserDeclined => agena_api::part::PartExecutionStatusResource::UserDeclined,
         ExecutionStatus::CapabilityUnavailable => {
             agena_api::part::PartExecutionStatusResource::CapabilityUnavailable
         }
@@ -199,9 +189,7 @@ const fn fixture_part_status(
             agena_api::part::PartExecutionStatusResource::ToolUnavailable
         }
         ExecutionStatus::Failed => agena_api::part::PartExecutionStatusResource::Failed,
-        ExecutionStatus::Cancelled => {
-            agena_api::part::PartExecutionStatusResource::Cancelled
-        }
+        ExecutionStatus::Cancelled => agena_api::part::PartExecutionStatusResource::Cancelled,
     }
 }
 use crate::commands::{CommandId, CommandSpec};

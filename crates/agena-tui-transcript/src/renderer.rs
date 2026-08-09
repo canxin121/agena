@@ -277,10 +277,10 @@ pub fn render_entry_detailed(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{
-        I18n, Line, RunStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults,
-        TranscriptEntry, TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr,
-        activity_status_icon, bounded_title_summary, markdown_blocks, refresh_spinner_line,
-        render_entry_detailed, render_entry_export, render_markdown_block, render_tool_execution,
+        I18n, Line, RunStatus, TRANSCRIPT_EXPORT_WIDTH, TranscriptDetailDefaults, TranscriptEntry,
+        TranscriptNodeKey, TranscriptNodeKind, UnicodeWidthStr, activity_status_icon,
+        bounded_title_summary, markdown_blocks, refresh_spinner_line, render_entry_detailed,
+        render_entry_export, render_markdown_block, render_tool_execution,
         render_transcript_entries_export_markdown, should_suppress_markdown_block, spinner_frame,
         thinking_collapsed_summary, tool_execution_compact_summary, tool_invocation_label,
         transcript_spinner_placeholder,
@@ -1335,14 +1335,12 @@ mod tests {
                 text: "created an image".to_owned(),
                 ..Default::default()
             },
-            blocks: vec![
-                agena_api::part::OperationBlockResource::EmbeddedResource {
-                    uri: "pixel.png".to_owned(),
-                    mime: "image/png".to_owned(),
-                    text: None,
-                    base64: Some(png),
-                },
-            ],
+            blocks: vec![agena_api::part::OperationBlockResource::EmbeddedResource {
+                uri: "pixel.png".to_owned(),
+                mime: "image/png".to_owned(),
+                text: None,
+                base64: Some(png),
+            }],
             attachments: vec![attachment],
             ..Default::default()
         };
@@ -1546,9 +1544,7 @@ mod tests {
                 payload: agena_api::part::StructuredObjectResource {
                     fields: vec![agena_api::part::StructuredFieldResource {
                         name: "matches".to_owned(),
-                        value: agena_api::part::StructuredValueResource::Integer {
-                            value: 36,
-                        },
+                        value: agena_api::part::StructuredValueResource::Integer { value: 36 },
                     }],
                 },
                 ..Default::default()

@@ -90,9 +90,7 @@ pub(crate) fn file_change_display_path(
     }
 }
 
-pub(crate) fn file_change_marker(
-    kind: agena_api::part::FileChangeKindResource,
-) -> &'static str {
+pub(crate) fn file_change_marker(kind: agena_api::part::FileChangeKindResource) -> &'static str {
     match kind {
         agena_api::part::FileChangeKindResource::Added => "A",
         agena_api::part::FileChangeKindResource::Updated => "M",
@@ -110,14 +108,12 @@ pub(crate) fn file_change_list_item_text(
         file_change_marker(change.kind),
         file_change_display_path(change),
         match change.kind {
-            agena_api::part::FileChangeKindResource::Added =>
-                ui_text::t(i18n, "file-change-added"),
+            agena_api::part::FileChangeKindResource::Added => ui_text::t(i18n, "file-change-added"),
             agena_api::part::FileChangeKindResource::Updated =>
                 ui_text::t(i18n, "file-change-updated"),
             agena_api::part::FileChangeKindResource::Deleted =>
                 ui_text::t(i18n, "file-change-deleted"),
-            agena_api::part::FileChangeKindResource::Moved =>
-                ui_text::t(i18n, "file-change-moved"),
+            agena_api::part::FileChangeKindResource::Moved => ui_text::t(i18n, "file-change-moved"),
         }
     )
 }

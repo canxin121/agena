@@ -16,7 +16,10 @@ use agena_provider::CompletionFinishReason;
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
 
-use super::{ContextGovernor, store::{ProcessorPartIdAllocator, StoreAdapter}};
+use super::{
+    ContextGovernor,
+    store::{ProcessorPartIdAllocator, StoreAdapter},
+};
 use agena_storage::store::Part;
 
 const REASONING_PLACEHOLDER: &str = "(no reasoning recorded)";
@@ -168,5 +171,4 @@ mod tests {
         assert!(pending.contains_key("id:call_shared"));
         assert!(!pending.contains_key("idx:0"));
     }
-
 }

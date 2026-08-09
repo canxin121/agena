@@ -4,16 +4,16 @@ use super::{
     operation_authorization, resolve_pending_tool, terminal_operation_title, text_result_blocks,
     update_resolved_tool_message,
 };
+use crate::session::Session;
 use crate::session::store::{
     part_state_from_execution_status, tool_call_from_operation, typed_content_to_value,
 };
-use agena_runtime_contracts::part_content::TypedContent;
-use crate::session::Session;
 use agena_domain::ToolOutput;
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, ModelFeedback,
     RecoveryDirective, RetryDirective, UserPresentation,
 };
+use agena_runtime_contracts::part_content::TypedContent;
 
 fn internal_tool_failure() -> Failure {
     Failure::new(

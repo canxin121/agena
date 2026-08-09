@@ -874,11 +874,7 @@ impl Session {
     /// projection. Cheap slice view — parts are already ordered, so the
     /// window is a contiguous suffix (13.4).
     pub fn active_window_parts(&self) -> &[Part] {
-        match self
-            .parts
-            .iter()
-            .rposition(is_compaction_marker)
-        {
+        match self.parts.iter().rposition(is_compaction_marker) {
             Some(index) => &self.parts[index + 1..],
             None => &self.parts[..],
         }
@@ -906,7 +902,9 @@ impl Session {
     /// Pending tool calls: `tool_call` parts still awaiting a result — not yet
     /// `completed`/`cancelled` and without a `tool_result` referencing them.
     pub fn pending_tool_calls(&self) -> impl Iterator<Item = &Part> {
-        self.parts.iter().filter(|part| self.pending_tool_call(part))
+        self.parts
+            .iter()
+            .filter(|part| self.pending_tool_call(part))
     }
 
     /// Pending interaction parts (`kind == "interaction"`, in-flight state).
@@ -959,7 +957,12 @@ impl Session {
     /// from part ids, so this is the highest part id in the projection plus
     /// one.
     pub fn next_call_id(&self) -> i64 {
-        self.parts.iter().map(|part| part.part_id).max().unwrap_or(0) + 1
+        self.parts
+            .iter()
+            .map(|part| part.part_id)
+            .max()
+            .unwrap_or(0)
+            + 1
     }
 
     pub fn approx_bytes(&self) -> usize {
@@ -1134,9 +1137,7 @@ fn text_from_part(part: &Part) -> Option<String> {
 /// Parse a `usage` object embedded in part content (run markers, assistant
 /// parts) into a provider `CompletionUsage`. Tolerant: any subset of fields
 /// parses (serde defaults fill the rest); empty objects are ignored.
-fn usage_from_part_content(
-    content: &serde_json::Value,
-) -> Option<agena_provider::CompletionUsage> {
+fn usage_from_part_content(content: &serde_json::Value) -> Option<agena_provider::CompletionUsage> {
     let usage = content.get("usage")?;
     let parsed: agena_provider::CompletionUsage = serde_json::from_value(usage.clone()).ok()?;
     (parsed.requests > 0 || parsed.own_total_tokens() > 0).then_some(parsed)
@@ -1208,11 +1209,41 @@ mod parts_projection_tests {
     #[test]
     fn run_marker_and_user_part_are_projections_over_kind_and_role() {
         let session = session_with(vec![
-            part(1, "run", PartRole::Runtime, PartState::Completed, json!({"run_kind": "user_send"})),
-            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
-            part(3, "run", PartRole::Assistant, PartState::InProgress, json!({"run_kind": "continue"})),
-            part(4, "text", PartRole::Assistant, PartState::Completed, json!({"text": "hi"})),
-            part(5, "text", PartRole::User, PartState::Completed, json!({"text": "more"})),
+            part(
+                1,
+                "run",
+                PartRole::Runtime,
+                PartState::Completed,
+                json!({"run_kind": "user_send"}),
+            ),
+            part(
+                2,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "hello"}),
+            ),
+            part(
+                3,
+                "run",
+                PartRole::Assistant,
+                PartState::InProgress,
+                json!({"run_kind": "continue"}),
+            ),
+            part(
+                4,
+                "text",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"text": "hi"}),
+            ),
+            part(
+                5,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "more"}),
+            ),
         ]);
 
         assert_eq!(session.last_run_marker().map(|p| p.part_id), Some(3));
@@ -1258,7 +1289,9 @@ mod parts_projection_tests {
         let pending: Vec<i64> = session.pending_tool_calls().map(|p| p.part_id).collect();
         assert_eq!(pending, vec![11]);
         assert_eq!(
-            session.tool_result_for(&session.parts()[0]).map(|p| p.part_id),
+            session
+                .tool_result_for(&session.parts()[0])
+                .map(|p| p.part_id),
             Some(13),
             "fs.read is paired with its tool_result"
         );
@@ -1325,7 +1358,9 @@ mod parts_projection_tests {
             _ => panic!("expected Tool op"),
         }
         match &ops[1] {
-            SessionPendingOperation::UserInput { pending } => assert_eq!(pending.request.part_id, 31),
+            SessionPendingOperation::UserInput { pending } => {
+                assert_eq!(pending.request.part_id, 31)
+            }
             _ => panic!("expected UserInput op"),
         }
         match &ops[2] {
@@ -1338,7 +1373,10 @@ mod parts_projection_tests {
 
         let tool_refs = session.pending_tools();
         assert_eq!(tool_refs.len(), 1);
-        assert_eq!(session.next_pending_tool().map(|t| t.part.part_id), Some(30));
+        assert_eq!(
+            session.next_pending_tool().map(|t| t.part.part_id),
+            Some(30)
+        );
         assert_eq!(
             session.pending_tool_by_part_id(30).map(|t| t.part.part_id),
             Some(30)
@@ -1380,8 +1418,20 @@ mod parts_projection_tests {
     #[test]
     fn part_refs_resolve_by_id_when_the_index_is_stale() {
         let mut session = session_with(vec![
-            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "a"})),
-            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "b"})),
+            part(
+                1,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "a"}),
+            ),
+            part(
+                2,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "b"}),
+            ),
         ]);
 
         let current = SessionPartRef::new(0, &session.parts()[0]);
@@ -1404,9 +1454,27 @@ mod parts_projection_tests {
     #[test]
     fn last_assistant_text_takes_the_newest_assistant_text_part() {
         let session = session_with(vec![
-            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
-            part(2, "think", PartRole::Assistant, PartState::Completed, json!({"text": "thinking"})),
-            part(3, "text", PartRole::Assistant, PartState::Completed, json!({"text": "hi there"})),
+            part(
+                1,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "hello"}),
+            ),
+            part(
+                2,
+                "think",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"text": "thinking"}),
+            ),
+            part(
+                3,
+                "text",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"text": "hi there"}),
+            ),
         ]);
         assert_eq!(session.last_assistant_text().as_deref(), Some("hi there"));
     }
@@ -1414,9 +1482,27 @@ mod parts_projection_tests {
     #[test]
     fn active_window_parts_without_compaction_returns_all_parts() {
         let session = session_with(vec![
-            part(1, "run", PartRole::Runtime, PartState::Completed, json!({"run_kind": "user_send"})),
-            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
-            part(3, "text", PartRole::Assistant, PartState::Completed, json!({"text": "hi"})),
+            part(
+                1,
+                "run",
+                PartRole::Runtime,
+                PartState::Completed,
+                json!({"run_kind": "user_send"}),
+            ),
+            part(
+                2,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "hello"}),
+            ),
+            part(
+                3,
+                "text",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"text": "hi"}),
+            ),
         ]);
 
         let window = session.active_window_parts();
@@ -1428,10 +1514,34 @@ mod parts_projection_tests {
     #[test]
     fn active_window_parts_with_one_compaction_returns_only_parts_after_it() {
         let session = session_with(vec![
-            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old 1"})),
-            part(2, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp"})),
-            part(3, "text", PartRole::User, PartState::Completed, json!({"text": "new 1"})),
-            part(4, "text", PartRole::Assistant, PartState::Completed, json!({"text": "new 2"})),
+            part(
+                1,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "old 1"}),
+            ),
+            part(
+                2,
+                "run",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"run_kind": "compaction", "summary": "cp"}),
+            ),
+            part(
+                3,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "new 1"}),
+            ),
+            part(
+                4,
+                "text",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"text": "new 2"}),
+            ),
         ]);
 
         let window = session.active_window_parts();
@@ -1443,11 +1553,41 @@ mod parts_projection_tests {
     #[test]
     fn active_window_parts_with_two_compactions_returns_parts_after_the_last() {
         let session = session_with(vec![
-            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old 1"})),
-            part(2, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp1"})),
-            part(3, "text", PartRole::User, PartState::Completed, json!({"text": "mid"})),
-            part(4, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp2"})),
-            part(5, "text", PartRole::User, PartState::Completed, json!({"text": "new"})),
+            part(
+                1,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "old 1"}),
+            ),
+            part(
+                2,
+                "run",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"run_kind": "compaction", "summary": "cp1"}),
+            ),
+            part(
+                3,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "mid"}),
+            ),
+            part(
+                4,
+                "run",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"run_kind": "compaction", "summary": "cp2"}),
+            ),
+            part(
+                5,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "new"}),
+            ),
         ]);
 
         let window = session.active_window_parts();
@@ -1458,8 +1598,20 @@ mod parts_projection_tests {
     #[test]
     fn active_window_parts_with_compaction_at_the_end_is_empty() {
         let session = session_with(vec![
-            part(1, "text", PartRole::User, PartState::Completed, json!({"text": "old"})),
-            part(2, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp"})),
+            part(
+                1,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "old"}),
+            ),
+            part(
+                2,
+                "run",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"run_kind": "compaction", "summary": "cp"}),
+            ),
         ]);
 
         assert!(session.active_window_parts().is_empty());
@@ -1470,10 +1622,34 @@ mod parts_projection_tests {
         // A background/steer run marker is NOT a compaction checkpoint; the
         // window must still span it.
         let session = session_with(vec![
-            part(1, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "background"})),
-            part(2, "text", PartRole::User, PartState::Completed, json!({"text": "hello"})),
-            part(3, "run", PartRole::Assistant, PartState::Completed, json!({"run_kind": "compaction", "summary": "cp"})),
-            part(4, "text", PartRole::User, PartState::Completed, json!({"text": "new"})),
+            part(
+                1,
+                "run",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"run_kind": "background"}),
+            ),
+            part(
+                2,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "hello"}),
+            ),
+            part(
+                3,
+                "run",
+                PartRole::Assistant,
+                PartState::Completed,
+                json!({"run_kind": "compaction", "summary": "cp"}),
+            ),
+            part(
+                4,
+                "text",
+                PartRole::User,
+                PartState::Completed,
+                json!({"text": "new"}),
+            ),
         ]);
 
         let window = session.active_window_parts();

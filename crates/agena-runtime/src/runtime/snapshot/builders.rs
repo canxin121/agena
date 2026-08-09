@@ -213,8 +213,8 @@ pub(super) fn build_tool_executor(
         );
     }
 
-    let scheduler = session_manager
-        .map(|session_manager| build_scheduler(session_manager, scheduler_database));
+    let scheduler =
+        session_manager.map(|session_manager| build_scheduler(session_manager, scheduler_database));
     let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         principal,

@@ -2,10 +2,9 @@
 
 use agena_api::{
     part::{
-        AttachmentPartResource, ErrorPartResource, HookPartResource,
-        PartDetailResource, ReasoningPartResource, RequestPartResource,
-        SkillReferencePartResource, TextPartResource, OperationPartResource,
-        PartExecutionStatusResource,
+        AttachmentPartResource, ErrorPartResource, HookPartResource, OperationPartResource,
+        PartDetailResource, PartExecutionStatusResource, ReasoningPartResource,
+        RequestPartResource, SkillReferencePartResource, TextPartResource,
     },
     resource::{RunResource, RunRole, RunStatus},
 };

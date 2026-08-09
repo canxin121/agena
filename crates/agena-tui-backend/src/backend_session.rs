@@ -786,6 +786,6 @@ use crate::{
     PermissionReply, PermissionReplyKind, PermissionScope, Query, QueryResult,
     ReplyPermissionParams, ReplyUserInputParams, RewindSessionParams, RunOptions,
     SessionExecutionResource, SessionPermissionStudioState, SessionRefresh, SessionResource,
-    SessionTimelineEntry, SubmitRunParams, UpdateSessionSelectionParams, UserInputReply,
-    api_error, build_file_index, direct_path_candidate, dispatch, file_search_score, mpsc,
+    SessionTimelineEntry, SubmitRunParams, UpdateSessionSelectionParams, UserInputReply, api_error,
+    build_file_index, direct_path_candidate, dispatch, file_search_score, mpsc,
 };

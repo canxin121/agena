@@ -7,9 +7,8 @@
 use std::ops::Range;
 
 pub use agena_api::part::{
-    FileChangeKindResource, HumanToolResultResource, RequestPartResource,
-    OperationBlockResource, OperationPartResource, PartExecutionStatusResource, TodoStatusResource,
-    ToolInvocationResource,
+    FileChangeKindResource, HumanToolResultResource, OperationBlockResource, OperationPartResource,
+    PartExecutionStatusResource, RequestPartResource, TodoStatusResource, ToolInvocationResource,
 };
 use ratatui::layout::Rect;
 
@@ -78,12 +77,10 @@ mod test_fixtures {
             TranscriptEntryPart {
                 id: TranscriptContentId::StoredPart(id),
                 status: fixture_part_status(status),
-                content: TranscriptPartContent::Text(
-                    agena_api::part::TextPartResource {
-                        text: text.into(),
-                        synthetic,
-                    },
-                ),
+                content: TranscriptPartContent::Text(agena_api::part::TextPartResource {
+                    text: text.into(),
+                    synthetic,
+                }),
             }
         }
 
@@ -147,15 +144,9 @@ mod test_fixtures {
         status: ExecutionStatus,
     ) -> agena_api::part::PartExecutionStatusResource {
         match status {
-            ExecutionStatus::Pending => {
-                agena_api::part::PartExecutionStatusResource::Pending
-            }
-            ExecutionStatus::InProgress => {
-                agena_api::part::PartExecutionStatusResource::InProgress
-            }
-            ExecutionStatus::Completed => {
-                agena_api::part::PartExecutionStatusResource::Completed
-            }
+            ExecutionStatus::Pending => agena_api::part::PartExecutionStatusResource::Pending,
+            ExecutionStatus::InProgress => agena_api::part::PartExecutionStatusResource::InProgress,
+            ExecutionStatus::Completed => agena_api::part::PartExecutionStatusResource::Completed,
             ExecutionStatus::PolicyDenied => {
                 agena_api::part::PartExecutionStatusResource::PolicyDenied
             }
@@ -169,9 +160,7 @@ mod test_fixtures {
                 agena_api::part::PartExecutionStatusResource::ToolUnavailable
             }
             ExecutionStatus::Failed => agena_api::part::PartExecutionStatusResource::Failed,
-            ExecutionStatus::Cancelled => {
-                agena_api::part::PartExecutionStatusResource::Cancelled
-            }
+            ExecutionStatus::Cancelled => agena_api::part::PartExecutionStatusResource::Cancelled,
         }
     }
 }

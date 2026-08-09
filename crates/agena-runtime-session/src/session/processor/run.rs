@@ -1,10 +1,9 @@
 use super::{
     AppError, Arc, BTreeMap, CompletionRequest, CompletionStreamEvent, ContextGovernor,
-    FinishReason, ModelRef, PathBuf, PendingProviderNativeToolCall,
-    PendingToolCall, ProviderRegistry, REASONING_PLACEHOLDER, SessionProcessor, SessionRunRequest,
-    SessionRunResult, SessionRunTermination, cancel_nonterminal_parts, complete_part_status,
-    fail_nonterminal_parts, map_finish_reason, message_provider_state_from_provider_metadata,
-    pending_tool_call_stream_key,
+    FinishReason, ModelRef, PathBuf, PendingProviderNativeToolCall, PendingToolCall,
+    ProviderRegistry, REASONING_PLACEHOLDER, SessionProcessor, SessionRunRequest, SessionRunResult,
+    SessionRunTermination, cancel_nonterminal_parts, complete_part_status, fail_nonterminal_parts,
+    map_finish_reason, message_provider_state_from_provider_metadata, pending_tool_call_stream_key,
 };
 use agena_provider::{ProviderNativeToolArtifact, ProviderNativeToolOutputBlock};
 use agena_storage::store::{Part, PartState, RunOutcome};
@@ -196,8 +195,7 @@ impl SessionProcessor {
                         // stops showing the spinner instead of waiting for the
                         // stream end.
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
                     let part_id = match active_text_part {
                         Some(part_id) => part_id,
@@ -223,13 +221,11 @@ impl SessionProcessor {
                     saw_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
                     let stream_key =
@@ -242,8 +238,13 @@ impl SessionProcessor {
                         pending.name = Some(name);
                     }
                     pending.arguments_json.push_str(arguments_delta.as_str());
-                    self.ensure_pending_tool_call_part(&mut run, assistant_message_id, &mut parts, pending)
-                        .await?;
+                    self.ensure_pending_tool_call_part(
+                        &mut run,
+                        assistant_message_id,
+                        &mut parts,
+                        pending,
+                    )
+                    .await?;
                 }
                 Ok(CompletionStreamEvent::ToolCallSnapshot {
                     stream_key,
@@ -255,13 +256,11 @@ impl SessionProcessor {
                     saw_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
                     let stream_key =
@@ -283,8 +282,13 @@ impl SessionProcessor {
                     if !snapshot_is_degenerate {
                         pending.arguments_json = arguments_json.clone();
                     }
-                    self.ensure_pending_tool_call_part(&mut run, assistant_message_id, &mut parts, pending)
-                        .await?;
+                    self.ensure_pending_tool_call_part(
+                        &mut run,
+                        assistant_message_id,
+                        &mut parts,
+                        pending,
+                    )
+                    .await?;
                 }
                 Ok(CompletionStreamEvent::ProviderNativeToolCallStarted {
                     stream_key,
@@ -297,13 +301,11 @@ impl SessionProcessor {
                     saw_provider_native_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
                     let pending = pending_provider_native_tool_calls
@@ -313,8 +315,13 @@ impl SessionProcessor {
                     pending.invocation = Some(invocation);
                     pending.title = title;
                     pending.raw = raw;
-                    self.ensure_provider_native_tool_call_part(&mut run, assistant_message_id, &mut parts, pending)
-                        .await?;
+                    self.ensure_provider_native_tool_call_part(
+                        &mut run,
+                        assistant_message_id,
+                        &mut parts,
+                        pending,
+                    )
+                    .await?;
                 }
                 Ok(CompletionStreamEvent::ProviderNativeToolCallCompleted {
                     stream_key,
@@ -331,13 +338,11 @@ impl SessionProcessor {
                     saw_provider_native_tool_call = true;
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
                     if let Some(part_id) = active_reasoning_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
 
                     let pending = pending_provider_native_tool_calls
@@ -377,8 +382,7 @@ impl SessionProcessor {
                     reasoning_text.push_str(delta.as_str());
                     if let Some(part_id) = active_text_part.take() {
                         complete_part_status(&mut parts, part_id)?;
-                        self.persist_part_state(&run, &mut parts, part_id)
-                            .await?;
+                        self.persist_part_state(&run, &mut parts, part_id).await?;
                     }
                     let part_id = match active_reasoning_part {
                         Some(part_id) => part_id,
@@ -423,13 +427,11 @@ impl SessionProcessor {
         } else {
             if let Some(part_id) = active_text_part.take() {
                 complete_part_status(&mut parts, part_id)?;
-                self.persist_part_state(&run, &mut parts, part_id)
-                    .await?;
+                self.persist_part_state(&run, &mut parts, part_id).await?;
             }
             if let Some(part_id) = active_reasoning_part.take() {
                 complete_part_status(&mut parts, part_id)?;
-                self.persist_part_state(&run, &mut parts, part_id)
-                    .await?;
+                self.persist_part_state(&run, &mut parts, part_id).await?;
             }
         }
 
@@ -446,8 +448,7 @@ impl SessionProcessor {
             self.append_text_delta(&run, &mut parts, part_id, reasoning_text.as_str())
                 .await?;
             complete_part_status(&mut parts, part_id)?;
-            self.persist_part_state(&run, &mut parts, part_id)
-                .await?;
+            self.persist_part_state(&run, &mut parts, part_id).await?;
         }
 
         // A successful stream that produced no visible text, no tool call,
@@ -470,7 +471,12 @@ impl SessionProcessor {
             // it into the terminal path below so the already-persisted text
             // and think parts are terminalized alongside the marker.
             if let Err(err) = self
-                .finalize_pending_tool_calls(&mut run, assistant_message_id, &mut parts, pending_calls)
+                .finalize_pending_tool_calls(
+                    &mut run,
+                    assistant_message_id,
+                    &mut parts,
+                    pending_calls,
+                )
                 .await
             {
                 provider_err = Some(err);
@@ -496,8 +502,7 @@ impl SessionProcessor {
             // (text/think rows appended above), then terminalize the marker.
             let durable_part_ids: Vec<i64> = parts.iter().map(|part| part.part_id).collect();
             for part_id in durable_part_ids {
-                self.persist_part_state(&run, &mut parts, part_id)
-                    .await?;
+                self.persist_part_state(&run, &mut parts, part_id).await?;
             }
             let marker = if cancelled {
                 // `cancel_run` cancels the marker and its in-flight children.
@@ -601,11 +606,7 @@ impl SessionProcessor {
         })
     }
 
-    pub(crate) fn prompt_exceeds_budget(
-        &self,
-        parts: &[Part],
-        max_prompt_chars: usize,
-    ) -> bool {
+    pub(crate) fn prompt_exceeds_budget(&self, parts: &[Part], max_prompt_chars: usize) -> bool {
         self.context_governor.prompt_exceeds_budget(
             crate::session::prompt_window::approximate_prompt_payload_chars(parts),
             max_prompt_chars,

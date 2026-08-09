@@ -1,7 +1,7 @@
 use agena_domain::*;
 use agena_domain::{AssistantReasoningField, Role};
 use agena_provider::{
-    CompletionFinishReason, CompletionInputRun, CompletionInputPart, CompletionToolCall,
+    CompletionFinishReason, CompletionInputPart, CompletionInputRun, CompletionToolCall,
 };
 /// Shared wire types and message-conversion helpers for OpenAI-compatible
 /// Chat Completions API endpoints.
@@ -70,7 +70,7 @@ mod tests {
     };
     use agena_domain::ThinkingRequest;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     /// A minimal persisted assistant content part (R6-T5: projections consume
     /// storage `Part` slices, so fixtures are built as parts, not v1 messages).
@@ -728,10 +728,7 @@ pub fn backfill_assistant_reasoning_field_on_request(
     }
 }
 
-fn session_text_lossy(
-    run: &CompletionInputRun,
-    parts: &[wire_message::WirePart],
-) -> String {
+fn session_text_lossy(run: &CompletionInputRun, parts: &[wire_message::WirePart]) -> String {
     if parts.is_empty() {
         run.as_text_lossy()
     } else {
@@ -739,10 +736,7 @@ fn session_text_lossy(
     }
 }
 
-fn message_content_value(
-    run: &CompletionInputRun,
-    parts: &[wire_message::WirePart],
-) -> Value {
+fn message_content_value(run: &CompletionInputRun, parts: &[wire_message::WirePart]) -> Value {
     if parts.is_empty() {
         return Value::String(run.as_text_lossy());
     }
@@ -783,8 +777,7 @@ fn assistant_messages_from_parts(
                 ..
             } if !tool_call_id.trim().is_empty() => {
                 if !buffered.is_empty() {
-                    let (content, tool_calls) =
-                        assistant_content_and_tool_calls(run, &buffered);
+                    let (content, tool_calls) = assistant_content_and_tool_calls(run, &buffered);
                     let mut chat_message = ChatMessage::assistant(
                         content,
                         (!tool_calls.is_empty()).then_some(tool_calls),
@@ -850,8 +843,7 @@ fn tool_messages_from_parts(parts: &[wire_message::WirePart]) -> Vec<ChatMessage
 }
 
 fn assistant_reasoning_text(run: &CompletionInputRun) -> String {
-    run
-        .parts
+    run.parts
         .iter()
         .filter_map(|part| match part {
             CompletionInputPart::Reasoning { text } if !text.is_empty() => Some(text.as_str()),

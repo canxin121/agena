@@ -165,19 +165,15 @@ pub(super) fn default_model(providers: &dyn ProviderCatalog) -> Result<ModelRef,
 pub(super) fn last_assistant_text_from_projection(
     runs: Vec<agena_runtime::SessionProjectedRun>,
 ) -> Option<String> {
-    runs
-        .into_iter()
+    runs.into_iter()
         .rev()
         .find(|run| run.role == Role::Assistant)
         .map(|run| projected_run_visible_text(&run))
         .filter(|text| !text.trim().is_empty())
 }
 
-pub(super) fn projected_run_visible_text(
-    run: &agena_runtime::SessionProjectedRun,
-) -> String {
-    run
-        .parts
+pub(super) fn projected_run_visible_text(run: &agena_runtime::SessionProjectedRun) -> String {
+    run.parts
         .iter()
         .filter_map(|part| match part.detail.as_ref() {
             Some(agena_runtime::SessionProjectedPartDetail::Text { text, .. }) => {

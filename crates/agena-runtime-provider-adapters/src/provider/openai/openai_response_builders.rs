@@ -13,9 +13,7 @@ use super::{
     session_text_lossy, utils, validate_responses_input, wire_message,
 };
 use agena_domain::Model;
-use agena_provider::{
-    CompletionInputRun, ProviderCompactionContext, ResponsesApiRequestMetadata,
-};
+use agena_provider::{CompletionInputRun, ProviderCompactionContext, ResponsesApiRequestMetadata};
 
 impl OpenAiTransport {
     pub(super) fn is_vision_request(request: &CompletionRequest) -> bool {
@@ -428,8 +426,7 @@ impl OpenAiTransport {
                     let replay_content_reasoning = run.provider_state.assistant_reasoning_field
                         == Some(agena_domain::AssistantReasoningField::ReasoningContent);
                     input.extend(
-                        run
-                            .provider_state
+                        run.provider_state
                             .openai_reasoning_items
                             .iter()
                             .filter(|item| {
@@ -1097,14 +1094,7 @@ mod tool_api_history_tests {
             StructuredObject::try_from(serde_json::json!({ "path": "a.txt" }))
                 .expect("structured input"),
         );
-        let operation = completed_operation(
-            0,
-            invocation,
-            "Read",
-            "Read file",
-            "contents",
-            None,
-        );
+        let operation = completed_operation(0, invocation, "Read", "Read file", "contents", None);
         let provider_state = serde_json::to_value(PartProviderState {
             openai_reasoning_items: vec![serde_json::json!({
                 "type": "reasoning",

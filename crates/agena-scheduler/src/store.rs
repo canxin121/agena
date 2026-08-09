@@ -165,8 +165,7 @@ impl JobStore for InMemoryJobStore {
         self.inner.read().get(&id).cloned()
     }
     async fn list_due(&self, now_ms: i64) -> Vec<ScheduledJob> {
-        let now =
-            chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
+        let now = chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now);
         self.inner
             .read()
             .values()
@@ -762,9 +761,11 @@ mod tests {
         let due = ScheduledJob::new_once(now - Duration::seconds(1), "due");
         let due_token = due.next_fire_at.map(|value| value.timestamp_millis());
         store.put(due.clone()).await;
-        assert!(store
-            .claim(due.id, due_token, due.clone(), "claimed".to_owned(), now_ms)
-            .await);
+        assert!(
+            store
+                .claim(due.id, due_token, due.clone(), "claimed".to_owned(), now_ms)
+                .await
+        );
         let due2 = ScheduledJob::new_once(now - Duration::seconds(1), "due2");
         store.put(due2.clone()).await;
 

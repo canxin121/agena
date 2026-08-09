@@ -15,15 +15,14 @@
 
 use agena_api::{
     part::{
-        AttachmentPartResource, ErrorPartResource, HookPartResource,
-        ReasoningPartResource, RequestPartResource,
-        SkillReferencePartResource, TextPartResource, OperationPartResource,
-        PartExecutionStatusResource, StructuredFieldResource, StructuredObjectResource,
-        StructuredValueResource, ToolInvocationResource,
+        AttachmentPartResource, ErrorPartResource, HookPartResource, OperationPartResource,
+        PartExecutionStatusResource, ReasoningPartResource, RequestPartResource,
+        SkillReferencePartResource, StructuredFieldResource, StructuredObjectResource,
+        StructuredValueResource, TextPartResource, ToolInvocationResource,
     },
     resource::{
-        PartAttachment, PartAttachmentKind, PartAttachmentSource, RunRole,
-        PartSkillReference, RunStatus, SessionTranscriptPart,
+        PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
+        RunStatus, SessionTranscriptPart,
     },
 };
 use serde_json::Value;
@@ -492,9 +491,7 @@ fn assistant_reply_lifecycle(
         | RunStatus::ToolUnavailable => TranscriptAssistantReplyLifecycle::Failed { problem },
         RunStatus::Cancelled => TranscriptAssistantReplyLifecycle::Cancelled,
         RunStatus::Completed => TranscriptAssistantReplyLifecycle::Completed,
-        RunStatus::Pending | RunStatus::InProgress => {
-            TranscriptAssistantReplyLifecycle::Running
-        }
+        RunStatus::Pending | RunStatus::InProgress => TranscriptAssistantReplyLifecycle::Running,
     }
 }
 

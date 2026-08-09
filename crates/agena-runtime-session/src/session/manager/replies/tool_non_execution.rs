@@ -1,17 +1,18 @@
 use super::{
     AppError, Arc, ExecutionStatus, OperationPart, PersistedPermissionRule, SessionManager,
     SessionManagerState, SessionPendingTool, completed_lifecycle, operation_authorization,
-    resolve_pending_tool, terminal_operation_title, text_result_blocks, update_resolved_tool_message,
+    resolve_pending_tool, terminal_operation_title, text_result_blocks,
+    update_resolved_tool_message,
 };
+use crate::session::Session;
 use crate::session::store::{
     part_state_from_execution_status, tool_call_from_operation, typed_content_to_value,
 };
-use agena_runtime_contracts::part_content::TypedContent;
-use crate::session::Session;
 use agena_domain::{
     CapabilityUnavailableResult, PolicyDeniedResult, ToolOutput, ToolUnavailableResult,
     UserDeclinedResult,
 };
+use agena_runtime_contracts::part_content::TypedContent;
 
 impl SessionManager {
     pub(in crate::session::manager) async fn apply_tool_capability_unavailable(
@@ -53,7 +54,8 @@ impl SessionManager {
                     tool_call_from_operation(&operation),
                 ))
                 .expect("tool content is always JSON serializable");
-                tool_part.state = part_state_from_execution_status(ExecutionStatus::CapabilityUnavailable);
+                tool_part.state =
+                    part_state_from_execution_status(ExecutionStatus::CapabilityUnavailable);
             })?;
         self.persist_tool_completion(session, &resolved, Vec::new(), state)
             .await
@@ -98,7 +100,8 @@ impl SessionManager {
                     tool_call_from_operation(&operation),
                 ))
                 .expect("tool content is always JSON serializable");
-                tool_part.state = part_state_from_execution_status(ExecutionStatus::ToolUnavailable);
+                tool_part.state =
+                    part_state_from_execution_status(ExecutionStatus::ToolUnavailable);
             })?;
         self.persist_tool_completion(session, &resolved, Vec::new(), state)
             .await

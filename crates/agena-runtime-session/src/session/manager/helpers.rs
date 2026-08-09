@@ -1,10 +1,10 @@
+use super::replies::{operation_from_part, operation_id_from_part};
 use super::{
     AppError, AttachmentItem, ExecutionControlError, HashSet, PermissionAction, PermissionMode,
     PermissionReplyKind, PermissionScope, PersistedPermissionRule, ResolvedPendingTool,
     RunAbortReason, SessionManager, SessionPendingTool, TimeRange, ToolError, ToolInvocation,
     ToolInvocationExecution, ToolOutput, UserInputReplyKind, Utc,
 };
-use super::replies::{operation_from_part, operation_id_from_part};
 use crate::session::Session;
 use agena_domain::{PermissionReply, UserInputReply, UserInputRequest};
 use agena_tool::ToolHumanRenderer;
@@ -101,14 +101,12 @@ pub(super) fn resolve_pending_tool(
     let normalized_pending = SessionPendingTool {
         part: normalized_part,
     };
-    let part = session
-        .part(&normalized_pending.part)
-        .ok_or_else(|| {
-            AppError::Internal(format!(
-                "pending tool part not found: part={}",
-                normalized_pending.part.part_id
-            ))
-        })?;
+    let part = session.part(&normalized_pending.part).ok_or_else(|| {
+        AppError::Internal(format!(
+            "pending tool part not found: part={}",
+            normalized_pending.part.part_id
+        ))
+    })?;
     let operation = operation_from_part(part).ok_or_else(|| {
         AppError::Internal(format!(
             "pending tool payload missing: part={}",

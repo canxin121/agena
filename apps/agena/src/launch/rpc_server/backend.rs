@@ -6,8 +6,8 @@ use agena_api_server::jsonrpc::protocol::{
     CancelRunParams, CancelRunResult, CreateSessionParams, CreateSessionResult,
     ListSessionsParams as AppListSessionsParams, ListSessionsResult as AppListSessionsResult,
     PermissionDecision as AppPermissionDecision, PermissionRememberScope, PermissionReplyParams,
-    PermissionReplyResult, ReadPartsParams, ReadPartsResult, SessionListItem,
-    SubmitRunParams, SubmitRunResult,
+    PermissionReplyResult, ReadPartsParams, ReadPartsResult, SessionListItem, SubmitRunParams,
+    SubmitRunResult,
 };
 use agena_api_server::jsonrpc::{self, AppServerError};
 use agena_cli::{AgenaCli, RpcServerRequest, RpcServerTransport};
@@ -158,11 +158,9 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
         // run marker part id).
         let run_id = messages.last().map(|message| message.id);
         let parts = match messages.last() {
-            Some(message) => {
-                agena_application::session::project_session_transcript(std::slice::from_ref(
-                    message,
-                ))
-            }
+            Some(message) => agena_application::session::project_session_transcript(
+                std::slice::from_ref(message),
+            ),
             None => Vec::new(),
         };
         Ok(SubmitRunResult {

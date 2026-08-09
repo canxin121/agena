@@ -18,8 +18,8 @@
 
 pub mod error;
 pub mod job;
-pub mod schema;
 pub mod scheduler;
+pub mod schema;
 pub mod store;
 
 pub use error::{SchedulerError, SchedulerResult};

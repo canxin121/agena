@@ -190,9 +190,9 @@ impl TranscriptState {
                 current_run = Some(part.part_id);
             } else if part.kind == "error"
                 && let Some(run_id) = current_run
-                && let Ok(error) = serde_json::from_value::<
-                    agena_api::part::ErrorPartResource,
-                >(part.content.clone())
+                && let Ok(error) = serde_json::from_value::<agena_api::part::ErrorPartResource>(
+                    part.content.clone(),
+                )
             {
                 failures.insert(run_id, error.problem);
             }
@@ -3016,10 +3016,10 @@ fn empty_active_run_ids(parts: &[agena_api::resource::SessionTranscriptPart]) ->
     let mut run_has_text = false;
     for part in parts {
         if part.kind == "run" {
-            if let Some(marker) = current_run.take() {
-                if is_empty_active_run(&marker, run_has_text) {
-                    active.insert(marker.part_id);
-                }
+            if let Some(marker) = current_run.take()
+                && is_empty_active_run(&marker, run_has_text)
+            {
+                active.insert(marker.part_id);
             }
             current_run = Some(part.clone());
             run_has_text = false;

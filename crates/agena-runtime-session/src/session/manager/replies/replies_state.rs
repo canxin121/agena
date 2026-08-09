@@ -1,11 +1,11 @@
 use super::{
-    AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, ResolvedPendingTool,
-    SessionManager, SessionManagerState, SessionRunOptions, ToolError, ToolInvocationExecution,
+    AppError, Arc, ModelRef, PathBuf, PersistedPermissionRule, ResolvedPendingTool, SessionManager,
+    SessionManagerState, SessionRunOptions, ToolError, ToolInvocationExecution,
     custom_payload_value, managed_project_state_permission, mode_request_override_for_adapter,
     mpsc, payload_tool_name_for_invocation,
 };
-use crate::session::store::new_part_from_content;
 use crate::session::Session;
+use crate::session::store::new_part_from_content;
 use agena_domain::ToolInvocation;
 use agena_runtime_contracts::part_content::TypedContent;
 use agena_storage::store::{PartDelta, PartRole, PartState};
@@ -85,7 +85,10 @@ impl SessionManager {
         }
         let mut parts = session.parts().to_vec();
         for updated in updated_parts {
-            if let Some(existing) = parts.iter_mut().find(|part| part.part_id == updated.part_id) {
+            if let Some(existing) = parts
+                .iter_mut()
+                .find(|part| part.part_id == updated.part_id)
+            {
                 *existing = updated;
             } else {
                 parts.push(updated);

@@ -249,7 +249,9 @@ impl SessionProcessor {
         // preserving the accumulator's creation order.
         let mut created_iter = created.into_iter();
         for part in parts.iter_mut() {
-            if part.part_id < 0 && let Some(durable) = created_iter.next() {
+            if part.part_id < 0
+                && let Some(durable) = created_iter.next()
+            {
                 *part = durable;
             }
         }
@@ -284,7 +286,10 @@ impl SessionProcessor {
 /// Replace (or append) a durable part row in the turn's part accumulator,
 /// preserving creation order.
 fn upsert_part(parts: &mut Vec<Part>, updated: Part) {
-    if let Some(existing) = parts.iter_mut().find(|part| part.part_id == updated.part_id) {
+    if let Some(existing) = parts
+        .iter_mut()
+        .find(|part| part.part_id == updated.part_id)
+    {
         *existing = updated;
     } else {
         parts.push(updated);

@@ -12,8 +12,8 @@ use tokio::sync::{Mutex, Semaphore, mpsc, oneshot};
 
 use crate::AppError;
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource, OperationPart};
-use agena_runtime_contracts::part_content::{TypedContent, TextContent};
 use crate::tool::{StreamingToolExecution, ToolError, ToolExecutor, ToolInvocationExecution};
+use agena_domain::ExecutionStatus;
 use agena_domain::ToolInvocation;
 use agena_domain::ToolOutput;
 use agena_domain::UserInputReply;
@@ -21,21 +21,19 @@ use agena_domain::{
     DecisionTraceStep, ExecutionOutcome, ExecutionSource, PermissionAction, PermissionMode,
     PermissionReplyKind, PermissionScope, RunAbortReason, TimeRange, UserInputReplyKind,
 };
-use agena_domain::ExecutionStatus;
 pub(crate) use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
+use agena_runtime_contracts::part_content::{TextContent, TypedContent};
 use agena_storage::PersistedPermissionRule;
 use agena_tool::PreparedShellCommand;
 
 use super::model::{PromptCompactionRuntime, ProviderPromptAnchor, SessionPendingTool};
-use super::processor::{
-    SessionRunRequest, SessionRunTermination,
-};
+use super::processor::{SessionRunRequest, SessionRunTermination};
 use super::prompt_window::PromptRequestOptions;
 use super::store::StoreAdapter;
-use agena_storage::store::PartRole;
 use super::{ExecutionControl, ExecutionControlError, ExecutionRegistry};
 use crate::session::{Session, SessionProcessor};
 use agena_domain::{SessionListRequest, SessionSummary, UsageStats, UsageStatsQuery};
+use agena_storage::store::PartRole;
 
 use agena_runtime::RuntimeSessionManagerConfig;
 
@@ -892,8 +890,14 @@ impl SessionManager {
                     return None;
                 }
                 match (
-                    marker.content.get("turn_id").and_then(serde_json::Value::as_str),
-                    marker.content.get("reply_id").and_then(serde_json::Value::as_str),
+                    marker
+                        .content
+                        .get("turn_id")
+                        .and_then(serde_json::Value::as_str),
+                    marker
+                        .content
+                        .get("reply_id")
+                        .and_then(serde_json::Value::as_str),
                 ) {
                     (Some(turn_id), Some(reply_id)) => {
                         let turn_id = uuid::Uuid::parse_str(turn_id).ok()?;

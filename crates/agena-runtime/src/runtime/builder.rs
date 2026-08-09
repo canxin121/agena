@@ -106,12 +106,10 @@ impl AgenaRuntime {
                 || scheduler_database_path.is_some()
                 || std::env::var("AGENA_SCHEDULER_DATABASE_URL").is_ok()
                 || std::env::var("AGENA_SCHEDULER_DATABASE_PATH").is_ok();
-            let chat_url = agena_runtime::resolve_runtime_database_url(
-                chat_database_url,
-                chat_database_path,
-            )
-            .map_err(agena_runtime::RuntimeDatabaseCompositionError::from)
-            .map_err(runtime_database_error)?;
+            let chat_url =
+                agena_runtime::resolve_runtime_database_url(chat_database_url, chat_database_path)
+                    .map_err(agena_runtime::RuntimeDatabaseCompositionError::from)
+                    .map_err(runtime_database_error)?;
             if !explicitly_configured && agena_runtime::is_in_memory_database(&chat_url) {
                 None
             } else {

@@ -353,9 +353,7 @@ pub fn build_persistent(
     tick: Duration,
 ) -> Arc<Scheduler> {
     let store: Arc<dyn JobStore> = match database {
-        Some(database) => Arc::new(crate::store::SqliteJobStore::new(
-            database.as_ref().clone(),
-        )),
+        Some(database) => Arc::new(crate::store::SqliteJobStore::new(database.as_ref().clone())),
         None => Arc::new(crate::store::InMemoryJobStore::new()),
     };
     Scheduler::new(store, sink, tick)

@@ -2,8 +2,7 @@ use agena_application::{
     dto::SessionPermissionUpdateRequest,
     session::{
         session_execution_request, session_execution_resource, session_permission_reply_request,
-        session_resource_from_summary, session_user_input_reply_request,
-        session_user_run_request,
+        session_resource_from_summary, session_user_input_reply_request, session_user_run_request,
     },
 };
 
@@ -240,8 +239,7 @@ pub async fn submit_message(
     assert_if_match_session_version(&state, session_id, &headers).await?;
 
     let request =
-        session_user_run_request(&state, session_id, request.run.options, request.document)
-            .await?;
+        session_user_run_request(&state, session_id, request.run.options, request.document).await?;
     let session_services = state.application().session_execution_services()?;
     let outcome = session_services
         .commands
@@ -470,8 +468,8 @@ pub async fn import_session(
 use super::{
     AppState, AxumQuery, Deserialize, Event, HeaderMap, Infallible, IntoResponse, Json, Path,
     PermissionReply, ServerError, SessionChangeStreamQuery, SessionCreateRequest,
-    SessionForkRequestBody, SessionListQuery, SessionRunRequest, SessionPartListQuery,
-    SessionReplyRequestBody, SessionRewindRequestBody, SessionRunRequestBody, SessionUpdateRequest,
-    Sse, State, UserInputReply, dispatch, if_match_version, json_http, json_http_found,
+    SessionForkRequestBody, SessionListQuery, SessionPartListQuery, SessionReplyRequestBody,
+    SessionRewindRequestBody, SessionRunRequest, SessionRunRequestBody, SessionUpdateRequest, Sse,
+    State, UserInputReply, dispatch, if_match_version, json_http, json_http_found,
     server_error_from_application, sse_error_event, stream,
 };

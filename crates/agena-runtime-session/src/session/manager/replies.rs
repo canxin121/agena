@@ -6,11 +6,10 @@ use crate::session::model::{
     SessionPartRef, SessionPendingInteractiveRequest, SessionPendingPermissionRequest,
     SessionPendingTool,
 };
-use crate::session::store::{
-    OPERATION_ID_METADATA_KEY, operation_from_tool_call, typed_content_from_value,
-};
+use crate::session::store::{OPERATION_ID_METADATA_KEY, typed_content_from_value};
 use agena_domain::UserInputReply;
 use agena_provider::ResponsesApiRequestMetadata;
+use agena_runtime_contracts::part_content::operation_from_tool_call;
 use agena_storage::store::{Part, PartRole, PartState};
 use agena_tool::ToolPermissionCheck;
 
@@ -223,17 +222,14 @@ pub(super) fn operation_id_from_part(part: &Part) -> Option<String> {
 
 /// Re-encode a mutated v1 [`OperationPart`] back onto the tool part's content
 /// and return the part's changed state.
-pub(super) fn apply_operation_mutation(
-    part: &mut Part,
-    mutation: impl FnOnce(&mut OperationPart),
-) {
+pub(super) fn apply_operation_mutation(part: &mut Part, mutation: impl FnOnce(&mut OperationPart)) {
     let Some(mut operation) = operation_from_part(part) else {
         return;
     };
     mutation(&mut operation);
     let mut content = part.content.clone();
-    content["extra"]["operation"] = serde_json::to_value(&operation)
-        .expect("operation payload is always JSON serializable");
+    content["extra"]["operation"] =
+        serde_json::to_value(&operation).expect("operation payload is always JSON serializable");
     part.content = content;
 }
 
@@ -266,13 +262,19 @@ pub(super) fn interaction_content(
     request: &serde_json::Value,
 ) -> serde_json::Value {
     let mut content = serde_json::Map::new();
-    content.insert("kind".to_owned(), serde_json::Value::String(kind.to_owned()));
+    content.insert(
+        "kind".to_owned(),
+        serde_json::Value::String(kind.to_owned()),
+    );
     content.insert(
         "request_id".to_owned(),
         serde_json::Value::String(request_id.to_owned()),
     );
     if let Some(prompt) = prompt {
-        content.insert("prompt".to_owned(), serde_json::Value::String(prompt.to_owned()));
+        content.insert(
+            "prompt".to_owned(),
+            serde_json::Value::String(prompt.to_owned()),
+        );
     }
     content.insert(
         "tool_part_id".to_owned(),
@@ -336,9 +338,11 @@ fn matching_request_part_refs(
             if !kind_matches {
                 return None;
             }
-            let matches_request =
-                part.content.get("request_id").and_then(serde_json::Value::as_str)
-                    == Some(request_id);
+            let matches_request = part
+                .content
+                .get("request_id")
+                .and_then(serde_json::Value::as_str)
+                == Some(request_id);
             matches_request.then_some(SessionPartRef {
                 part_index,
                 part_id: part.part_id,
@@ -426,14 +430,18 @@ pub(super) fn matching_model_turn_id(
         .iter()
         .rev()
         .find(|part| {
-            part.kind == "run"
-                && part.role == PartRole::Assistant
-                && part.part_id == model_turn_id
+            part.kind == "run" && part.role == PartRole::Assistant && part.part_id == model_turn_id
         })
         .filter(|marker| {
-            marker.content.get("provider_id").and_then(serde_json::Value::as_str)
+            marker
+                .content
+                .get("provider_id")
+                .and_then(serde_json::Value::as_str)
                 == Some(options.model.provider_id.as_ref())
-                && marker.content.get("model_id").and_then(serde_json::Value::as_str)
+                && marker
+                    .content
+                    .get("model_id")
+                    .and_then(serde_json::Value::as_str)
                     == Some(options.model.model_id.as_ref())
         })
         .map(|_| model_turn_id)
@@ -528,7 +536,10 @@ pub(super) fn find_pending_user_input_by_request_id(
             if part.content.get("kind").and_then(serde_json::Value::as_str) == Some("permission") {
                 return None;
             }
-            if part.content.get("request_id").and_then(serde_json::Value::as_str)
+            if part
+                .content
+                .get("request_id")
+                .and_then(serde_json::Value::as_str)
                 != Some(request_id)
             {
                 return None;
@@ -537,8 +548,8 @@ pub(super) fn find_pending_user_input_by_request_id(
                 part_index,
                 part_id: part.part_id,
             };
-            let (tool_index, tool_part) =
-                interaction_tool_part_id(part).and_then(|part_id| find_tool_part_by_id(session, part_id))?;
+            let (tool_index, tool_part) = interaction_tool_part_id(part)
+                .and_then(|part_id| find_tool_part_by_id(session, part_id))?;
             Some(SessionPendingInteractiveRequest {
                 request,
                 tool: SessionPendingTool {
@@ -554,7 +565,10 @@ pub(super) fn find_pending_user_input_by_request_id(
 pub(super) fn has_replied_user_input_request(session: &Session, request_id: &str) -> bool {
     session.parts().iter().any(|part| {
         part.kind == "interaction"
-            && part.content.get("request_id").and_then(serde_json::Value::as_str)
+            && part
+                .content
+                .get("request_id")
+                .and_then(serde_json::Value::as_str)
                 == Some(request_id)
             && part.content.get("response").is_some()
     })
@@ -629,12 +643,18 @@ pub(super) fn user_input_request_for_operation(
     session: &Session,
     operation_id: &str,
     sequence_index: usize,
-) -> Option<crate::part::InteractiveRequestPart<agena_domain::UserInputRequest, agena_domain::UserInputReply>>
-{
+) -> Option<
+    crate::part::InteractiveRequestPart<
+        agena_domain::UserInputRequest,
+        agena_domain::UserInputReply,
+    >,
+> {
     session
         .parts()
         .iter()
-        .filter(|part| part.kind == "interaction" && interaction_operation_id(part) == Some(operation_id))
+        .filter(|part| {
+            part.kind == "interaction" && interaction_operation_id(part) == Some(operation_id)
+        })
         .filter_map(|part| {
             let request: agena_domain::UserInputRequest =
                 serde_json::from_value(part.content.get("request")?.clone()).ok()?;
@@ -659,7 +679,9 @@ impl SessionManager {
     ) -> Result<PendingReplyLookup<P>, AppError> {
         match find_pending(session, request_id) {
             Some(pending) => Ok(PendingReplyLookup::Pending(pending)),
-            None if has_replied(session, request_id) || has_finished_operation(session, request_id) => {
+            None if has_replied(session, request_id)
+                || has_finished_operation(session, request_id) =>
+            {
                 tracing::debug!(
                     target: "agena::session::reply",
                     session_id,
@@ -1246,17 +1268,15 @@ impl SessionManager {
             let part = session.part_mut(request_part).ok_or_else(|| {
                 pending_reply_part_missing_error("user input", request_id.as_str())
             })?;
-            let Some(mut request) = part
-                .content
-                .get("request")
-                .and_then(|value| serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok())
-            else {
+            let Some(mut request) = part.content.get("request").and_then(|value| {
+                serde_json::from_value::<agena_domain::UserInputRequest>(value.clone()).ok()
+            }) else {
                 continue;
             };
             if part.state == PartState::Pending && request.presented_at.is_none() {
                 request.presented_at = Some(Utc::now());
-                part.content["request"] =
-                    serde_json::to_value(&request).expect("user input request is JSON serializable");
+                part.content["request"] = serde_json::to_value(&request)
+                    .expect("user input request is JSON serializable");
                 presented = true;
                 changed_part_ids.push(request_part.part_id);
             }
@@ -1335,8 +1355,7 @@ impl SessionManager {
         let mut replied_content = interaction_content(
             "ask_user",
             request_id.as_str(),
-            (!user_input_request.title.is_empty())
-                .then_some(user_input_request.title.as_str()),
+            (!user_input_request.title.is_empty()).then_some(user_input_request.title.as_str()),
             pending.tool.part.part_id,
             &serde_json::to_value(&user_input_request)
                 .expect("UserInputRequest is always JSON serializable"),
@@ -1543,8 +1562,8 @@ pub(super) fn managed_project_state_permission(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{matching_model_turn_id, should_execute_pending_tools_concurrently};
-    use crate::session::store::run_marker_content;
     use crate::session::Session;
+    use crate::session::store::run_marker_content;
     use agena_domain::{ModelRef, ModelSpeedModeRequestOverride};
     use agena_runtime::SessionRunOptions;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
@@ -1645,16 +1664,15 @@ mod tests {
     }
 }
 use super::{
-    AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ExecutionStatus,
-    ModelRef, ModelSpeedModeRequestOverride, OperationPart, PathBuf, PermissionAction,
-    PermissionMode, PermissionReplyKind, PermissionScope, PersistedPermissionRule,
-    PromptRequestOptions, PromptTurnBudget, ProviderPromptAnchor, ResolvedPendingTool,
-    SessionExecutionReplyRequest, SessionManager, SessionManagerState,
-    SessionPermissionReplyRequest, SessionRunOptions, SessionRunRequest, SessionRunTermination,
-    StreamingToolExecution, TimeRange, ToolError, ToolInvocation, ToolInvocationExecution,
-    UserInputReplyKind, Utc, ask_user_title, completed_lifecycle, custom_payload_value,
-    execution_control_to_app_error, host_user_input_response, mpsc,
-    operation_blocks_from_tool_output,
+    AppError, Arc, DecisionTraceStep, ExecutionControl, ExecutionSource, ExecutionStatus, ModelRef,
+    ModelSpeedModeRequestOverride, OperationPart, PathBuf, PermissionAction, PermissionMode,
+    PermissionReplyKind, PermissionScope, PersistedPermissionRule, PromptRequestOptions,
+    PromptTurnBudget, ProviderPromptAnchor, ResolvedPendingTool, SessionExecutionReplyRequest,
+    SessionManager, SessionManagerState, SessionPermissionReplyRequest, SessionRunOptions,
+    SessionRunRequest, SessionRunTermination, StreamingToolExecution, TimeRange, ToolError,
+    ToolInvocation, ToolInvocationExecution, UserInputReplyKind, Utc, ask_user_title,
+    completed_lifecycle, custom_payload_value, execution_control_to_app_error,
+    host_user_input_response, mpsc, operation_blocks_from_tool_output,
     payload_tool_name_for_invocation, permission_action_key, persisted_rules_for_reply,
     resolve_pending_tool, run_abort_reason, text_result_blocks, tool_name, user_input_execution,
 };

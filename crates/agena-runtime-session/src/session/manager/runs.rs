@@ -3,17 +3,19 @@ use super::{
     SessionExecutionRequest, SessionManager, SessionSubtaskRequest, SessionSubtaskResponse,
     SessionUserRunRequest, StableRunContext, UserInputPart, mpsc,
 };
-use crate::session::store::{
-    new_part_from_content, operation_from_tool_call, skill_ref_from_reference,
-    skill_reference_from_skill_ref, text_content, typed_content_from_value, typed_text,
-};
 use crate::session::Session;
+use crate::session::store::{
+    new_part_from_content, skill_ref_from_reference, text_content, typed_content_from_value,
+    typed_text,
+};
 use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
 use agena_runtime_contracts::part::{SkillReference, SkillReferencePart};
-use agena_runtime_contracts::part_content::TypedContent;
+use agena_runtime_contracts::part_content::{
+    TypedContent, operation_from_tool_call, skill_reference_from_skill_ref,
+};
 use agena_storage::store::{Part, PartRole, PartState};
 use std::path::Path;
 
@@ -25,8 +27,8 @@ use std::path::Path;
 pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
     run.iter()
         .skip(1)
-        .filter_map(|part| {
-            match typed_content_from_value(&part.kind, &part.content) {
+        .filter_map(
+            |part| match typed_content_from_value(&part.kind, &part.content) {
                 Ok(TypedContent::Text(text)) => Some(text.text.clone()),
                 Ok(TypedContent::SkillRef(skill)) => {
                     Some(skill_reference_from_skill_ref(&skill).summary())
@@ -36,8 +38,8 @@ pub(crate) fn run_visible_text_lossy(run: &[Part]) -> String {
                 }
                 Ok(TypedContent::Think(_)) => None,
                 _ => part.summary.clone(),
-            }
-        })
+            },
+        )
         .filter(|text| !text.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n")
@@ -157,11 +159,8 @@ impl SessionManager {
         let child = self
             .require_subtask_session(parent_session_id, task_id)
             .await?;
-        self.steer_input(
-            child.id,
-            vec![TypedContent::Text(text_content(message))],
-        )
-        .await?;
+        self.steer_input(child.id, vec![TypedContent::Text(text_content(message))])
+            .await?;
         Ok(child.id)
     }
 
@@ -297,21 +296,12 @@ impl SessionManager {
         let user_parts = input_parts
             .iter()
             .map(|part| {
-                new_part_from_content(
-                    "text",
-                    PartRole::User,
-                    &part.content,
-                    PartState::Completed,
-                )
+                new_part_from_content("text", PartRole::User, &part.content, PartState::Completed)
             })
             .collect::<Result<Vec<_>, _>>()?;
         let outcome = self
             .store
-            .submit_user_run(
-                session.id,
-                user_parts,
-                request.idempotency_key.clone(),
-            )
+            .submit_user_run(session.id, user_parts, request.idempotency_key.clone())
             .await?;
         let mut projected = session.parts().to_vec();
         projected.extend(outcome.parts);

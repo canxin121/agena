@@ -111,10 +111,7 @@ fn file_change_resource_style(kind: agena_api::part::FileChangeKindResource) -> 
     }
 }
 
-fn todo_status_resource_label(
-    i18n: &I18n,
-    status: agena_api::part::TodoStatusResource,
-) -> String {
+fn todo_status_resource_label(i18n: &I18n, status: agena_api::part::TodoStatusResource) -> String {
     let key = match status {
         agena_api::part::TodoStatusResource::Pending => "todo-pending",
         agena_api::part::TodoStatusResource::InProgress => "todo-in-progress",

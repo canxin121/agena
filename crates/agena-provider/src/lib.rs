@@ -361,7 +361,7 @@ mod tests {
 
     use super::{
         CompletionFinishReason, CompletionInputAttachment, CompletionInputAttachmentKind,
-        CompletionInputAttachmentSource, CompletionInputRun, CompletionInputPart,
+        CompletionInputAttachmentSource, CompletionInputPart, CompletionInputRun,
         CompletionResponse, CompletionStreamEvent, ProviderHostedCodeExecutionConfig,
         ProviderHostedFileSearchConfig, ProviderHostedImageGenerationConfig,
         ProviderHostedToolConfigs, ProviderHostedUrlContextConfig, ProviderHostedWebSearchConfig,

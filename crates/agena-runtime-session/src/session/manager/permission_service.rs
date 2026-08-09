@@ -10,9 +10,7 @@ use std::sync::Arc;
 use agena_domain::ApprovalModelSelection;
 use agena_permission::DenialBudget;
 
-use super::{
-    AppError, ModelRef, Session, SessionManager, SessionManagerState, SessionRunOptions,
-};
+use super::{AppError, ModelRef, Session, SessionManager, SessionManagerState, SessionRunOptions};
 use crate::session::prompt_window;
 use agena_domain::Role;
 
@@ -284,8 +282,7 @@ impl SessionManager {
             match cached {
                 Some((len, text)) if len == part_count => text,
                 _ => {
-                    let text =
-                        prompt_window::project_transcript(parts, transcript_budget_chars);
+                    let text = prompt_window::project_transcript(parts, transcript_budget_chars);
                     if let Ok(mut cache) = state.auto_projection.lock() {
                         cache.insert(session_id, (part_count, text.clone()));
                     }

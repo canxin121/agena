@@ -715,9 +715,7 @@ impl ProviderRegistry {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
-        crate::provider::wire_message::validate_provider_native_tool_input_history(
-            &request.turns,
-        )?;
+        crate::provider::wire_message::validate_provider_native_tool_input_history(&request.turns)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -802,9 +800,7 @@ impl ProviderRegistry {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
-        crate::provider::wire_message::validate_provider_native_tool_input_history(
-            &request.turns,
-        )?;
+        crate::provider::wire_message::validate_provider_native_tool_input_history(&request.turns)?;
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
         self.call_with_retry(model.provider_id.as_ref(), "compact_conversation", {
@@ -836,9 +832,7 @@ impl ProviderRegistry {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
         validate_provider_native_tool_definition_boundary(&request)?;
-        crate::provider::wire_message::validate_provider_native_tool_input_history(
-            &request.turns,
-        )?;
+        crate::provider::wire_message::validate_provider_native_tool_input_history(&request.turns)?;
         let declared_tool_api_functions = declared_tool_api_functions(&request);
         validate_request_capabilities(model, provider.as_ref(), &request)?;
         request.model = model.model_id.clone();
@@ -1796,7 +1790,11 @@ mod tool_api_function_validation_tests {
         content.insert(
             "tool_api_call".to_owned(),
             serde_json::to_value(
-                operation.invocation.tool_api_call.as_ref().expect("tool api call"),
+                operation
+                    .invocation
+                    .tool_api_call
+                    .as_ref()
+                    .expect("tool api call"),
             )
             .expect("tool api call is JSON serializable"),
         );

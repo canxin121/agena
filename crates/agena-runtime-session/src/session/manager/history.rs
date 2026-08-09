@@ -19,14 +19,21 @@ impl SessionManager {
                 current: source.version,
             });
         }
-        // A fork without an explicit cutoff forks to the end of the
-        // transcript (7.3: the cutoff is the last conversation message's run
-        // marker; a message id is a part id, design 4.1).
+        // The public request names a message (its run-marker part id), while
+        // storage forks at an inclusive part boundary. Resolve a marker to the
+        // message's final member part so the fork includes the entire message,
+        // not only its marker. A literal part id that is not a message marker
+        // remains a valid precise cutoff for internal callers.
         let at_part_id = match request.at_message_id {
-            Some(part_id) => part_id,
+            Some(part_id) => source
+                .messages
+                .iter()
+                .find(|message| message.id == part_id)
+                .map(message_inclusive_cutoff)
+                .unwrap_or(part_id),
             None => source
                 .last_conversation_message()
-                .map(|message| message.id)
+                .map(message_inclusive_cutoff)
                 .ok_or_else(|| {
                     AppError::Internal(format!(
                         "cannot fork session {}: it has no message to use as the cutoff",
@@ -203,6 +210,17 @@ impl SessionManager {
         let session = self.store.load_session(session_id).await?;
         transcript_snapshot_from_session(&session)
     }
+}
+
+/// Inclusive storage cutoff for a projected message. The marker is the
+/// message id; content parts follow it in canonical `(created_at_ms, part_id)`
+/// order, so the final member is the end of the message's shared prefix.
+fn message_inclusive_cutoff(message: &Message) -> i64 {
+    message
+        .parts
+        .last()
+        .map(|part| part.id)
+        .unwrap_or(message.id)
 }
 
 /// Resolve the canonical user message that owns `turn_id`.

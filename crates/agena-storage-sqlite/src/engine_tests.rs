@@ -15,6 +15,7 @@ use agena_storage::{
         RunOutcome, SessionFacade, SessionStore, SessionView,
     },
 };
+use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use serde_json::json;
 
 use crate::{SeaWorkspaceRepository, SqliteEngine, initialize_schema};
@@ -229,6 +230,116 @@ async fn fork_copies_edges_up_to_cutoff_and_child_reads_shared_prefix() {
 }
 
 #[tokio::test]
+async fn fork_during_streaming_shares_parent_updates_and_child_diverges_by_append() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let outcome = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart {
+                kind: "text".to_owned(),
+                role: PartRole::Assistant,
+                content: json!({"text": "partial"}),
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                state: PartState::InProgress,
+            }],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("start streaming part");
+    let run_id = outcome.run_id;
+    let streamed_id = outcome.parts[1].part_id;
+
+    let child = engine
+        .fork_session(
+            session_id,
+            streamed_id,
+            "streaming fork".to_owned(),
+            false,
+            1_000_000,
+        )
+        .await
+        .expect("fork while parent part is in progress");
+    engine
+        .try_acquire_lease(child.id, "owner-child", 1_000_000)
+        .await
+        .expect("child acquires independent lease");
+
+    engine
+        .update_part(
+            session_id,
+            "owner-a",
+            streamed_id,
+            agena_storage::store::PartDelta {
+                state: Some(PartState::Completed),
+                content_text_delta: Some(" complete".to_owned()),
+                ..Default::default()
+            },
+            1_000_001,
+        )
+        .await
+        .expect("parent completes its streamed row");
+    let child_after_parent_write = engine.load_session(child.id).await.expect("load child");
+    let shared = child_after_parent_write
+        .parts
+        .iter()
+        .find(|part| part.part_id == streamed_id)
+        .expect("shared streamed part");
+    assert_eq!(shared.state, PartState::Completed);
+    assert_eq!(shared.content["text"], "partial complete");
+
+    let mutation_error = engine
+        .update_part(
+            child.id,
+            "owner-child",
+            streamed_id,
+            agena_storage::store::PartDelta {
+                content: Some(json!({"text": "child overwrite"})),
+                ..Default::default()
+            },
+            1_000_002,
+        )
+        .await
+        .expect_err("child cannot mutate a parent-origin shared part");
+    assert!(matches!(
+        mutation_error,
+        agena_storage::store::StoreError::InvalidState(_)
+    ));
+
+    let divergence = engine
+        .append_parts(
+            child.id,
+            "owner-child",
+            run_id,
+            vec![NewPart::pending(
+                "text",
+                PartRole::Assistant,
+                json!({"text": "child continuation"}),
+            )],
+            1_000_003,
+        )
+        .await
+        .expect("child diverges by appending a child-origin part");
+    assert_eq!(divergence.len(), 1);
+    assert_eq!(divergence[0].origin_session_id, child.id);
+    let child_final = engine
+        .load_session(child.id)
+        .await
+        .expect("load child final");
+    assert!(
+        child_final
+            .parts
+            .iter()
+            .any(|part| part.content["text"] == "child continuation")
+    );
+}
+
+#[tokio::test]
 async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_runs() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
@@ -327,6 +438,162 @@ async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_
 }
 
 #[tokio::test]
+async fn retry_history_keeps_the_durable_error_beside_the_successful_result() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let outcome = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart {
+                kind: "tool_call".to_owned(),
+                role: PartRole::Assistant,
+                content: json!({"name": "fs.read", "input": {"path": "missing"}}),
+                summary: Some("read missing".to_owned()),
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                state: PartState::InProgress,
+            }],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("start tool operation");
+    let run_id = outcome.run_id;
+    let tool_id = outcome.parts[1].part_id;
+
+    engine
+        .update_part(
+            session_id,
+            "owner-a",
+            tool_id,
+            agena_storage::store::PartDelta {
+                state: Some(PartState::Failed),
+                ..Default::default()
+            },
+            1_000_001,
+        )
+        .await
+        .expect("first attempt fails");
+    engine
+        .append_parts(
+            session_id,
+            "owner-a",
+            run_id,
+            vec![NewPart {
+                kind: "error".to_owned(),
+                role: PartRole::Runtime,
+                content: json!({
+                    "code": "tool.read_failed",
+                    "message": "file was temporarily unavailable",
+                    "retryable": true,
+                    "attempt": 1
+                }),
+                summary: Some("attempt 1 failed".to_owned()),
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: Some(tool_id),
+                state: PartState::Failed,
+            }],
+            1_000_002,
+        )
+        .await
+        .expect("append durable error");
+    let retried = engine
+        .update_part(
+            session_id,
+            "owner-a",
+            tool_id,
+            agena_storage::store::PartDelta {
+                state: Some(PartState::InProgress),
+                ..Default::default()
+            },
+            1_000_003,
+        )
+        .await
+        .expect("retry same operation part");
+    assert_eq!(retried.state, PartState::InProgress);
+    assert!(retried.revision >= 3);
+    engine
+        .append_parts(
+            session_id,
+            "owner-a",
+            run_id,
+            vec![NewPart {
+                kind: "tool_result".to_owned(),
+                role: PartRole::Tool,
+                content: json!({"output": "contents", "ok": true}),
+                summary: Some("read succeeded".to_owned()),
+                visibility: PartVisibility::Both,
+                rendered_markdown: Some("`contents`".to_owned()),
+                parent_part_id: Some(tool_id),
+                state: PartState::Completed,
+            }],
+            1_000_004,
+        )
+        .await
+        .expect("append successful result");
+    engine
+        .update_part(
+            session_id,
+            "owner-a",
+            tool_id,
+            agena_storage::store::PartDelta {
+                state: Some(PartState::Completed),
+                ..Default::default()
+            },
+            1_000_005,
+        )
+        .await
+        .expect("complete retried operation");
+    engine
+        .complete_run(
+            session_id,
+            "owner-a",
+            run_id,
+            RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: None,
+            },
+            1_000_006,
+        )
+        .await
+        .expect("complete run");
+
+    let history = engine
+        .load_session(session_id)
+        .await
+        .expect("reload history");
+    let error = history
+        .parts
+        .iter()
+        .find(|part| part.kind == "error")
+        .expect("durable error remains");
+    let success = history
+        .parts
+        .iter()
+        .find(|part| part.kind == "tool_result")
+        .expect("successful result remains");
+    assert_eq!(error.parent_part_id, Some(tool_id));
+    assert_eq!(error.state, PartState::Failed);
+    assert_eq!(success.parent_part_id, Some(tool_id));
+    assert_eq!(success.state, PartState::Completed);
+    assert_eq!(success.content["output"], "contents");
+    assert_eq!(
+        history
+            .parts
+            .iter()
+            .find(|part| part.part_id == tool_id)
+            .expect("tool operation")
+            .state,
+        PartState::Completed
+    );
+}
+
+#[tokio::test]
 async fn idempotency_key_deduplicates_user_send() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db).await;
@@ -401,10 +668,320 @@ async fn gc_deletes_only_refcount_orphans() {
 }
 
 #[tokio::test]
+async fn resume_mid_stream_without_a_lease_reconciles_to_ready() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let facade = SessionFacade::with_clock(
+        engine.clone(),
+        "owner-a",
+        agena_storage::store::MemoryLayer::new(8),
+        agena_storage::store::NotificationBus::new(),
+        || 1_000_000,
+    );
+    let run_id = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart {
+                kind: "text".to_owned(),
+                role: PartRole::Assistant,
+                content: json!({"text": "partial"}),
+                summary: None,
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                state: PartState::InProgress,
+            }],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("start stream")
+        .run_id;
+    assert!(
+        engine
+            .release_lease(session_id, "owner-a")
+            .await
+            .expect("release lease")
+    );
+
+    let interrupted = facade
+        .session_state(session_id)
+        .await
+        .expect("derive interrupted");
+    assert_eq!(
+        interrupted.state,
+        agena_storage::store::SessionState::Interrupted
+    );
+    facade
+        .reconcile(session_id)
+        .await
+        .expect("reconcile interrupted stream");
+    let ready = facade
+        .session_state(session_id)
+        .await
+        .expect("derive ready");
+    assert_eq!(ready.state, agena_storage::store::SessionState::Ready);
+    let view = facade
+        .load(session_id)
+        .await
+        .expect("reload reconciled stream");
+    let marker = view
+        .parts
+        .iter()
+        .find(|part| part.part_id == run_id)
+        .expect("run marker");
+    assert_eq!(marker.state, PartState::Failed);
+    assert_eq!(marker.content["abort_reason"], "process_restart");
+    assert_eq!(
+        view.parts
+            .iter()
+            .find(|part| part.kind == "text")
+            .expect("streamed part")
+            .state,
+        PartState::Cancelled
+    );
+}
+
+#[tokio::test]
+async fn resume_mid_ask_without_a_lease_remains_awaiting_user() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let facade = SessionFacade::with_clock(
+        engine.clone(),
+        "owner-a",
+        agena_storage::store::MemoryLayer::new(8),
+        agena_storage::store::NotificationBus::new(),
+        || 1_000_000,
+    );
+    let outcome = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart::pending(
+                "interaction",
+                PartRole::Runtime,
+                json!({"kind": "ask_user", "prompt": "Continue?"}),
+            )],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("pause run on interaction");
+    assert!(
+        engine
+            .release_lease(session_id, "owner-a")
+            .await
+            .expect("release lease")
+    );
+
+    let awaiting = facade
+        .session_state(session_id)
+        .await
+        .expect("derive awaiting user");
+    assert_eq!(
+        awaiting.state,
+        agena_storage::store::SessionState::AwaitingUser
+    );
+    let interaction_id = awaiting
+        .pending_interaction
+        .expect("pending interaction")
+        .part_id;
+    let view = facade.load(session_id).await.expect("reload paused run");
+    assert!(
+        view.parts
+            .iter()
+            .find(|part| part.part_id == outcome.run_id)
+            .expect("run marker")
+            .state
+            .is_in_flight()
+    );
+    assert_eq!(
+        view.parts
+            .iter()
+            .find(|part| part.part_id == interaction_id)
+            .expect("interaction")
+            .state,
+        PartState::Pending
+    );
+}
+
+#[tokio::test]
+async fn resume_mid_tool_preserves_error_context_and_cancels_the_tool() {
+    let db = in_memory_db().await;
+    let (engine, session_id) = setup(db).await;
+    let facade = SessionFacade::with_clock(
+        engine.clone(),
+        "owner-a",
+        agena_storage::store::MemoryLayer::new(8),
+        agena_storage::store::NotificationBus::new(),
+        || 1_000_000,
+    );
+    let outcome = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart {
+                kind: "tool_call".to_owned(),
+                role: PartRole::Assistant,
+                content: json!({"name": "shell", "input": {"command": "sleep"}}),
+                summary: Some("running shell".to_owned()),
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                state: PartState::InProgress,
+            }],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("start tool");
+    let tool_id = outcome.parts[1].part_id;
+    engine
+        .append_parts(
+            session_id,
+            "owner-a",
+            outcome.run_id,
+            vec![NewPart {
+                kind: "error".to_owned(),
+                role: PartRole::Runtime,
+                content: json!({
+                    "code": "tool.partial_failure",
+                    "message": "last durable diagnostic"
+                }),
+                summary: Some("diagnostic".to_owned()),
+                visibility: PartVisibility::User,
+                rendered_markdown: None,
+                parent_part_id: Some(tool_id),
+                state: PartState::Failed,
+            }],
+            1_000_001,
+        )
+        .await
+        .expect("append durable diagnostic");
+    assert!(
+        engine
+            .release_lease(session_id, "owner-a")
+            .await
+            .expect("release lease")
+    );
+    assert_eq!(
+        facade
+            .session_state(session_id)
+            .await
+            .expect("derive interrupted tool")
+            .state,
+        agena_storage::store::SessionState::Interrupted
+    );
+    facade
+        .reconcile(session_id)
+        .await
+        .expect("reconcile tool run");
+    let view = facade
+        .load(session_id)
+        .await
+        .expect("reload reconciled tool");
+    assert_eq!(
+        view.parts
+            .iter()
+            .find(|part| part.part_id == tool_id)
+            .expect("tool part")
+            .state,
+        PartState::Cancelled
+    );
+    let marker = view
+        .parts
+        .iter()
+        .find(|part| part.part_id == outcome.run_id)
+        .expect("run marker");
+    assert_eq!(marker.state, PartState::Failed);
+    assert_eq!(marker.content["abort_reason"], "process_restart");
+    let error = view
+        .parts
+        .iter()
+        .find(|part| part.kind == "error")
+        .expect("diagnostic remains reconstructible");
+    assert_eq!(error.state, PartState::Failed);
+    assert_eq!(error.content["message"], "last durable diagnostic");
+}
+
+#[tokio::test]
 async fn jsonl_round_trip_preserves_ordering_and_references() {
     let db = in_memory_db().await;
     let (engine, session_id) = setup(db.clone()).await;
-    let (_run_id, _view) = submit_hello(&engine, session_id).await;
+    let outcome = engine
+        .submit_user_message(
+            session_id,
+            "owner-a",
+            vec![NewPart {
+                kind: "tool_call".to_owned(),
+                role: PartRole::Assistant,
+                content: json!({"name": "fs.read", "input": {"path": "README.md"}}),
+                summary: Some("read README".to_owned()),
+                visibility: PartVisibility::Both,
+                rendered_markdown: None,
+                parent_part_id: None,
+                state: PartState::InProgress,
+            }],
+            None,
+            1_000_000,
+        )
+        .await
+        .expect("start exportable run");
+    let tool_id = outcome.parts[1].part_id;
+    engine
+        .append_parts(
+            session_id,
+            "owner-a",
+            outcome.run_id,
+            vec![NewPart {
+                kind: "tool_result".to_owned(),
+                role: PartRole::Tool,
+                content: json!({"output": "hello", "ok": true}),
+                summary: Some("read complete".to_owned()),
+                visibility: PartVisibility::Both,
+                rendered_markdown: Some("hello".to_owned()),
+                parent_part_id: Some(tool_id),
+                state: PartState::Completed,
+            }],
+            1_000_001,
+        )
+        .await
+        .expect("append referenced result");
+    engine
+        .update_part(
+            session_id,
+            "owner-a",
+            tool_id,
+            agena_storage::store::PartDelta {
+                state: Some(PartState::Completed),
+                ..Default::default()
+            },
+            1_000_002,
+        )
+        .await
+        .expect("complete tool");
+    let provider_state = json!({"response_id": "resp-1", "thought_signature": "sig"});
+    engine
+        .complete_run(
+            session_id,
+            "owner-a",
+            outcome.run_id,
+            RunOutcome {
+                status: PartState::Completed,
+                abort_reason: None,
+                content: None,
+                provider_state: Some(provider_state.clone()),
+            },
+            1_000_003,
+        )
+        .await
+        .expect("complete exportable run");
+    let anchors = json!({"anthropic": {"previous_response_id": "resp-1"}});
+    engine
+        .set_provider_anchors(session_id, Some(anchors.clone()))
+        .await
+        .expect("persist anchors");
 
     let bundle = engine
         .export_session_jsonl(session_id)
@@ -423,16 +1000,46 @@ async fn jsonl_round_trip_preserves_ordering_and_references() {
     let original = engine.load_session(session_id).await.expect("original");
     let restored = engine.load_session(imported).await.expect("restored");
     assert_eq!(restored.parts.len(), original.parts.len());
+    assert_ne!(restored.meta.id, original.meta.id);
+    assert_eq!(restored.meta.parent_id, None);
+    assert_eq!(restored.meta.relation_kind, SessionRelationKind::Root);
+    assert_eq!(restored.meta.cutoff_part_id, None);
+    assert_eq!(restored.meta.depth, 0);
+    assert_eq!(restored.meta.root_id, restored.meta.id);
+    assert_eq!(restored.meta.provider_anchors_json, Some(anchors));
     for (left, right) in restored.parts.iter().zip(original.parts.iter()) {
+        assert_ne!(left.part_id, right.part_id, "imports allocate fresh ids");
         assert_eq!(left.kind, right.kind);
         assert_eq!(left.role, right.role);
         assert_eq!(left.state, right.state);
         assert_eq!(left.content, right.content);
-        assert_eq!(left.run_id.is_some(), right.run_id.is_some());
-        // References were remapped consistently: the marker is the first part.
-        assert!(restored.parts[0].is_run_marker());
+        assert_eq!(left.provider_state, right.provider_state);
     }
+    assert!(restored.parts[0].is_run_marker());
+    let restored_marker = restored.parts[0].part_id;
+    let restored_tool = restored
+        .parts
+        .iter()
+        .find(|part| part.kind == "tool_call")
+        .expect("restored tool call");
+    let restored_result = restored
+        .parts
+        .iter()
+        .find(|part| part.kind == "tool_result")
+        .expect("restored tool result");
     assert_eq!(restored.parts[0].run_id, None, "marker stays a root");
+    assert_eq!(restored.parts[0].provider_state, Some(provider_state));
+    assert_eq!(restored_tool.run_id, Some(restored_marker));
+    assert_eq!(restored_result.run_id, Some(restored_marker));
+    assert_eq!(restored_result.parent_part_id, Some(restored_tool.part_id));
+    assert!(
+        restored
+            .parts
+            .windows(2)
+            .all(|pair| (pair[0].created_at_ms, pair[0].part_id)
+                <= (pair[1].created_at_ms, pair[1].part_id)),
+        "import preserves canonical ordering"
+    );
 }
 
 #[tokio::test]
@@ -521,6 +1128,74 @@ async fn usage_stats_groups_by_provider_and_model() {
     assert_eq!(anthropic.calls, 2);
     assert_eq!(anthropic.input_tokens, 300);
     assert_eq!(anthropic.total_cost_micros, 75);
+}
+
+#[tokio::test]
+async fn usage_query_shapes_use_their_covering_range_indexes() {
+    let db = in_memory_db().await;
+    initialize_schema(&db).await.expect("schema");
+
+    async fn plan_details(db: &sea_orm::DatabaseConnection, sql: &str) -> Vec<String> {
+        db.query_all(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            format!("EXPLAIN QUERY PLAN {sql}"),
+        ))
+        .await
+        .expect("explain query plan")
+        .into_iter()
+        .map(|row| row.try_get("", "detail").expect("plan detail"))
+        .collect()
+    }
+
+    let aggregate = "SELECT provider_id, model_id, COUNT(*) AS calls, \
+                     SUM(input_tokens), SUM(output_tokens), SUM(reasoning_tokens), \
+                     SUM(cache_write_tokens), SUM(cache_read_tokens), SUM(total_cost_micros) \
+                     FROM agena_usage";
+    let session = plan_details(
+        &db,
+        &format!(
+            "{aggregate} WHERE session_id = 1 AND created_at_ms >= 100 AND created_at_ms < 200 \
+             GROUP BY provider_id, model_id ORDER BY provider_id, model_id"
+        ),
+    )
+    .await;
+    assert!(
+        session
+            .iter()
+            .any(|detail| detail.contains("idx_agena_usage_session")),
+        "session/time plan must use idx_agena_usage_session: {session:?}"
+    );
+
+    let workspace = plan_details(
+        &db,
+        &format!(
+            "{aggregate} WHERE workspace_id = 1 AND created_at_ms >= 100 AND created_at_ms < 200 \
+             GROUP BY provider_id, model_id ORDER BY provider_id, model_id"
+        ),
+    )
+    .await;
+    assert!(
+        workspace
+            .iter()
+            .any(|detail| detail.contains("idx_agena_usage_ws_time")),
+        "workspace/time plan must use idx_agena_usage_ws_time: {workspace:?}"
+    );
+
+    let provider_model = plan_details(
+        &db,
+        &format!(
+            "{aggregate} WHERE provider_id = 'anthropic' AND model_id = 'sonnet' \
+             AND created_at_ms >= 100 AND created_at_ms < 200 \
+             GROUP BY provider_id, model_id ORDER BY provider_id, model_id"
+        ),
+    )
+    .await;
+    assert!(
+        provider_model
+            .iter()
+            .any(|detail| detail.contains("idx_agena_usage_provider_model")),
+        "provider/model/time plan must use idx_agena_usage_provider_model: {provider_model:?}"
+    );
 }
 
 async fn connect_file(tempdir: &tempfile::TempDir, name: &str) -> Arc<sea_orm::DatabaseConnection> {
@@ -628,7 +1303,6 @@ async fn facade_cross_process_cache_invalidation() {
         .await
         .expect("workspace");
     let session_id = facade_a
-        .engine()
         .create_session(NewSession {
             workspace_id,
             parent_id: None,

@@ -18,10 +18,11 @@
 //!
 //! ## Write path (commit-then-notify, 15.6)
 //!
-//! Every facade write validates the session lease against the caller's
-//! `owner_id`, commits one transaction through the engine, then notifies
-//! subscribers before returning. Streaming appends are buffered in the
-//! [`MemoryLayer`] so the UI sees deltas immediately (15.3).
+//! Every ordinary facade write validates the session lease against the
+//! caller's `owner_id`, commits one transaction through the engine, then
+//! notifies subscribers before returning. Text-stream deltas are accumulated
+//! in the [`MemoryLayer`] and flushed after a bounded number of deltas or when
+//! the run ends (D10); ordinary semantic checkpoints remain commit-synchronous.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -32,11 +33,14 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{
-    LEASE_STALENESS_MS, LeaseAcquire, MaintenanceOutcome, NewPart, NewSession, PartDelta,
+    LEASE_STALENESS_MS, LeaseAcquire, MaintenanceOutcome, NewPart, NewSession, Part, PartDelta,
     PersistenceEngine, RunOutcome, SessionChange, SessionListQuery, SessionMeta,
     SessionPresentation, SessionSummary, SessionView, StateInputs, StoreError, SubmitOutcome,
-    UsageQuery, UsageRecord, UsageStats, presentation,
+    UsageQuery, UsageRecord, UsageStats, apply_part_transition, presentation,
 };
+
+/// Default number of text deltas coalesced into one durable part update (D10).
+pub const STREAMING_FLUSH_DELTA_COUNT: usize = 8;
 
 /// A session subscription handle. Dropping it unsubscribes (15.5).
 pub struct Subscription {
@@ -304,6 +308,16 @@ struct CacheEntry {
     newest_cursor: Option<(i64, i64)>,
 }
 
+/// One in-memory text stream checkpoint waiting for its bounded durable
+/// flush. `part.revision` remains the last committed revision until the
+/// engine accepts the coalesced update.
+#[derive(Debug, Clone)]
+struct StreamingBuffer {
+    owner_id: String,
+    part: Part,
+    pending_deltas: usize,
+}
+
 /// The internal memory layer (15.3): a per-session LRU cache of
 /// [`SessionView`]s validated against the persisted position. (The streaming
 /// buffers of 15.3 are introduced with the execution engine's throttled flush
@@ -318,6 +332,8 @@ pub struct MemoryLayer {
     clock: AtomicU64,
     /// Maximum number of sessions held in the cache.
     max_cached_sessions: usize,
+    /// `(session_id, part_id)` text streams awaiting a bounded flush.
+    streaming: Mutex<HashMap<(i64, i64), StreamingBuffer>>,
 }
 
 impl Default for MemoryLayer {
@@ -333,6 +349,7 @@ impl MemoryLayer {
             lru: Mutex::new(HashMap::new()),
             clock: AtomicU64::new(1),
             max_cached_sessions,
+            streaming: Mutex::new(HashMap::new()),
         }
     }
 
@@ -395,6 +412,24 @@ impl MemoryLayer {
     fn invalidate(&self, session_id: i64) {
         self.cache.lock().expect("cache lock").remove(&session_id);
         self.lru.lock().expect("lru lock").remove(&session_id);
+    }
+
+    /// Overlay same-process, not-yet-flushed text deltas on a persisted/cache
+    /// view. Other processes intentionally see only bounded checkpoints.
+    fn overlay_streaming(&self, session_id: i64, view: &mut SessionView) {
+        let streaming = self.streaming.lock().expect("streaming lock");
+        for part in &mut view.parts {
+            if let Some(buffer) = streaming.get(&(session_id, part.part_id)) {
+                *part = buffer.part.clone();
+            }
+        }
+    }
+
+    fn clear_streaming_session(&self, session_id: i64) {
+        self.streaming
+            .lock()
+            .expect("streaming lock")
+            .retain(|(buffer_session_id, _), _| *buffer_session_id != session_id);
     }
 }
 
@@ -490,6 +525,7 @@ pub struct SessionFacade<E> {
     /// Lease owner identity for this process/caller.
     default_owner: String,
     now_ms: Arc<dyn Fn() -> i64 + Send + Sync>,
+    streaming_flush_delta_count: usize,
 }
 
 impl<E> SessionFacade<E>
@@ -520,7 +556,15 @@ where
             bus: Arc::new(bus),
             default_owner: owner_id.into(),
             now_ms: Arc::new(now_ms),
+            streaming_flush_delta_count: STREAMING_FLUSH_DELTA_COUNT,
         }
+    }
+
+    /// Override the D10 text-stream flush threshold. Primarily useful for
+    /// deterministic tests and benchmarks; zero is normalized to one.
+    pub fn with_streaming_flush_delta_count(mut self, delta_count: usize) -> Self {
+        self.streaming_flush_delta_count = delta_count.max(1);
+        self
     }
 
     fn now(&self) -> i64 {
@@ -535,10 +579,11 @@ where
         }
     }
 
-    /// The engine, exposed for recovery/maintenance only (lease reaping, GC).
-    /// The facade itself is the only chat-data write path; these calls are
-    /// maintenance internals (14.2).
-    pub fn engine(&self) -> &E {
+    /// Test-only access for white-box parity assertions. Production callers
+    /// cannot reach the engine through the facade; maintenance is part of the
+    /// sealed [`SessionStore`] surface.
+    #[cfg(test)]
+    pub(crate) fn engine(&self) -> &E {
         &self.engine
     }
 
@@ -550,12 +595,14 @@ where
         let meta = self.engine.session_meta(session_id).await?;
         let version = meta.version;
         let cursor = self.engine.newest_member_cursor(session_id).await?;
-        if let Some(view) = self.memory.get(session_id, Some(version), cursor) {
+        if let Some(mut view) = self.memory.get(session_id, Some(version), cursor) {
+            self.memory.overlay_streaming(session_id, &mut view);
             return Ok(view);
         }
-        let view = self.engine.load_session(session_id).await?;
+        let mut view = self.engine.load_session(session_id).await?;
         self.memory
             .insert(session_id, view.clone(), version, cursor);
+        self.memory.overlay_streaming(session_id, &mut view);
         Ok(view)
     }
 
@@ -620,12 +667,195 @@ where
         }
     }
 
+    /// Read-only lease validation for deltas already represented by an active
+    /// in-memory stream buffer. The first delta in each buffer heartbeats via
+    /// `ensure_lease`; later deltas avoid turning the lease heartbeat itself
+    /// into one database write per chunk. The engine validates ownership again
+    /// atomically when the buffer flushes.
+    async fn validate_buffered_lease(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+    ) -> Result<(), StoreError> {
+        let lease = self
+            .engine
+            .current_lease(session_id)
+            .await?
+            .ok_or(StoreError::LeaseNotHeld { session_id })?;
+        if self.now() - lease.heartbeat_at_ms > LEASE_STALENESS_MS {
+            return Err(StoreError::LeaseNotHeld { session_id });
+        }
+        if lease.owner_id != owner_id {
+            return Err(StoreError::LeaseHeldByOther {
+                session_id,
+                owner_id: lease.owner_id,
+                heartbeat_at_ms: lease.heartbeat_at_ms,
+            });
+        }
+        Ok(())
+    }
+
+    /// Buffer a text-stream delta and return the committed part when the
+    /// threshold (or a non-streaming semantic change) forces a flush.
+    async fn update_streaming_part(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        part_id: i64,
+        delta: PartDelta,
+    ) -> Result<Option<Part>, StoreError> {
+        let key = (session_id, part_id);
+        let needs_base = !self
+            .memory
+            .streaming
+            .lock()
+            .expect("streaming lock")
+            .contains_key(&key);
+        let persisted_base = if needs_base {
+            Some(
+                self.engine
+                    .load_session(session_id)
+                    .await?
+                    .parts
+                    .into_iter()
+                    .find(|part| part.part_id == part_id)
+                    .ok_or_else(|| StoreError::not_found(format!("part {part_id}")))?,
+            )
+        } else {
+            None
+        };
+        if persisted_base
+            .as_ref()
+            .is_some_and(|part| part.origin_session_id != session_id)
+        {
+            return Err(StoreError::InvalidState(format!(
+                "part {part_id} is shared; only its origin session may update it in place"
+            )));
+        }
+
+        let is_text_delta = delta.content.is_none()
+            && delta.content_text_delta.is_some()
+            && delta.finished_at_ms.is_none();
+        let flush = {
+            let mut streaming = self.memory.streaming.lock().expect("streaming lock");
+            let buffer = streaming.entry(key).or_insert_with(|| StreamingBuffer {
+                owner_id: owner_id.to_owned(),
+                part: persisted_base.expect("missing stream buffer has a persisted base"),
+                pending_deltas: 0,
+            });
+            if buffer.owner_id != owner_id {
+                return Err(StoreError::InvalidState(format!(
+                    "part {part_id} has a streaming buffer owned by another lease holder"
+                )));
+            }
+            if buffer.part.origin_session_id != session_id {
+                return Err(StoreError::InvalidState(format!(
+                    "part {part_id} is shared; only its origin session may update it in place"
+                )));
+            }
+            let mut next_part = buffer.part.clone();
+            let state_changed = apply_buffered_delta(&mut next_part, delta, self.now())?;
+            buffer.part = next_part;
+            buffer.pending_deltas += 1;
+            let should_flush = !is_text_delta
+                || state_changed
+                || buffer.pending_deltas >= self.streaming_flush_delta_count;
+            should_flush.then(|| {
+                streaming
+                    .remove(&key)
+                    .expect("stream buffer exists while flushing")
+            })
+        };
+
+        match flush {
+            Some(buffer) => self
+                .flush_streaming_buffer(session_id, buffer)
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    async fn flush_streaming_buffer(
+        &self,
+        session_id: i64,
+        buffer: StreamingBuffer,
+    ) -> Result<Part, StoreError> {
+        let part = buffer.part;
+        self.engine
+            .update_part(
+                session_id,
+                &buffer.owner_id,
+                part.part_id,
+                PartDelta {
+                    state: Some(part.state),
+                    content: Some(part.content),
+                    content_text_delta: None,
+                    summary: part.summary,
+                    rendered_markdown: part.rendered_markdown,
+                    provider_state: part.provider_state,
+                    finished_at_ms: part.finished_at_ms,
+                },
+                self.now(),
+            )
+            .await
+    }
+
+    /// Flush every buffered member of a run before its marker becomes
+    /// terminal. This is the mandatory tail flush in D10.
+    async fn flush_streaming_run(
+        &self,
+        session_id: i64,
+        owner_id: &str,
+        run_id: i64,
+    ) -> Result<(), StoreError> {
+        let buffers = {
+            let mut streaming = self.memory.streaming.lock().expect("streaming lock");
+            let keys = streaming
+                .iter()
+                .filter(|((buffer_session_id, part_id), buffer)| {
+                    *buffer_session_id == session_id
+                        && (*part_id == run_id || buffer.part.run_id == Some(run_id))
+                })
+                .map(|(key, _)| *key)
+                .collect::<Vec<_>>();
+            if keys.iter().any(|key| {
+                streaming
+                    .get(key)
+                    .is_some_and(|buffer| buffer.owner_id != owner_id)
+            }) {
+                return Err(StoreError::InvalidState(format!(
+                    "run {run_id} has a streaming buffer owned by another lease holder"
+                )));
+            }
+            let mut buffers = Vec::with_capacity(keys.len());
+            for key in keys {
+                let buffer = streaming
+                    .remove(&key)
+                    .expect("collected stream buffer exists");
+                buffers.push(buffer);
+            }
+            buffers
+        };
+        for buffer in buffers {
+            let part = self.flush_streaming_buffer(session_id, buffer).await?;
+            self.memory.invalidate(session_id);
+            self.bus
+                .emit(SessionChange::PartUpdated { session_id, part });
+        }
+        Ok(())
+    }
+
     /// Reconcile a session whose in-flight run lost its lease (17.4 step 2c):
     /// mark in-flight run markers `failed` (`process_restart`) and their
     /// non-terminal children `cancelled`. Idempotent.
     async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
+        // A process-restart reconciliation cannot safely commit a process-local
+        // stream tail. Drop it before deriving/announcing the terminal rows.
+        self.memory.clear_streaming_session(session_id);
         let outcome = self.engine.reconcile(session_id, self.now()).await?;
         if !outcome.aborted_runs.is_empty() || outcome.cancelled_parts > 0 {
+            self.memory.invalidate(session_id);
             let meta = self.engine.session_meta(session_id).await?;
             self.bus
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
@@ -789,7 +1019,31 @@ where
         delta: PartDelta,
     ) -> Result<(), StoreError> {
         let owner = self.owner(owner_id);
-        self.ensure_lease(session_id, &owner, true).await?;
+        let has_buffer = self
+            .memory
+            .streaming
+            .lock()
+            .expect("streaming lock")
+            .contains_key(&(session_id, part_id));
+        if has_buffer {
+            self.validate_buffered_lease(session_id, &owner).await?;
+        } else {
+            self.ensure_lease(session_id, &owner, true).await?;
+        }
+        let is_text_delta = delta.content.is_none() && delta.content_text_delta.is_some();
+        if has_buffer || is_text_delta {
+            if let Some(updated) = self
+                .update_streaming_part(session_id, &owner, part_id, delta)
+                .await?
+            {
+                self.memory.invalidate(session_id);
+                self.bus.emit(SessionChange::PartUpdated {
+                    session_id,
+                    part: updated,
+                });
+            }
+            return Ok(());
+        }
         let updated = self
             .engine
             .update_part(session_id, &owner, part_id, delta, self.now())
@@ -811,6 +1065,7 @@ where
     ) -> Result<(), StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner, true).await?;
+        self.flush_streaming_run(session_id, &owner, run_id).await?;
         let marker = self
             .engine
             .complete_run(session_id, &owner, run_id, outcome, self.now())
@@ -970,6 +1225,7 @@ where
     ) -> Result<(), StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner, true).await?;
+        self.flush_streaming_run(session_id, &owner, run_id).await?;
         self.engine
             .cancel_run(session_id, &owner, run_id, self.now())
             .await?;
@@ -1014,6 +1270,7 @@ where
 
     async fn delete(&self, session_id: i64) -> Result<(), StoreError> {
         self.engine.delete_session(session_id).await?;
+        self.memory.clear_streaming_session(session_id);
         self.memory.invalidate(session_id);
         self.bus.emit(SessionChange::PartRemoved {
             session_id,
@@ -1041,7 +1298,12 @@ where
     }
 
     async fn maintenance(&self, now_ms: i64) -> Result<MaintenanceOutcome, StoreError> {
-        self.engine.maintenance(now_ms).await
+        let outcome = self.engine.maintenance(now_ms).await?;
+        for session_id in &outcome.reaped_sessions {
+            self.memory.clear_streaming_session(*session_id);
+            self.memory.invalidate(*session_id);
+        }
+        Ok(outcome)
     }
 
     fn subscribe(&self, session_id: i64, observer: SessionObserver) -> Subscription {
@@ -1066,6 +1328,66 @@ fn wall_clock_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Apply a streaming delta to the in-memory checkpoint without advancing the
+/// persisted revision. The engine advances revision once when the coalesced
+/// checkpoint is committed.
+fn apply_buffered_delta(
+    part: &mut Part,
+    delta: PartDelta,
+    now_ms: i64,
+) -> Result<bool, StoreError> {
+    let state_changed = delta.state.is_some_and(|state| state != part.state);
+    if let Some(state) = delta.state {
+        apply_part_transition(part, state, now_ms, true)?;
+    }
+    if let Some(content) = delta.content {
+        part.content = content;
+    } else if let Some(delta_text) = delta.content_text_delta {
+        append_buffered_text_delta(&mut part.content, &delta_text)?;
+    }
+    if let Some(summary) = delta.summary {
+        part.summary = Some(summary);
+    }
+    if let Some(rendered_markdown) = delta.rendered_markdown {
+        part.rendered_markdown = Some(rendered_markdown);
+    }
+    if let Some(provider_state) = delta.provider_state {
+        part.provider_state = Some(provider_state);
+    }
+    if let Some(finished_at_ms) = delta.finished_at_ms {
+        part.finished_at_ms = Some(finished_at_ms);
+    }
+    if part.state.is_terminal() && part.finished_at_ms.is_none() {
+        part.finished_at_ms = Some(now_ms);
+    }
+    if part.state == super::PartState::InProgress {
+        part.finished_at_ms = None;
+    }
+    part.updated_at_ms = now_ms;
+    Ok(state_changed)
+}
+
+fn append_buffered_text_delta(content: &mut Value, delta: &str) -> Result<(), StoreError> {
+    match content {
+        Value::String(text) => {
+            text.push_str(delta);
+            Ok(())
+        }
+        Value::Object(map) => match map.get_mut("text") {
+            Some(Value::String(text)) => {
+                text.push_str(delta);
+                Ok(())
+            }
+            _ => Err(StoreError::InvalidState(
+                "content_text_delta requires a text-shaped content".to_owned(),
+            )),
+        },
+        _ => Err(StoreError::InvalidState(
+            "content_text_delta requires a text-shaped content".to_owned(),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -1182,6 +1504,159 @@ mod tests {
 
         let view = facade.load(session_id).await.expect("load");
         assert_eq!(view.parts.len(), 2, "marker + text");
+    }
+
+    #[tokio::test]
+    async fn text_stream_deltas_are_amortized_and_run_end_flushes_the_tail() {
+        let clock = Clock::new(1_000_000);
+        let engine = InMemoryEngine::default();
+        let facade = SessionFacade::with_clock(
+            engine.clone(),
+            "owner-a",
+            MemoryLayer::new(16),
+            NotificationBus::new(),
+            {
+                let clock = clock.clone();
+                move || clock.get()
+            },
+        )
+        .with_streaming_flush_delta_count(3);
+        let session_id = ready_session(&facade, 1, "stream").await;
+        let run_id = facade
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart {
+                    kind: "text".to_owned(),
+                    role: PartRole::Assistant,
+                    content: json!({"text": ""}),
+                    summary: None,
+                    visibility: crate::store::PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: None,
+                    state: PartState::InProgress,
+                }],
+                None,
+            )
+            .await
+            .expect("start streamed part");
+        let part_id = engine
+            .load_session(session_id)
+            .await
+            .expect("load persisted stream")
+            .parts[1]
+            .part_id;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let observer: SessionObserver = {
+            let seen = Arc::clone(&seen);
+            Arc::new(move |change| seen.lock().expect("seen lock").push(change))
+        };
+        let _subscription = facade.subscribe(session_id, observer);
+
+        for delta in ["a", "b"] {
+            facade
+                .update_part(
+                    session_id,
+                    "owner-a",
+                    part_id,
+                    PartDelta {
+                        content_text_delta: Some(delta.to_owned()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("buffer delta");
+        }
+        let persisted_before_threshold = engine
+            .load_session(session_id)
+            .await
+            .expect("load before threshold");
+        assert_eq!(persisted_before_threshold.parts[1].content["text"], "");
+        assert_eq!(persisted_before_threshold.parts[1].revision, 1);
+        assert_eq!(
+            facade.load(session_id).await.expect("overlay stream").parts[1].content["text"],
+            "ab",
+            "same-process readers see the in-memory stream before its checkpoint"
+        );
+
+        facade
+            .update_part(
+                session_id,
+                "owner-a",
+                part_id,
+                PartDelta {
+                    content_text_delta: Some("c".to_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("threshold delta");
+        let first_flush = engine
+            .load_session(session_id)
+            .await
+            .expect("load first flush");
+        assert_eq!(first_flush.parts[1].content["text"], "abc");
+        assert_eq!(first_flush.parts[1].revision, 2, "three deltas, one write");
+
+        for delta in ["d", "e"] {
+            facade
+                .update_part(
+                    session_id,
+                    "owner-a",
+                    part_id,
+                    PartDelta {
+                        content_text_delta: Some(delta.to_owned()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("buffer tail delta");
+        }
+        assert_eq!(
+            engine
+                .load_session(session_id)
+                .await
+                .expect("tail remains buffered")
+                .parts[1]
+                .content["text"],
+            "abc"
+        );
+
+        facade
+            .complete_run(
+                session_id,
+                "owner-a",
+                run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+            )
+            .await
+            .expect("run completion flushes tail");
+        let completed = engine
+            .load_session(session_id)
+            .await
+            .expect("load completed stream");
+        assert_eq!(completed.parts[1].content["text"], "abcde");
+        assert_eq!(
+            completed.parts[1].revision, 3,
+            "five deltas persisted in two part updates"
+        );
+        let content_flushes = seen
+            .lock()
+            .expect("seen lock")
+            .iter()
+            .filter(|change| {
+                matches!(
+                    change,
+                    SessionChange::PartUpdated { part, .. } if part.part_id == part_id
+                )
+            })
+            .count();
+        assert_eq!(content_flushes, 2, "notifications follow committed flushes");
     }
 
     #[tokio::test]

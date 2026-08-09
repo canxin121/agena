@@ -1739,6 +1739,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fork_during_streaming_shares_completion_and_rejects_child_mutation() {
+        let (engine, session_id) = setup().await;
+        let outcome = engine
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart {
+                    kind: "text".to_owned(),
+                    role: PartRole::Assistant,
+                    content: json!({"text": "partial"}),
+                    summary: None,
+                    visibility: PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: None,
+                    state: PartState::InProgress,
+                }],
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("start stream");
+        let streamed_id = outcome.parts[1].part_id;
+        let child = engine
+            .fork_session(
+                session_id,
+                streamed_id,
+                "stream child".to_owned(),
+                false,
+                engine.now_ms(),
+            )
+            .await
+            .expect("fork stream");
+        engine
+            .try_acquire_lease(child.id, "child-owner", engine.now_ms())
+            .await
+            .expect("child lease");
+        engine
+            .update_part(
+                session_id,
+                "owner-a",
+                streamed_id,
+                PartDelta {
+                    state: Some(PartState::Completed),
+                    content_text_delta: Some(" complete".to_owned()),
+                    ..Default::default()
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("parent completes shared stream");
+        let child_view = engine.load_session(child.id).await.expect("child view");
+        let shared = child_view
+            .parts
+            .iter()
+            .find(|part| part.part_id == streamed_id)
+            .expect("shared part");
+        assert_eq!(shared.state, PartState::Completed);
+        assert_eq!(shared.content["text"], "partial complete");
+
+        let error = engine
+            .update_part(
+                child.id,
+                "child-owner",
+                streamed_id,
+                PartDelta {
+                    content: Some(json!({"text": "overwrite"})),
+                    ..Default::default()
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect_err("shared parent part is read-only in child");
+        assert!(matches!(error, StoreError::InvalidState(_)));
+        let appended = engine
+            .append_parts(
+                child.id,
+                "child-owner",
+                outcome.run_id,
+                vec![text_part("child divergence")],
+                engine.now_ms(),
+            )
+            .await
+            .expect("child diverges by append");
+        assert_eq!(appended[0].origin_session_id, child.id);
+    }
+
+    #[tokio::test]
     async fn retry_transitions_failed_to_in_progress_with_revision_bump_but_not_for_runs() {
         let (engine, session_id) = setup().await;
         let outcome = engine
@@ -1824,6 +1911,139 @@ mod tests {
             .await
             .expect_err("run marker cannot retry");
         assert!(matches!(error, StoreError::InvalidState(_)));
+    }
+
+    #[tokio::test]
+    async fn retry_history_retains_failed_error_and_successful_result_parts() {
+        let (engine, session_id) = setup().await;
+        let outcome = engine
+            .submit_user_message(
+                session_id,
+                "owner-a",
+                vec![NewPart {
+                    kind: "tool_call".to_owned(),
+                    role: PartRole::Assistant,
+                    content: json!({"name": "fs.read", "input": {}}),
+                    summary: None,
+                    visibility: PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: None,
+                    state: PartState::InProgress,
+                }],
+                None,
+                engine.now_ms(),
+            )
+            .await
+            .expect("start tool");
+        let tool_id = outcome.parts[1].part_id;
+        engine
+            .update_part(
+                session_id,
+                "owner-a",
+                tool_id,
+                PartDelta {
+                    state: Some(PartState::Failed),
+                    ..Default::default()
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("fail tool");
+        engine
+            .append_parts(
+                session_id,
+                "owner-a",
+                outcome.run_id,
+                vec![NewPart {
+                    kind: "error".to_owned(),
+                    role: PartRole::Runtime,
+                    content: json!({"message": "attempt one failed", "attempt": 1}),
+                    summary: None,
+                    visibility: PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: Some(tool_id),
+                    state: PartState::Failed,
+                }],
+                engine.now_ms(),
+            )
+            .await
+            .expect("append error");
+        engine
+            .update_part(
+                session_id,
+                "owner-a",
+                tool_id,
+                PartDelta {
+                    state: Some(PartState::InProgress),
+                    ..Default::default()
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("retry tool");
+        engine
+            .append_parts(
+                session_id,
+                "owner-a",
+                outcome.run_id,
+                vec![NewPart {
+                    kind: "tool_result".to_owned(),
+                    role: PartRole::Tool,
+                    content: json!({"output": "ok", "ok": true}),
+                    summary: None,
+                    visibility: PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: Some(tool_id),
+                    state: PartState::Completed,
+                }],
+                engine.now_ms(),
+            )
+            .await
+            .expect("append success");
+        engine
+            .update_part(
+                session_id,
+                "owner-a",
+                tool_id,
+                PartDelta {
+                    state: Some(PartState::Completed),
+                    ..Default::default()
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("complete tool");
+        engine
+            .complete_run(
+                session_id,
+                "owner-a",
+                outcome.run_id,
+                RunOutcome {
+                    status: PartState::Completed,
+                    abort_reason: None,
+                    content: None,
+                    provider_state: None,
+                },
+                engine.now_ms(),
+            )
+            .await
+            .expect("complete run");
+
+        let history = engine.load_session(session_id).await.expect("history");
+        let error = history
+            .parts
+            .iter()
+            .find(|part| part.kind == "error")
+            .expect("error persists");
+        let result = history
+            .parts
+            .iter()
+            .find(|part| part.kind == "tool_result")
+            .expect("success persists");
+        assert_eq!(error.parent_part_id, Some(tool_id));
+        assert_eq!(error.state, PartState::Failed);
+        assert_eq!(result.parent_part_id, Some(tool_id));
+        assert_eq!(result.state, PartState::Completed);
     }
 
     #[tokio::test]
@@ -1954,8 +2174,8 @@ mod tests {
             matches!(acquire, LeaseAcquire::Acquired { reconciled_runs } if reconciled_runs.is_empty())
         );
 
-        // Pending interaction -> AwaitingUser.
-        engine
+        // Pending interaction -> AwaitingUser, even when the lease is gone.
+        let paused = engine
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -1969,10 +2189,27 @@ mod tests {
             )
             .await
             .expect("submit with interaction");
+        assert!(
+            engine
+                .release_lease(session_id, "owner-a")
+                .await
+                .expect("release paused lease")
+        );
         let awaiting = derive_state(&engine, session_id).expect("presentation");
         assert_eq!(awaiting.state, SessionState::AwaitingUser);
         let interaction = awaiting.pending_interaction.expect("pending interaction");
         assert_eq!(interaction.kind, "plan_review");
+        let paused_view = engine.load_session(session_id).await.expect("paused view");
+        assert!(
+            paused_view
+                .parts
+                .iter()
+                .find(|part| part.part_id == paused.run_id)
+                .expect("paused run marker")
+                .state
+                .is_in_flight(),
+            "a pending interaction wins even without a lease"
+        );
     }
 
     #[tokio::test]

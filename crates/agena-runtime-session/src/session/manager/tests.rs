@@ -8,7 +8,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use agena_domain::{ExecutionStatus, Role};
 use agena_plugin_host::{PluginHost, PluginHostBuildConfig, PluginsConfig, ToolPresentationConfig};
-use agena_storage::store::{PartState, SessionState};
+use agena_storage::store::{NewPart, PartRole, PartState, PersistenceEngine, SessionState};
 use sea_orm::{Database, DatabaseConnection};
 
 use super::{SessionManager, build_message, merge_system_prompts};
@@ -16,7 +16,7 @@ use crate::session::store::MessageCheckpoint;
 use crate::{
     RuntimeSessionManagerConfig,
     authorization::ExecutionPrincipal,
-    message::{MessageMetadata, PartContent},
+    message::{InteractiveRequestPart, MessageMetadata, PartContent, RequestPart},
     permission::{PermissionPolicy, ToolPermissionPolicy},
     provider::ProviderRegistry,
     session::{ContextGovernor, Session, SessionProcessor},
@@ -24,6 +24,10 @@ use crate::{
 };
 
 async fn test_manager() -> SessionManager {
+    test_manager_with_database().await.0
+}
+
+async fn test_manager_with_database() -> (SessionManager, DatabaseConnection) {
     let workspace_root = std::env::current_dir().expect("resolve test workspace");
     let plugins = PluginHost::new(PluginHostBuildConfig {
         static_plugins: Vec::new(),
@@ -59,12 +63,13 @@ async fn test_manager() -> SessionManager {
         .await
         .expect("open v2 test database");
     initialize(&database).await;
-    SessionManager::new(
-        database,
+    let manager = SessionManager::new(
+        database.clone(),
         processor,
         executor,
         RuntimeSessionManagerConfig::default(),
-    )
+    );
+    (manager, database)
 }
 
 async fn initialize(database: &DatabaseConnection) {
@@ -301,6 +306,207 @@ async fn fork_renders_the_shared_prefix_without_copying_parts() {
             .messages[0]
             .as_text_lossy(),
         "shared prompt"
+    );
+}
+
+#[tokio::test]
+async fn default_manager_fork_includes_the_complete_last_message() {
+    let manager = test_manager().await;
+    let session = create(&manager, "default fork source").await;
+    let session = append_message(
+        &manager,
+        session,
+        Role::User,
+        vec![
+            PartContent::text("shared first"),
+            PartContent::text("shared second"),
+        ],
+    )
+    .await;
+
+    let child = manager
+        .fork_session(agena_runtime::SessionForkRequest {
+            session_id: session.id,
+            at_message_id: None,
+            title: Some("default fork child".to_owned()),
+            expected_version: None,
+        })
+        .await
+        .expect("fork complete history through manager");
+
+    assert_eq!(child.messages.len(), 1);
+    assert_eq!(
+        child.messages[0].as_text_lossy(),
+        "shared first\nshared second"
+    );
+    let source_view = manager
+        .session_store()
+        .load(session.id)
+        .await
+        .expect("load source parts");
+    let child_view = manager
+        .session_store()
+        .load(child.id)
+        .await
+        .expect("load child parts");
+    assert_eq!(
+        child_view
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        source_view
+            .parts
+            .iter()
+            .map(|part| part.part_id)
+            .collect::<Vec<_>>(),
+        "the default message cutoff shares the marker and every content part"
+    );
+
+    let explicit = manager
+        .fork_session(agena_runtime::SessionForkRequest {
+            session_id: session.id,
+            at_message_id: Some(session.messages[0].id),
+            title: Some("explicit marker fork child".to_owned()),
+            expected_version: None,
+        })
+        .await
+        .expect("fork at an explicit message marker");
+    assert_eq!(explicit.messages.len(), 1);
+    assert_eq!(
+        explicit.messages[0].as_text_lossy(),
+        "shared first\nshared second",
+        "an explicit message marker resolves to that message's inclusive tail"
+    );
+}
+
+#[tokio::test]
+async fn open_session_preserves_a_run_paused_for_user_input_without_a_lease() {
+    let (manager, database) = test_manager_with_database().await;
+    let session = create(&manager, "awaiting user").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            serde_json::json!({"run_kind": "continue"}),
+        )
+        .await
+        .expect("start in-flight run");
+    manager
+        .store
+        .append_parts(
+            session.id,
+            run_id,
+            vec![NewPart::pending(
+                "interaction",
+                PartRole::Runtime,
+                serde_json::to_value(PartContent::request(RequestPart::UserInput(
+                    InteractiveRequestPart::pending(agena_domain::UserInputRequest {
+                        request_id: "ask-1".to_owned(),
+                        session_id: Some(session.id),
+                        title: "Choose a path".to_owned(),
+                        kind: "ask_user".to_owned(),
+                        auto_resolution_ms: None,
+                        presented_at: None,
+                        questions: Vec::new(),
+                        created_at: chrono::Utc::now(),
+                    }),
+                )))
+                .expect("serialize interaction part"),
+            )],
+        )
+        .await
+        .expect("append pending interaction");
+
+    // Fault injection through the persistence engine: an open session must
+    // derive AwaitingUser even when the paused run has no lease. Production
+    // manager code itself continues to access chat data only through
+    // SessionStore.
+    let engine = agena_storage_sqlite::SqliteEngine::new(Arc::new(database));
+    assert!(
+        engine
+            .release_lease(session.id, manager.store.owner_id.as_str())
+            .await
+            .expect("release paused run lease")
+    );
+    let facade = manager.session_store();
+    let before = facade
+        .session_state(session.id)
+        .await
+        .expect("derive awaiting state without a lease");
+    assert_eq!(before.state, SessionState::AwaitingUser);
+
+    // Exercise the manager's lazy reconciliation-on-open path. If its
+    // AwaitingUser guard regresses, this call terminalizes the paused run.
+    let opened = manager
+        .get_session(session.id)
+        .await
+        .expect("open paused session");
+    assert_eq!(opened.id, session.id);
+
+    let after = facade.load(session.id).await.expect("reload paused parts");
+    let marker = after
+        .parts
+        .iter()
+        .find(|part| part.part_id == run_id)
+        .expect("run marker remains");
+    let interaction = after
+        .parts
+        .iter()
+        .find(|part| part.kind == "interaction")
+        .expect("interaction remains");
+    assert!(marker.state.is_in_flight(), "paused run is not aborted");
+    assert_eq!(interaction.state, PartState::Pending);
+    assert_eq!(
+        facade
+            .session_state(session.id)
+            .await
+            .expect("derive state after open")
+            .state,
+        SessionState::AwaitingUser
+    );
+}
+
+#[tokio::test]
+async fn open_session_leaves_another_process_fresh_run_intact() {
+    let manager = test_manager().await;
+    let session = create(&manager, "fresh run").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            serde_json::json!({"run_kind": "continue"}),
+        )
+        .await
+        .expect("start fresh run");
+
+    manager
+        .get_session(session.id)
+        .await
+        .expect("open session with fresh lease");
+
+    let presentation = manager
+        .session_store()
+        .session_state(session.id)
+        .await
+        .expect("derive running state after open");
+    assert_eq!(presentation.state, SessionState::Running);
+    assert_eq!(presentation.active_run_id, Some(run_id));
+    let view = manager
+        .session_store()
+        .load(session.id)
+        .await
+        .expect("load live run");
+    assert!(
+        view.parts
+            .iter()
+            .find(|part| part.part_id == run_id)
+            .expect("run marker")
+            .state
+            .is_in_flight(),
+        "open must not reconcile a fresh run"
     );
 }
 

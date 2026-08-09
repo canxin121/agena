@@ -24,7 +24,11 @@ impl SessionManager {
         // A live cross-process run means another process is actively running
         // this session; its interrupted work is not ours to abort (17.4 2b).
         let presentation = self.store.session_state(session_id).await?;
-        if presentation.state == agena_storage::store::SessionState::Running {
+        if matches!(
+            presentation.state,
+            agena_storage::store::SessionState::Running
+                | agena_storage::store::SessionState::AwaitingUser
+        ) {
             return Ok(());
         }
         // Abort the session's in-flight run markers (17.4 2c). The engine
@@ -81,10 +85,15 @@ impl SessionManager {
                 return Ok(());
             }
         }
-        // A live cross-process run means another process is actively running
-        // this session; leave it alone.
+        // A live cross-process run belongs to another process, and a pending
+        // interaction means the run is deliberately paused for the user.
+        // Neither condition is an interrupted execution (17.4 steps 2a-2b).
         let presentation = self.store.session_state(session_id).await?;
-        if presentation.state == agena_storage::store::SessionState::Running {
+        if matches!(
+            presentation.state,
+            agena_storage::store::SessionState::Running
+                | agena_storage::store::SessionState::AwaitingUser
+        ) {
             return Ok(());
         }
         self.reconcile_interrupted_session(session_id).await?;

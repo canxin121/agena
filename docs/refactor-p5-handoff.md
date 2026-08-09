@@ -1,5 +1,8 @@
 # v2 重构进度 — P5 中途交接（2026-08-09）
 
+> 此中途交接已由 [`refactor-p7-completion.md`](refactor-p7-completion.md)
+> 取代；P5、P6、P7 均已完成，十道验证门的最终证据见该文档。
+
 > 目标：按 `docs/refactor-prompt.md` 彻底完成 v2 持久化/执行数据层重构，
 > 设计依据 `docs/database-design-v2.md`（"everything is a part" 会员优先模型）。
 > 硬性约束：无向后兼容、无迁移、无死代码、无死数据、门面封闭（外部只走 `SessionStore`）、

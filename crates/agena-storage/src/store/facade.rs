@@ -147,46 +147,51 @@ pub trait SessionStore: Send + Sync {
     async fn session_state(&self, session_id: i64) -> Result<SessionPresentation, StoreError>;
 
     /// User send (7.1): marker + content parts + membership + optional
-    /// idempotency in one committed transaction. Returns the run marker's
-    /// part id.
+    /// idempotency in one committed transaction. Returns the full
+    /// [`SubmitOutcome`] — the run marker id plus the committed parts — so
+    /// callers never reload after writing.
     async fn submit_user_message(
         &self,
         session_id: i64,
         owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
-    ) -> Result<i64, StoreError>;
+    ) -> Result<SubmitOutcome, StoreError>;
 
-    /// Append content parts to an in-flight run (streaming, D10).
+    /// Append content parts to an in-flight run (streaming, D10). Returns the
+    /// committed parts with their engine-assigned ids.
     async fn append_parts(
         &self,
         session_id: i64,
         owner_id: &str,
         run_id: i64,
         parts: Vec<NewPart>,
-    ) -> Result<(), StoreError>;
+    ) -> Result<Vec<Part>, StoreError>;
 
     /// Apply a streaming delta to one part (revision++, notify on flush).
+    /// Returns the updated part (the in-memory buffer overlay when the delta
+    /// is still buffered, the durable row once flushed).
     async fn update_part(
         &self,
         session_id: i64,
         owner_id: &str,
         part_id: i64,
         delta: PartDelta,
-    ) -> Result<(), StoreError>;
+    ) -> Result<Part, StoreError>;
 
-    /// Finish a run marker with the given terminal outcome.
+    /// Finish a run marker with the given terminal outcome. Returns the
+    /// terminal marker row.
     async fn complete_run(
         &self,
         session_id: i64,
         owner_id: &str,
         run_id: i64,
         outcome: RunOutcome,
-    ) -> Result<(), StoreError>;
+    ) -> Result<Part, StoreError>;
 
     /// Start a fresh run without user input (`continue`, `compaction`,
     /// `background`, `steer`). Creates a run marker with the given `run_kind`
-    /// and returns its part id.
+    /// and returns the full [`SubmitOutcome`] (marker plus created parts).
     async fn start_run(
         &self,
         session_id: i64,
@@ -194,7 +199,7 @@ pub trait SessionStore: Send + Sync {
         run_kind: &str,
         content: Value,
         idempotency_key: Option<String>,
-    ) -> Result<i64, StoreError>;
+    ) -> Result<SubmitOutcome, StoreError>;
 
     /// Persist `provider_anchors_json` (resume is blocking on it, D8).
     async fn set_provider_anchors(
@@ -246,12 +251,13 @@ pub trait SessionStore: Send + Sync {
     async fn rename(&self, session_id: i64, title: String) -> Result<SessionMeta, StoreError>;
 
     /// Cancel a run marker and its non-terminal children (17.5 user cancel).
+    /// Returns every changed row (marker and cancelled children).
     async fn cancel_run(
         &self,
         session_id: i64,
         owner_id: &str,
         run_id: i64,
-    ) -> Result<(), StoreError>;
+    ) -> Result<Vec<Part>, StoreError>;
 
     /// Reconcile a session whose in-flight run lost its lease (17.4 step 2c):
     /// mark in-flight run markers `failed` (`process_restart`) and their
@@ -364,18 +370,24 @@ impl MemoryLayer {
         version: Option<i64>,
         newest_cursor: Option<(i64, i64)>,
     ) -> Option<SessionView> {
-        let cache = self.cache.lock().expect("cache lock");
-        let entry = cache.get(&session_id)?;
-        // A missing persisted version (session deleted) is not a hit.
-        if version.is_some() && entry.version != version.unwrap() {
-            return None;
-        }
-        if entry.newest_cursor != newest_cursor {
-            return None;
-        }
+        // Read the entry and touch recency under separate locks — never nest
+        // the cache and LRU mutexes (see `insert`'s eviction path and
+        // [`Self::apply_committed`]).
+        let view = {
+            let cache = self.cache.lock().expect("cache lock");
+            let entry = cache.get(&session_id)?;
+            // A missing persisted version (session deleted) is not a hit.
+            if version.is_some() && entry.version != version.unwrap() {
+                return None;
+            }
+            if entry.newest_cursor != newest_cursor {
+                return None;
+            }
+            entry.view.clone()
+        };
         let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
         self.lru.lock().expect("lru lock").insert(session_id, stamp);
-        Some(entry.view.clone())
+        Some(view)
     }
 
     fn insert(
@@ -414,6 +426,52 @@ impl MemoryLayer {
     fn invalidate(&self, session_id: i64) {
         self.cache.lock().expect("cache lock").remove(&session_id);
         self.lru.lock().expect("lru lock").remove(&session_id);
+    }
+
+    /// Merge parts that were just committed (or are in an in-progress
+    /// streaming buffer) into the cached view, keeping the entry's position
+    /// in sync so the very next `load` is a cache hit instead of a redundant
+    /// membership JOIN. In-place updates replace by `part_id`; new parts
+    /// append — the `(created_at_ms, part_id)` order position is immutable,
+    /// so appends keep the view ordered.
+    ///
+    /// `version` is `Some` when the write advanced `sessions.version` (a
+    /// durable mutation) and `None` for a not-yet-flushed streaming delta,
+    /// which must leave the entry's version untouched. A missing cache entry
+    /// is a no-op (there is nothing to seed).
+    fn apply_committed(&self, session_id: i64, parts: &[Part], version: Option<i64>) {
+        // Touch recency under the LRU lock first, then update the cache under
+        // the cache lock — the same lock order as `insert` (which may take the
+        // cache lock while holding the LRU lock during eviction). Never nest
+        // the two in the opposite order.
+        let stamp = self.clock.fetch_add(1, Ordering::Relaxed);
+        self.lru.lock().expect("lru lock").insert(session_id, stamp);
+        let mut cache = self.cache.lock().expect("cache lock");
+        let Some(entry) = cache.get_mut(&session_id) else {
+            return;
+        };
+        for part in parts {
+            match entry
+                .view
+                .parts
+                .iter_mut()
+                .find(|existing| existing.part_id == part.part_id)
+            {
+                Some(existing) => *existing = part.clone(),
+                None => entry.view.parts.push(part.clone()),
+            }
+        }
+        if let Some(version) = version {
+            entry.version = version;
+        }
+        let parts_cursor = parts
+            .iter()
+            .map(|part| (part.created_at_ms, part.part_id))
+            .max();
+        entry.newest_cursor = match (entry.newest_cursor, parts_cursor) {
+            (Some(existing), Some(incoming)) => Some(existing.max(incoming)),
+            (existing, incoming) => existing.or(incoming),
+        };
     }
 
     /// Overlay same-process, not-yet-flushed text deltas on a persisted/cache
@@ -994,7 +1052,7 @@ where
         owner_id: &str,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
-    ) -> Result<i64, StoreError> {
+    ) -> Result<SubmitOutcome, StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner).await?;
         let outcome: SubmitOutcome = self
@@ -1002,8 +1060,9 @@ where
             .submit_user_message(session_id, &owner, parts, idempotency_key, self.now())
             .await?;
         if outcome.created {
-            self.memory.invalidate(session_id);
             let meta = self.engine.session_meta(session_id).await?;
+            self.memory
+                .apply_committed(session_id, &outcome.parts, Some(meta.version));
             for part in &outcome.parts {
                 self.bus.emit(SessionChange::PartAdded {
                     session_id,
@@ -1013,7 +1072,7 @@ where
             self.bus
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
-        Ok(outcome.run_id)
+        Ok(outcome)
     }
 
     async fn append_parts(
@@ -1022,18 +1081,23 @@ where
         owner_id: &str,
         run_id: i64,
         parts: Vec<NewPart>,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<Part>, StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner).await?;
         let created = self
             .engine
             .append_parts(session_id, &owner, run_id, parts, self.now())
             .await?;
-        self.memory.invalidate(session_id);
-        for part in created {
-            self.bus.emit(SessionChange::PartAdded { session_id, part });
+        let meta = self.engine.session_meta(session_id).await?;
+        self.memory
+            .apply_committed(session_id, &created, Some(meta.version));
+        for part in &created {
+            self.bus.emit(SessionChange::PartAdded {
+                session_id,
+                part: part.clone(),
+            });
         }
-        Ok(())
+        Ok(created)
     }
 
     async fn update_part(
@@ -1042,7 +1106,7 @@ where
         owner_id: &str,
         part_id: i64,
         delta: PartDelta,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Part, StoreError> {
         let owner = self.owner(owner_id);
         let has_buffer = self
             .memory
@@ -1061,24 +1125,42 @@ where
                 .update_streaming_part(session_id, &owner, part_id, delta)
                 .await?
             {
-                self.memory.invalidate(session_id);
+                // The delta was flushed: notify (D10 — notifications follow
+                // committed flushes) and return the durable row. The streaming
+                // buffer overlay owns the part for same-process reads, so do
+                // not seed the persisted cache here.
                 self.bus.emit(SessionChange::PartUpdated {
                     session_id,
-                    part: updated,
+                    part: updated.clone(),
                 });
+                return Ok(updated);
             }
-            return Ok(());
+            // Still buffered: return the in-memory overlay (authoritative for
+            // this process) without a notification and without touching the
+            // persisted cache.
+            let buffered = self
+                .memory
+                .streaming
+                .lock()
+                .expect("streaming lock")
+                .get(&(session_id, part_id))
+                .expect("buffered part exists")
+                .part
+                .clone();
+            return Ok(buffered);
         }
         let updated = self
             .engine
             .update_part(session_id, &owner, part_id, delta, self.now())
             .await?;
-        self.memory.invalidate(session_id);
+        let meta = self.engine.session_meta(session_id).await?;
+        self.memory
+            .apply_committed(session_id, &[updated.clone()], Some(meta.version));
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
-            part: updated,
+            part: updated.clone(),
         });
-        Ok(())
+        Ok(updated)
     }
 
     async fn complete_run(
@@ -1087,7 +1169,7 @@ where
         owner_id: &str,
         run_id: i64,
         outcome: RunOutcome,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Part, StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner).await?;
         self.flush_streaming_run(session_id, &owner, run_id).await?;
@@ -1095,15 +1177,16 @@ where
             .engine
             .complete_run(session_id, &owner, run_id, outcome, self.now())
             .await?;
-        self.memory.invalidate(session_id);
+        let meta = self.engine.session_meta(session_id).await?;
+        self.memory
+            .apply_committed(session_id, &[marker.clone()], Some(meta.version));
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
-            part: marker,
+            part: marker.clone(),
         });
-        let meta = self.engine.session_meta(session_id).await?;
         self.bus
             .emit(SessionChange::SessionMetaUpdated { session_id, meta });
-        Ok(())
+        Ok(marker)
     }
 
     async fn start_run(
@@ -1113,7 +1196,7 @@ where
         run_kind: &str,
         content: Value,
         idempotency_key: Option<String>,
-    ) -> Result<i64, StoreError> {
+    ) -> Result<SubmitOutcome, StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner).await?;
         let outcome = self
@@ -1128,8 +1211,9 @@ where
             )
             .await?;
         if outcome.created {
-            self.memory.invalidate(session_id);
             let meta = self.engine.session_meta(session_id).await?;
+            self.memory
+                .apply_committed(session_id, &outcome.parts, Some(meta.version));
             for part in &outcome.parts {
                 self.bus.emit(SessionChange::PartAdded {
                     session_id,
@@ -1139,7 +1223,7 @@ where
             self.bus
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
-        Ok(outcome.run_id)
+        Ok(outcome)
     }
 
     async fn set_provider_anchors(
@@ -1190,7 +1274,10 @@ where
             .engine
             .answer_interaction(session_id, &owner, interaction_part_id, reply, self.now())
             .await?;
-        self.memory.invalidate(session_id);
+        let meta = self.engine.session_meta(session_id).await?;
+        let committed = [outcome.interaction.clone(), outcome.reply.clone()];
+        self.memory
+            .apply_committed(session_id, &committed, Some(meta.version));
         self.bus.emit(SessionChange::PartUpdated {
             session_id,
             part: outcome.interaction,
@@ -1251,7 +1338,7 @@ where
         session_id: i64,
         owner_id: &str,
         run_id: i64,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<Part>, StoreError> {
         let owner = self.owner(owner_id);
         self.ensure_lease(session_id, &owner).await?;
         self.flush_streaming_run(session_id, &owner, run_id).await?;
@@ -1260,16 +1347,17 @@ where
             .cancel_run(session_id, &owner, run_id, self.now())
             .await?;
         if !updated_parts.is_empty() {
-            self.memory.invalidate(session_id);
-            for part in updated_parts {
-                self.bus
-                    .emit(SessionChange::PartUpdated { session_id, part });
-            }
             let meta = self.engine.session_meta(session_id).await?;
+            self.memory
+                .apply_committed(session_id, &updated_parts, Some(meta.version));
+            for part in &updated_parts {
+                self.bus
+                    .emit(SessionChange::PartUpdated { session_id, part: part.clone() });
+            }
             self.bus
                 .emit(SessionChange::SessionMetaUpdated { session_id, meta });
         }
-        Ok(())
+        Ok(updated_parts)
     }
 
     async fn reconcile(&self, session_id: i64) -> Result<(), StoreError> {
@@ -1294,10 +1382,14 @@ where
             )
             .await?;
         self.engine.set_provider_anchors(session_id, None).await?;
-        self.memory.invalidate(session_id);
         let meta = self.engine.session_meta(session_id).await?;
-        for part in outcome.parts {
-            self.bus.emit(SessionChange::PartAdded { session_id, part });
+        self.memory
+            .apply_committed(session_id, &outcome.parts, Some(meta.version));
+        for part in &outcome.parts {
+            self.bus.emit(SessionChange::PartAdded {
+                session_id,
+                part: part.clone(),
+            });
         }
         self.bus
             .emit(SessionChange::SessionMetaUpdated { session_id, meta });
@@ -1560,7 +1652,7 @@ mod tests {
         };
         let _subscription = facade.subscribe(session_id, observer);
 
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -1573,6 +1665,7 @@ mod tests {
             )
             .await
             .expect("submit");
+        let run_id = outcome.run_id;
         let changes = seen.lock().unwrap().clone();
         assert!(
             changes
@@ -1608,7 +1701,7 @@ mod tests {
         )
         .with_streaming_flush_delta_count(3);
         let session_id = ready_session(&facade, 1, "stream").await;
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -1626,6 +1719,7 @@ mod tests {
             )
             .await
             .expect("start streamed part");
+        let run_id = outcome.run_id;
         let part_id = engine
             .load_session(session_id)
             .await
@@ -1769,7 +1863,7 @@ mod tests {
         // owner-a's lease goes stale; owner-b acquires, which reconciles the
         // (now stale) owner-a state and lets owner-b write.
         clock.advance(60_000);
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-b",
@@ -1782,7 +1876,7 @@ mod tests {
             )
             .await
             .expect("owner-b acquires after staleness");
-        assert!(run_id > 0);
+        assert!(outcome.run_id > 0);
     }
 
     #[tokio::test]
@@ -1793,7 +1887,7 @@ mod tests {
         let ready = facade.session_state(session_id).await.expect("state");
         assert_eq!(ready.state, SessionState::Ready);
 
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -1806,6 +1900,7 @@ mod tests {
             )
             .await
             .expect("submit");
+        let run_id = outcome.run_id;
         let running = facade.session_state(session_id).await.expect("state");
         assert_eq!(running.state, SessionState::Running);
         assert_eq!(running.active_run_id, Some(run_id));
@@ -1833,7 +1928,7 @@ mod tests {
     async fn pending_interaction_gates_to_awaiting_user() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -1846,6 +1941,7 @@ mod tests {
             )
             .await
             .expect("submit");
+        let run_id = outcome.run_id;
         facade
             .append_parts(
                 session_id,
@@ -1883,7 +1979,7 @@ mod tests {
     async fn fork_and_rewind_copy_edges_and_return_new_session_ids() {
         let (facade, clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -1896,6 +1992,7 @@ mod tests {
             )
             .await
             .expect("submit");
+        let run_id = outcome.run_id;
         facade
             .complete_run(
                 session_id,
@@ -1979,7 +2076,11 @@ mod tests {
             .submit_user_message(session_id, "owner-a", parts.clone(), Some("k1".to_owned()))
             .await
             .expect("replay");
-        assert_eq!(first, second, "replay returns the same run id");
+        // The replay resolves to the same run but is not a re-creation: the
+        // marker is not re-emitted (`created == false`) while the run id and
+        // content parts match.
+        assert_eq!(first.run_id, second.run_id, "replay returns the same run id");
+        assert!(second.created == false, "replay is not a re-creation");
         let view = facade.load(session_id).await.expect("load");
         assert_eq!(view.parts.len(), 2, "no duplicate parts");
     }
@@ -2036,7 +2137,7 @@ mod tests {
     async fn root_delete_emits_membership_removals_for_descendants() {
         let (facade, _clock) = harness();
         let root_id = ready_session(&facade, 1, "delete tree").await;
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 root_id,
                 "owner-a",
@@ -2049,6 +2150,7 @@ mod tests {
             )
             .await
             .expect("submit");
+        let run_id = outcome.run_id;
         let root_part_ids = facade
             .load(root_id)
             .await
@@ -2252,7 +2354,7 @@ mod tests {
     async fn start_run_starts_a_non_user_run_and_returns_its_marker_id() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "t").await;
-        let run_id = facade
+        let outcome = facade
             .start_run(
                 session_id,
                 "owner-a",
@@ -2262,6 +2364,7 @@ mod tests {
             )
             .await
             .expect("start background run");
+        let run_id = outcome.run_id;
         assert!(run_id > 0);
         let view = facade.load(session_id).await.expect("load");
         let marker = view
@@ -2435,7 +2538,7 @@ mod tests {
     async fn answer_interaction_emits_updated_interaction_before_added_reply() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "answer patches").await;
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -2448,6 +2551,7 @@ mod tests {
             )
             .await
             .expect("submit interaction");
+        let run_id = outcome.run_id;
         let interaction_id = facade
             .load(session_id)
             .await
@@ -2493,7 +2597,7 @@ mod tests {
     async fn cancel_emits_only_changed_marker_and_child_before_meta() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "cancel patches").await;
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -2523,6 +2627,7 @@ mod tests {
             )
             .await
             .expect("submit run");
+        let run_id = outcome.run_id;
         let child_id = facade.load(session_id).await.expect("load run").parts[1].part_id;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let _subscription = facade.subscribe(session_id, {
@@ -2557,7 +2662,7 @@ mod tests {
     async fn reconcile_emits_committed_part_updates_and_preserves_live_or_paused_runs() {
         let (facade, _clock) = harness();
         let session_id = ready_session(&facade, 1, "reconcile patches").await;
-        let run_id = facade
+        let outcome = facade
             .submit_user_message(
                 session_id,
                 "owner-a",
@@ -2575,6 +2680,7 @@ mod tests {
             )
             .await
             .expect("submit run");
+        let run_id = outcome.run_id;
         let child_id = facade.load(session_id).await.expect("load run").parts[1].part_id;
         let seen = Arc::new(Mutex::new(Vec::new()));
         let _subscription = facade.subscribe(session_id, {

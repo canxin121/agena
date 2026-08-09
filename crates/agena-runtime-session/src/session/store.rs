@@ -205,34 +205,19 @@ impl StoreAdapter {
     }
 
     /// Submit a user message: creates the `run` marker and its content parts
-    /// in one transaction, returns the run id and the engine-id'd user
-    /// [`Message`] (plus all created parts for callers that need them).
+    /// in one transaction. The facade returns the full outcome — the run
+    /// marker plus the committed, engine-id'd parts — so callers remap
+    /// placeholders without reloading.
     pub(crate) async fn submit_user_message(
         &self,
         session_id: i64,
         parts: Vec<NewPart>,
         idempotency_key: Option<String>,
     ) -> Result<SubmitOutcome, AppError> {
-        // The facade returns only the run marker id (7.1); the created parts
-        // are reloaded from the view so callers can remap placeholders. The
-        // view is ordered by `(created_at_ms, part_id)` so the marker leads.
-        let run_id = self
-            .facade
+        self.facade
             .submit_user_message(session_id, &self.owner_id, parts, idempotency_key)
             .await
-            .map_err(store_error)?;
-        let view = self.facade.load(session_id).await.map_err(store_error)?;
-        let created: Vec<Part> = view
-            .parts
-            .iter()
-            .filter(|part| part.part_id == run_id || part.run_id == Some(run_id))
-            .cloned()
-            .collect();
-        Ok(SubmitOutcome {
-            run_id,
-            created: true,
-            parts: created,
-        })
+            .map_err(store_error)
     }
 
     /// Start a non-user run (continue / compaction / subtask) and return the
@@ -243,10 +228,12 @@ impl StoreAdapter {
         run_kind: &str,
         content: Value,
     ) -> Result<i64, AppError> {
-        self.facade
+        let outcome = self
+            .facade
             .start_run(session_id, &self.owner_id, run_kind, content, None)
             .await
-            .map_err(store_error)
+            .map_err(store_error)?;
+        Ok(outcome.run_id)
     }
 
     /// Append content parts under an existing run marker. Returns the created
@@ -257,24 +244,10 @@ impl StoreAdapter {
         run_id: i64,
         parts: Vec<NewPart>,
     ) -> Result<Vec<Part>, AppError> {
-        // The facade returns only `()` (14.1); the created parts are reloaded
-        // from the view so callers can remap placeholders. The view is ordered
-        // by `(created_at_ms, part_id)`, so the run's newest members — the
-        // last `part_count` entries of the run's parts — are exactly the
-        // appended ones (same transaction, largest ids).
-        let part_count = parts.len();
         self.facade
             .append_parts(session_id, &self.owner_id, run_id, parts)
             .await
-            .map_err(store_error)?;
-        let view = self.facade.load(session_id).await.map_err(store_error)?;
-        let run_parts: Vec<Part> = view
-            .parts
-            .into_iter()
-            .filter(|part| part.run_id == Some(run_id))
-            .collect();
-        let split = run_parts.len().saturating_sub(part_count);
-        Ok(run_parts.into_iter().skip(split).collect())
+            .map_err(store_error)
     }
 
     /// Apply a streaming delta to one part and return the updated part.
@@ -284,19 +257,10 @@ impl StoreAdapter {
         part_id: i64,
         delta: PartDelta,
     ) -> Result<Part, AppError> {
-        // The facade returns `()` (14.1); the authoritative part is reloaded
-        // so the caller applies the engine's values back onto its aggregate.
         self.facade
             .update_part(session_id, &self.owner_id, part_id, delta)
             .await
-            .map_err(store_error)?;
-        let view = self.facade.load(session_id).await.map_err(store_error)?;
-        view.parts
-            .into_iter()
-            .find(|part| part.part_id == part_id)
-            .ok_or_else(|| {
-                AppError::Internal(format!("updated part {part_id} not found after update"))
-            })
+            .map_err(store_error)
     }
 
     pub(crate) async fn complete_run(
@@ -308,6 +272,7 @@ impl StoreAdapter {
         self.facade
             .complete_run(session_id, &self.owner_id, run_id, outcome)
             .await
+            .map(|_| ())
             .map_err(store_error)
     }
 
@@ -315,6 +280,7 @@ impl StoreAdapter {
         self.facade
             .cancel_run(session_id, &self.owner_id, run_id)
             .await
+            .map(|_| ())
             .map_err(store_error)
     }
 

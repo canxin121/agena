@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::message::AskUserToolInput;
+use crate::part::AskUserToolInput;
 
 use super::{ToolError, ToolExecutionView, ToolPayloadExecution, ToolPayloadOutput};
 
@@ -76,7 +76,7 @@ pub fn execution_from_timeout(input: &AskUserToolInput) -> ToolPayloadExecution 
 
 #[cfg(test)]
 mod tests {
-    use crate::message::AskUserToolInput;
+    use crate::part::AskUserToolInput;
     use agena_domain::UserInputQuestion;
 
     #[test]

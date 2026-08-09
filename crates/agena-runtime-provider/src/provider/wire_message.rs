@@ -22,10 +22,10 @@ use agena_provider::{
     CompletionInputAttachment, CompletionInputAttachmentKind, CompletionInputAttachmentSource,
     CompletionInputMessage, CompletionInputPart, CompletionInputProviderState, ModelToolFunction,
 };
-use agena_runtime_contracts::message::{
-    AttachmentItem, AttachmentKind, AttachmentSource, MessageProviderState, OperationPart,
-    PartContent, RuntimeActivity,
+use agena_runtime_contracts::part::{
+    AttachmentItem, AttachmentKind, AttachmentSource, OperationPart, PartContent, RuntimeActivity,
 };
+use agena_runtime_contracts::provider_state::MessageProviderState;
 use agena_runtime_contracts::part_content::decode_part_content;
 use agena_storage::store::{Part, PartRole};
 
@@ -1025,7 +1025,7 @@ mod tests {
     use agena_domain::ToolOutput;
     use agena_domain::{ExecutionStatus, ToolApiFunction};
     use agena_domain::{Role, StructuredObject, TimeRange};
-    use agena_runtime_contracts::message::{OperationCompletion, OperationPart};
+    use agena_runtime_contracts::part::{OperationCompletion, OperationPart};
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use serde_json::{Map, Value};
 

@@ -878,7 +878,8 @@ mod tool_api_history_tests {
     use agena_domain::ToolInvocation;
     use agena_domain::ToolOutput;
     use agena_domain::{StructuredObject, TimeRange};
-    use agena_runtime_contracts::message::{MessageProviderState, OperationPart};
+    use agena_runtime_contracts::part::OperationPart;
+    use agena_runtime_contracts::provider_state::MessageProviderState;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use serde_json::{Map, Value};
 
@@ -952,7 +953,7 @@ mod tool_api_history_tests {
         let mut operation = OperationPart::completed(
             call_id,
             invocation,
-            agena_runtime_contracts::message::OperationCompletion::new(
+            agena_runtime_contracts::part::OperationCompletion::new(
                 title.to_owned(),
                 summary.to_owned(),
                 output_text.to_owned(),

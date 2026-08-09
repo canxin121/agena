@@ -325,7 +325,7 @@ pub(super) fn validate_shell_filesystem_effects(
 pub(super) fn shell_command_from_invocation(invocation: &ToolInvocation) -> Option<String> {
     if let Some(payload) = ToolPayloadInput::from_invocation(invocation) {
         let command = match payload {
-            ToolPayloadInput::Shell(crate::message::ShellToolInput::Run { command, .. }) => {
+            ToolPayloadInput::Shell(crate::part::ShellToolInput::Run { command, .. }) => {
                 Some(command.command)
             }
             _ => None,

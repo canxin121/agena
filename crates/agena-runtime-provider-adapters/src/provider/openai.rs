@@ -32,7 +32,7 @@ use crate::{
 };
 use agena_domain::{CapabilitySupport, ModelInputModality, StructuredObject};
 use agena_provider::CompletionRequest;
-use agena_runtime_contracts::message::{AttachmentItem, AttachmentKind, AttachmentSource};
+use agena_runtime_contracts::part::{AttachmentItem, AttachmentKind, AttachmentSource};
 
 mod openai_models;
 mod openai_provider_native_tools;

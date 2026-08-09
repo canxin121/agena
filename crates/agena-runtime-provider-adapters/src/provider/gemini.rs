@@ -23,7 +23,7 @@ use crate::{
 };
 use agena_provider::CompletionRequest;
 use agena_provider::CompletionStreamEvent;
-use agena_runtime_contracts::message::AttachmentItem;
+use agena_runtime_contracts::part::AttachmentItem;
 
 mod gemini_adapter;
 

@@ -1,7 +1,7 @@
 use agena_domain::{FileChangeKind, FileChangeRecord};
 use serde_json::Value as JsonValue;
 
-use crate::message::ApplyPatchToolInput;
+use crate::part::ApplyPatchToolInput;
 use agena_plugin_host::sdk::ToolInput;
 
 use super::{

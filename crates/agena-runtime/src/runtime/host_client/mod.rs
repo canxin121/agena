@@ -8,7 +8,7 @@ use std::{future::Future, sync::Arc};
 use agena_plugin_sdk::PluginKey;
 use async_trait::async_trait;
 
-use crate::message::{AskUserToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput};
+use crate::part::{AskUserToolInput, EnterSnapshotToolInput, ExitSnapshotToolInput};
 use crate::plugins::storage::{
     PluginSecretStore, PluginStorage, PluginStorageError, StorageLocator,
 };

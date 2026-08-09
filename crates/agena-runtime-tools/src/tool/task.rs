@@ -1,4 +1,4 @@
-use crate::message::TaskToolInput;
+use crate::part::TaskToolInput;
 
 use super::{ToolExecutor, ToolPayloadExecution};
 

@@ -19,7 +19,7 @@ use agena_domain::{
 };
 use agena_plugin_host::ProviderDescriptor;
 use agena_provider::ProviderErrorKind;
-use agena_runtime_contracts::message::{AttachmentItem, AttachmentKind};
+use agena_runtime_contracts::part::{AttachmentItem, AttachmentKind};
 
 use super::{CompletionResponse, ModelRuntime, wire_message};
 use agena_provider::CompletionRequest;

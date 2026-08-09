@@ -1561,7 +1561,7 @@ mod tool_api_function_validation_tests {
     use agena_provider::{
         CompletionFinishReason, CompletionRequest, CompletionToolCall, CompletionUsage,
     };
-    use agena_runtime_contracts::message::{OperationCompletion, OperationPart};
+    use agena_runtime_contracts::part::{OperationCompletion, OperationPart};
     use agena_runtime_tools::tool::ToolApiBinding;
     use agena_storage::store::{Part, PartRole, PartState, PartVisibility};
     use async_trait::async_trait;

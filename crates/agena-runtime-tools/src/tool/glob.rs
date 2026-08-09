@@ -1,7 +1,7 @@
 use globset::{Glob, GlobMatcher};
 use walkdir::WalkDir;
 
-use crate::message::GlobToolInput;
+use crate::part::GlobToolInput;
 
 use super::{
     ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,

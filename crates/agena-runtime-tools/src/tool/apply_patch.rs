@@ -5,7 +5,7 @@ use diff::Result as DiffResult;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::message::ApplyPatchToolInput;
+use crate::part::ApplyPatchToolInput;
 
 use super::{ToolError, ToolExecutor};
 use agena_tool::{AppliedFileChange, ApplyPatchExecution, PatchOpKind};

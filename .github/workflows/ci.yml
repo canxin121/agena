@@ -1,11 +1,10 @@
 name: CI
 
 on:
-  push:
-    branches:
-      - main
-      - master
-  pull_request:
+  # Automatic push/PR runs are disabled while GitHub Actions billing is
+  # unavailable. Keep the workflow manually runnable without deleting its
+  # checks so the automatic triggers can be restored in one small change.
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always

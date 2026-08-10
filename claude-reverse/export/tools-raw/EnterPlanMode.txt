@@ -1,0 +1,11 @@
+ss({name:Gle,searchHint:"switch to plan mode to design an approach before coding",maxResultSizeChars:1e5,async description(){return"Requests permission to enter plan mode for complex tasks requiring exploration and design"},async prompt(){return Mkp()},get inputSchema(){return xTb()},get outputSchema(){return ITb()},userFacingName(){return""},shouldDefer:!0,isEnabled(){return r5.isEnabled()},isConcurrencySafe(){return!0},isReadOnly(){return!0},renderToolUseMessage(){return null},async call(e,t){if(t.agentId)throw Error("EnterPlanMode tool cannot be used in agent contexts");return U2e(_n(t).mode,"plan"),t.setToolPermissionContext((r)=>av(MAr(r),{type:"setMode",mode:"plan",destination:"session"})),{data:{message:"Entered plan mode. You should now focus on exploring the codebase and designing an implementation approach."}}},mapToolResultToToolResultBlockParam({message:e},t){return{type:"tool_result",content:`${e}
+
+In plan mode, you should:
+1. Thoroughly explore the codebase to understand existing patterns
+2. Identify similar features and architectural approaches
+3. Consider multiple approaches and their trade-offs
+4. Use ${om} if you need to clarify the approach
+5. Design a concrete implementation strategy
+6. When ready, use ${AF} to present your plan for approval
+
+Remember: DO NOT write or edit any files yet. This is a read-only exploration and planning phase.`,tool_use_id:t}}}

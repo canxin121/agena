@@ -10,7 +10,7 @@ use agena_domain::{
     ExecutionSelection, ModelRef, PromptCompactionActivity, PromptTokenUsageSnapshot, Role,
     SessionLifecycleState, SessionRelationKind, SubtaskStatus, WorkflowState,
 };
-use agena_storage::store::{Part, PartRole, PartState};
+use agena_storage::store::{Part, PartRole};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 /// Runtime state of a subtask.
@@ -899,8 +899,8 @@ impl Session {
             .find(|part| part.role == PartRole::User && part.kind != "run")
     }
 
-    /// Pending tool calls: `tool_call` parts still awaiting a result — not yet
-    /// `completed`/`cancelled` and without a `tool_result` referencing them.
+    /// Pending tool calls: in-flight `tool_call` parts still awaiting a result
+    /// and without a `tool_result` referencing them.
     pub fn pending_tool_calls(&self) -> impl Iterator<Item = &Part> {
         self.parts
             .iter()
@@ -934,12 +934,11 @@ impl Session {
             .find(|part| part.kind == "tool_result" && part.parent_part_id == Some(call.part_id))
     }
 
-    /// Whether `part` is a tool call still awaiting its result (not
-    /// `completed`/`cancelled` and without a paired `tool_result`).
+    /// Whether `part` is an in-flight tool call still awaiting its result and
+    /// without a paired `tool_result`.
     fn pending_tool_call(&self, part: &Part) -> bool {
         part.kind == "tool_call"
-            && part.state != PartState::Completed
-            && part.state != PartState::Cancelled
+            && part.state.is_in_flight()
             && self.tool_result_for(part).is_none()
     }
 
@@ -1146,6 +1145,7 @@ fn usage_from_part_content(content: &serde_json::Value) -> Option<agena_provider
 #[cfg(test)]
 mod parts_projection_tests {
     use super::*;
+    use agena_storage::store::PartState;
     use agena_storage::store::PartVisibility;
     use serde_json::json;
 
@@ -1268,12 +1268,26 @@ mod parts_projection_tests {
             PartState::Pending,
             json!({"name": "fs.write", "input": {}}),
         );
-        let terminal = part(
+        let completed = part(
             12,
             "tool_call",
             PartRole::Assistant,
             PartState::Completed,
             json!({"name": "done", "input": {}}),
+        );
+        let failed = part(
+            14,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Failed,
+            json!({"name": "failed", "input": {}}),
+        );
+        let cancelled = part(
+            15,
+            "tool_call",
+            PartRole::Assistant,
+            PartState::Cancelled,
+            json!({"name": "cancelled", "input": {}}),
         );
         let mut result = part(
             13,
@@ -1284,7 +1298,7 @@ mod parts_projection_tests {
         );
         result.parent_part_id = Some(paired.part_id);
 
-        let session = session_with(vec![paired, unpaired, terminal, result]);
+        let session = session_with(vec![paired, unpaired, completed, result, failed, cancelled]);
 
         let pending: Vec<i64> = session.pending_tool_calls().map(|p| p.part_id).collect();
         assert_eq!(pending, vec![11]);
@@ -1297,7 +1311,7 @@ mod parts_projection_tests {
         );
         assert_eq!(session.tool_results().count(), 1);
         // Highest part id + 1 is the next call id (call ids are part ids).
-        assert_eq!(session.next_call_id(), 14);
+        assert_eq!(session.next_call_id(), 16);
         assert_eq!(session.workflow_state(), WorkflowState::ToolPending);
     }
 

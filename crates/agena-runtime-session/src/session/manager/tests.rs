@@ -946,6 +946,20 @@ async fn manager_with_provider(provider: Arc<dyn ModelRuntime>) -> SessionManage
 #[derive(Default)]
 struct ToolSearchFixture;
 
+#[derive(
+    Debug,
+    Clone,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+    agena_plugin_host::sdk::ToolInput,
+)]
+#[input(non_empty("tool"))]
+#[serde(deny_unknown_fields)]
+struct ToolHelpFixtureInput {
+    tool: String,
+}
+
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
     name = "tools",
@@ -968,6 +982,28 @@ impl ToolSearchFixture {
             "Matching tools for {:?}:\n- fs.read [filesystem, query]: Read workspace files.",
             input.query
         ))
+    }
+
+    #[tool(
+        name = "help",
+        summary = "Inspect one live tool contract.",
+        read_only,
+        discovery,
+        concurrency_safe
+    )]
+    async fn help(
+        &self,
+        input: &ToolHelpFixtureInput,
+    ) -> agena_plugin_host::sdk::Result<agena_plugin_host::sdk::ToolInvokeOutput> {
+        if input.tool == "fs.list" {
+            return Err(agena_plugin_host::sdk::PluginError::invalid_params(
+                "unknown tool 'fs.list'",
+            ));
+        }
+        Ok(agena_plugin_host::sdk::ToolInvokeOutput::text(format!(
+            "Contract for {}",
+            input.tool
+        )))
     }
 }
 
@@ -1103,6 +1139,130 @@ impl ModelRuntime for ToolSearchLoopProvider {
                     provider_id: provider_id.clone(),
                     model: model.clone(),
                     delta: "TOOL_SEARCH_OK fs.read".to_owned(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason: Some(CompletionFinishReason::Stop),
+                    usage: Some(CompletionUsage::default()),
+                    provider_metadata: None,
+                    end_turn: None,
+                }),
+            ],
+            other => panic!("stable run made an unexpected provider request #{other}"),
+        };
+        Ok(Box::pin(futures_util::stream::iter(events)))
+    }
+}
+
+/// Reproduces the production failure that wedged session 25: two
+/// concurrency-safe Tool API calls finish in one batch, one Failed and one
+/// Completed. The failed terminal part must not be projected as pending on the
+/// next stable-loop iteration.
+struct MixedToolHelpBatchProvider {
+    model: ModelId,
+    requests: std::sync::Mutex<Vec<CompletionRequest>>,
+}
+
+impl MixedToolHelpBatchProvider {
+    fn new() -> Self {
+        Self {
+            model: ModelId::new("mixed-tool-help-model"),
+            requests: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn request_count(&self) -> usize {
+        self.requests.lock().expect("request lock").len()
+    }
+}
+
+#[async_trait::async_trait]
+impl ModelRuntime for MixedToolHelpBatchProvider {
+    fn id(&self) -> &str {
+        "mixed-tool-help"
+    }
+
+    fn default_model(&self) -> &ModelId {
+        &self.model
+    }
+
+    fn agena_tool_mode(&self, _model: &ModelId) -> agena_provider::AgenaToolMode {
+        agena_provider::AgenaToolMode::ProviderProtocol
+    }
+
+    async fn list_models(&self) -> Result<Vec<agena_domain::Model>, ProviderError> {
+        Ok(Vec::new())
+    }
+
+    async fn complete(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        Ok(CompletionResponse {
+            provider_id: ProviderId::new(self.id()),
+            model: self.model.clone(),
+            text: "MIXED_TOOL_BATCH_OK".to_owned(),
+            reasoning_text: None,
+            finish_reason: Some(CompletionFinishReason::Stop),
+            tool_calls: Vec::new(),
+            usage: Some(CompletionUsage::default()),
+            provider_metadata: None,
+        })
+    }
+
+    async fn complete_stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<
+        std::pin::Pin<
+            Box<
+                dyn futures_util::Stream<Item = Result<CompletionStreamEvent, ProviderError>>
+                    + Send,
+            >,
+        >,
+        ProviderError,
+    > {
+        let request_index = {
+            let mut requests = self.requests.lock().expect("request lock");
+            let request_index = requests.len();
+            requests.push(request);
+            request_index
+        };
+        let provider_id = ProviderId::new(self.id());
+        let model = self.model.clone();
+        let events = match request_index {
+            0 => vec![
+                Ok(CompletionStreamEvent::ToolCallSnapshot {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    stream_key: "call:invalid-help".to_owned(),
+                    id: Some("call_invalid_help".to_owned()),
+                    name: Some("tools_help".to_owned()),
+                    arguments_json: r#"{"tool":"fs.list"}"#.to_owned(),
+                }),
+                Ok(CompletionStreamEvent::ToolCallSnapshot {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    stream_key: "call:valid-help".to_owned(),
+                    id: Some("call_valid_help".to_owned()),
+                    name: Some("tools_help".to_owned()),
+                    arguments_json: r#"{"tool":"fs.read"}"#.to_owned(),
+                }),
+                Ok(CompletionStreamEvent::Completed {
+                    provider_id,
+                    model,
+                    finish_reason: Some(CompletionFinishReason::ToolCalls),
+                    usage: Some(CompletionUsage::default()),
+                    provider_metadata: None,
+                    end_turn: None,
+                }),
+            ],
+            1 => vec![
+                Ok(CompletionStreamEvent::TextDelta {
+                    provider_id: provider_id.clone(),
+                    model: model.clone(),
+                    delta: "MIXED_TOOL_BATCH_OK".to_owned(),
                 }),
                 Ok(CompletionStreamEvent::Completed {
                     provider_id,
@@ -1495,6 +1655,64 @@ async fn stable_run_executes_in_progress_tools_search_and_replays_reasoning() {
         "replayed parts: {:#?}",
         replayed_tool_turn.parts
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stable_run_continues_after_mixed_failed_and_completed_parallel_tool_batch() {
+    let provider = Arc::new(MixedToolHelpBatchProvider::new());
+    let manager = manager_with_tool_search_fixture(provider.clone()).await;
+    let session = create(&manager, "mixed Tool API batch").await;
+    let mut request_override = agena_domain::ModelSpeedModeRequestOverride::default();
+    request_override.set_parallel_tool_calls(Some(true));
+    let request = SessionUserRunRequest::new(
+        session.id,
+        agena_runtime::SessionRunOptions {
+            model: ModelRef::new("mixed-tool-help", "mixed-tool-help-model"),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            thinking: None,
+            request_override,
+            system: Some("Inspect both tool contracts, then finish.".to_owned()),
+            temperature: Some(0.0),
+            max_output_tokens: Some(256),
+        },
+        vec![TypedContent::Text(text_content(
+            "Inspect one invalid and one valid tool contract.",
+        ))],
+    );
+
+    let completed = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        manager.submit_subtask_user_message(request, None),
+    )
+    .await
+    .expect("mixed terminal tool batch must not spin forever")
+    .expect("stable run must continue after returning the failed tool result to the model");
+
+    let tool_states = completed
+        .parts()
+        .iter()
+        .filter(|part| part.kind == "tool_call")
+        .map(|part| part.state)
+        .collect::<Vec<_>>();
+    assert_eq!(tool_states.len(), 2);
+    assert!(tool_states.contains(&PartState::Failed));
+    assert!(tool_states.contains(&PartState::Completed));
+    assert!(
+        completed.pending_tools().is_empty(),
+        "failed and completed tool calls are both terminal"
+    );
+    assert_eq!(
+        provider.request_count(),
+        2,
+        "the terminal batch must trigger exactly one follow-up model turn"
+    );
+    assert!(completed.parts().iter().any(|part| {
+        part.kind == "text"
+            && part.content.get("text").and_then(serde_json::Value::as_str)
+                == Some("MIXED_TOOL_BATCH_OK")
+    }));
 }
 
 #[tokio::test]

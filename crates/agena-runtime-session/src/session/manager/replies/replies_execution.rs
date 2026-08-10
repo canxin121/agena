@@ -421,6 +421,10 @@ impl SessionManager {
 
             let pending_tools = session.pending_tools();
             if !pending_tools.is_empty() {
+                let pending_before = pending_tools
+                    .iter()
+                    .map(|pending| pending.part.part_id)
+                    .collect::<Vec<_>>();
                 // The model requested tools this turn: we are mid-task. Resolve
                 // and execute them, then request another model turn so the
                 // tool results are sent back.
@@ -454,7 +458,25 @@ impl SessionManager {
                         .record_hook_runs(session, hook_runs, state.clone())
                         .await?;
                 }
-                model_requested = !session.blocked() && session.pending_tools().is_empty();
+                let pending_after = session
+                    .pending_tools()
+                    .into_iter()
+                    .map(|pending| pending.part.part_id)
+                    .collect::<Vec<_>>();
+                if !session.blocked() && pending_after == pending_before {
+                    // A pending-tool pass must either complete at least one
+                    // operation or install a blocking interaction. Returning
+                    // to the top with the identical pending set creates a
+                    // ready-future busy loop that can pin a Tokio worker at
+                    // 100% CPU while the lease heartbeat makes the run look
+                    // healthy forever. Fail closed instead of spinning even
+                    // if a future lifecycle regression misclassifies a part.
+                    return Err(AppError::Internal(format!(
+                        "tool resolution made no progress for session {} (pending call ids: {:?})",
+                        session.id, pending_after
+                    )));
+                }
+                model_requested = !session.blocked() && pending_after.is_empty();
                 continue;
             }
 

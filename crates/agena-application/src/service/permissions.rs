@@ -470,6 +470,7 @@ const fn permission_mode_to_resource(
 mod tests {
     use std::{path::Path, sync::Arc};
 
+    use agena_api::resource::PermissionMode as PermissionModeResource;
     use agena_domain::PermissionMode;
     use agena_storage::MemoryStore;
     use agena_storage::store::{SessionFacade, SessionStore};
@@ -523,7 +524,7 @@ mod tests {
 
         assert_eq!(created.source, "cli");
         assert_eq!(created.operator.as_deref(), Some("cli"));
-        assert_eq!(created.mode, PermissionMode::Allow);
+        assert_eq!(created.mode, PermissionModeResource::Allow);
         assert!(created.workspace_id.is_some());
     }
 

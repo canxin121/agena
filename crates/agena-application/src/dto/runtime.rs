@@ -117,7 +117,7 @@ impl From<agena_runtime::RuntimeUiConfiguration> for TuiPreferencesResource {
     }
 }
 
-pub(crate) fn runtime_background_task_resource(
+pub fn runtime_background_task_resource(
     value: agena_runtime::RuntimeBackgroundTask,
 ) -> agena_api::resource::RuntimeBackgroundTaskResource {
     agena_api::resource::RuntimeBackgroundTaskResource {

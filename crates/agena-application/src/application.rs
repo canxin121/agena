@@ -826,11 +826,11 @@ impl Application {
     /// instead of assembling the record themselves.
     pub async fn runtime_status_response(&self) -> agena_api::resource::RuntimeStatusResponse {
         use agena_api::resource::{
-            DefaultSelectionResource, ModelCatalogResponse, ModelCatalogSourceKind,
-            RuntimeAutomationResource, RuntimeLspResource, RuntimeLspServerResource,
-            RuntimeMcpResource, RuntimeMcpServerResource, RuntimeOperatorResource,
-            RuntimePluginUiResource, RuntimeSessionCacheResource, RuntimeSkillResource,
-            RuntimeSkillsResource, RuntimeStatusResponse, RuntimeTaskResource,
+            DefaultSelectionResource, ModelCatalogResponse, RuntimeAutomationResource,
+            RuntimeLspResource, RuntimeLspServerResource, RuntimeMcpResource,
+            RuntimeMcpServerResource, RuntimeOperatorResource, RuntimePluginUiResource,
+            RuntimeSessionCacheResource, RuntimeSkillResource, RuntimeSkillsResource,
+            RuntimeStatusResponse, RuntimeTaskResource,
         };
 
         let status = self.runtime_status().runtime_status().await;

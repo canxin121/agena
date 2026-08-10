@@ -142,7 +142,7 @@ pub struct SessionForkRequestBody {
 pub async fn health(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
     let status = state.runtime_snapshot_summary().await;
     Ok(Json(HealthResponse {
-        status: "ok",
+        status: "ok".to_owned(),
         generation: status.generation,
         loaded_at: status.loaded_at,
         database_connected: true,
@@ -190,14 +190,16 @@ fn runtime_background_task_start_response(
 ) -> RuntimeBackgroundTaskStartResponse {
     RuntimeBackgroundTaskStartResponse {
         started: start.started,
-        task: start.task.into(),
+        task: agena_application::dto::runtime_background_task_resource(start.task),
     }
 }
 
 fn runtime_background_task_cancel_response(
     task: agena_runtime::RuntimeBackgroundTask,
 ) -> RuntimeBackgroundTaskCancelResponse {
-    RuntimeBackgroundTaskCancelResponse { task: task.into() }
+    RuntimeBackgroundTaskCancelResponse {
+        task: agena_application::dto::runtime_background_task_resource(task),
+    }
 }
 
 /// Lightweight liveness probe — returns 200 OK with a static body.
@@ -558,7 +560,7 @@ pub async fn list_runtime_background_tasks(
             .runtime_control()
             .background_tasks()
             .into_iter()
-            .map(Into::into)
+            .map(agena_application::dto::runtime_background_task_resource)
             .collect::<Vec<agena_application::dto::RuntimeBackgroundTaskResource>>(),
     ))
 }

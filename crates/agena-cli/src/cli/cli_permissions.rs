@@ -1,6 +1,9 @@
 use agena_application::Application;
 use agena_application::{
-    dto::{CursorPaginationQuery, PermissionRuleResource, SearchPaginationQuery},
+    dto::{
+        CursorPaginationQuery, PermissionMode as PermissionModeResource, PermissionRuleResource,
+        SearchPaginationQuery,
+    },
     service::PermissionRuleWriteCommand,
 };
 use agena_storage::MemoryType;
@@ -62,10 +65,10 @@ pub(super) fn permission_rule_output(
         id: rule.id,
         action_key: rule.action_key,
         mode: match rule.mode {
-            PermissionMode::Allow => "allow",
-            PermissionMode::Auto => "auto",
-            PermissionMode::Ask => "ask",
-            PermissionMode::Deny => "deny",
+            PermissionModeResource::Allow => "allow",
+            PermissionModeResource::Auto => "auto",
+            PermissionModeResource::Ask => "ask",
+            PermissionModeResource::Deny => "deny",
         }
         .to_owned(),
         scope: rule.scope,

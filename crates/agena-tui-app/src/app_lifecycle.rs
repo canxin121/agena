@@ -112,6 +112,7 @@ impl App {
                 .checked_sub(Duration::from_millis(REFRESH_INTERVAL_MS))
                 .unwrap_or_else(Instant::now),
             pending_refresh: None,
+            refresh_pending: false,
             pending_ui_action: None,
             current_lineage: None,
             side_sessions: HashMap::new(),
@@ -325,13 +326,25 @@ impl App {
         self.session_load
             .recover_stalled_request(Duration::from_millis(REFRESH_STALL_TIMEOUT_MS));
 
+        // An event-driven refresh request (a streaming `PartUpdated` arrived)
+        // is merged into the same interval gate: flushing once per event
+        // would spawn a full-snapshot refresh for every coalesced stream
+        // flush, saturating the TUI with ~100+ refreshes/s and keeping the
+        // transcript permanently behind a running reply. The periodic path
+        // below repaints streamed parts at most every `REFRESH_INTERVAL_MS`,
+        // which is what makes reasoning/tool-call deltas appear live. A
+        // parked force refresh (bus lag, terminal safety net) rides the same
+        // gate — the terminal state converges a fraction of a second later.
         if let Some(session_id) = self.transcript.session_id
+            && self.refresh_pending
             && !self.transcript.refreshing
             && !self.transcript.state_loading
             && self.last_refresh_at.elapsed() >= Duration::from_millis(REFRESH_INTERVAL_MS)
         {
+            self.refresh_pending = false;
             self.last_refresh_at = Instant::now();
-            self.request_refresh(session_id, false);
+            let force = self.pending_refresh.take().is_some();
+            self.request_refresh(session_id, force);
         }
 
         self.sync_current_draft_slot();

@@ -229,6 +229,22 @@ impl App {
         });
     }
 
+    /// Park an event-driven refresh for the periodic tick to consume. `on_tick`
+    /// runs one refresh per `REFRESH_INTERVAL_MS`, so a burst of streaming
+    /// `PartUpdated` events collapses into a bounded refresh rate. A `force`
+    /// refresh is parked in `pending_refresh` so the tick (or the in-flight
+    /// refresh completion) re-issues it as a force.
+    pub(crate) fn pending_refresh_for(&mut self, session_id: i64, force: bool) {
+        self.refresh_pending = true;
+        if force {
+            let merged = match self.pending_refresh {
+                Some((_, existing_force)) => force || existing_force,
+                None => force,
+            };
+            self.pending_refresh = Some((session_id, merged));
+        }
+    }
+
     pub(crate) fn request_refresh(&mut self, session_id: i64, force: bool) {
         if self.transcript.refreshing {
             // A refresh is already in flight. Remember the request instead of

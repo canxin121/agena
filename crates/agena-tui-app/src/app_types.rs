@@ -493,6 +493,14 @@ pub struct App {
     /// transcript until the next event or a restart; the refreshed handler
     /// re-issues it once the in-flight request completes.
     pub(super) pending_refresh: Option<(i64, bool)>,
+    /// An event-driven refresh request merged into the periodic tick budget.
+    /// Streaming flushes emit `PartUpdated` at far higher rates than the TUI
+    /// can apply full-snapshot refreshes (~100+/s while reasoning); refreshing
+    /// on every event leaves the backlog permanently behind the run, so the
+    /// transcript only converges when the run ends. `on_tick` consumes this
+    /// flag under the same `REFRESH_INTERVAL_MS` gate, repainting streamed
+    /// parts at most once per 250 ms.
+    pub(super) refresh_pending: bool,
     pub(super) pending_ui_action: Option<UiAction>,
     pub(super) current_lineage: Option<CurrentLineageState>,
     /// Open side conversations: side session id -> the parent session it was

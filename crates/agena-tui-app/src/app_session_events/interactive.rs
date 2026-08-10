@@ -23,6 +23,7 @@ impl App {
         // A refresh requested for the previous session must not be re-issued
         // against the newly opened one.
         self.pending_refresh = None;
+        self.refresh_pending = false;
         // A model selection belongs to the session that produced it. Clear the
         // previous session's stack until this session's persisted execution
         // context arrives.
@@ -231,7 +232,13 @@ impl App {
             )
         });
         if live.force_refresh || live.triggers_refresh || refresh_needed_from_event {
-            self.request_refresh(session_id, live.force_refresh);
+            // Park the refresh into the periodic tick budget instead of
+            // flushing immediately: streaming flushes emit `PartUpdated` far
+            // faster than the TUI can apply full-snapshot refreshes, and
+            // spawning one per event leaves the transcript permanently behind
+            // a running reply. `on_tick` repaints at most once per
+            // `REFRESH_INTERVAL_MS`.
+            self.pending_refresh_for(session_id, live.force_refresh);
         }
     }
 }

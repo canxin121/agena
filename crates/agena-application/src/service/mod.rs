@@ -58,6 +58,35 @@ pub use execution::{
     permission_config_resource_from_domain, scheduled_job_resource, sort_jobs_for_display,
 };
 
+/// Maps wire `ListActivitiesParams` to the domain activity filter. HTTP and
+/// WS/IPC transports both funnel through this so CSV kind/status parsing stays
+/// identical regardless of transport.
+pub fn activity_filter_from_params(
+    params: &agena_api::queries::ListActivitiesParams,
+) -> agena_domain::BackgroundActivityFilter {
+    use agena_domain::{BackgroundActivityKind, BackgroundActivityStatus};
+    let parse_kinds = |value: &Option<String>| -> Vec<BackgroundActivityKind> {
+        value.as_deref().map_or_else(Vec::new, |csv| {
+            csv.split(',')
+                .filter_map(|raw| raw.trim().parse::<BackgroundActivityKind>().ok())
+                .collect()
+        })
+    };
+    let parse_statuses = |value: &Option<String>| -> Vec<BackgroundActivityStatus> {
+        value.as_deref().map_or_else(Vec::new, |csv| {
+            csv.split(',')
+                .filter_map(|raw| raw.trim().parse::<BackgroundActivityStatus>().ok())
+                .collect()
+        })
+    };
+    agena_domain::BackgroundActivityFilter {
+        kinds: parse_kinds(&params.kinds),
+        statuses: parse_statuses(&params.statuses),
+        session_id: params.session_id,
+        active_only: params.active_only,
+    }
+}
+
 /// Transport-neutral permission-rule mutation request.
 ///
 /// HTTP handlers map their wire DTO at the transport edge; CLI and other

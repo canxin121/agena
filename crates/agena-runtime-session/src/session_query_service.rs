@@ -81,7 +81,10 @@ pub struct SessionProjectedPart {
     pub run_id: i64,
     pub part_index: i32,
     pub status: agena_domain::ExecutionStatus,
-    pub kind: agena_domain::PartKind,
+    /// The precise v2 part kind (`text`, `think`, `tool_call`, ...). The
+    /// v1 `PartKind` binary (Text/Activity) is gone: the transcript surfaces
+    /// dispatch on this exact kind, so it must round-trip the storage column.
+    pub kind: String,
     pub name: Option<String>,
     pub summary: Option<String>,
     pub has_detail: bool,

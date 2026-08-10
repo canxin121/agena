@@ -60,11 +60,10 @@ impl SessionProcessor {
                 vec![NewPart {
                     kind: "think".to_owned(),
                     role: PartRole::Assistant,
-                    content: serde_json::json!({
-                        "type": "activity",
-                        "activity_type": "reasoning",
-                        "payload": { "summary": [], "raw_content": [] }
-                    }),
+                    // Canonical v2 thinking shape (4.1.1): `summary`/`raw`
+                    // arrays. The v1 `type`/`activity_type`/`payload` keys are
+                    // gone so `as_value()` round-trips a clean document.
+                    content: serde_json::json!({ "summary": [], "raw": [] }),
                     summary: None,
                     visibility: PartVisibility::Both,
                     rendered_markdown: None,

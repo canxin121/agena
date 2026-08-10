@@ -858,13 +858,6 @@ pub(crate) fn text_content(text: impl Into<String>) -> part_content::TextContent
 
 /// The coarse [`agena_domain::PartKind`] of a typed payload: text is
 /// `Text`, every other kind is `Activity`.
-pub(crate) fn typed_part_kind(content: &TypedContent) -> agena_domain::PartKind {
-    match content {
-        TypedContent::Text(_) => agena_domain::PartKind::Text,
-        _ => agena_domain::PartKind::Activity,
-    }
-}
-
 /// The plain text of a `TypedContent::Text` payload, if any (the v1
 /// `text_value`-style extraction over typed content).
 pub(crate) fn typed_text(content: &TypedContent) -> Option<&str> {

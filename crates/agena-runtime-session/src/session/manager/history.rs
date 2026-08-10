@@ -1202,7 +1202,7 @@ struct DecodedPart {
     id: i64,
     part_index: i32,
     status: ExecutionStatus,
-    kind: agena_domain::PartKind,
+    kind: String,
     name: Option<String>,
     summary: Option<String>,
     has_detail: bool,
@@ -1253,7 +1253,10 @@ fn decode_part(part: &Part, part_index: i32) -> Result<DecodedPart, AppError> {
         id: part.part_id,
         part_index,
         status,
-        kind: crate::session::store::typed_part_kind(&content),
+        // Carry the precise storage kind through to the transcript surfaces
+        // (the v1 `PartKind` binary collapsed every non-text part to
+        // "activity", breaking `think`/`tool_call`/... rendering dispatch).
+        kind: part.kind.clone(),
         name: part_name_from_content(&content),
         summary: part.summary.clone(),
         has_detail: part.content.is_object(),

@@ -621,6 +621,70 @@ async fn query_projection_is_derived_from_persisted_parts() {
 }
 
 #[tokio::test]
+async fn projection_preserves_precise_part_kind() {
+    let manager = test_manager().await;
+    let session = create(&manager, "projection kind").await;
+    let run_id = manager
+        .store
+        .start_run(
+            session.id,
+            "continue",
+            serde_json::json!({"run_kind": "continue"}),
+        )
+        .await
+        .expect("start assistant run");
+    manager
+        .store
+        .append_parts(
+            session.id,
+            run_id,
+            vec![
+                NewPart {
+                    kind: "think".to_owned(),
+                    role: PartRole::Assistant,
+                    content: serde_json::json!({"summary": ["thinking…"]}),
+                    summary: None,
+                    visibility: PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: None,
+                    state: PartState::Completed,
+                },
+                NewPart {
+                    kind: "tool_call".to_owned(),
+                    role: PartRole::Assistant,
+                    content: serde_json::json!({"name": "tools_search", "input": {"query": "x"}}),
+                    summary: None,
+                    visibility: PartVisibility::Both,
+                    rendered_markdown: None,
+                    parent_part_id: None,
+                    state: PartState::Completed,
+                },
+            ],
+        )
+        .await
+        .expect("append assistant parts");
+
+    let projected = manager
+        .list_projected_runs(session.id, true)
+        .await
+        .expect("list projected runs");
+    let assistant_run = projected
+        .iter()
+        .find(|run| run.role == Role::Assistant)
+        .expect("assistant run");
+    let kinds = assistant_run
+        .parts
+        .iter()
+        .map(|part| part.kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        ["think", "tool_call"],
+        "projection must preserve the precise v2 part kind, not collapse to \"activity\""
+    );
+}
+
+#[tokio::test]
 async fn derived_state_tracks_run_marker_and_lease() {
     let manager = test_manager().await;
     let session = create(&manager, "derived state").await;
